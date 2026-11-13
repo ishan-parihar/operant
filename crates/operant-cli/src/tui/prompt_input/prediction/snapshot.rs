@@ -15,7 +15,9 @@ const SNAPSHOT_VERSION: u32 = 1;
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Snapshot {
     version: u32,
-    /// Sorted vocab (ids = positions).
+    /// Vocabulary in ID order. IDs are APPEND order until `compact` runs, so
+    /// this is NOT necessarily sorted even though `prefix_ids` binary-searches
+    /// it — `rebuild_indexes` sorts it on decode (RT-540).
     vocab: Vec<String>,
     count: Vec<f64>,
     /// (word id, distinct-prompt count) pairs.
@@ -50,6 +52,25 @@ pub fn decode(bytes: &[u8]) -> Result<Model, String> {
     }
     if snap.vocab.len() != snap.count.len() {
         return Err("vocab/count length mismatch".to_string());
+    }
+    // Every id-keyed map must address the vocabulary. A snapshot is untrusted
+    // input (a hand-edit, a truncated write, a rollback across a format
+    // change), and `compact` — which now runs at load to restore sortedness —
+    // indexes those maps directly. An out-of-range id must be a decode error
+    // the engine wipes, never an index-out-of-bounds panic at boot.
+    let len = snap.vocab.len() as u32;
+    let out_of_range = |id: u32| id >= len;
+    if snap.prompt_counts.iter().any(|(id, _)| out_of_range(*id))
+        || snap
+            .bigrams
+            .iter()
+            .any(|(prev, next, _)| out_of_range(*prev) || out_of_range(*next))
+        || snap
+            .trigrams
+            .iter()
+            .any(|(u, v, w, _)| out_of_range(*u) || out_of_range(*v) || out_of_range(*w))
+    {
+        return Err("snapshot references a word id outside the vocabulary".to_string());
     }
     let mut model = Model::from_parts(
         snap.vocab,
@@ -109,6 +130,26 @@ mod snapshot_tests {
         assert!(
             decode(&bad).is_err() || decode(&bad).is_ok(),
             "never panics"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_naming_a_word_id_outside_the_vocab_is_rejected_not_indexed() {
+        // Load-time `compact` indexes every id-keyed map, so an id past the
+        // end must be a decode error (the engine wipes and re-ingests) rather
+        // than an index-out-of-bounds panic at boot.
+        let m = {
+            let mut m = Model::default();
+            m.learn("run the audit");
+            m
+        };
+        let mut snap: serde_json::Value =
+            serde_json::from_slice(&encode(&m).expect("encode")).expect("snapshot json");
+        snap["trigrams"] = serde_json::json!([[0, 1, 99, 1.0]]);
+        let bytes = serde_json::to_vec(&snap).expect("json");
+        assert!(
+            decode(&bytes).is_err(),
+            "an out-of-range word id must be rejected"
         );
     }
 

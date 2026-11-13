@@ -221,8 +221,14 @@ pub fn complete(
     let mut best: Option<(&(String, Cand), f64)> = None;
     for cand in &cands {
         let (word, c) = cand;
-        if word.len() == key.len() {
-            continue; // completing to itself is no completion
+        // Only a STRICT prefix extension is a completion. This is the same
+        // predicate `window_weights` uses, and it is what makes the
+        // `word[key.len()..]` slice below sound: a candidate that is shorter
+        // than the key, or that merely sorts near it, cannot be sliced at
+        // `key.len()` (measured: a decoded snapshot's unsorted base offered
+        // `run` for the key `audit` and panicked the predictor thread).
+        if word.len() <= key.len() || !word.starts_with(key.as_str()) {
+            continue; // completing to itself, or not an extension, is no completion
         }
         // Hygiene: vocab words must be eligible UNLESS the prompt-local
         // cache carries them (the user just typed this word).
@@ -280,6 +286,83 @@ mod query_tests {
             complete(&m, &[], "can you refactor the par", "par", None).expect("parser completes");
         assert_eq!(s.suffix, "ser");
         assert!(s.confidence >= 0.15, "confidence {}", s.confidence);
+    }
+
+    /// Red-team sweep of the slice that panicked: every vocab word as a KEY,
+    /// every word plus a suffix (so the key is longer than every candidate),
+    /// an uppercase form and a non-ASCII prefix, over several `before`
+    /// contexts — with the threshold pinned to 0 so a suggestion ALWAYS clears
+    /// it. The threshold matters: the suffix slice runs AFTER the posterior
+    /// check, so a high threshold hides the panic, which is why it only
+    /// surfaced once the operator's model had enough history to clear it.
+    #[test]
+    fn no_key_or_candidate_can_panic_the_predictor_thread() {
+        let mut m = Model::default();
+        for p in [
+            "can you refactor the parser",
+            "please review the parser tests",
+            "the audit found nothing to report",
+            "run the audit again after the change",
+            "zebra crossing at the end",
+            "apple pie for the office",
+        ] {
+            m.learn(p);
+        }
+        let bytes = crate::tui::prompt_input::prediction::snapshot::encode(&m).expect("encode");
+        let decoded =
+            crate::tui::prompt_input::prediction::snapshot::decode(&bytes).expect("decode");
+        let vocab = decoded.vocab_dump().to_vec();
+
+        let mut keys: Vec<String> = vocab.clone();
+        keys.extend(vocab.iter().map(|w| format!("{w}x")));
+        keys.extend(vocab.iter().map(|w| w.to_uppercase()));
+        keys.push("\u{130}stanbul".to_string());
+        keys.push("x".repeat(64));
+        keys.push("ze".to_string());
+
+        for key in &keys {
+            for before in ["", "the audit", "please review the", "zebra"] {
+                if let Some(s) = complete(&decoded, &[], before, key, Some(0.0)) {
+                    assert!(!s.suffix.is_empty(), "empty suffix for key {key:?}");
+                    let key_lower = key.to_lowercase();
+                    let whole = format!("{key_lower}{}", s.suffix);
+                    assert!(
+                        vocab.contains(&whole),
+                        "completing {key:?} produced {whole:?}, which is not a vocabulary word"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_decoded_snapshot_never_slices_a_shorter_word_for_a_longer_key() {
+        // Append order is decode order, and this order is unsorted — the
+        // measured shrink of the live snapshot's failing case: the key
+        // "reload" pulled "tool" into its candidate range, and the suffix
+        // slice ran at byte 6 of a 4-byte word (live: byte 7 of 5).
+        let mut m = Model::default();
+        m.learn("tool reload quit");
+        let bytes = crate::tui::prompt_input::prediction::snapshot::encode(&m).expect("encode");
+        let decoded =
+            crate::tui::prompt_input::prediction::snapshot::decode(&bytes).expect("decode");
+
+        // Must not panic, and "tool" must not be offered as a completion of
+        // a word it does not extend.
+        assert!(
+            complete(&decoded, &[], "tool reload", "reload", None).is_none(),
+            "a non-extension must not be offered"
+        );
+        // Sorting on load remaps every id-keyed map; the words and their
+        // counts must still line up afterwards.
+        let rel = decoded.prefix_ids("rel");
+        assert_eq!(rel.len(), 1, "the decoded vocab must still find `reload`");
+        assert_eq!(decoded.word(rel[0]), "reload");
+        let tool = decoded.id("tool").expect("tool");
+        assert!(
+            decoded.bigram(tool, rel[0]) > 0.0,
+            "the `tool reload` bigram must survive the load-time remap"
+        );
     }
 
     #[test]

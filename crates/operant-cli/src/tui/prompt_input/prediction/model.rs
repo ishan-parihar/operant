@@ -361,8 +361,25 @@ impl Model {
     }
 
     /// Rebuild the word→id index and (defensively) the pair type counts.
+    ///
+    /// `reindex` sets `base_len = vocab.len()`, which is only sound while the
+    /// vocab is genuinely sorted. A snapshot encodes the vocab in ID order,
+    /// and IDs are append order until `compact` runs — so a snapshot written
+    /// with a non-empty overflow segment decodes UNSORTED and `prefix_ids`'
+    /// binary search then returns words that do not start with the prefix.
+    /// Measured 2026-11-13 on the operator's own 643-word snapshot: 293
+    /// descending pairs, 11 keys with a bogus candidate range (`audit` →
+    /// `run`, `recursive` → `utility`), and `complete` sliced a 5-byte word
+    /// at a 7-byte key — `start byte index 7 is out of bounds for string of
+    /// length 5` — panicking the word-predictor thread. Sorting on load
+    /// restores the invariant `compact` maintains; the remap of every
+    /// id-keyed map is what keeps counts attached to the right words.
     pub(super) fn rebuild_indexes(&mut self) {
-        self.reindex();
+        if self.vocab.windows(2).any(|pair| pair[0] > pair[1]) {
+            self.compact();
+        } else {
+            self.reindex();
+        }
     }
 
     fn reindex(&mut self) {
@@ -389,6 +406,36 @@ impl Model {
 #[cfg(test)]
 mod model_tests {
     use super::*;
+
+    #[test]
+    fn a_decoded_snapshot_sorts_its_vocab_so_prefix_search_is_sound() {
+        // Learning appends to the overflow segment, so a snapshot encodes an
+        // UNSORTED vocab whenever `compact` has not run (it only fires past
+        // 4096 appends). `zebra` before `apple` is that shape in miniature.
+        let mut m = Model::default();
+        m.learn("zebra crossing");
+        m.learn("apple pie");
+        let bytes = crate::tui::prompt_input::prediction::snapshot::encode(&m).expect("encode");
+        let decoded =
+            crate::tui::prompt_input::prediction::snapshot::decode(&bytes).expect("decode");
+
+        let vocab = decoded.vocab_dump();
+        assert!(
+            vocab.windows(2).all(|pair| pair[0] <= pair[1]),
+            "the decoded base must be sorted or prefix_ids' binary search lies: {vocab:?}"
+        );
+        // The consequence the sort exists for: every id the prefix search
+        // returns really does start with the prefix and is a strict extension.
+        for key in vocab {
+            for id in decoded.prefix_ids(key) {
+                let word = decoded.word(id);
+                assert!(
+                    word.starts_with(key.as_str()),
+                    "prefix_ids({key:?}) returned {word:?}, which is not a prefix match"
+                );
+            }
+        }
+    }
 
     #[test]
     fn prose_words_filters_non_prose() {
