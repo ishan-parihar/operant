@@ -290,6 +290,11 @@ against `iter-2155`, and the work landed as **iters 2166–2189**.
 | 2163 J1+J2 | **2189** (J1 only) | The header says "500 of 3,302". **J2 (the `Show more` row) did NOT land**: the page cursor exists in the database layer, but nothing in the UI asks for the next page. |
 | 2164 J3 | **2189** | The tab counts are computed in `rebuild_visible`, not on every frame. |
 
+Two further iterations followed the table: **2190** committed this audit and
+plan as documents, and **2191** advertised the hub's new keys — `e` and `t`
+existed in the key handler and on no screen, which the repo's own standard
+calls decoration the operator cannot find.
+
 **Two planned items are still open** — I1 (the bounded preview read: the load
 reads all 14,103 messages of the largest session and keeps the last 400) and
 J2 (the `Show more` row, which the page cursor now makes possible). Both were
