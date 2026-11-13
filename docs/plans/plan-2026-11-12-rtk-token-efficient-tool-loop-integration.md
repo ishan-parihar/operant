@@ -2,19 +2,33 @@
 
 Dated-frozen: published `2026-11-12`. Scope: a design plan.
 
-## Landing status (updated 2026-11-12 — these rows are append-only history)
+## Landing status (corrected 2026-11-13 against `origin/main` @ `3a9c489d`)
+
+The 2026-11-12 version of this table was wrong in five places. It was corrected on
+2026-11-13 from the code, and every corrected row cites the file and line it was
+corrected against. The evidence layer landed across three commits, not one:
+
+- `9d163951` (**iter-2120**) — the layer itself: types, chain runner, classifier,
+  router, recall contract, the method set and chains, `[compression]` in
+  `operant.example.toml`, and the tests.
+- `5244ac70` (**iter-2123**) — the layer was DELETED again (the files went), and
+  the request-time trim, the context ledger and the per-session usage records
+  landed with it.
+- `9f723e88` (**iter-2139**) — the layer landed on the tool-result chokepoint,
+  with the `rtk` bridge, the terminal rewrite, the fleet ranking,
+  `operant doctor --tools-tokens`, and `evidence_recall` resolving the marker.
 
 | Part | State | Commit |
 |---|---|---|
-| P0 — instrument the tool-result chokepoint | **LANDED** — per-tool token accounting is part of the layer's own `Compressed` report (`tokens_before`/`tokens_after`/`applied`) | `feat(iter-2111)` |
-| P1 — the evidence layer (types, chain runner, classifier, router, recall contract) | **LANDED** — `crates/operant-core/src/agent/evidence/` | `feat(iter-2111)` |
-| P2 — the method set and the per-format chains | **LANDED** — 9 lossless + 6 lossy methods, plus the code filter | `feat(iter-2111)` |
-| P3 — lossless recovery | **LANDED** — the `RecallStore` contract, the provenance marker, and a bounded ring + disk spill | `feat(iter-2111)` |
-| P4 — tool-family coverage | **LANDED** — the classifier covers every registered tool; the coverage test fails when a new tool has no entry | `feat(iter-2111)` |
-| P5 — the shell path | **LANDED** — `compression.shell = "aft" \| "native" \| "rtk"`, defaulting to `aft` (AFT already compresses bash in-process) | `feat(iter-2111)` |
-| P6 — observability | **LANDED** — the `Compressed` report carries the per-result saving, the methods applied, and the subject/format | `feat(iter-2111)` |
-| P0 — a *fleet-wide* baseline of operant's own token distribution | **NOT LANDED** — the layer reports per-result savings, but no fleet-wide ranking has been measured | — |
-| The `rtk` binary as a live backend | **NOT LANDED** — the mode exists in config; the binary is not wired (see §10 for why) | — |
+| P0 — instrument the tool-result chokepoint | **LANDED** — per-tool token accounting is part of the layer's own `Compressed` report (`tokens_before`/`tokens_after`/`applied`), `crates/operant-core/src/agent/evidence/mod.rs:95-116` | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P1 — the evidence layer (types, chain runner, classifier, router, recall contract) | **LANDED** — `crates/operant-core/src/agent/evidence/` | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P2 — the method set and the per-format chains | **LANDED** — 9 lossless + 6 lossy methods, plus the code filter | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P3 — lossless recovery | **LANDED, but not as this plan described it** — there is NO bounded ring and NO disk spill: both were deliberately deleted, so one fact has one owner. The full text lives in `messages.full_content` (`crates/operant-core/src/database.rs:78`) and the `evidence_recall` tool reads it back (`crates/operant-core/src/tools/evidence_recall.rs:96` → `crates/operant-core/src/database.rs:1289`) | `9f723e88` (iter-2139) |
+| P4 — tool-family coverage | **PARTIAL** — the coverage test iterates `builtin_tool_names()` (`crates/operant-core/src/tools/builtin.rs:281`), a hand-written list that the live registry is tied to only by a COUNT assertion (`crates/operant-core/src/tools/builtin.rs:406-413`). The kernel tools (`kernel_exec`, `kernel_state`, `kernel_refine`, registered from `crates/operant-core/src/tools/kernel/`) are in neither list and are unclassified, so their results are never compressed. The test that iterates the list is `crates/operant-core/tests/evidence_classification.rs:75` | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P5 — the shell path | **LANDED** — `compression.shell = "aft" \| "native" \| "rtk"`, defaulting to `aft` (AFT already compresses bash in-process) | `9d163951` (iter-2120), the `rtk` backend wired in `9f723e88` (iter-2139) |
+| P6 — observability | **LANDED** — the `Compressed` report carries the per-result saving, the methods applied, and the subject/format | `9d163951` (iter-2120), re-landed in `9f723e88` (iter-2139) |
+| P0 — a *fleet-wide* baseline of operant's own token distribution | **LANDED** — `Database::tool_token_ranking` (`crates/operant-core/src/database.rs:1338`), its test (`crates/operant-core/src/database.rs:5310`), and the report `operant doctor --tools-tokens` (the flag: `crates/operant-cli/src/cmd_doctor/mod.rs:60`; the report: `crates/operant-cli/src/cmd_doctor/checks_tools.rs:1155`) | `9f723e88` (iter-2139) |
+| The `rtk` binary as a live backend | **LANDED** — the bridge is `crates/operant-core/src/rtk_bridge.rs` (`find_rtk`, `rewrite_command`), and the terminal tool runs the rewrite when `compression.shell = "rtk"` (`crates/operant-core/src/tools/terminal_tool.rs:151-167`) | `9f723e88` (iter-2139) |
 
 **The one claim this plan deliberately does NOT make:** a percentage. §11's numbers are AFT's measured
 benchmark and RTK's documented per-rule design bounds — neither is operant's own. The layer now
@@ -456,7 +470,7 @@ Add a counter at `run.rs:2745` keyed by tool name: `chars`, `estimate_tokens`, `
 session aggregate.
 
 - Exit: a report that ranks operant's tool families by model-visible tokens **on real sessions**.
-- Verify: `cargo test --workspace`; a new `operant doctor tools-tokens` (or extend `doctor.rs`) prints
+- Verify: `cargo test --workspace`; a new `operant doctor --tools-tokens` (or extend `doctor.rs`) prints
   the ranking; `scripts/check.sh check --workspace`.
 - Cost: ~120 lines. No behavior change.
 - **This phase is not optional.** Unknown U3 (the actual distribution) blocks any honest saving claim,
@@ -574,28 +588,41 @@ CortexKit techniques natively rather than bridging them.
 
 ### P6 — Observability and the operator surface
 
-Extend the P0 report into `operant doctor tools-tokens` and a per-turn summary: per family, tokens in /
+Extend the P0 report into `operant doctor --tools-tokens` and a per-turn summary: per family, tokens in /
 out / saved, method hit rates, `never_worse` rejections, recall hits, and the residual spend-guard fires.
 Config lands in `operant.example.toml` and `README.md`/`CHANGELOG.md` per the repo's own rules.
 
 - Exit: the report runs on a real session and shows a per-family saving; the operator can disable any
   method without a rebuild.
 
-### Config schema (additive, TOML-first per `config.rs`)
+### Config schema (corrected 2026-11-13 against `EvidenceConfig`, `crates/operant-core/src/agent/evidence/mod.rs:63-76`)
+
+The 2026-11-12 version of this block documented four keys that do not exist, and
+spelled the family table wrong. `EvidenceConfig` has exactly these fields:
+`enabled`, `min_size`, `shell`, and `families.<subject>.enabled` /
+`families.<subject>.chain`.
 
 ```toml
 [compression]
-enabled = false            # P1: flag-gated, default off until P0/P1 land
-shell = "aft"              # "aft" | "native" | "rtk"
-min_size = 512             # bytes; below this, compression is a no-op (RTK's [guards].min_size analogue)
-never_worse = true         # reject any chain that grows the block or changes nothing
-policy = "default"         # method-chain preset; "off" disables per-family override
-tool_result_retrim_chars = 2000   # EXISTING — unchanged
+enabled = false              # the layer is OFF by default; this is the opt-in
+shell = "aft"                # "aft" | "native" | "rtk" — who owns shell output
+min_size = 512               # BYTES; below this, compression is a no-op
 
-[compression.family.web]   # optional per-family overrides
-enabled = true
-chain = ["web"]            # lossless preset
+[compression.families.web]   # one table per subject; the key is the subject name
+enabled = true               # when present, this decides — it is not limited by the master switch
+chain = "web"                # ONE named chain: json, web, matches, lockfile, term,
+                             # code, code-aggressive, plain, lossless
 ```
+
+**Keys this plan named that were never built:**
+
+- `never_worse` — never a key. The guarantee is hardcoded (`crates/operant-core/src/agent/evidence/mod.rs:230-233`), not configurable.
+- `policy = "default"` — never built. There is no method-chain preset key; the chain comes from the format, and a family's `chain` overrides it.
+- `tool_result_retrim_chars` — never built under `[compression]`, and not a TOML key at all. It is a field of `PreflightConfig` (`crates/operant-core/src/agent/compress.rs:45`, default 2000), which derives no serde — the code does not read it from a config file.
+- `[compression.family.web]` — the spelling is `families` (plural), not `family`, and `chain` is a STRING naming one chain, not a list of chain names.
+
+`EvidenceConfig` carries no `deny_unknown_fields`, so an operator who copies the
+old block gets a config that loads cleanly with those keys silently dropped.
 
 ---
 
@@ -704,6 +731,9 @@ one number worth betting on is the one with the widest gap between what is spent
 - RTK's issue-tracker themes and third-party adopter counts — the GitHub API was rate-limited from this
   host; the only adoption evidence is RTK's own marketing assets.
 - No Operant source was modified; the peer WIP present in the working tree was left untouched.
+  **Corrected 2026-11-13:** this was true when the plan was written and is false now. The
+  evidence layer landed in `9d163951` (iter-2120), was deleted again in `5244ac70` (iter-2123),
+  and landed on the chokepoint in `9f723e88` (iter-2139). See the landing table at the top.
 
 ### Two operational notes for whoever picks this up
 
@@ -711,6 +741,9 @@ one number worth betting on is the one with the widest gap between what is spent
    is mid-build and its working tree has a compile error at `crates/operant-core/src/tools/web_tools.rs:274`
    — `read_bounded_body` is private in `crates/operant-core/src/tools/http_tool.rs:287`. This is peer WIP
    and was deliberately not touched. **P0 cannot be measured until that build is green.**
+   **Corrected 2026-11-13:** the tree compiles, and P0 IS measured — `operant doctor --tools-tokens`
+   ranks the tool families (`crates/operant-cli/src/cmd_doctor/checks_tools.rs:1155`). The note above
+   is kept as the 2026-11-12 snapshot.
 2. **`.tmpwork/` is not a safe place for deliverables.** It was wiped mid-task by a concurrent agent using
    it for a Rust build, taking a cloned source tree and a research report with it. Durable artefacts
    belonging to this plan live in `_kernel/rtk-integration/`; use `.tmpwork/` only for throwaway scratch.

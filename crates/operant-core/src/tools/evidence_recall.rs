@@ -39,6 +39,13 @@ pub struct EvidenceRecallTool {
     database: Arc<Database>,
 }
 
+/// How many characters of the full output one recall hands back.
+///
+/// The whole point of the recall is to recover text the model did not see;
+/// handing back more than the model can use would make the recovery cost
+/// more than the compression saved.
+pub const RECALL_WINDOW_CHARS: usize = 4_096;
+
 impl EvidenceRecallTool {
     /// The tool needs the session store: that is where the full text is.
     pub fn new(database: Arc<Database>) -> Self {
@@ -92,15 +99,35 @@ impl OperantTool for EvidenceRecallTool {
             );
         }
         match self.database.get_tool_result(session, tool_call_id) {
-            Ok(Some((content, tool_name))) => ToolResult::success(
-                "evidence_recall",
-                json!({
+            Ok(Some((content, tool_name))) => {
+                // The recall has a CEILING. A tool result can be 200 000
+                // bytes, and handing all of it back costs the model more
+                // than the compression saved — the recovery path would be
+                // the expensive one. The window is the head of the text;
+                // the note says how much was withheld so the model can ask
+                // for the rest rather than guess.
+                let (window, withheld) = if content.chars().count() > RECALL_WINDOW_CHARS {
+                    let head: String = content.chars().take(RECALL_WINDOW_CHARS).collect();
+                    let rest = content.chars().count() - RECALL_WINDOW_CHARS;
+                    (head, rest)
+                } else {
+                    (content, 0)
+                };
+                let mut payload = json!({
                     "_evidence_tool": "evidence_recall",
                     "key": args.key.trim(),
                     "tool": tool_name,
-                    "content": content,
-                }),
-            ),
+                    "content": window,
+                });
+                if withheld > 0 {
+                    payload["withheld_chars"] = json!(withheld);
+                    payload["note"] = json!(format!(
+                        "the first {RECALL_WINDOW_CHARS} characters of the full output are shown; \
+                         {withheld} more characters are withheld — the whole text is still in the session store"
+                    ));
+                }
+                ToolResult::success("evidence_recall", payload)
+            }
             // The row is gone (the session was deleted) or the key was never
             // one of ours. Say so plainly — an empty result would read as
             // "the tool returned nothing", which is a different and wrong claim.

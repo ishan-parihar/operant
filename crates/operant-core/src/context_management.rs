@@ -128,6 +128,14 @@ impl ToolTrimReport {
 /// bug: after a context-overflow error the provider's real limit is smaller,
 /// so the share tightens and the trim fires harder exactly when the context
 /// is already failing.
+///
+/// ## Ordering: this pass runs FIRST
+///
+/// This pass runs BEFORE `agent::compress::fast_trim_tool_results`, so the
+/// 2 000-character re-trim sees THIS pass's output, never the original. The
+/// two rules rewrite the same tool messages with different markers; a reader
+/// of the wire bytes cannot tell which one produced the text, so the rule
+/// that wins is stated here and on the other side.
 pub fn trim_tool_results_to_share(
     messages: &mut [Message],
     budget_tokens: usize,
@@ -182,7 +190,7 @@ pub fn trim_tool_results_to_share(
         messages[idx].content = format!(
             "{TOOL_TRIM_MARKER} {tool}: {original_chars} chars returned, the first \
              {kept_chars} are kept and the rest is withheld to fit the context \
-             budget. The full output is still in the session store.",
+             budget. The full output is still in the session store.\n\n{kept}",
             original_chars = original.chars().count(),
             kept_chars = kept.chars().count(),
         );

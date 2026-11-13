@@ -42,6 +42,9 @@ pub struct PreflightConfig {
     /// Model used to generate summaries; `None` reuses the route model.
     pub summary_model: Option<String>,
     /// Character budget for re-trimming old tool results (0 disables).
+    // shortcut: tool_result_retrim_chars is hard-coded at 2000, not
+    // configurable — its serde key was retired because no shipped config set
+    // it; make it configurable only if an operator asks
     pub tool_result_retrim_chars: usize,
     /// Tool-result substrings exempt from re-trimming.
     pub tool_result_trim_exempt: Vec<String>,
@@ -115,6 +118,15 @@ pub fn parse_context_limit_from_error(msg: &str) -> Option<usize> {
 
 /// Fast-path: trim oversized tool results in non-protected messages.
 /// Returns total characters saved. No LLM call needed.
+///
+/// ## Ordering: this pass runs SECOND
+///
+/// The per-result path already applied the 400-character aggregate trim
+/// (`context_management::trim_tool_results_to_share`) FIRST; this pass cuts
+/// the survivors to the budget. It never restores what the first pass
+/// removed: a result the aggregate trim already shortened is under this
+/// pass's budget and is skipped, so the 400-character marker is what the
+/// model sees.
 pub fn fast_trim_tool_results(messages: &mut [Message], cfg: &PreflightConfig) -> usize {
     let max = cfg.tool_result_retrim_chars;
     if max == 0 {
@@ -175,7 +187,7 @@ fn truncate_tool_content(content: &str, max_chars: usize) -> String {
 // ponytail: no [IMAGE:]-marker boundary nudging — markers bisected here are
 // inert text in the text-only summarizer path; add the nudge if a vision
 // summarizer ever consumes trimmed tool output.
-fn truncate_head_tail(s: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_head_tail(s: &str, max_chars: usize) -> String {
     // RT-465: the budget is documented in CHARACTERS ("Returns total
     // characters saved", "Truncate a tool message body to `max_chars`", and
     // the marker says "characters truncated") but the arithmetic was in

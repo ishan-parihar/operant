@@ -99,16 +99,6 @@ impl ContentFormat {
     }
 }
 
-/// Whether a method transforms content or injects a directive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MethodKind {
-    /// Rewrites the payload.
-    Transform,
-    /// Adds guidance without changing the payload.
-    Directive,
-}
-
 /// How the information a method dropped can be recovered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,22 +107,6 @@ pub enum Recovery {
     None,
     /// The full text is retrievable from the recall store.
     Recall,
-    /// A tool call retrieves the full text.
-    RetrieveTool,
-    /// A pointer to the full text is printed with the compressed output.
-    Pointer,
-}
-
-/// How expensive a method is, ordered cheapest first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CostClass {
-    /// Pure string work, no parsing.
-    Instant,
-    /// Parses the payload.
-    Fast,
-    /// Parses and may spawn work.
-    Slow,
 }
 
 /// What a method emits.
@@ -150,63 +124,44 @@ pub enum Produces {
 /// A method that loses information must say so (`lossy`) and must say how the
 /// information comes back (`recovery`). A method that declares neither is a
 /// bug, not a default.
+///
+/// The contract holds FOUR fields, and each one is read by the runner: `lossy`
+/// decides whether the chain may run the method at all when no recall path
+/// exists, `recovery` says whether that path is available, `consumes` says
+/// which payload shapes the method accepts, and `produces` says what it emits.
+/// The fields that were here before — `kind`, `idempotent`, `cache_stable`,
+/// `deterministic`, `cost`, `terminal`, `cost_tokens` — were written by every
+/// method and read by nobody, and a contract nobody reads is a comment with
+/// ceremony around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MethodInfo {
-    /// Transform or directive.
-    pub kind: MethodKind,
     /// Whether the method can lose information.
     pub lossy: bool,
     /// How lost information is recovered.
     pub recovery: Recovery,
-    /// Whether running the method twice equals running it once.
-    pub idempotent: bool,
-    /// Whether the output is stable across identical inputs (prompt-cache safe).
-    pub cache_stable: bool,
-    /// Whether the output depends only on the input.
-    pub deterministic: bool,
-    /// The method's cost.
-    pub cost: CostClass,
-    /// The formats the method accepts.
+    /// The formats the method accepts. Empty accepts every format.
     pub consumes: &'static [ContentFormat],
     /// What the method emits.
     pub produces: Produces,
-    /// Whether the method ends the chain.
-    pub terminal: bool,
-    /// The method's cost in tokens, used when ranking chain candidates.
-    pub cost_tokens: usize,
 }
 
 impl MethodInfo {
     /// The contract for a transformation that changes nothing meaningful:
     /// lossless, idempotent, cache-stable and deterministic.
     pub const LOSSLESS_TRANSFORM: MethodInfo = MethodInfo {
-        kind: MethodKind::Transform,
         lossy: false,
         recovery: Recovery::None,
-        idempotent: true,
-        cache_stable: true,
-        deterministic: true,
-        cost: CostClass::Instant,
         consumes: &[],
         produces: Produces::Same,
-        terminal: false,
-        cost_tokens: 0,
     };
 
     /// The contract for a transformation that loses information but records
     /// where the full text went.
     pub const LOSSY_RECALLABLE: MethodInfo = MethodInfo {
-        kind: MethodKind::Transform,
         lossy: true,
         recovery: Recovery::Recall,
-        idempotent: true,
-        cache_stable: true,
-        deterministic: true,
-        cost: CostClass::Fast,
         consumes: &[],
         produces: Produces::Same,
-        terminal: false,
-        cost_tokens: 0,
     };
 }
 

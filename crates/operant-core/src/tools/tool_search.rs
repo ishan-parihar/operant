@@ -45,6 +45,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::config::ToolSearchSettings;
+use crate::context_management::estimate_tokens;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolExposure, ToolRegistry, ToolResult};
 
@@ -55,12 +56,6 @@ pub const TOOL_SEARCH_NAME: &str = "tool_search";
 pub const TOOL_DESCRIBE_NAME: &str = "tool_describe";
 pub const TOOL_CALL_NAME: &str = "tool_call";
 pub const BRIDGE_TOOL_NAMES: &[&str] = &[TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, TOOL_CALL_NAME];
-
-/// Cheap token estimate from char count without a real tokenizer (~4 chars
-/// per token for English+JSON). Underestimating errs toward NOT activating
-/// the listing (safe default); overestimating would truncate listings that
-/// actually fit.
-const CHARS_PER_TOKEN: f64 = 4.0;
 
 // WHY two families defer — describing them eagerly costs far more tokens than
 // the turn that needs them:
@@ -181,11 +176,11 @@ fn listing_budget(settings: &ToolSearchSettings, context_window: usize) -> usize
     settings.listing_max_tokens.min(pct_budget)
 }
 
-fn estimate_tokens(s: &str) -> usize {
-    (s.chars().count() as f64 / CHARS_PER_TOKEN).ceil() as usize
-}
-
-/// Decide which listing form fits the budget.
+/// Decide which listing form fits the budget. The budget is measured with the
+/// canonical estimator (`context_management::estimate_tokens`): char count / 4
+/// without a real tokenizer. Underestimating errs toward NOT activating the
+/// listing (safe default); overestimating would truncate listings that
+/// actually fit.
 fn resolve_listing_mode(
     deferred: &[ToolSchema],
     settings: &ToolSearchSettings,

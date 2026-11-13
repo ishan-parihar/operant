@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use super::super::types::{
-    Block, ContentFormat, CostClass, Method, MethodCtx, MethodInfo, Outcome, Produces, Recovery,
+    Block, ContentFormat, Method, MethodCtx, MethodInfo, Outcome, Produces, Recovery,
 };
 
 /// Whether `out` is genuinely smaller than `input`.
@@ -43,9 +43,7 @@ impl Method for Toon {
             lossy: true,
             recovery: Recovery::Recall,
             consumes: &[ContentFormat::Json],
-            produces: Produces::Format(ContentFormat::Json),
-            cost: CostClass::Fast,
-            ..MethodInfo::LOSSY_RECALLABLE
+            produces: Produces::Format(ContentFormat::Plain),
         }
     }
     fn apply(&self, block: &Block, _ctx: &MethodCtx) -> Outcome {
@@ -188,7 +186,6 @@ impl Method for GrepGroup {
             lossy: true,
             recovery: Recovery::Recall,
             consumes: &[ContentFormat::Matches],
-            cost: CostClass::Fast,
             ..MethodInfo::LOSSY_RECALLABLE
         }
     }
@@ -324,7 +321,6 @@ impl Method for Cap {
             lossy: true,
             recovery: Recovery::Recall,
             consumes: &[ContentFormat::Term],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSY_RECALLABLE
         }
     }
@@ -367,7 +363,6 @@ impl Method for Truncate {
                 ContentFormat::Term,
                 ContentFormat::Code,
             ],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSY_RECALLABLE
         }
     }
@@ -415,8 +410,6 @@ impl Method for WebMd {
             recovery: Recovery::Recall,
             consumes: &[ContentFormat::Web],
             produces: Produces::Format(ContentFormat::Plain),
-            cost: CostClass::Fast,
-            ..MethodInfo::LOSSY_RECALLABLE
         }
     }
     fn apply(&self, block: &Block, _ctx: &MethodCtx) -> Outcome {
@@ -650,7 +643,6 @@ impl Method for Lockfile {
             lossy: true,
             recovery: Recovery::Recall,
             consumes: &[ContentFormat::Lockfile],
-            cost: CostClass::Fast,
             ..MethodInfo::LOSSY_RECALLABLE
         }
     }

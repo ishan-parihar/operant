@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use operant_core::agent::{AgentEvent, OperantAgent};
 use operant_core::config::AppConfig;
+use operant_core::context_management::estimate_tokens;
 use operant_core::gateway::{
     DiscordAdapter, DrainOutcome, EmailAdapter, Gateway, GatewayConfig, IncomingMessage,
     MessageHandler, OutgoingMessage, PlatformAdapter, SlackAdapter, SmsAdapter, TelegramAdapter,
@@ -3539,7 +3540,7 @@ impl MessageHandler for GatewayMessageHandler {
                     } else {
                         roll
                     };
-                    let tokens = (roll.len() / 4).max(1) as i64; // ~4 chars/token estimate
+                    let tokens = estimate_tokens(&roll).max(1) as i64; // canonical chars/4 estimate
                     let upserted = self
                         .gateway
                         .lock()

@@ -63,31 +63,6 @@ agent should proceed.]";
 /// transcript; this only shapes the disposable advisory copy.
 const ADVISORY_TOOL_RESULT_BUDGET: usize = 4000;
 
-/// Head+tail preview of a tool result for the advisory view — keeps the first
-/// and last halves of the budget with an omitted-count marker between them.
-fn truncate_tool_result(text: &str) -> String {
-    if text.len() <= ADVISORY_TOOL_RESULT_BUDGET {
-        return text.to_string();
-    }
-    let half = ADVISORY_TOOL_RESULT_BUDGET / 2;
-    let omitted = text.len() - 2 * half;
-    let mut out = String::with_capacity(ADVISORY_TOOL_RESULT_BUDGET + 32);
-    // Both cuts are char-boundary-safe: a byte slice PANICS when the cut lands
-    // inside a multi-byte character (the RT-301/RT-312 class — tool output
-    // carries emoji, CJK and accented text, and this panic would take the
-    // turn with it, from the advisor and recap paths).
-    out.push_str(crate::agent::safe_truncate_str(text, half));
-    out.push_str(&format!("\n[... {omitted} chars omitted ...]\n"));
-    // The tail cut walks FORWARD to the next boundary (`text.len()` is always
-    // one, so the walk terminates).
-    let mut tail = text.len() - half;
-    while !text.is_char_boundary(tail) {
-        tail += 1;
-    }
-    out.push_str(&text[tail..]);
-    out
-}
-
 /// Render one assistant turn's `tool_calls` as readable text lines.
 fn render_tool_calls(tool_calls: &[crate::client::ToolCall]) -> String {
     let mut lines = Vec::new();
@@ -149,8 +124,16 @@ pub fn build_advisory_messages(messages: &[Message]) -> Vec<Message> {
             Role::Tool => {
                 // Fold the tool result into the preceding assistant turn so
                 // the reference sees what came back without a tool-role
-                // message it never produced.
-                let block = format!("[tool result: {}]", truncate_tool_result(&msg.content));
+                // message it never produced. The head+tail preview is the
+                // shared `agent::compress::truncate_head_tail` — the same
+                // truncator the request-time tool-result trim uses.
+                let block = format!(
+                    "[tool result: {}]",
+                    crate::agent::compress::truncate_head_tail(
+                        &msg.content,
+                        ADVISORY_TOOL_RESULT_BUDGET
+                    )
+                );
                 if let Some(last) = rendered.last_mut()
                     && last.role == Role::Assistant
                 {
@@ -544,7 +527,7 @@ mod tests {
         let view = build_advisory_messages(&msgs);
         let text = &view[1].content;
         assert!(
-            text.contains("chars omitted"),
+            text.contains("characters truncated"),
             "big results must be head+tail previewed"
         );
         assert!(text.len() < big.len());
@@ -553,12 +536,14 @@ mod tests {
     #[test]
     fn advisory_view_survives_a_multibyte_char_at_the_truncation_boundary() {
         // A byte slice panics when the cut lands inside a multi-byte
-        // character — the RT-301/RT-312 class. Three-byte characters put
-        // byte 2000 AND byte (len - 2000) mid-character, which is ordinary
-        // for CJK/emoji-heavy tool output (git logs, web pages, file reads).
-        // The ASCII-only test above passes on the defective code; this one
-        // cannot.
-        let big = "日".repeat(4_000); // 12_000 bytes; both cuts land mid-char
+        // character — the RT-301/RT-312 class. Three-byte characters put the
+        // cut offsets mid-character, which is ordinary for CJK/emoji-heavy
+        // tool output (git logs, web pages, file reads). The ASCII-only test
+        // above passes on the defective code; this one cannot.
+        //
+        // The budget is in CHARACTERS (the shared `truncate_head_tail`), so
+        // the input must be over 4 000 characters to be truncated at all.
+        let big = "日".repeat(6_000); // 6 000 chars / 18 000 bytes; cuts land mid-char
         let msgs = vec![
             Message::user("q"),
             Message::assistant("a"),
@@ -567,7 +552,7 @@ mod tests {
         let view = build_advisory_messages(&msgs);
         let text = &view[1].content;
         assert!(
-            text.contains("chars omitted"),
+            text.contains("characters truncated"),
             "big results must be head+tail previewed"
         );
         assert!(text.len() < big.len());

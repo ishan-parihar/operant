@@ -2991,13 +2991,58 @@ fn coerce_scalar(raw: &str) -> toml_edit::Item {
 /// loader; on failure the previous bytes are restored and the error is
 /// returned (a typo from `operant config set` can never leave an
 /// unloadable config behind). Returns the path written.
+///
+/// With no config file anywhere there was nothing to write into, and the
+/// writer refused: `operant config set` printed "in-memory only; persist
+/// failed" and the setting died with the process (audit 2026-11-13,
+/// finding 16). The first entry of `default_config_paths()` is where the
+/// loader would have looked first, so the writer creates that file — with a
+/// minimal valid TOML body — and writes into it. A path that IS recorded
+/// stays the target; only its absence is repaired.
 pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
-    let path = loaded_config_path().ok_or_else(|| {
-        crate::error::Error::Config(
-            "no config file is loaded in this process; nothing to persist into".to_string(),
-        )
-    })?;
+    let path = match loaded_config_path() {
+        Some(path) => path,
+        None => default_config_paths()
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                Error::Config(
+                    "no config file is loaded in this process and no default config path is available"
+                        .to_string(),
+                )
+            })?,
+    };
+    ensure_config_file_exists(&path)?;
     persist_config_key_at(&path, dotted, raw_value)
+}
+
+/// The body a freshly created config file starts with.
+///
+/// Comments only: the document is valid TOML, and the loader turns an empty
+/// document into the built-in defaults, so a created file behaves exactly
+/// like a config the operator never wrote.
+const FRESH_CONFIG_BODY: &str =
+    "# operant configuration\n# Created by operant: no config file existed when this key was set.\n";
+
+/// Create the target config file when it does not exist yet.
+///
+/// `operant config set` with no `operant.toml` anywhere had nowhere to
+/// write, and the setting was lost when the process exited (audit
+/// 2026-11-13, finding 16). The file is created OWNER-ONLY — it may hold an
+/// API key later — with a body the loader accepts.
+fn ensure_config_file_exists(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("create {}: {e}", parent.display())))?;
+    }
+    crate::fs_secrets::write_secret_file(path, FRESH_CONFIG_BODY.as_bytes())
+        .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+    Ok(())
 }
 
 /// Validate a configured context window before it reaches the agent.
@@ -4159,6 +4204,107 @@ model = "anthropic/claude-opus-4-20250514"
         );
         // No temp litter.
         assert!(!path.with_extension("toml.tmp").exists());
+    }
+
+    /// The operator's first `operant config set` on a machine with no
+    /// `operant.toml` anywhere: no config path is recorded, so the writer had
+    /// nothing to persist into and the setting died with the process (audit
+    /// 2026-11-13, finding 16 — the CLI printed "in-memory only; persist
+    /// failed" and the operator assumed it had worked).
+    ///
+    /// The first default path is the file's home. Here `OPERANT_CONFIG_DIR`
+    /// points it at a temp dir, so nothing outside that dir is touched.
+    #[test]
+    #[serial]
+    fn persist_config_key_creates_the_default_file_when_no_config_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // RT-208: hold the recorded-config-path global for this test's whole
+        // window, then clear it — a fresh machine records no config path.
+        let _cfg_guard = config_path_test_guard();
+        let _env_lock = crate::platform::test_env_lock_blocking();
+        let previous_dir = std::env::var("OPERANT_CONFIG_DIR").ok();
+        let previous_path = loaded_config_path();
+        // SAFETY: test-only env mutation, under the env lock and #[serial].
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", dir.path()) };
+        {
+            let mut slot = LOADED_CONFIG_PATH
+                .write()
+                .expect("the recorded-config-path lock");
+            *slot = None;
+        }
+        assert!(
+            loaded_config_path().is_none(),
+            "no file exists, so no path is recorded"
+        );
+
+        let created = dir.path().join("operant.toml");
+        let written = persist_config_key("compression.enabled", "true").expect("persist");
+        assert_eq!(written, created, "the first default path is the target");
+        assert!(created.exists(), "the config file was created");
+
+        let text = std::fs::read_to_string(&created).expect("re-read the created file");
+        assert!(
+            text.contains("[compression]"),
+            "the key's table was created: {text}"
+        );
+        assert!(text.contains("enabled = true"), "the leaf was set: {text}");
+        let reloaded = parse_config_file(&created).expect("the created file loads");
+        assert!(
+            reloaded.compression.enabled,
+            "the value survives a reload of the created file"
+        );
+
+        // Restore the process globals this test moved.
+        if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+            *slot = previous_path;
+        }
+        match previous_dir {
+            Some(v) => unsafe { std::env::set_var("OPERANT_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") },
+        }
+    }
+
+    /// The isolated-config-home case: a path IS recorded (the loader claims
+    /// `<dir>/operant.toml` for `OPERANT_CONFIG_DIR`) but no file exists
+    /// there yet. The recorded path stays the target and is created, so the
+    /// setting lands in the isolated home instead of the real `~/.operant`.
+    #[test]
+    #[serial]
+    fn persist_config_key_creates_the_recorded_file_when_it_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cfg_guard = config_path_test_guard();
+        let _env_lock = crate::platform::test_env_lock_blocking();
+        let previous_dir = std::env::var("OPERANT_CONFIG_DIR").ok();
+        let previous_path = loaded_config_path();
+        // SAFETY: test-only env mutation, under the env lock and #[serial].
+        unsafe { std::env::set_var("OPERANT_CONFIG_DIR", dir.path()) };
+
+        let recorded = dir.path().join("operant.toml");
+        // The loader claims `<dir>/operant.toml` as the config source for an
+        // isolated config home even when no file exists there yet. The path
+        // is recorded DIRECTLY here: a real `load_app_config` would find the
+        // operator's live `~/.operant/operant.toml` on this host and record
+        // THAT instead — the RT-208 hazard this file's guard exists for.
+        {
+            let mut slot = LOADED_CONFIG_PATH
+                .write()
+                .expect("the recorded-config-path lock");
+            *slot = Some(recorded.clone());
+        }
+        assert!(!recorded.exists(), "no file exists yet");
+
+        let written = persist_config_key("agent.model", "fresh-machine").expect("persist");
+        assert_eq!(written, recorded, "the RECORDED file is the one written");
+        let reloaded = parse_config_file(&recorded).expect("the created file loads");
+        assert_eq!(reloaded.agent.model, "fresh-machine");
+
+        if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+            *slot = previous_path;
+        }
+        match previous_dir {
+            Some(v) => unsafe { std::env::set_var("OPERANT_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") },
+        }
     }
 
     #[test]

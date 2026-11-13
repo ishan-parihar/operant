@@ -151,18 +151,64 @@ fn terminal_output(n: usize) -> String {
 }
 
 #[test]
-fn aft_mode_leaves_shell_output_to_aft() {
-    // The default: AFT already compresses bash in-process, and a second pass
-    // would strip AFT's own recovery handles.
+fn aft_mode_leaves_afts_own_shell_output_to_aft() {
+    // The default: AFT compresses the output of ITS OWN bash tool, and a
+    // second pass would strip AFT's own recovery handles.
     let text = terminal_output(400);
     let cfg = EvidenceConfig {
         enabled: true,
         min_size: 1,
         ..EvidenceConfig::default()
     };
-    let out = compress("terminal", &text, &cfg);
-    assert!(!out.changed(), "AFT mode must not touch a shell result");
+    let out = compress("aft_bash", &text, &cfg);
+    assert!(!out.changed(), "AFT mode must not touch AFT's own output");
     assert_eq!(out.subject, Subject::Shell);
+}
+
+#[test]
+fn aft_mode_still_compresses_the_shell_tools_operant_owns() {
+    // The shell gate used to skip EVERY shell result in AFT mode, on the
+    // assumption that AFT owns them all. It does not: `code_execution` and
+    // `process` are operant's own tools, and AFT never touched their
+    // output. Skipping them left the fleet's largest measured token family
+    // (code_execution, 875 955 tokens on the operator's database)
+    // uncompressed while the doctor said the layer was on.
+    let text = terminal_output(400);
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("code_execution", &text, &cfg);
+    assert!(
+        out.changed(),
+        "AFT mode must still compress the shell tools operant owns"
+    );
+    assert_eq!(out.subject, Subject::Shell);
+    let out = compress("process", &text, &cfg);
+    assert!(out.changed(), "and the process tool too");
+}
+
+#[test]
+fn native_mode_gives_the_layer_the_whole_shell_path() {
+    // `native` means the operator chose the layer for the shell, so it
+    // compresses every shell result. The EXCLUSIVITY guarantee lives in the
+    // default mode: in `aft` mode AFT's own output is never compressed
+    // twice (see the test above).
+    let text = terminal_output(400);
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        shell: ShellMode::Native,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("aft_bash", &text, &cfg);
+    assert!(
+        out.changed(),
+        "native mode gives the layer the whole shell path"
+    );
+    let out = compress("terminal", &text, &cfg);
+    assert!(out.changed(), "the layer's own shell tools are compressed");
 }
 
 #[test]
@@ -223,6 +269,7 @@ fn a_family_the_operator_turns_off_is_left_alone() {
         Subject::Shell.as_str().to_string(),
         FamilyConfig {
             enabled: Some(false),
+            methods: None,
             chain: None,
         },
     );
@@ -247,6 +294,7 @@ fn a_family_override_that_enables_works_over_a_disabled_master() {
         Subject::Shell.as_str().to_string(),
         FamilyConfig {
             enabled: Some(true),
+            methods: None,
             chain: None,
         },
     );
@@ -279,6 +327,7 @@ fn a_family_can_name_its_own_chain() {
         Subject::Read.as_str().to_string(),
         FamilyConfig {
             enabled: None,
+            methods: None,
             chain: Some("code-aggressive".to_string()),
         },
     );
@@ -308,6 +357,7 @@ fn an_unknown_chain_name_falls_back_instead_of_disabling() {
         Subject::Shell.as_str().to_string(),
         FamilyConfig {
             enabled: None,
+            methods: None,
             chain: Some("no-such-chain".to_string()),
         },
     );
@@ -368,5 +418,162 @@ fn the_schema_reconciles_a_column_onto_a_database_that_predates_it() {
         rows[0].full_content.as_deref(),
         Some("the tool's own output"),
         "the column must exist on a freshly created database"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The contract is now a rule, not a declaration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_family_can_switch_one_method_off() {
+    // The plan's P6 exit criterion: "the operator can disable any method
+    // without a rebuild". Before this, the smallest unit was a family and a
+    // family could only be swapped to a different preset.
+    let mut source = String::new();
+    for i in 0..200 {
+        source.push_str(&format!(
+            "fn item_{i}() {{\n    // a comment nobody reads\n    let value = compute({i}) + {i} * 3;\n    println!(\"{{value}}\");\n}}\n\n"
+        ));
+    }
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        ..EvidenceConfig::default()
+    };
+    let with_code_filter = compress("file_read", &source, &cfg);
+    assert!(with_code_filter.changed(), "the code chain must fire");
+
+    let mut families = std::collections::BTreeMap::new();
+    families.insert(
+        Subject::Read.as_str().to_string(),
+        FamilyConfig {
+            enabled: None,
+            chain: None,
+            methods: Some(vec!["code-filter".to_string()]),
+        },
+    );
+    let without_code_filter = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        families,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("file_read", &source, &without_code_filter);
+    assert!(
+        !out.applied.contains(&"code-filter"),
+        "the switched-off method must not run: {:?}",
+        out.applied
+    );
+    assert!(
+        out.text.len() >= with_code_filter.text.len(),
+        "and the result must be no smaller without it"
+    );
+    // The code filter is the method that shrinks a source read, so with it
+    // off the chain does nothing at all — which is exactly what the operator
+    // asked for, and exactly why the knob has to exist.
+    assert!(
+        !out.changed() || out.text.len() > with_code_filter.text.len(),
+        "switching the method off must not shrink the result further"
+    );
+}
+
+#[test]
+fn a_method_that_does_not_accept_the_shape_does_not_run_on_it() {
+    // `consumes` was declared by every method and read by nobody. Now the
+    // runner asks: a method that accepts only JSON must not run on a
+    // terminal payload.
+    let mut payload = String::from("{\"exit_code\":0,\"stdout\":\"");
+    for i in 0..400 {
+        payload.push_str(&format!("line {i}\n"));
+    }
+    payload.push_str("\",\"runtime\":\"local\"}");
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        shell: ShellMode::Native,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("terminal", &payload, &cfg);
+    assert!(out.changed(), "the terminal chain must fire");
+    assert!(
+        !out.applied.contains(&"toon"),
+        "toon accepts JSON only, and this payload is not JSON: {:?}",
+        out.applied
+    );
+}
+
+#[test]
+fn stderr_is_never_routed_and_survives_a_long_failure() {
+    // The plan's §9 guard: "the router never routes stderr/error fields".
+    // The router used to route stderr, and the Term chain's cap could then
+    // cut the failure detail the model needed. The old test used a
+    // 31-character stderr, so it passed either way.
+    let mut stderr = String::new();
+    for i in 0..2_000 {
+        stderr.push_str(&format!("warning: something {i} happened\n"));
+    }
+    stderr.push_str("fatal: the real error is at the end\n");
+    let payload = serde_json::json!({
+        "exit_code": 1,
+        "stdout": "some output\n",
+        "stderr": stderr,
+        "runtime": "local",
+    });
+    let text = serde_json::to_string(&payload).expect("serialises");
+    let cfg = EvidenceConfig {
+        enabled: true,
+        min_size: 1,
+        shell: ShellMode::Native,
+        ..EvidenceConfig::default()
+    };
+    let out = compress("terminal", &text, &cfg);
+    let parsed: serde_json::Value = serde_json::from_str(&out.text).expect("still JSON");
+    let kept = parsed["stderr"].as_str().expect("a string");
+    assert_eq!(
+        kept, stderr,
+        "stderr must survive byte for byte — the failure detail is the point"
+    );
+}
+
+#[test]
+fn the_recall_window_keeps_the_recovery_cheaper_than_the_result() {
+    // The recovery path must not cost more than the thing it recovered: a
+    // tool result can be 200 000 bytes, and handing all of it back would
+    // spend more context than the compression saved.
+    let db = test_db("window");
+    let session = "sess-window";
+    let call = "call-window";
+    db.save_session(
+        session,
+        Some("window"),
+        "test",
+        "2026-11-12T00:00:00Z",
+        "2026-11-12T00:00:00Z",
+    )
+    .expect("the session row");
+    let big = "x".repeat(200_000);
+    store_tool_result(&db, session, call, "the shaped copy", &big);
+
+    use operant_core::tools::OperantTool;
+    let tool =
+        operant_core::tools::evidence_recall::EvidenceRecallTool::new(std::sync::Arc::new(db));
+    let ctx = operant_core::tools::ToolContext::default().with_session_id(session.to_string());
+    let out = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(tool.execute(serde_json::json!({"key": format!("{session}:{call}")}), ctx));
+    let payload: serde_json::Value =
+        serde_json::from_str(&out.content).expect("the tool answers JSON");
+    let content = payload["content"].as_str().expect("a string");
+    assert_eq!(
+        content.chars().count(),
+        operant_core::tools::evidence_recall::RECALL_WINDOW_CHARS,
+        "the recall hands back one window"
+    );
+    assert!(
+        payload["withheld_chars"].as_i64().expect("a count") > 0,
+        "and says how much it withheld"
     );
 }

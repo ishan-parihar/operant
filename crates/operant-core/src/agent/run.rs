@@ -183,22 +183,30 @@ fn last_user_turn(messages: &[Message]) -> String {
 /// retrieves the full text. The full text is in the SESSION STORE, which the
 /// caller writes — the caller keeps the original and gives the model the
 /// shaped copy, so the marker is a promise the store keeps.
+/// Compress one tool result, and say whether the compression was lossy.
+///
+/// The lossy flag travels out because a LOSSY result must keep its archived
+/// full text even when the shaped text happens to equal the original: the
+/// provenance marker promises the full output can come back, and that
+/// promise must not depend on the shaped text being different.
 fn compress_tool_result(
     tool_name: &str,
     body: &str,
     tool_call_id: &str,
     session_id: &str,
-) -> String {
+) -> (String, bool) {
     let cfg = crate::config::compression_config();
-    if !cfg.enabled || body.len() < cfg.min_size {
-        return body.to_string();
-    }
+    // The master switch is NOT checked here. It is checked inside
+    // `compress()`, where the per-family override is consulted first — so a
+    // family can be turned on on its own. Checking it here returned before
+    // the override was ever read, and the documented "turn ONE family on"
+    // did nothing.
     let compressed = crate::agent::evidence::compress(tool_name, body, &cfg);
     if !compressed.changed() {
-        return body.to_string();
+        return (body.to_string(), false);
     }
     if !compressed.lossy {
-        return compressed.text;
+        return (compressed.text, false);
     }
     let key = crate::agent::evidence::recall::key_for(Some(session_id), tool_call_id);
     let marker = crate::agent::evidence::recall::marker(
@@ -209,7 +217,7 @@ fn compress_tool_result(
     );
     let mut text = compressed.text;
     text.push_str(&marker);
-    text
+    (text, true)
 }
 
 impl OperantAgent {
@@ -3259,7 +3267,7 @@ impl OperantAgent {
                         // Only SUCCESSFUL results are compressed: errors are
                         // short and the model needs them verbatim.
                         let full_body = body;
-                        let body = if result.success {
+                        let (body, result_was_lossy) = if result.success {
                             compress_tool_result(
                                 &result.name,
                                 &full_body,
@@ -3267,7 +3275,7 @@ impl OperantAgent {
                                 &session_id,
                             )
                         } else {
-                            full_body.clone()
+                            (full_body.clone(), false)
                         };
                         let body = self
                             .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
@@ -3276,7 +3284,7 @@ impl OperantAgent {
                         // through -- after the guard, so the guard saw the
                         // result at its REAL size.
                         let body = if result.success {
-                            truncate_tool_result(&result.name, &body)
+                            truncate_tool_result(&body)
                         } else {
                             body
                         };
@@ -3354,7 +3362,15 @@ impl OperantAgent {
                             // CAPPED text, so the trim's promise ("the full
                             // output is still in the session store") was
                             // false for every result over 4096 characters.
-                            full_content: (full_body != content).then(|| full_body.clone()),
+                            // The archive copy is written whenever the
+                            // model-facing copy differs from the tool's
+                            // output — and ALSO when the layer compressed
+                            // the result LOSSILY. A lossy result whose
+                            // shaped text happened to equal the original
+                            // would otherwise lose its archived twin, and
+                            // the marker would point at nothing.
+                            full_content: (full_body != content || result_was_lossy)
+                                .then(|| full_body.clone()),
                             tool_call_id: Some(result.tool_call_id.clone()),
                             tool_calls: None,
                             tool_name: Some(result.name.clone()),
@@ -4711,6 +4727,30 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod compression_chokepoint_tests {
+    /// The master switch used to be checked in the CHOKEPOINT, before
+    /// `compress()` ran. `compress()` is where the per-family override is
+    /// consulted, so the documented "turn ONE family on without turning on
+    /// everything" could never fire while the master switch was off — and
+    /// `operant.example.toml` said it would.
+    ///
+    /// The order is the defect, so the contract is pinned over the source:
+    /// the early return must not come back.
+    #[test]
+    fn the_master_switch_is_not_checked_before_the_family_override() {
+        let src = include_str!("run.rs");
+        // The needle is assembled at runtime so this test's own source does
+        // not contain it — the repo's other source contracts do the same.
+        let early_return = format!("if !cfg.enabled || body.len() < {}", "cfg.min_size");
+        assert!(
+            !src.contains(&early_return),
+            "the chokepoint must not return before `compress()` — the per-family \
+             override lives there"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -33,9 +33,16 @@ pub struct RoutePlan {
 ///
 /// Everything else — `exit_code`, `runtime`, `hint`, `truncated`, counts,
 /// status flags — is metadata, and metadata is left exactly as it is.
+///
+/// `stderr` is metadata too, and deliberately so. The plan's failure-mode
+/// table names it: "compression destroys the failure detail the model needed"
+/// is what happens when a chain runs over the whole payload, and the guard
+/// it names is that the router never routes `stderr`. A long stderr used to
+/// be capped by the Term chain, which is exactly the loss the guard exists
+/// to prevent.
 fn payload_keys(subject: Subject) -> &'static [&'static str] {
     match subject {
-        Subject::Shell => &["stdout", "stderr"],
+        Subject::Shell => &["stdout"],
         Subject::Web => &["text", "content", "body", "data", "markdown"],
         Subject::Search => &["matches", "results"],
         Subject::Read => &["content", "text"],

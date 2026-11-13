@@ -23,7 +23,7 @@
 
 use operant_core::client::{Message, Role, ToolCall, ToolCallFunction};
 use operant_core::context_management::{
-    trim_tool_results_to_share, TOOL_TRIM_MARKER, TOOL_TRIM_PROTECT_LAST,
+    TOOL_TRIM_MARKER, TOOL_TRIM_PROTECT_LAST, trim_tool_results_to_share,
 };
 
 /// An assistant turn that asked for one tool call, and the tool's result.
@@ -46,6 +46,7 @@ fn exchange(id: &str, args: &str, result_chars: usize) -> (Message, Message) {
 #[test]
 fn the_trim_keeps_the_call_and_replaces_the_result() {
     let (assistant, result) = exchange("call_a", "{\"path\":\"src/lib.rs\"}", 20_000);
+    let original = result.content.clone();
     let mut messages = vec![
         Message::new(Role::System, "you are operant"),
         Message::new(Role::User, "read the file"),
@@ -61,8 +62,13 @@ fn the_trim_keeps_the_call_and_replaces_the_result() {
         messages[2].tool_calls.is_some(),
         "the CALL survives — the description is the cheap part"
     );
-    let args = &messages[2].tool_calls.as_ref().unwrap()[0].function.arguments;
-    assert_eq!(args, "{\"path\":\"src/lib.rs\"}", "the arguments are untouched");
+    let args = &messages[2].tool_calls.as_ref().unwrap()[0]
+        .function
+        .arguments;
+    assert_eq!(
+        args, "{\"path\":\"src/lib.rs\"}",
+        "the arguments are untouched"
+    );
     assert!(
         messages[3].content.starts_with(TOOL_TRIM_MARKER),
         "the result carries the marker: {}",
@@ -72,6 +78,15 @@ fn the_trim_keeps_the_call_and_replaces_the_result() {
         messages[3].content.contains("20000 chars returned"),
         "the marker states the original size: {}",
         messages[3].content
+    );
+    // The marker's promise must be true: "the first 400 are kept" means the
+    // first 400 characters of the ORIGINAL are in the content the model reads.
+    // Without this assertion the trim could replace every character with a
+    // marker and still pass — which is exactly what it did.
+    let first_400: String = original.chars().take(400).collect();
+    assert!(
+        messages[3].content.contains(&first_400),
+        "the first 400 characters of the original survive the trim"
     );
     assert_eq!(
         messages[3].tool_call_id.as_deref(),
@@ -100,7 +115,8 @@ fn the_trim_is_a_no_op_when_the_share_is_already_met() {
     let (assistant, result) = exchange("call_a", "{}", 100);
     let mut messages = vec![assistant, result];
     let before = messages[1].content.clone();
-    let report = trim_tool_results_to_share(&mut messages, 100_000, 0.40, TOOL_TRIM_PROTECT_LAST, 400);
+    let report =
+        trim_tool_results_to_share(&mut messages, 100_000, 0.40, TOOL_TRIM_PROTECT_LAST, 400);
     assert_eq!(report.trimmed, 0);
     assert_eq!(report.saved(), 0);
     assert_eq!(messages[1].content, before, "the result is untouched");

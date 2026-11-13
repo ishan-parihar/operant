@@ -30,36 +30,64 @@ use serde::{Deserialize, Serialize};
 
 pub use chain::{ChainOutcome, run_chain_guarded, run_chain_traced};
 pub use types::{
-    Block, ContentFormat, CostClass, Method, MethodCtx, MethodInfo, MethodKind, Origin, Outcome,
-    Produces, Recovery, Subject,
+    Block, ContentFormat, Method, MethodCtx, MethodInfo, Origin, Outcome, Produces, Recovery,
+    Subject,
 };
 
 /// How shell results are compressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellMode {
-    /// AFT already compresses shell output; the layer leaves it alone.
+    /// AFT owns the shell output it produces; the layer leaves AFT's own
+    /// tool alone and compresses the shell tools operant owns.
     #[default]
     Aft,
-    /// The layer compresses the shell payload itself.
+    /// The layer compresses every shell payload itself.
     Native,
-    /// The `rtk` binary compresses the shell output.
+    /// The `rtk` binary owns the shell output; the layer leaves it alone.
     Rtk,
 }
 
+/// The tool whose output AFT produces and compresses.
+///
+/// The shell gate used to skip EVERY shell result in `aft` mode, on the
+/// assumption that AFT owns them all. It does not: `aft_bash` is AFT's, and
+/// `terminal`, `code_execution` and `process` are operant's own tools whose
+/// output AFT never touched. Skipping them all left the fleet's largest
+/// token family uncompressed while the doctor said the layer was on.
+pub const AFT_SHELL_TOOL: &str = "aft_bash";
+
 /// A per-family override.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FamilyConfig {
     /// Whether this family is compressed at all.
+    ///
+    /// When set, this flag decides for the family — it is NOT limited by the
+    /// master switch. That is the point of a per-family flag: one family can
+    /// be turned on without turning everything on, or one turned off without
+    /// a rebuild.
     #[serde(default)]
     pub enabled: Option<bool>,
     /// The named chain to use, instead of the one the format selects.
     #[serde(default)]
     pub chain: Option<String>,
+    /// Methods to switch OFF for this family, by method name.
+    ///
+    /// The smallest unit the operator can turn off. Without it, a single
+    /// aggressive method in a chain can only be avoided by swapping the whole
+    /// family to another preset.
+    #[serde(default)]
+    pub methods: Option<Vec<String>>,
 }
 
 /// The evidence layer's configuration.
+///
+/// Unknown keys are REJECTED. A config key that is silently dropped looks
+/// exactly like a feature that is off, and an operator has no way to tell
+/// the difference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceConfig {
     /// Whether the layer compresses anything at all.
     #[serde(default)]
@@ -158,19 +186,42 @@ pub fn compress(tool_name: &str, content: &str, cfg: &EvidenceConfig) -> Compres
         }
     };
 
-    // The SHELL path is owned by another compressor: AFT compresses bash
-    // in-process, and the `rtk` binary is the terminal tool's executor. The
-    // layer must not compress what they already compressed — a second pass
-    // over rtk's reduced output would strip the very handles rtk prints for
-    // its own recovery. `Native` is the mode where the layer compresses the
-    // shell payload itself.
-    if subject == Subject::Shell && cfg.shell != ShellMode::Native {
-        return Compressed::unchanged(subject, format, content);
+    // The SHELL path can be owned by another compressor: AFT compresses the
+    // output of its own bash tool, and the `rtk` binary is the terminal
+    // tool's executor. The layer must not compress what they already
+    // compressed — a second pass over rtk's reduced output would strip the
+    // very handles rtk prints for its own recovery.
+    //
+    // Ownership is decided by the TOOL, not by the subject. `aft_bash` is
+    // AFT's; `terminal`, `code_execution` and `process` are operant's own,
+    // and AFT never touched their output. Skipping every shell result left
+    // the fleet's largest token family uncompressed while the doctor said
+    // the layer was on.
+    if subject == Subject::Shell {
+        match cfg.shell {
+            // AFT owns the output of ITS OWN bash tool, and a second pass
+            // over it would strip the handles AFT prints for its own
+            // recovery. The other shell tools — `terminal`, `code_execution`,
+            // `process` — are operant's own, and AFT never touched them.
+            ShellMode::Aft if tool_name == AFT_SHELL_TOOL => {
+                return Compressed::unchanged(subject, format, content);
+            }
+            // The `rtk` binary is the executor for EVERY shell command, so
+            // the layer stays out of the shell path entirely.
+            ShellMode::Rtk => return Compressed::unchanged(subject, format, content),
+            // `Native`, and `Aft` for the tools AFT does not own: the layer
+            // compresses them.
+            ShellMode::Aft | ShellMode::Native => {}
+        }
     }
 
     // The per-family override decides whether this family is compressed, and
     // it WINS over the master switch: an operator can turn ONE family on
     // without turning on everything, or one family off, without a rebuild.
+    //
+    // This check lives HERE, not in the caller. When it lived in the caller,
+    // the master switch returned before the family was ever consulted, and
+    // the documented "turn one family on" did nothing.
     let family = cfg.families.get(subject.as_str());
     let enabled = family.and_then(|f| f.enabled).unwrap_or(cfg.enabled);
     if !enabled || content.len() < cfg.min_size {
@@ -202,12 +253,20 @@ pub fn compress(tool_name: &str, content: &str, cfg: &EvidenceConfig) -> Compres
     let named = family
         .and_then(|f| f.chain.as_deref())
         .and_then(methods::named_chain);
+    // And it may switch individual methods off. The names are the methods'
+    // own `name()` values ("toon", "code-filter", …).
+    let switched_off: &[String] = family.and_then(|f| f.methods.as_deref()).unwrap_or(&[]);
 
     for segment in &plan.segments {
         let chain = named.unwrap_or_else(|| methods::chain_for(segment.format));
+        let chain: Vec<&dyn Method> = chain
+            .iter()
+            .copied()
+            .filter(|m| !switched_off.iter().any(|off| off == m.name()))
+            .collect();
         let block = Block::new(&segment.text, subject, segment.format, &origin);
         let ctx = MethodCtx::new(tool_name);
-        match chain::run_chain_guarded(chain, &block, &ctx) {
+        match chain::run_chain_guarded(&chain, &block, &ctx, true) {
             Some(outcome) => {
                 applied.extend(outcome.applied.iter().copied());
                 lossy |= outcome.lossy;
@@ -234,6 +293,22 @@ pub fn compress(tool_name: &str, content: &str, cfg: &EvidenceConfig) -> Compres
 
     let tokens_before = estimate_tokens(content);
     let tokens_after = estimate_tokens(&text);
+
+    // One line per result the layer changed. The layer used to emit nothing
+    // at all: an operator who turned it on could not tell a quiet day from a
+    // broken feature, and the numbers that prove it works (what was saved,
+    // which method did it) existed only in a struct that never left this
+    // function.
+    tracing::info!(
+        tool = tool_name,
+        subject = subject.as_str(),
+        format = format.as_str(),
+        methods = %applied.join(","),
+        lossy,
+        tokens_before,
+        tokens_after,
+        "evidence layer compressed a tool result",
+    );
 
     Compressed {
         text,

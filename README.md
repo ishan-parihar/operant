@@ -217,23 +217,31 @@ body becomes a table, a source file has its comments stripped, a fetch has
 its HTML boilerplate removed — instead of every one of them receiving the
 same head/tail cut.
 
-- It runs **after secret redaction** (no compression ever holds an
-  unredacted byte) and **before the spend guard** (so the guard measures the
-  cost that shaping could not remove).
+- It runs **after secret redaction** and **before the spend guard**, so the
+  guard measures the cost that shaping could not remove.
 - Only `successful` results are compressed: an error reaches the model
   verbatim, because the detail is the point.
-- Three guarantees: **never worse** (a result never grows),
-  **fail-open** (a method that panics is caught, the payload untouched), and
-  **recoverable** (a lossy method only runs when the full text is stored, and
-  the compressed result names the key — resolved by the `evidence_recall`
-  tool).
-- `shell = "aft"` is the default: AFT already compresses bash output, and the
-  layer must not compress what AFT already compressed.
+- Three guarantees: **never worse** (a result never grows), **fail-open** (a
+  method that panics is caught, the payload untouched), and **recoverable** (a
+  lossy method only runs when the full text is stored, and the compressed
+  result names the key — resolved by the `evidence_recall` tool).
+- `min_size` is in **bytes** (512 by default); a smaller result is left alone.
+- `shell` names who owns shell output: `aft` (the default — AFT already
+  compresses bash output, so the layer skips it), `native` (the layer
+  compresses the payload itself), or `rtk` (the `rtk` binary owns it).
+- A family's `enabled` flag, when present, decides for that family — it is
+  not limited by the master switch, so one family can be turned on or off
+  without a rebuild.
 
 It is **off by default** and behaviour-neutral until you set
 `enabled = true`. Measure before you tune:
 `operant doctor --tools-tokens` ranks your tool families by model-visible
 tokens. See `operant.example.toml` for the full commented schema.
+
+**Database growth:** every tool result whose model-facing copy differs from
+the tool's own output now stores BOTH, whether or not `[compression]` is on —
+measured on a live install, 47.3 MB of tool content in 42 689 rows becomes
+~94.7 MB, so a 147.6 MB database grows to roughly 195 MB for the same history.
 
 ### When a turn runs out of room
 

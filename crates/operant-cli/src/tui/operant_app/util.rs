@@ -1,11 +1,8 @@
 // Vendored from jcode (crates/operant-core/src/util.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; partial —
-// the token-estimation helpers the renderers use: APPROX_CHARS_PER_TOKEN (:17),
-// ApproxTokenSeverity (:20), estimate_tokens (:27), format_number (:32),
-// format_approx_token_count (:45), approx_tool_output_token_severity (:62).
+// the token-estimation helpers the renderers use: ApproxTokenSeverity,
+// format_approx_token_count, approx_tool_output_token_severity.
 //! (Upstream reaches these via operant-base/src/util.rs:1 `pub use operant_core::util::*`.)
-
-pub const APPROX_CHARS_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproxTokenSeverity {
@@ -17,9 +14,10 @@ pub enum ApproxTokenSeverity {
 // [port-decision] dedup: ApproxTokenSeverity defined twice across concatenated
 // sources; kept the first (identical) copy.
 
-/// Estimate token count using jcode's existing chars-per-token heuristic.
+/// Estimate token count with the canonical estimator
+/// (`operant_core::context_management::estimate_tokens`): chars / 4.
 pub fn estimate_tokens(s: &str) -> usize {
-    s.len() / APPROX_CHARS_PER_TOKEN
+    operant_core::context_management::estimate_tokens(s)
 }
 
 /// Format a token count in the compact style used by the TUI.

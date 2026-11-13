@@ -1,13 +1,8 @@
 //! LCM (Lossless Context Management) agent tools.
 //!
-//! UNWIRED (RT-358, named not shipped): when `agent.context_engine = "lcm"`
-//! the DAG engine is attached to the agent, but NONE of these tool structs is
-//! registered — nothing in the workspace names any of them outside this file
-//! (verified: the only external references to the tool NAMES are icon and
-//! parameter strings in `gateway_runner` and the CLI's command docs). The
-//! header used to promise that both LCM tools mount into the registry so
-//! the model can use the lossless store directly; the store is reachable
-//! only through the engine internals and the CLI's `context` commands.
+//! Loaded into the tool registry when `agent.context_engine = "lcm"` (wired at
+//! `operant-cli/src/main.rs`): they answer "what did we already say?" over the
+//! lossless DAG, so nothing lost to compaction is truly gone.
 //!
 //! The tools, for a reader:
 //!   - `lcm_recall` — FTS5 phrase search over the DAG (session-scoped by
@@ -17,8 +12,7 @@
 //!     the D0 tail token budget.
 //!
 //! hermes-lcm parity: recall tools are the "memory tool" half of the
-//! ContextEngine plugin (see `docs/HERMES_LCM_INTEGRATION.md` P2); mounting
-//! them into the registry is a product decision, not a silent refactor.
+//! ContextEngine plugin (see `docs/HERMES_LCM_INTEGRATION.md` P2).
 
 use std::sync::Arc;
 
@@ -1024,21 +1018,23 @@ pub async fn register_lcm_tools(
 
 #[cfg(test)]
 mod rt358_tests {
-    /// RT-358: the module header promised the LCM tools are registered when
-    /// `context_engine = "lcm"`, while nothing in the workspace mounts any of
-    /// them. Source contract, needles concatenation-built.
+    /// RT-358 was "named not shipped": the module header claimed the LCM tools
+    /// were NOT registered. They ARE — `operant-cli/src/main.rs` calls
+    /// `register_lcm_tools` when `agent.context_engine = "lcm"` — so the
+    /// header was the stale half of the contract. This pins the truth now:
+    /// the header names the condition the tools load under.
+    /// Source contract, needles concatenation-built.
     #[test]
-    fn the_lcm_tools_name_their_unregistered_state() {
+    fn the_lcm_tools_name_their_loading_condition() {
         let src = include_str!("lcm_tools.rs");
+        assert!(
+            src.contains("context_engine = \"lcm\""),
+            "the module doc must name the condition the tools load under"
+        );
         let unwired = format!("UNWIRED (RT-358, named not {}shipped)", "");
         assert!(
-            src.contains(&unwired),
-            "the module doc must name the unregistered surface"
-        );
-        let promise = format!("its two tools are {}registered", "");
-        assert!(
-            !src.contains(&promise),
-            "the header must not promise a registration that does not happen"
+            !src.contains(&unwired),
+            "the header must not claim the tools are unregistered"
         );
     }
 }

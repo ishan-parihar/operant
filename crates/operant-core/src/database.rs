@@ -1331,6 +1331,12 @@ impl Database {
     /// model for bytes it never saw is the one mistake this report must not
     /// make.
     ///
+    /// The archived side IS reported beside it: `archived_bytes` is the size
+    /// of the tool's OWN output before compression, so the operator can see
+    /// the saving and not just the cost. The archive exists only for rows
+    /// written since the `full_content` column was added, so
+    /// `archived_results` says how much of the family is covered at all.
+    ///
     /// Rows with no `tool_name` are NOT counted here: the name was only
     /// recorded from 2026-11-05 onward, so the older rows are unattributable.
     /// [`Self::unattributed_tool_tokens`] reports them separately rather than
@@ -1339,7 +1345,10 @@ impl Database {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT tool_name, COUNT(*), SUM(token_count) FROM messages
+                "SELECT tool_name, COUNT(*), SUM(token_count),
+                        SUM(CASE WHEN full_content IS NOT NULL THEN LENGTH(full_content) ELSE 0 END),
+                        SUM(CASE WHEN full_content IS NOT NULL THEN 1 ELSE 0 END)
+                 FROM messages
                  WHERE role = 'tool' AND token_count IS NOT NULL AND tool_name IS NOT NULL
                  GROUP BY tool_name ORDER BY SUM(token_count) DESC",
             )
@@ -1350,6 +1359,8 @@ impl Database {
                     tool_name: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                     results: row.get::<_, i64>(1)?,
                     tokens: row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
+                    archived_bytes: row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
+                    archived_results: row.get::<_, Option<i64>>(4)?.unwrap_or_default(),
                 })
             })
             .map_err(|e| Error::Agent(format!("Query error: {}", e)))?;
@@ -3067,8 +3078,9 @@ pub struct MessageData {
 
 /// One tool family's share of the model-visible tokens.
 ///
-/// The fleet baseline's row: a family, how many results it produced, and
-/// what the model was charged for them.
+/// The fleet baseline's row: a family, how many results it produced, what the
+/// model was charged for them, and — where the archive exists — how big those
+/// results were BEFORE compression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolTokenRank {
     /// The tool name, as recorded on the result row.
@@ -3077,6 +3089,13 @@ pub struct ToolTokenRank {
     pub results: i64,
     /// The tokens the model was charged for those results.
     pub tokens: i64,
+    /// The bytes of the ORIGINAL tool output for this family, as archived in
+    /// `messages.full_content`; zero for rows written before the archive
+    /// column existed.
+    pub archived_bytes: i64,
+    /// How many rows of this family carry an archived copy — the rows the
+    /// saving is measurable on.
+    pub archived_results: i64,
 }
 
 /// A session from the database (for listing).
@@ -5375,6 +5394,71 @@ mod tests {
         let (rows, tokens) = db.unattributed_tool_tokens().expect("the count runs");
         assert_eq!(rows, 1);
         assert_eq!(tokens, 34);
+    }
+
+    /// The ranking must report the SAVING, not just the cost: the archived
+    /// size of the tool's own output sits beside the model-visible tokens,
+    /// together with the number of rows the archive covers.
+    #[test]
+    fn the_tool_family_ranking_reports_the_archived_size_and_its_coverage() {
+        let db = test_db();
+        // One archived row: the tool's own output was 40 000 bytes, the model
+        // saw a 40-byte copy of it.
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c1",
+            Some("terminal"),
+            &"b".repeat(40),
+            Some(&"c".repeat(40_000)),
+            14,
+        ))
+        .expect("row a");
+        // One row written before the archive column existed: no archived copy,
+        // so it contributes nothing to the archived total.
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c2",
+            Some("terminal"),
+            &"a".repeat(400),
+            None,
+            104,
+        ))
+        .expect("row b");
+        // A family with no archived copy at all.
+        db.save_message_full(&tool_row(
+            "test-session",
+            "c3",
+            Some("file_read"),
+            &"d".repeat(200),
+            None,
+            54,
+        ))
+        .expect("row c");
+
+        let ranking = db.tool_token_ranking().expect("the ranking runs");
+        assert_eq!(ranking.len(), 2);
+
+        let terminal = ranking
+            .iter()
+            .find(|r| r.tool_name == "terminal")
+            .expect("the terminal family ranks");
+        assert_eq!(terminal.results, 2);
+        assert_eq!(terminal.tokens, 118, "the visible tokens are unchanged");
+        assert_eq!(
+            terminal.archived_bytes, 40_000,
+            "the archived size of the tool's own output"
+        );
+        assert_eq!(
+            terminal.archived_results, 1,
+            "only the row with an archived copy counts towards the saving"
+        );
+
+        let file_read = ranking
+            .iter()
+            .find(|r| r.tool_name == "file_read")
+            .expect("the file_read family ranks");
+        assert_eq!(file_read.archived_bytes, 0);
+        assert_eq!(file_read.archived_results, 0);
     }
 
     #[test]

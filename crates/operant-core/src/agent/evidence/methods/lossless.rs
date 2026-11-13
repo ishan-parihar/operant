@@ -2,13 +2,11 @@
 //!
 //! **Contract for this file:** every method here must return
 //! [`MethodInfo::LOSSLESS_TRANSFORM`] unless it genuinely transforms (some are
-//! lossless but parse, and therefore declare [`CostClass::Fast`]). No method
+//! lossless but parse, and therefore take longer). No method
 //! in this file may set `lossy = true`; anything that can lose information
 //! belongs in [`super::lossy`].
 
-use super::super::types::{
-    Block, ContentFormat, CostClass, Method, MethodCtx, MethodInfo, Outcome,
-};
+use super::super::types::{Block, ContentFormat, Method, MethodCtx, MethodInfo, Outcome};
 
 /// One source line, with its terminator kept apart.
 ///
@@ -63,8 +61,7 @@ impl Method for Ansi {
     }
     fn info(&self) -> MethodInfo {
         MethodInfo {
-            consumes: &[ContentFormat::Term, ContentFormat::Plain],
-            cost: CostClass::Instant,
+            consumes: &[],
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -205,7 +202,6 @@ impl Method for Progress {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Term],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -277,7 +273,6 @@ impl Method for Dedup {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Term, ContentFormat::Plain],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -357,7 +352,6 @@ impl Method for MinifyJson {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Json],
-            cost: CostClass::Fast,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -421,7 +415,6 @@ impl Method for MdSlim {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Web, ContentFormat::Plain],
-            cost: CostClass::Fast,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -485,7 +478,6 @@ impl Method for StripLineNumbers {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Code],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -563,8 +555,7 @@ impl Method for Base64Elide {
     }
     fn info(&self) -> MethodInfo {
         MethodInfo {
-            consumes: &[ContentFormat::Json, ContentFormat::Web, ContentFormat::Term],
-            cost: CostClass::Instant,
+            consumes: &[],
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -630,7 +621,6 @@ impl Method for Shape {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Json],
-            cost: CostClass::Fast,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }
@@ -742,7 +732,6 @@ impl Method for Rle {
     fn info(&self) -> MethodInfo {
         MethodInfo {
             consumes: &[ContentFormat::Plain, ContentFormat::Term],
-            cost: CostClass::Instant,
             ..MethodInfo::LOSSLESS_TRANSFORM
         }
     }

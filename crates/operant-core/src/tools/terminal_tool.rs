@@ -8,14 +8,37 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
+use std::time::Duration;
 
 use crate::config::runtime_config;
+use crate::rtk_bridge::RtkLocation;
 use crate::schema::ToolSchema;
 use crate::terminal_hints::annotate_failure;
-use crate::tools::terminal_backend::{self, CommandOutput};
+use crate::tools::terminal_backend::{self, CommandOutput, TerminalBackend};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 pub struct TerminalTool;
+
+/// The note the runtime label carries when rtk was configured but is not
+/// installed: the command still runs, but nothing compressed it.
+const RTK_MISSING_NOTE: &str = "rtk not found — commands were not compressed";
+
+/// The markers the terminal backends append when they stop a stream at its
+/// cap: the local backend writes `[output truncated]`, the docker and ssh
+/// backends write `...[truncated]`.
+///
+/// The backends do not report the cut on [`CommandOutput`] — that is a
+/// `terminal_backend.rs` change — so the marker is all the tool can see.
+const TRUNCATION_MARKERS: [&str; 2] = ["[output truncated]", "...[truncated]"];
+
+/// Whether a backend cut this stream at its output cap.
+fn output_was_cut(text: &str) -> bool {
+    let text = text.trim_end();
+    TRUNCATION_MARKERS
+        .iter()
+        .any(|marker| text.ends_with(marker))
+}
 
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +51,34 @@ struct TerminalArgs {
     use_shell: Option<bool>,
 }
 
+/// One terminal invocation's inputs.
+///
+/// Grouped into a struct so the rtk decision can be exercised without the
+/// process-global config: the rtk inputs are the only two things that differ
+/// between the live path and the "rtk is configured but not installed" path.
+struct TerminalRun<'a> {
+    /// The command the model asked for.
+    command: &'a str,
+    /// Whether the command runs through a shell.
+    use_shell: bool,
+    /// The working directory, when the caller named one.
+    cwd: Option<&'a Path>,
+    /// The environment overrides the caller supplied.
+    env_vars: &'a HashMap<String, String>,
+    /// How long the command may run.
+    timeout: Duration,
+    /// The output cap, in bytes.
+    max_output: usize,
+}
+
+/// The rtk path's two inputs for one run.
+struct RtkInputs<'a> {
+    /// `[compression] shell = "rtk"` is on.
+    mode: bool,
+    /// The resolved rtk binary, when one was found.
+    location: Option<&'a RtkLocation>,
+}
+
 /// What the rtk path decided about one command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RtkOutcome {
@@ -37,6 +88,10 @@ enum RtkOutcome {
     NoRewrite,
     /// rtk's own policy denies this command; it must not run.
     Denied(String),
+    /// rtk is NOT INSTALLED. The command runs unchanged — fail open — but
+    /// the runtime label has to say so, because the operator asked for rtk
+    /// and did not get it.
+    Missing,
 }
 
 /// Ask rtk how it would run this command.
@@ -53,13 +108,17 @@ enum RtkOutcome {
 ///   would run `ls` with the rest as arguments — a silent change of meaning.
 /// * A rewrite is never used when rtk is not installed or not answering: the
 ///   original command runs unchanged.
-fn rtk_rewritten_command(command: &str, use_shell: bool) -> RtkOutcome {
-    use crate::rtk_bridge::{RewriteVerdict, find_rtk, rewrite_command};
+///
+/// `rtk` is the resolved binary, or `None` when it is not installed. Taking it
+/// as an argument rather than resolving it here is what makes the
+/// missing-binary branch testable on a host that HAS rtk installed.
+fn rtk_rewritten_command(command: &str, use_shell: bool, rtk: Option<&RtkLocation>) -> RtkOutcome {
+    use crate::rtk_bridge::{RewriteVerdict, rewrite_command};
 
-    let Some(rtk) = find_rtk() else {
-        return RtkOutcome::NoRewrite;
+    let Some(rtk) = rtk else {
+        return RtkOutcome::Missing;
     };
-    match rewrite_command(&rtk, command) {
+    match rewrite_command(rtk, command) {
         RewriteVerdict::Rewritten { command: rewritten } => {
             if !use_shell && rewritten.contains(['|', '>', '<', '&', ';', '`', '$']) {
                 // The rewrite needs a shell and the command was going to run
@@ -147,10 +206,47 @@ impl OperantTool for TerminalTool {
         //    is one the operator blocked. Running it anyway would make that
         //    deny rule a lie, so the command does not run.
         //
-        // Outside rtk mode this is a single config read and no process at all.
+        // Outside rtk mode this is a single config read and no process at all:
+        // the binary is only resolved when the mode is on.
         let rtk_mode = runtime_config().compression.shell == crate::agent::evidence::ShellMode::Rtk;
-        let (effective_command, rtk_note): (String, Option<String>) = if rtk_mode {
-            match rtk_rewritten_command(&args.command, use_shell) {
+        let rtk_location = if rtk_mode {
+            crate::rtk_bridge::find_rtk()
+        } else {
+            None
+        };
+
+        TerminalTool::run(
+            backend.as_ref(),
+            &TerminalRun {
+                command: &args.command,
+                use_shell,
+                cwd,
+                env_vars: &env_vars,
+                timeout,
+                max_output,
+            },
+            &RtkInputs {
+                mode: rtk_mode,
+                location: rtk_location.as_ref(),
+            },
+        )
+        .await
+    }
+}
+
+impl TerminalTool {
+    /// Pick the command the rtk path allows, run it, and build the envelope.
+    ///
+    /// The rtk inputs are parameters rather than reads of the process-global
+    /// config, so the "rtk is configured but NOT INSTALLED" path is testable
+    /// on a host that has rtk installed.
+    async fn run(
+        backend: &dyn TerminalBackend,
+        run: &TerminalRun<'_>,
+        rtk: &RtkInputs<'_>,
+    ) -> ToolResult {
+        let (effective_command, rtk_note): (String, Option<String>) = if rtk.mode {
+            match rtk_rewritten_command(run.command, run.use_shell, rtk.location) {
                 RtkOutcome::Rewrite(command) => {
                     (command, Some("rtk rewrote this command".to_string()))
                 }
@@ -160,10 +256,17 @@ impl OperantTool for TerminalTool {
                         format!("rtk denied this command and it was not run: {reason}"),
                     );
                 }
-                RtkOutcome::NoRewrite => (args.command.clone(), None),
+                // rtk is not installed: the command still runs, but nothing
+                // compressed it. The envelope must say so — a silent fall-back
+                // is how an operator ends up believing the output was
+                // compressed when it was not.
+                RtkOutcome::Missing => {
+                    (run.command.to_string(), Some(RTK_MISSING_NOTE.to_string()))
+                }
+                RtkOutcome::NoRewrite => (run.command.to_string(), None),
             }
         } else {
-            (args.command.clone(), None)
+            (run.command.to_string(), None)
         };
 
         // The fence sees the command that WILL run — the rewrite, not the
@@ -174,26 +277,26 @@ impl OperantTool for TerminalTool {
         // instead: the rewrite is an optimisation, and an optimisation that is
         // not allowed must not become a refusal of the command the model
         // actually asked for (the original already passed the fence above).
-        let effective_command = if effective_command == args.command
+        let effective_command = if effective_command == run.command
             || crate::tools::file_tools::holon_command_fence_with_shell(
                 &effective_command,
-                use_shell,
+                run.use_shell,
             )
             .is_ok()
         {
             effective_command
         } else {
-            args.command.clone()
+            run.command.to_string()
         };
 
         let output: CommandOutput = match backend
             .execute_command(
                 &effective_command,
-                cwd,
-                &env_vars,
-                use_shell,
-                timeout,
-                max_output,
+                run.cwd,
+                run.env_vars,
+                run.use_shell,
+                run.timeout,
+                run.max_output,
             )
             .await
         {
@@ -206,34 +309,64 @@ impl OperantTool for TerminalTool {
             None => backend.name().to_string(),
         };
 
+        // The tool's own output cap cuts stdout BEFORE the agent's spend
+        // guard ever sees it, so a cut result has to say it was cut: without
+        // that, the guard's later size marker describes the cut rather than
+        // the command's output, and the model cannot tell "the command
+        // produced 200 000 characters" from "the command produced 1 MB and
+        // the tool cut it at 200 000".
+        let truncated = if output_was_cut(&output.stdout) {
+            Some(format!(
+                "stdout was cut at the {}-byte output cap — the command produced more than this envelope carries",
+                run.max_output
+            ))
+        } else if output_was_cut(&output.stderr) {
+            Some(format!(
+                "stderr was cut at the {}-byte output cap — the command produced more than this envelope carries",
+                run.max_output / 4
+            ))
+        } else {
+            None
+        };
+
         if output.success {
             ToolResult::success(
                 "terminal",
-                serde_json::json!({
-                    "exit_code": output.exit_code,
-                    "stdout": output.stdout,
-                    "stderr": output.stderr,
-                    "runtime": runtime_label,
-                }),
+                terminal_envelope(&output, &runtime_label, truncated),
             )
         } else {
             // Plan 010: append an actionable hint when the failure matches
             // one of the terminal_hints heuristics. The hint becomes part
             // of the model-visible error content so it can self-correct.
             let hint = annotate_failure(&effective_command, output.exit_code, &output.stderr);
-            ToolResult::error(
-                "terminal",
-                serde_json::json!({
-                    "exit_code": output.exit_code,
-                    "stdout": output.stdout,
-                    "stderr": output.stderr,
-                    "runtime": runtime_label,
-                    "hint": hint,
-                })
-                .to_string(),
-            )
+            let mut envelope = terminal_envelope(&output, &runtime_label, truncated);
+            envelope["hint"] = serde_json::json!(hint);
+            ToolResult::error("terminal", envelope.to_string())
         }
     }
+}
+
+/// The result envelope: the command's exit code, its two streams, and the
+/// runtime it ran under.
+///
+/// `truncated` is present ONLY when the tool cut the output, and then says
+/// which stream was cut and at which cap — the existing fields stay exactly
+/// as they were.
+fn terminal_envelope(
+    output: &CommandOutput,
+    runtime_label: &str,
+    truncated: Option<String>,
+) -> Value {
+    let mut envelope = serde_json::json!({
+        "exit_code": output.exit_code,
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "runtime": runtime_label,
+    });
+    if let Some(note) = truncated {
+        envelope["truncated"] = Value::String(note);
+    }
+    envelope
 }
 
 #[cfg(test)]
@@ -329,5 +462,91 @@ mod tests {
             .expect("default config selects the local backend");
         assert_eq!(backend.name(), "local");
         assert!(backend.is_available());
+    }
+
+    /// `[compression] shell = "rtk"` on a host with NO rtk installed must
+    /// still run the command — the fall-back is fail-open — but the envelope
+    /// must say that nothing was compressed, or the operator believes a
+    /// compression happened that did not.
+    #[tokio::test]
+    async fn rtk_mode_without_rtk_still_runs_the_command_and_names_the_missing_binary() {
+        let backend = terminal_backend::LocalBackend;
+        let env_vars = HashMap::new();
+        let run = TerminalRun {
+            command: "echo rtk-missing",
+            use_shell: false,
+            cwd: None,
+            env_vars: &env_vars,
+            timeout: Duration::from_secs(10),
+            max_output: 64 * 1024,
+        };
+        // rtk mode, and rtk is NOT installed.
+        let rtk = RtkInputs {
+            mode: true,
+            location: None,
+        };
+
+        let result = TerminalTool::run(&backend, &run, &rtk).await;
+
+        assert!(result.success, "the command must still run");
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["exit_code"], 0);
+        assert!(
+            v["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rtk-missing"),
+            "the command's own output must be in the envelope"
+        );
+        let runtime = v["runtime"].as_str().unwrap_or_default();
+        assert!(
+            runtime.contains("rtk not found"),
+            "the runtime must name the missing rtk, got: {runtime}"
+        );
+        assert!(
+            runtime.contains("commands were not compressed"),
+            "the runtime must say the output was not compressed, got: {runtime}"
+        );
+    }
+
+    /// The tool's own output cap cuts stdout BEFORE the agent's spend guard
+    /// sees it, so a cut result must SAY it was cut — otherwise the guard's
+    /// size marker describes the cut, not the command's output.
+    #[tokio::test]
+    async fn a_truncated_result_says_it_was_truncated() {
+        let backend = terminal_backend::LocalBackend;
+        let env_vars = HashMap::new();
+        // A tiny cap: the backend stops reading stdout at 16 bytes and
+        // marks the cut. No huge output is needed to reach it.
+        let run = TerminalRun {
+            command: "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            use_shell: false,
+            cwd: None,
+            env_vars: &env_vars,
+            timeout: Duration::from_secs(10),
+            max_output: 16,
+        };
+        let rtk = RtkInputs {
+            mode: false,
+            location: None,
+        };
+
+        let result = TerminalTool::run(&backend, &run, &rtk).await;
+
+        assert!(result.success, "the command must still run");
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        let truncated = v["truncated"].as_str().unwrap_or_default().to_string();
+        assert!(
+            truncated.contains("stdout was cut"),
+            "the envelope must say stdout was cut, got: {truncated}"
+        );
+        assert!(
+            truncated.contains("16"),
+            "the envelope must name the cap it cut at, got: {truncated}"
+        );
+        // The existing fields are untouched.
+        assert_eq!(v["exit_code"], 0);
+        assert!(v["stdout"].as_str().unwrap_or_default().contains("aaaa"));
+        assert!(v["runtime"].as_str().unwrap_or_default().contains("local"));
     }
 }

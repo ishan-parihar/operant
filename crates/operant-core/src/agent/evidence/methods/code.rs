@@ -21,9 +21,7 @@
 //! the full text must be in the recall store before either runs. That is why
 //! they live here and not in `lossless.rs`.
 
-use super::super::types::{
-    Block, ContentFormat, CostClass, Method, MethodCtx, MethodInfo, Outcome, Recovery,
-};
+use super::super::types::{Block, ContentFormat, Method, MethodCtx, MethodInfo, Outcome, Recovery};
 
 /// How hard the code filter works.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +49,6 @@ fn code_info() -> MethodInfo {
         lossy: true,
         recovery: Recovery::Recall,
         consumes: &[ContentFormat::Code],
-        cost: CostClass::Fast,
         ..MethodInfo::LOSSY_RECALLABLE
     }
 }

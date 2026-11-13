@@ -1143,7 +1143,7 @@ fn shell_mode_label(mode: operant_core::agent::evidence::ShellMode) -> &'static 
 }
 
 /// The fleet baseline: which tool families are charged the most model-visible
-/// tokens.
+/// tokens, and how big those results were BEFORE compression.
 ///
 /// This is the number the evidence layer's savings have to be measured
 /// against. Without it, a compression percentage is a claim; with it, it is a
@@ -1151,7 +1151,8 @@ fn shell_mode_label(mode: operant_core::agent::evidence::ShellMode) -> &'static 
 ///
 /// The sum is over the MODEL-VISIBLE copy of each result (`content`), never
 /// over the archived full text (`full_content`) — charging the model for
-/// bytes it never saw is the one mistake this report must not make.
+/// bytes it never saw is the one mistake this report must not make. The
+/// archived size is reported BESIDE it, so the saving is visible too.
 pub fn check_tool_tokens(config: &AppConfig) {
     section_header("Tool-result tokens");
     let db = match operant_core::database::Database::init(config.database_path.clone()) {
@@ -1178,16 +1179,23 @@ pub fn check_tool_tokens(config: &AppConfig) {
         db.unattributed_tool_tokens().unwrap_or((0, 0));
     let attributed: i64 = ranking.iter().map(|r| r.tokens).sum();
     let attributed_results: i64 = ranking.iter().map(|r| r.results).sum();
+    // ONE line per fact. The helpers print a detail string as-is, so a
+    // detail that carries several facts (or an embedded newline) runs them
+    // together on one line.
     check_ok(
         "model-visible tool tokens",
-        &format!(
-            "{attributed_results} attributed result(s) carry {attributed} token(s);              {unattributed_results} further result(s) carry {unattributed_tokens} token(s)              with no tool name recorded"
-        ),
+        &format!("{attributed_results} attributed result(s) carry {attributed} token(s)"),
     );
+    check_info(&format!(
+        "{unattributed_results} further result(s) carry {unattributed_tokens} token(s) with no tool name recorded"
+    ));
     for rank in ranking.iter().take(12) {
         check_info(&format!(
-            "{} — {} result(s), {} token(s)",
-            rank.tool_name, rank.results, rank.tokens
+            "{} — {} result(s), {} token(s), {}",
+            rank.tool_name,
+            rank.results,
+            rank.tokens,
+            archived_summary(rank)
         ));
     }
     if ranking.len() > 12 {
@@ -1200,11 +1208,46 @@ pub fn check_tool_tokens(config: &AppConfig) {
         // Not an error: the tool name was only recorded from a certain date
         // onward, so the earlier rows cannot be attributed after the fact.
         check_warn(
-            "unattributed tool output",
-            &format!(
-                "{unattributed_results} result(s), {unattributed_tokens} token(s) — written before the tool name was recorded, so they cannot be ranked by family"
-            ),
+            "unattributed tool output —",
+            "written before the tool name was recorded, so these results cannot be ranked by family",
         );
+    }
+    // The coverage limit, stated once: the archive column arrived after the
+    // history did, so the saving above is measured on part of it only.
+    check_info(
+        "coverage: only rows written since the archive column (messages.full_content) existed carry an archived copy, so the saving above is measured on that part of the history alone",
+    );
+}
+
+/// The archive side of one tool family, as one line of text.
+///
+/// The ratio is computed ONLY when the family has an archive: with no
+/// archived copy there is nothing to compare against, and a "0 %" would read
+/// as "nothing was saved" instead of "nothing was measured".
+fn archived_summary(rank: &operant_core::database::ToolTokenRank) -> String {
+    if rank.archived_results <= 0 || rank.archived_bytes <= 0 {
+        return "no archived copy yet".to_string();
+    }
+    let visible_share = rank.tokens as f64 / rank.archived_bytes as f64 * 100.0;
+    format!(
+        "{} archived ({} archived) — the visible tokens are {:.1}% of the archived bytes",
+        human_bytes(rank.archived_bytes),
+        rank.archived_results,
+        visible_share
+    )
+}
+
+/// A byte count as an operator reads it: `1.2 MB`, `812.0 kB`, `340 B`.
+fn human_bytes(bytes: i64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1} kB", bytes / KB)
+    } else {
+        format!("{bytes:.0} B")
     }
 }
 

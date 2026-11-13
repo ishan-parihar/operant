@@ -3,6 +3,7 @@
 // Extracted from the prompt_input/mod.rs monolith.
 
 use super::*;
+use operant_core::context_management::estimate_tokens;
 
 impl PromptInputState {
     pub fn new() -> Self {
@@ -134,9 +135,9 @@ impl PromptInputState {
         self.update_token_estimate();
     }
 
-    /// Rough token estimate: ~4 chars per token.
+    /// Rough token estimate: the canonical chars/4 estimator.
     pub(crate) fn update_token_estimate(&mut self) {
-        self.token_estimate = self.text.len().div_ceil(4);
+        self.token_estimate = estimate_tokens(&self.text);
     }
 
     pub fn is_empty(&self) -> bool {

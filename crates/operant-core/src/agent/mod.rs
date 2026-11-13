@@ -1244,7 +1244,7 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 /// Keeps a JSON summary with metadata but strips the bulk data.
 const MAX_TOOL_RESULT_LEN: usize = 4096;
 
-fn truncate_tool_result(tool_name: &str, content: &str) -> String {
+fn truncate_tool_result(content: &str) -> String {
     if content.len() <= MAX_TOOL_RESULT_LEN {
         return content.to_string();
     }
@@ -1309,17 +1309,21 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
             return serialized;
         }
         // Final fallback: hard head-truncate (char-boundary-safe).
+        //
+        // The marker points at the session store because the store holds
+        // the full output: the row carries `full_content`, the tool's own
+        // text before this cap ran. A marker that says only "truncated"
+        // leaves the model guessing whether the rest is gone or
+        // recoverable, and it IS recoverable.
         return format!(
-            "{}... [truncated, tool: {}]",
-            safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN),
-            tool_name
+            "{}... [truncated {MAX_TOOL_RESULT_LEN} chars — full output in the session store]",
+            safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN)
         );
     }
     // Fallback: hard truncate (char-boundary-safe to avoid panic on CJK/emoji)
     format!(
-        "{}... [truncated, tool: {}]",
-        safe_truncate_str(content, MAX_TOOL_RESULT_LEN),
-        tool_name
+        "{}... [truncated {MAX_TOOL_RESULT_LEN} chars — full output in the session store]",
+        safe_truncate_str(content, MAX_TOOL_RESULT_LEN)
     )
 }
 
@@ -1498,7 +1502,9 @@ pub mod clients;
 
 // Method-group impl blocks extracted from the former 4.1K-line impl OperantAgent.
 mod builders;
-mod compress;
+// pub(crate): `moa.rs` shares `compress::truncate_head_tail` — the head/tail
+// tool-result truncator — so the crate has ONE of them.
+pub(crate) mod compress;
 // W1.4: the preflight compression surface the runtime reconciled facade
 // drives (old runtime engine's knobs + ported behaviors b/c/e + todo fold).
 pub use compress::{
@@ -1860,7 +1866,7 @@ mod tests {
             "supporting_files": ["scripts/search.sh"],
             "path": "/tmp/skills/skills/arxiv/SKILL.md"
         });
-        let truncated = truncate_tool_result("skill_view", &result.to_string());
+        let truncated = truncate_tool_result(&result.to_string());
         assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 128);
         // Metadata survives and remains machine-readable.
         assert!(truncated.contains("\"name\":\"arxiv\""));
@@ -1875,15 +1881,22 @@ mod tests {
     #[test]
     fn truncate_tool_result_keeps_small_results_untouched() {
         let small = serde_json::json!({"name": "arxiv", "content": "short"}).to_string();
-        assert_eq!(truncate_tool_result("skill_view", &small), small);
+        assert_eq!(truncate_tool_result(&small), small);
     }
 
     #[test]
     fn truncate_tool_result_falls_back_for_non_json() {
         let big = "y".repeat(10_000);
-        let truncated = truncate_tool_result("terminal", &big);
+        let truncated = truncate_tool_result(&big);
         assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 64);
-        assert!(truncated.contains("[truncated, tool: terminal]"));
+        assert!(
+            truncated.contains("[truncated 4096 chars — full output in the session store]"),
+            "the marker must name the cap AND point at the store: {truncated}"
+        );
+        assert!(
+            truncated.contains("full output in the session store"),
+            "the model must be told the text is recoverable: {truncated}"
+        );
     }
 
     #[test]
