@@ -984,8 +984,16 @@ fn a_session_row_names_its_directory() {
     let (list, _preview) = hub_rows(vec![r]);
     let joined = list.join("\n");
     assert!(
-        joined.contains("\u{1f4c2} operant"),
+        joined.contains('\u{1f4c2}'),
+        "the row must mark the directory: {joined}"
+    );
+    assert!(
+        joined.contains("operant"),
         "the row must carry the directory's basename: {joined}"
+    );
+    assert!(
+        !joined.contains("/srv/agentic-harness/operant"),
+        "the row carries the BASENAME; the full path is the preview's line: {joined}"
     );
 }
 

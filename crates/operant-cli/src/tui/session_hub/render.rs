@@ -643,14 +643,79 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         .add_modifier(Modifier::BOLD),
                     (false, false) => Style::default().fg(theme_colors::text()),
                 };
+                // (2026-11-13, audit finding 1) The session's DIRECTORY, as a
+                // qualifier on the TITLE line.
+                //
+                // MEASURED, and this took three tries to get right, which is
+                // worth recording. The directory did not fit the META line —
+                // that line carries the id, employee, message count, tokens,
+                // status, age and cost, and a realistic row measures 38 cells
+                // against the pane's 46 inner columns before the directory is
+                // even considered. The metric model then made it worse: the
+                // model's fixed allowance over-estimates the row's real slack
+                // by ~3 cells, so a "fits" decision made from the model hid a
+                // basename that in fact fitted.
+                //
+                // The TITLE line has its own budget (the title is one string,
+                // and the pane clips it), so the directory rides there: it
+                // qualifies the title the operator is already scanning, and it
+                // is dropped when the title leaves no room — never at the
+                // cost of the metrics, which are the reason the operator
+                // opened the list.
+                //
+                // It is the BASENAME, not the path: the full path lives in the
+                // preview's `project:` line (codex's details pane prints the
+                // thread's cwd the same way). `cwd` was never written by any
+                // production path before this audit, so this qualifier was
+                // silent on every row for the hub's whole life; the write
+                // landed at turn_context.rs beside the seat stamp.
+                //
+                // It is NOT repeated when the hub is already grouped by
+                // directory: the section heading IS the path, and printing it
+                // again per row is the same mistake Stage B made with the
+                // delegation status (`pending  pending`).
+                let directory_shown = state.group_mode != HubGroupMode::Directory
+                    && row.cwd.as_deref().is_some_and(|c| !c.is_empty());
+                let dir_tag: String = row
+                    .cwd
+                    .as_deref()
+                    .filter(|_| directory_shown)
+                    .map(|c| {
+                        let base = std::path::Path::new(c)
+                            .file_name()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| c.to_string());
+                        format!("  \u{1f4c2} {base}")
+                    })
+                    .unwrap_or_default();
+                // The directory qualifies the TITLE, on the title line's own
+                // budget: the meta line cannot carry it (MEASURED above), and
+                // the title line is where the operator is already looking. It
+                // is dropped when the title leaves no room, and never at the
+                // cost of the metrics.
+                let title_text = row_title(row);
+                let title_width = title_text.chars().count();
+                let dir_span = if !dir_tag.is_empty()
+                    && title_width + dir_tag.chars().count() + 1 <= inner_width as usize
+                {
+                    Some(Span::styled(
+                        dir_tag.clone(),
+                        Style::default().fg(theme_colors::muted()),
+                    ))
+                } else {
+                    None
+                };
                 spans.extend(highlight_spans(
-                    &row_title(row),
+                    &title_text,
                     &tokens,
                     title_style,
                     Style::default()
                         .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 ));
+                if let Some(d) = dir_span {
+                    spans.push(d);
+                }
                 // (2026-10-29) The operator could not see the session's ID,
                 // employee, message count or tokens: the meta was ONE appended
                 // span, and the list is 40% of the frame, so a 100+ column
@@ -722,22 +787,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // columns wide. `cwd` was never written before that audit, so
                 // this span was silent on every row for the hub's whole life;
                 // the write landed at turn_context.rs beside the seat stamp.
-                let directory_shown = state.group_mode != HubGroupMode::Directory
-                    && row.cwd.as_deref().is_some_and(|c| !c.is_empty());
-                let dir_tag: String = row
-                    .cwd
-                    .as_deref()
-                    .filter(|_| directory_shown)
-                    .map(|c| {
-                        let base = std::path::Path::new(c)
-                            .file_name()
-                            .map(|f| f.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| c.to_string());
-                        format!("  \u{1f4c2} {base}")
-                    })
-                    .unwrap_or_default();
                 let metrics_width = emp.chars().count()
-                    + dir_tag.chars().count()
                     + format!("{} msg", row.message_count).chars().count()
                     + tokens_suffix(row.tokens).chars().count()
                     + row.status.label().chars().count()
@@ -748,15 +798,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         format!("${:.4}", row.cost_usd).chars().count()
                     }
                     + 8;
-                // Drop the directory FIRST: it is the field the row can most
-                // easily afford to lose, because it is the field the pane and
-                // the grouping both restore.
-                let show_dir = metrics_width as usize + 13 <= inner_width as usize;
-                let metrics_width = if show_dir {
-                    metrics_width
-                } else {
-                    metrics_width.saturating_sub(dir_tag.chars().count())
-                };
                 // Drop the status column BEFORE shrinking the id: the header
                 // above already names it (Stage B), so it is the one field here
                 // the row can afford to lose. Shrinking the id first would burn
@@ -773,7 +814,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 {
                     id_budget -= 1;
                 }
-
                 let short_id: String = row.id.chars().take(id_budget).collect();
                 // (2026-10-30) A subagent row printed "$0.0000 · 0 msg · 0.000k
                 // tok" and asserted a fact it did not have: `records_snapshot`
@@ -809,11 +849,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // ladder above): recoverable in the preview's `Project` line and
                 // in the directory grouping's headings, which is the same
                 // recoverability argument the ladder already makes for status.
-                let dir_span = if show_dir {
-                    Span::styled(dir_tag, Style::default().fg(theme_colors::muted()))
-                } else {
-                    Span::styled(String::new(), Style::default())
-                };
                 let mut meta_spans = vec![
                     // ID first: it is the row's handle, and the one thing an
                     // operator is never otherwise shown on screen.
@@ -822,7 +857,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         Style::default().fg(theme_colors::muted()),
                     ),
                     Span::styled(emp, Style::default().fg(theme_colors::muted())),
-                    dir_span,
                     usage_span,
                 ];
                 // Stage B also fills a real gap: a session row's status was
