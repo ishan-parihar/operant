@@ -6379,6 +6379,56 @@ fn the_full_window_notice_reports_an_armed_auto_compaction() {
 }
 
 #[test]
+fn an_automatic_window_names_the_provider_as_the_remedy() {
+    // The notice used to say "raise agent.context_window" in every case.
+    // Under an AUTOMATIC window (0, the shipped default) that knob is not
+    // the remedy — the endpoint decides — so the operator is sent to a knob
+    // that does nothing. Say the thing they can actually change.
+    let mut app = make_app();
+    app.config.agent.context_window = 0; // AUTOMATIC
+    app.token_warning_threshold_shown = 0;
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 124_000, // 96.9% of the 128,000 fallback
+        output_tokens: 1_000,
+        total_tokens: 121_000,
+    });
+    app.check_token_warnings();
+    let notice = app.status_message.as_deref().unwrap_or_default();
+    assert!(
+        notice.contains("raise the model's window at the provider"),
+        "an automatic window must name the provider, not the config: {notice}"
+    );
+    assert!(
+        notice.contains("95%"),
+        "the notice is the 95% warning: {notice}"
+    );
+}
+
+#[test]
+fn a_configured_window_names_the_config_as_the_remedy() {
+    // And the other side: an explicit window must still name the config
+    // knob, which is the remedy that works there.
+    let mut app = make_app();
+    app.config.agent.context_window = 128_000;
+    app.token_warning_threshold_shown = 0;
+    app.handle_agent_event(AgentEvent::Usage {
+        input_tokens: 124_000,
+        output_tokens: 1_000,
+        total_tokens: 125_000,
+    });
+    app.check_token_warnings();
+    let notice = app.status_message.as_deref().unwrap_or_default();
+    assert!(
+        notice.contains("raise agent.context_window"),
+        "a configured window must name the config knob: {notice}"
+    );
+    assert!(
+        !notice.contains("at the provider"),
+        "a configured window is not the provider's to change: {notice}"
+    );
+}
+
+#[test]
 fn token_warning_uses_the_prompt_size_not_the_turn_total() {
     // iter-1207: a turn whose PROMPT is small but whose OUTPUT is large
     // must not trip the warning. The prompt is what occupies the window;
@@ -15385,7 +15435,6 @@ fn toggling_show_current_directory_in_settings_reaches_the_app_live() {
     );
 }
 
-
 // ---- (2026-11-13) the copy-pasteable way back to a session ----
 
 /// Every surface that names a session must name it with the WHOLE id, and
@@ -15545,7 +15594,6 @@ fn a_deliberate_exit_leaves_no_interrupted_flag() {
 
     let _ = std::fs::remove_file(&app.config.database_path);
 }
-
 
 /// A switch to a session another live window owns must NOT happen.
 ///

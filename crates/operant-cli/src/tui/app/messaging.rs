@@ -293,23 +293,33 @@ impl App {
         //   the only remedy is a bigger `agent.context_window`.
         let auto_compact_armed =
             self.config.agent.micro_compaction || self.config.agent.context_compression;
+        // With an AUTOMATIC window the operator cannot "raise
+        // agent.context_window" — the endpoint decides. The remedy has to
+        // name the thing they can actually change.
+        let remedy = if self.config.agent.context_window == 0 {
+            "raise the model's window at the provider (or set agent.context_window explicitly)"
+        } else {
+            "raise agent.context_window"
+        };
         if pct >= 100 && self.token_warning_threshold_shown < 100 {
             self.token_warning_threshold_shown = 100;
             let message = if auto_compact_armed {
                 "Context window full. Running auto-compact\u{2026}".to_string()
             } else {
-                "Context window full. Run /compact, or raise agent.context_window if the \
-                 protected prompt does not fit."
-                    .to_string()
+                format!(
+                    "Context window full. Run /compact, or {remedy} if the protected \
+                 prompt does not fit."
+                )
             };
             self.push_notice(NotificationKind::Error, message);
         } else if pct >= 95 && self.token_warning_threshold_shown < 95 {
             self.token_warning_threshold_shown = 95;
             self.push_notice(
                 NotificationKind::Error,
-                "Context window 95% full! Run /compact, or raise agent.context_window if the \
-                 protected prompt does not fit."
-                    .to_string(),
+                format!(
+                    "Context window 95% full! Run /compact, or {remedy} if the protected prompt \
+                     does not fit."
+                ),
             );
         } else if pct >= 80 && self.token_warning_threshold_shown < 80 {
             self.token_warning_threshold_shown = 80;
