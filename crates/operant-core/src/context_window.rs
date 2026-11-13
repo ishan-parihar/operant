@@ -24,9 +24,11 @@
 //! 2. **Learned** — a limit a provider's own overflow error stated for this
 //!    (provider, model). Revisable: see `Agent::note_request_succeeded`.
 //! 3. **Endpoint** — the provider's `/models` row for this model.
-//! 4. **Catalog** — models.dev `limit.context`.
-//! 5. **Default** — [`DEFAULT_CONTEXT_WINDOW`], the historical 128k, now a
+//! 4. **Default** — [`DEFAULT_CONTEXT_WINDOW`], the historical 128k, now a
 //!    last resort rather than the answer for every model.
+//!
+//! models.dev is deliberately NOT a leg: the service is deprecated and its
+//! numbers are stale. The endpoint that serves the model is the authority.
 //!
 //! `0` means AUTOMATIC: resolve from the sources above. It is a legal config
 //! value and the example TOML ships it, so a fresh install tracks the model
@@ -81,8 +83,7 @@ pub enum WindowSource {
     Learned,
     /// The provider's own `/models` listing.
     Endpoint,
-    /// The models.dev catalog.
-    Catalog,
+
     /// [`DEFAULT_CONTEXT_WINDOW`] — nothing knew better.
     Default,
 }
@@ -93,7 +94,6 @@ impl WindowSource {
             Self::Configured => "configured",
             Self::Learned => "learned",
             Self::Endpoint => "endpoint",
-            Self::Catalog => "catalog",
             Self::Default => "default",
         }
     }
@@ -176,17 +176,6 @@ impl Discovered {
     fn with_reachability(mut self, reachable: bool) -> Self {
         self.endpoint_reachable = reachable;
         self
-    }
-
-    /// Merge another source underneath this one (self wins where it has an
-    /// answer). Used to layer models.dev beneath the provider's own listing.
-    fn or(self, fallback: Self) -> Self {
-        Self {
-            context_window: self.context_window.or(fallback.context_window),
-            window_source: self.window_source.or(fallback.window_source),
-            max_output: self.max_output.or(fallback.max_output),
-            endpoint_reachable: self.endpoint_reachable || fallback.endpoint_reachable,
-        }
     }
 }
 
@@ -320,16 +309,18 @@ pub async fn discover(
     // (not whether it had something to say about this model — "reachable but
     // silent" and "unreachable" are different facts, and the second one means
     // the window fell back to a default).
+    //
+    // The chain is CONFIGURED -> LEARNED -> ENDPOINT -> DEFAULT. models.dev is
+    // NOT in it: the service is deprecated, its numbers are stale (they
+    // disagreed with the operator's own route by an order of magnitude on
+    // this host), and consulting it cost the turn a 15s-timeout network fetch
+    // whenever the endpoint was unreachable. The endpoint that actually
+    // SERVES the model is the only authority on what it accepts.
     let (endpoint_reachable, endpoint) =
         discover_endpoint(provider, base_url, api_key, model).await;
-    let catalog = discover_catalog(provider, model).await;
-    let discovered = match (endpoint, catalog) {
-        (Some(endpoint), Some(catalog)) => endpoint.or(catalog),
-        (Some(endpoint), None) => endpoint,
-        (None, Some(catalog)) => catalog,
-        (None, None) => Discovered::default(),
-    }
-    .with_reachability(endpoint_reachable);
+    let discovered = endpoint
+        .unwrap_or_default()
+        .with_reachability(endpoint_reachable);
     cache_put(key, discovered);
     discovered
 }
@@ -370,33 +361,6 @@ async fn discover_endpoint(
             endpoint_reachable: true,
         });
     (true, discovered)
-}
-
-async fn discover_catalog(provider: &str, model: &str) -> Option<Discovered> {
-    // `provider/model` spellings are how routes alias models; look up both
-    // the whole id and its leaf, and let the first hit win.
-    let leaf = model.rsplit('/').next().unwrap_or(model);
-    for candidate in [model, leaf] {
-        if let Some(caps) = crate::models_dev::get_model_capabilities(provider, candidate).await {
-            let context_window = caps
-                .context_window
-                .and_then(|tokens| usize::try_from(tokens).ok())
-                .filter(|tokens| *tokens >= MIN_CONTEXT_WINDOW);
-            if context_window.is_some() || caps.max_output.is_some() {
-                return Some(Discovered {
-                    context_window,
-                    window_source: context_window.map(|_| WindowSource::Catalog),
-                    max_output: caps
-                        .max_output
-                        .and_then(|tokens| usize::try_from(tokens).ok()),
-                    // The catalog is not the provider: reachability is the
-                    // endpoint's fact, and this leg never speaks for it.
-                    endpoint_reachable: false,
-                });
-            }
-        }
-    }
-    None
 }
 
 /// The wire family a provider's `/models` endpoint speaks, when it has one.
@@ -518,18 +482,19 @@ mod tests {
     }
 
     #[test]
-    fn a_catalog_window_is_labelled_catalog_not_endpoint() {
+    fn an_endpoint_window_is_labelled_endpoint() {
         let resolved = resolve(
             AUTOMATIC,
             None,
             Discovered {
-                endpoint_reachable: false,
+                endpoint_reachable: true,
                 context_window: Some(200_000),
-                window_source: Some(WindowSource::Catalog),
+                window_source: Some(WindowSource::Endpoint),
                 max_output: None,
             },
         );
-        assert_eq!(resolved.source, WindowSource::Catalog);
+        assert_eq!(resolved.source, WindowSource::Endpoint);
+        assert_eq!(resolved.window, 200_000);
     }
 
     #[test]

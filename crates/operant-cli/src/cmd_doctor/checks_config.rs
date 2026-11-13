@@ -493,6 +493,17 @@ pub fn run_config_checks(
 ///
 /// This is a FLOOR, not a promise: the runtime adds the turn tail (memory
 /// recall, workspace, harness) on top, which the CLI cannot measure.
+/// Is the lossless-DAG context engine actually running?
+///
+/// The six `context_lcm_*` keys and `agent.context_engine` ship in the example
+/// config, but the engine is attached ONLY when `context_engine = "lcm"`; the
+/// default ("compact") attaches nothing and the keys are read by nothing. An
+/// operator who sets `context_lcm_tail_tokens` and sees no difference is
+/// looking at an inert knob, and the doctor is where that fact belongs.
+pub(crate) fn lcm_surface_is_inert(config: &AppConfig) -> bool {
+    !config.agent.context_engine.eq_ignore_ascii_case("lcm")
+}
+
 /// How the window was resolved, in the operator's words.
 pub(crate) fn window_source_label(source: &str) -> &'static str {
     match source {
@@ -578,6 +589,15 @@ pub async fn check_context_window(
             floor.skills_tokens
         ),
     );
+    if lcm_surface_is_inert(config) {
+        check_warn(
+            "The lossless-DAG context engine is not running",
+            "agent.context_engine is not \"lcm\", so the context_lcm_* keys in the config are \
+             read by nothing: the built-in compaction is what folds the history. Set \
+             agent.context_engine = \"lcm\" to arm it (it needs a database and a little more \
+             RAM).",
+        );
+    }
 }
 
 /// Is the context meter recording?
@@ -761,6 +781,28 @@ mod tests {
                 "{key} is classified differently by the .env and ambient scans"
             );
         }
+    }
+
+    /// The lossless-DAG engine is inert unless it is switched on, and the
+    /// doctor is where that fact belongs: an operator who sets the
+    /// context_lcm_* keys and sees no difference is looking at an inert knob.
+    #[test]
+    fn the_lcm_surface_is_inert_unless_the_engine_is_armed() {
+        let mut config = AppConfig::default();
+        assert!(
+            lcm_surface_is_inert(&config),
+            "the default engine is the built-in compaction"
+        );
+        config.agent.context_engine = "lcm".to_string();
+        assert!(
+            !lcm_surface_is_inert(&config),
+            "the engine is armed, so the keys are live"
+        );
+        config.agent.context_engine = "LCM".to_string();
+        assert!(
+            !lcm_surface_is_inert(&config),
+            "the engine name is case-insensitive"
+        );
     }
 
     /// The doctor's context-window verdict must be about the RESOLVED window.

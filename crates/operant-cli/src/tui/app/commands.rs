@@ -1038,7 +1038,16 @@ impl App {
                     );
                 } else {
                     self.pending_compact = true;
-                    self.set_status_notice("Compacting context…".to_string());
+                    // Say what the fold can and cannot shrink: the older
+                    // exchanges become markers, but the protected prompt
+                    // (system prompt + skills), the tool schemas and the
+                    // turn tail are untouched, so an over-budget request
+                    // caused by THOSE needs a bigger window, not a fold.
+                    self.set_status_notice(
+                        "Compacting context… (older exchanges are folded into markers; the \
+                         protected prompt, the tool schemas and the turn tail do not shrink)."
+                            .to_string(),
+                    );
                 }
                 true
             }
