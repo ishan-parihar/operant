@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
 
     // Build the agent
     let agent_config = AgentConfig {
+        advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         model: std::env::var("MODEL").unwrap_or_else(|_| "gpt-4".to_string()),

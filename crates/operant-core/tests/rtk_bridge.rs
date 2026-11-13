@@ -220,7 +220,10 @@ fn a_missing_binary_is_failed() {
 /// When `/dev/shm` is not usable, the ordinary temp dir is the fallback and
 /// the ETXTBSY window is simply accepted.
 fn test_dir() -> tempfile::TempDir {
-    match tempfile::Builder::new().prefix("rtk-bridge").tempdir_in("/dev/shm") {
+    match tempfile::Builder::new()
+        .prefix("rtk-bridge")
+        .tempdir_in("/dev/shm")
+    {
         Ok(dir) => dir,
         Err(_) => tempfile::tempdir().expect("a temp dir"),
     }

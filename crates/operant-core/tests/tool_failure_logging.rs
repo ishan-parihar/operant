@@ -235,6 +235,7 @@ async fn a_failed_tool_is_logged_with_its_name_duration_and_error() {
     registry.register(FailingTool).await.unwrap();
     let agent = OperantAgent::new(
         AgentConfig {
+            advertised_skills_token_budget: 0,
             model: "demo-tool-failure".to_string(),
             max_iterations: 3,
             stream: false,
@@ -256,11 +257,7 @@ async fn a_failed_tool_is_logged_with_its_name_duration_and_error() {
     let failure = lines
         .iter()
         .find(|line| line.contains("Tool call failed"))
-        .unwrap_or_else(|| {
-            panic!(
-                "the failed tool must be logged; captured lines: {lines:#?}"
-            )
-        });
+        .unwrap_or_else(|| panic!("the failed tool must be logged; captured lines: {lines:#?}"));
     assert!(
         failure.contains("fail_probe"),
         "the line must name the tool, got: {failure}"

@@ -81,6 +81,7 @@ fn text_response(content: &str) -> ChatResponse {
 
 fn test_config(model: &str) -> AgentConfig {
     AgentConfig {
+        advertised_skills_token_budget: 0,
         model: model.to_string(),
         max_iterations: 2,
         stream: false,

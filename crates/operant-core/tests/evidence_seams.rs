@@ -235,7 +235,10 @@ fn rtk_mode_leaves_the_terminal_tools_output_to_rtk() {
         ..EvidenceConfig::default()
     };
     let out = compress("terminal", &text, &cfg);
-    assert!(!out.changed(), "rtk mode must not touch the terminal tool's output");
+    assert!(
+        !out.changed(),
+        "rtk mode must not touch the terminal tool's output"
+    );
 }
 
 #[test]

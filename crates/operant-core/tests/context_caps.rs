@@ -193,6 +193,7 @@ impl OperantTool for FloodTool {
 
 fn test_config(model: &str) -> AgentConfig {
     AgentConfig {
+        advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         context_semantic_compaction: false,

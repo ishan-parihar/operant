@@ -48,10 +48,7 @@ impl StubAgent {
     /// the operator-facing message. This stub must mirror that signature:
     /// with `anyhow::Error` here, `src/autonomous.rs` (which this target
     /// `include!`s) does not compile.
-    async fn run(
-        self,
-        _query: String,
-    ) -> std::result::Result<(), operant_core::error::Error> {
+    async fn run(self, _query: String) -> std::result::Result<(), operant_core::error::Error> {
         Ok(())
     }
 }

@@ -341,6 +341,7 @@ fn varying_calls(tool: &str, n: usize) -> Vec<ChatResponse> {
 
 fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         context_semantic_compaction: false,
@@ -357,7 +358,8 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         stream: false,
         context_window: 8000,
         max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
-        max_tool_result_total_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
+        max_tool_result_total_share:
+            operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE,
         max_healing_attempts: 1,
         fallback_models: Vec::new(),
         fallback_on_errors: false,

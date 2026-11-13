@@ -256,6 +256,7 @@ fn tool_call_response(tool: &str, arguments: &str) -> ChatResponse {
 
 fn test_config() -> AgentConfig {
     AgentConfig {
+        advertised_skills_token_budget: 0,
         model: "demo".to_string(),
         max_iterations: 8,
         tool_timeout: Duration::from_secs(5),

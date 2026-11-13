@@ -11,8 +11,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -87,7 +87,9 @@ impl ModelClient for DroppingStreamClient {
     }
 
     async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
-        Err(Error::Agent("this fixture serves the streaming path only".into()))
+        Err(Error::Agent(
+            "this fixture serves the streaming path only".into(),
+        ))
     }
 
     async fn chat_streaming(
@@ -150,6 +152,7 @@ async fn a_replayed_stream_re_announces_its_tool_call() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
     let agent = OperantAgent::with_events(
         AgentConfig {
+            advertised_skills_token_budget: 0,
             model: "demo-replay".to_string(),
             max_iterations: 4,
             stream: true,
@@ -168,7 +171,10 @@ async fn a_replayed_stream_re_announces_its_tool_call() {
         .await
         .expect("the replay must recover the turn");
 
-    assert_eq!(result.content, "done", "the turn must end on the replay's answer");
+    assert_eq!(
+        result.content, "done",
+        "the turn must end on the replay's answer"
+    );
     assert_eq!(
         client.attempts.load(Ordering::SeqCst),
         3,
