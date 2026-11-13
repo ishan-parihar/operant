@@ -307,6 +307,18 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
                 e
             })?;
     }
+    // The session's directory, stamped beside the seat for the same reason and
+    // with the same contract: best-effort, one narrow UPDATE, no wider
+    // `save_session` signature. `cwd` is the field the operator reads to answer
+    // "which project is this session for" in the session hub, and until this
+    // write no row carried one (audit 2026-11-13, finding 1), so the hub's
+    // current-dir filter and directory grouping could never match anything.
+    // The value is the same `cwd` the @-reference expansion already resolved
+    // above, so there is no second syscall.
+    let cwd_display = cwd.to_string_lossy().into_owned();
+    if let Err(e) = agent.database.set_session_cwd(&session_id, &cwd_display) {
+        warn!(error = %e, "Failed to stamp session cwd");
+    }
 
     // Persist user message
     //

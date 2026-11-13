@@ -1675,6 +1675,33 @@ impl Database {
         Ok(())
     }
 
+    /// Stamp the session's working directory on the row.
+    ///
+    /// The column existed since v1 and was written by NO production path: the
+    /// live turn called `save_session`, whose five-column INSERT does not name
+    /// it, and the only `save_session_full` caller (the rewind fork) hardcodes
+    /// `cwd: None`. Measured on the operator's database, `cwd` was NULL on all
+    /// 3,302 rows and `COUNT(DISTINCT cwd)` was 0 — so the session hub's
+    /// "current dir" filter returned 0 rows always and its Directory grouping
+    /// produced one "(no cwd)" group always. The directory was the one row
+    /// field with consumers and no producer.
+    ///
+    /// Idempotent and best-effort by the same contract as
+    /// [`Self::set_session_employee`]: a miss means the row was concurrently
+    /// deleted, which is not worth failing a turn over. Rows created before the
+    /// column was captured cannot be honest about a directory they never
+    /// recorded, so they stay NULL and the hub labels them `(no cwd)` rather
+    /// than guessing.
+    pub fn set_session_cwd(&self, session_id: &str, cwd: &str) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET cwd = ?2 WHERE id = ?1",
+            params![session_id, cwd],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to stamp session cwd: {}", e)))?;
+        Ok(())
+    }
+
     /// FTS5 session search with an optional role filter (`user`/`assistant`/
     /// `tool`). hermes `session_search` role_filter parity. `role = None`
     /// matches every role (backwards compatible with `search_sessions`).
@@ -5304,6 +5331,49 @@ mod tests {
         let b = rows.iter().find(|r| r.id == "emp-b").expect("b");
         assert_eq!(a.employee_id.as_deref(), Some("analyst"));
         assert_eq!(b.employee_id, None, "the stamp must not leak to other rows");
+    }
+
+    /// The directory column must have a PRODUCER, not just a consumer. It did
+    /// not: the live turn path called `save_session` (no cwd column) and the
+    /// only `save_session_full` caller hardcoded `None`, so on the operator's
+    /// 3,302-row database `COUNT(DISTINCT cwd)` was 0 and the session hub's
+    /// current-dir filter and directory grouping were dead by construction.
+    /// This test is the regression guard: the write reaches the row the hub
+    /// reads.
+    #[test]
+    fn set_session_cwd_reaches_the_row_the_hub_reads() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("dir-a", Some("Dir A"), "agent", &now, &now)
+            .expect("a");
+        db.save_session("dir-b", None, "agent", &now, &now)
+            .expect("b");
+        db.set_session_cwd("dir-a", "/srv/one").expect("stamp");
+        db.set_session_cwd("dir-a", "/srv/one")
+            .expect("idempotent re-stamp");
+        let rows = db.list_sessions_rich(10).expect("list");
+        let a = rows.iter().find(|r| r.id == "dir-a").expect("a");
+        let b = rows.iter().find(|r| r.id == "dir-b").expect("b");
+        assert_eq!(a.cwd.as_deref(), Some("/srv/one"));
+        assert_eq!(
+            b.cwd, None,
+            "an unstamped row stays NULL rather than inheriting a directory"
+        );
+    }
+
+    /// A legacy row (pre-column) can never be honest about a directory it was
+    /// created without, and must not be back-filled with a guess — the hub
+    /// prints `(no cwd)` for these.
+    #[test]
+    fn set_session_cwd_on_an_unknown_row_is_a_silent_noop() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("dir-known", None, "agent", &now, &now)
+            .expect("save");
+        db.set_session_cwd("dir-missing", "/srv/ghost")
+            .expect("a miss must not error");
+        let rows = db.list_sessions_rich(10).expect("list");
+        assert!(rows.iter().all(|r| r.cwd.is_none()));
     }
     /// A tool-result row: the model-visible copy plus, when they differ, the
     /// tool's own output.
