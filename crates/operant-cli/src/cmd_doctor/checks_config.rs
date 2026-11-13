@@ -582,13 +582,24 @@ pub async fn check_context_window(
         "Context window holds the protected content",
         &format!(
             "window {window} tokens ({}); protected content ~{} tokens (tool schemas ~{}, \
-             advertised skills ~{})",
+             advertised skills ~{} from {} skill(s))",
             window_source_label(report.source),
             floor.required,
             floor.schema_tokens,
-            floor.skills_tokens
+            floor.skills_tokens,
+            floor.skills_advertised
         ),
     );
+    if floor.skills_dropped > 0 {
+        check_warn(
+            "Some installed skills are not advertised",
+            &format!(
+                "{} skill(s) are installed but did not fit the advertised block's ceiling, so \
+                 the model cannot see them until it reaches for the skills tool.",
+                floor.skills_dropped
+            ),
+        );
+    }
     if lcm_surface_is_inert(config) {
         check_warn(
             "The lossless-DAG context engine is not running",

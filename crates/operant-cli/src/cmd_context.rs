@@ -835,6 +835,10 @@ pub(crate) struct ProtectedFloor {
     pub schema_tokens: usize,
     /// Tokens the advertised skills add to the frozen prefix.
     pub skills_tokens: usize,
+    /// How many skills the runtime actually advertises.
+    pub skills_advertised: usize,
+    /// How many installed skills did NOT fit the advertised block's ceiling.
+    pub skills_dropped: usize,
     /// The lower bound of the content that cannot be folded.
     pub required: usize,
     /// The window that would hold it (0 when an absolute hard cap binds).
@@ -858,13 +862,24 @@ pub(crate) async fn measure_protected_floor(
     // one the runtime carries.
     let mut manager = operant_core::skills::SkillManager::new(config.skills.root_dir.clone());
     let _ = manager.load_all();
-    let skills_tokens: usize = manager
-        .list_available()
-        .iter()
-        .map(|(name, description)| {
-            estimate_tokens(&format!("  <skill name=\"{name}\">{description}</skill>\n"))
-        })
-        .sum();
+    // The SAME ceiling the runtime applies to the advertised block
+    // (ADVERTISED_SKILLS_TOKEN_BUDGET): the runtime advertises the skills
+    // that fit and drops the rest, so the floor the check measures has to
+    // count the skills that are actually advertised. Measuring every
+    // installed skill would over-state the protected content and report a
+    // floor the runtime never carries.
+    let mut skills_tokens = 0usize;
+    let mut skills_advertised = 0usize;
+    let mut skills_dropped = 0usize;
+    for (name, description) in manager.list_available() {
+        let cost = estimate_tokens(&format!("  <skill name=\"{name}\">{description}</skill>\n"));
+        if skills_tokens + cost > operant_core::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET {
+            skills_dropped += 1;
+            continue;
+        }
+        skills_tokens += cost;
+        skills_advertised += 1;
+    }
 
     let surfaces = measure_surfaces(config, window).await?;
     let schema_tokens = surfaces.total_tokens_per_request;
@@ -879,6 +894,8 @@ pub(crate) async fn measure_protected_floor(
     Ok(ProtectedFloor {
         schema_tokens,
         skills_tokens,
+        skills_advertised,
+        skills_dropped,
         required,
         minimum_window,
         minimum_hard_cap,

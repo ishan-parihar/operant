@@ -224,12 +224,13 @@ async fn handle_check(config: &AppConfig) -> Result<()> {
         Ok(floor) if floor.minimum_window > window => {
             issues.push(format!(
                 "the context window is {window} tokens ({}) but the protected content needs \
-                 about {} tokens (tool schemas ~{}, advertised skills ~{}). Raise it to at \
-                 least {} — every turn fails until it fits.",
+                 about {} tokens (tool schemas ~{}, advertised skills ~{} from {} skill(s)). \
+                 Raise it to at least {} — every turn fails until it fits.",
                 crate::cmd_doctor::checks_config::window_source_label(report.source),
                 floor.required,
                 floor.schema_tokens,
                 floor.skills_tokens,
+                floor.skills_advertised,
                 floor.minimum_window,
             ));
         }
