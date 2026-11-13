@@ -350,6 +350,12 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
 async fn debug_skills(config: &AppConfig) -> Result<()> {
     let skills_dir = config.skills.root_dir.clone();
     let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+    // The vendor roots the live /skills overlay reads (iter-2159): a debug
+    // surface that shows FEWER skills than the overlay it simulates is a
+    // second skill set pretending to be the first.
+    for root in crate::skill_roots::vendor_skill_roots(config) {
+        mgr.add_extra_root(Some(root));
+    }
     let skills = mgr.load_all()?;
 
     if skills.is_empty() {
@@ -657,11 +663,13 @@ async fn debug_banner(_config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn debug_slash_commands(_config: &AppConfig) -> Result<()> {
+async fn debug_slash_commands(config: &AppConfig) -> Result<()> {
     println!("=== Registered Slash Commands ===");
-    println!("Source: crates/operant-cli/src/tui/operant_app/app.rs::REGISTERED_COMMANDS");
+    println!("Source: REGISTERED_COMMANDS + the vendor skills (a skill name is a command)");
     println!();
-    let mut entries: Vec<_> = crate::tui::operant_app::app::registered_command_entries().collect();
+    let mut entries: Vec<(String, String)> = crate::tui::app::helpers::tui_slash_command_data(
+        &crate::skill_roots::vendor_skill_command_rows(config),
+    );
     entries.sort();
     for (name, description) in entries {
         println!("{:<22} {}", name, description);
