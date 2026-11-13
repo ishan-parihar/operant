@@ -814,7 +814,35 @@ impl App {
         while let Some(ev) = lookahead.take() {
             match ev {
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Char(c) => buf.push(c),
+                    // Only a BARE letter is paste content. A chord is a key
+                    // the operator pressed, and appending its letter is how a
+                    // pasted newline became the letter `j`: terminals deliver
+                    // the raw 0x0A byte as Ctrl+J, this arm pushed `j`, and
+                    // "line one\nline two" landed as "line onejline two" in
+                    // the composer (measured 2026-11-13 against tmux). Hand
+                    // every chord back for replay through the key path.
+                    KeyCode::Char(c)
+                        if k.modifiers == crossterm::event::KeyModifiers::NONE
+                            || k.modifiers == crossterm::event::KeyModifiers::SHIFT =>
+                    {
+                        buf.push(c)
+                    }
+                    // Ctrl+J is the same newline byte seen through a chord,
+                    // so it carries Enter's ambiguity and takes Enter's rule:
+                    // more clipboard behind it → the paste's own newline;
+                    // nothing behind it → the operator's submit key.
+                    KeyCode::Char('j')
+                        if k.modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
+                        lookahead = queued.next();
+                        if lookahead.is_some() {
+                            buf.push('\n');
+                        } else {
+                            return (buf, Some(k));
+                        }
+                        continue;
+                    }
                     KeyCode::Enter => {
                         // More events behind this Enter → it is a paste's
                         // embedded newline. Nothing behind → it is the user's
