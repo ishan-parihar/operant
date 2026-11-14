@@ -2963,12 +2963,29 @@ fn auto_grouping_adds_no_heading_rows() {
         row_with_cwd("c", "/one"),
     ]);
     hub.group_mode = HubGroupMode::Auto;
+    // (2026-11-14, plan iteration 4) Auto now SECTIONS when the rows span more
+    // than one directory, because a flat run of 3,000 sessions with no project
+    // boundary is the thing the operator is complaining about. One directory
+    // still renders flat — a heading that repeats the whole list is noise.
+    assert!(hub.auto_sections_by_project(), "two directories section");
     let groups = hub.visible_groups();
-    assert_eq!(
-        groups.len(),
-        1,
-        "Auto is one flat group, not per-cwd groups"
-    );
+    assert_eq!(groups.len(), 2, "one group per project: {groups:?}");
+    assert_eq!(groups[0].1.len() + groups[1].1.len(), 3);
+}
+
+/// One directory: still flat, still no heading.
+#[test]
+fn auto_grouping_stays_flat_when_every_row_shares_a_directory() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row_with_cwd("a", "/one"),
+        row_with_cwd("b", "/one"),
+        row_with_cwd("c", "/one"),
+    ]);
+    hub.group_mode = HubGroupMode::Auto;
+    assert!(!hub.auto_sections_by_project());
+    let groups = hub.visible_groups();
+    assert_eq!(groups.len(), 1, "one flat group");
     assert!(groups[0].0.is_empty(), "the Auto key is empty by contract");
     assert_eq!(groups[0].1.len(), 3, "every visible row is in it");
 }

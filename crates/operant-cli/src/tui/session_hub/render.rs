@@ -89,7 +89,9 @@ fn interpose_group_headings(
     rows: Vec<ListItem<'static>>,
     inner_width: u16,
 ) -> Vec<ListItem<'static>> {
-    if state.group_mode == HubGroupMode::Auto || rows.is_empty() {
+    if rows.is_empty()
+        || (state.group_mode == HubGroupMode::Auto && !state.auto_sections_by_project())
+    {
         return rows;
     }
     let groups = state.visible_groups();
@@ -141,11 +143,12 @@ fn interpose_group_headings(
 /// headings from the rendered position is what keeps the highlight on the row
 /// the operator is on — the Stage A offset class, one level deeper.
 pub(super) fn group_heading_rows_above(state: &SessionHubState, selected: usize) -> usize {
-    if state.group_mode == HubGroupMode::Auto {
+    // `Auto` contributes zero ONLY while it is not sectioning; when it sections
+    // by project it contributes one heading per project, exactly as
+    // `Directory` does.
+    if state.group_mode == HubGroupMode::Auto && !state.auto_sections_by_project() {
         return 0;
     }
-    // `Auto` renders one flat group with no heading, so it contributes zero;
-    // every other mode renders one heading per group.
     state
         .visible_groups()
         .iter()

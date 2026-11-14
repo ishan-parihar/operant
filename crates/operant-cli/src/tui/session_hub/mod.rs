@@ -1004,10 +1004,40 @@ impl SessionHubState {
     ///
     /// `Auto` returns ONE group with an empty label, which the renderer draws
     /// with no heading at all: the default must not add chrome.
+    /// Whether `Auto` is sectioning by project right now.
+    ///
+    /// (2026-11-14, plan iteration 4) One predicate, three consumers: the
+    /// grouping itself, the heading interposer, and the heading-offset
+    /// arithmetic. Three spellings of "is Auto sectioning" is exactly how the
+    /// drawn layout and the arithmetic drift apart — the bug class this file
+    /// already paid for once.
+    pub fn auto_sections_by_project(&self) -> bool {
+        if self.group_mode != HubGroupMode::Auto {
+            return false;
+        }
+        let dirs: std::collections::HashSet<&str> = self
+            .visible_idx
+            .iter()
+            .filter_map(|&i| self.rows[i].cwd.as_deref())
+            .collect();
+        dirs.len() > 1
+    }
+
     pub fn visible_groups(&self) -> Vec<(String, Vec<usize>)> {
-        if self.group_mode == HubGroupMode::Auto {
+        // (2026-11-14, plan iteration 4) AUTO now sections by PROJECT when the
+        // loaded rows span more than one directory.
+        //
+        // This is the codex behaviour and the direct answer to "the aggregate of
+        // all sessions is confusing to navigate": a flat run of 3,000 sessions
+        // with no project boundary is the thing the operator is complaining
+        // about. When every row shares one directory there is nothing to
+        // section and a heading would be a divider with no content, so the list
+        // stays flat — a heading that repeats the whole list is noise.
+        if self.group_mode == HubGroupMode::Auto && !self.auto_sections_by_project() {
             return vec![(String::new(), self.visible_idx.clone())];
         }
+        // An Auto that sections falls through with the Auto arm keyed by
+        // directory — one code path, not a second copy of it.
         // First-appearance order keeps the groups stable across refreshes, which
         // is what codex's `AgentsOverviewGroup` guarantees too: re-deriving the
         // groups from a re-loaded row set must not shuffle the section the
@@ -1016,7 +1046,18 @@ impl SessionHubState {
         let mut groups: std::collections::HashMap<String, Vec<usize>> =
             std::collections::HashMap::new();
         for &i in &self.visible_idx {
-            let key = self.group_key(&self.rows[i]);
+            let key = match self.group_mode {
+                // `Auto` that reaches here has already decided to section, so
+                // it keys by directory exactly as `Directory` does. One
+                // implementation: two spellings of "the project sections" would
+                // drift.
+                HubGroupMode::Auto | HubGroupMode::Directory => self.rows[i]
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| "(no cwd)".to_string()),
+                HubGroupMode::Employee => self.group_key(&self.rows[i]),
+                HubGroupMode::Status => self.group_key(&self.rows[i]),
+            };
             if !groups.contains_key(&key) {
                 order.push(key.clone());
             }
