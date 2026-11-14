@@ -81,6 +81,45 @@ pub struct AsyncDelegationRecord {
     /// before the edge existed still loads.
     #[serde(default)]
     pub parent_session_id: Option<String>,
+    /// An optional caller-chosen key that makes a re-dispatch of the SAME work
+    /// return the existing handle instead of starting a second child.
+    ///
+    /// MEASURED 2026-11-14 (audit finding 6): dispatch had no idempotency at
+    /// all. `new_id()` mints a fresh `dlg-<epoch>-<n>` on every call, so a parent
+    /// that lost the handle — context compaction, a dropped tool result, a
+    /// torn-down turn — and re-dispatched the same goal got a SECOND worker, a
+    /// second token spend and a second ledger row, with nothing joining them.
+    /// jcode's `swarm_mutation_state` is the reference shape: request keys plus
+    /// persisted final responses, so a replayed mutation replays its answer
+    /// instead of repeating the work.
+    ///
+    /// `serde(default)` so a ledger written before the field loads.
+    #[serde(default)]
+    pub request_key: Option<String>,
+}
+
+/// What admitting a background delegation did.
+///
+/// The caller MUST distinguish these: a reused admission means the work is
+/// already in flight, so running a child for it would double-spend exactly what
+/// the key exists to prevent. Returning a bare id would lose that and make the
+/// deduplication a silent no-op (audit finding 6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelegationAdmission {
+    /// A new record exists; the caller owns settling this id.
+    Created(String),
+    /// A live record with the same request key already exists; the caller must
+    /// NOT start another child — poll this id instead.
+    Reused(String),
+}
+
+impl DelegationAdmission {
+    /// The handle either way, so a caller that only needs the id can read it.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Created(id) | Self::Reused(id) => id,
+        }
+    }
 }
 
 fn registry() -> &'static Mutex<HashMap<String, AsyncDelegationRecord>> {
@@ -276,6 +315,7 @@ fn insert_pending(
     goal: &str,
     model: &str,
     parent_session_id: Option<&str>,
+    request_key: Option<&str>,
 ) -> String {
     let id = new_id();
     map.insert(
@@ -291,6 +331,7 @@ fn insert_pending(
             error: None,
             session_id: None,
             parent_session_id: parent_session_id.map(str::to_string),
+            request_key: request_key.map(str::to_string),
         },
     );
     id
@@ -302,7 +343,7 @@ fn insert_pending(
 /// [`try_create_record`], which carries it.
 pub fn create_record(goal: &str, model: &str) -> String {
     if let Ok(mut map) = registry().lock() {
-        insert_pending(&mut map, goal, model, None)
+        insert_pending(&mut map, goal, model, None, None)
     } else {
         // Registry poisoned: fall back to an id that simply won't resolve.
         new_id()
@@ -322,21 +363,47 @@ pub fn try_create_record(
     model: &str,
     max_pending: usize,
     parent_session_id: Option<&str>,
-) -> Option<String> {
-    let mut map = registry().lock().ok()?;
+    request_key: Option<&str>,
+) -> Result<DelegationAdmission, TryCreateError> {
+    let mut map = registry().lock().map_err(|_| TryCreateError::RegistryPoisoned)?;
+
+    // Audit finding 6: a replayed dispatch returns the existing handle. Matched
+    // on PENDING only — a completed record with the same key is finished work,
+    // and re-running it is a legitimate new request, not a double-spend.
+    // Checked under the same lock as the insert, so two concurrent dispatches
+    // with one key cannot both miss and both create.
+    if let Some(key) = request_key {
+        let live = map
+            .values()
+            .find(|r| r.status == AsyncDelegationStatus::Pending && r.request_key.as_deref() == Some(key));
+        if let Some(existing) = live {
+            return Ok(DelegationAdmission::Reused(existing.delegation_id.clone()));
+        }
+    }
+
     let pending = map
         .values()
         .filter(|r| r.status == AsyncDelegationStatus::Pending)
         .count();
     if pending >= max_pending {
-        return None;
+        return Err(TryCreateError::TooManyPending { max_pending });
     }
-    Some(insert_pending(
+    Ok(DelegationAdmission::Created(insert_pending(
         &mut map,
         goal,
         model,
         parent_session_id,
-    ))
+        request_key,
+    )))
+}
+
+/// Why a background delegation was not admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TryCreateError {
+    /// The in-flight cap is reached.
+    TooManyPending { max_pending: usize },
+    /// The registry lock was poisoned; no id can be trusted.
+    RegistryPoisoned,
 }
 
 /// Join a delegation to the session its child ran in.
@@ -675,14 +742,89 @@ mod tests {
         assert!(rec.parent_session_id.is_none());
     }
 
+    /// Audit finding 6: a replayed dispatch returns the existing handle, and
+    /// the caller is told NOT to start a second child. This is the property
+    /// that prevents the double-spend — a bare id would make the deduplication
+    /// a silent no-op, because the caller would run the work again under it.
+    #[test]
+    fn a_replayed_request_key_returns_the_existing_delegation() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+
+        let first = try_create_record("audit the pool", "m", 3, None, Some("job-42"))
+            .expect("a free slot");
+        assert_eq!(
+            first,
+            DelegationAdmission::Created(first.id().to_string()),
+            "the first dispatch creates"
+        );
+
+        // The replay: same key, same work, must NOT create a second record and
+        // must NOT be handed back as something to run.
+        let replay = try_create_record("audit the pool", "m", 3, None, Some("job-42"))
+            .expect("a replay is admitted — as a reuse");
+        assert_eq!(
+            replay,
+            DelegationAdmission::Reused(first.id().to_string()),
+            "the replay must return the ORIGINAL id and be marked Reused"
+        );
+        assert_eq!(
+            list_records().len(),
+            1,
+            "a replay must not add a ledger row: {:?}",
+            list_records()
+        );
+
+        // A different key is different work.
+        let other = try_create_record("audit the pool", "m", 3, None, Some("job-43"))
+            .expect("a free slot");
+        assert!(matches!(other, DelegationAdmission::Created(_)));
+        assert_ne!(other.id(), first.id());
+        assert_eq!(list_records().len(), 2);
+
+        // A FINISHED record with the same key does not block a new request: the
+        // first one is done, and re-running finished work is legitimate.
+        mark_completed(first.id(), "done");
+        let again = try_create_record("audit the pool", "m", 3, None, Some("job-42"))
+            .expect("a completed key is free to re-run");
+        assert!(
+            matches!(again, DelegationAdmission::Created(_)),
+            "a completed record must not block a fresh dispatch: {again:?}"
+        );
+        __test_reset_registry();
+    }
+
+    /// The in-flight cap still applies, and a replay does not consume a slot.
+    #[test]
+    fn a_replay_is_admitted_even_when_the_cap_is_full() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let a = try_create_record("a", "m", 1, None, Some("k1")).expect("the only slot");
+        assert!(matches!(a, DelegationAdmission::Created(_)));
+        // A different key cannot get a slot.
+        assert_eq!(
+            try_create_record("b", "m", 1, None, Some("k2")),
+            Err(TryCreateError::TooManyPending { max_pending: 1 })
+        );
+        // But replaying the admitted key does not need one: the work is already
+        // in flight, so refusing the replay would push the caller to re-dispatch
+        // under a new key and double-spend.
+        assert_eq!(
+            try_create_record("a", "m", 1, None, Some("k1")),
+            Ok(DelegationAdmission::Reused(a.id().to_string()))
+        );
+        __test_reset_registry();
+    }
+
     /// Audit finding 2: a delegation records which session dispatched it, and
     /// the session-hub row carries it as the parent edge.
     #[test]
     fn a_delegation_records_the_session_that_dispatched_it() {
         let _guard = test_lock().lock().unwrap();
         __test_reset_registry();
-        let id = try_create_record("audit the pool", "m", 3, Some("sess_parent42"))
+        let admission = try_create_record("audit the pool", "m", 3, Some("sess_parent42"), None)
             .expect("a free slot");
+        let id = admission.id().to_string();
         assert_eq!(
             get_record(&id).unwrap().parent_session_id.as_deref(),
             Some("sess_parent42"),
@@ -725,6 +867,7 @@ mod tests {
             error: None,
             session_id: None,
             parent_session_id: Some("dlg-parent-1".to_string()),
+            request_key: None,
         };
         let done = AsyncDelegationRecord {
             delegation_id: "dlg-old-2".to_string(),
@@ -737,6 +880,7 @@ mod tests {
             error: None,
             session_id: None,
             parent_session_id: Some("dlg-parent-1".to_string()),
+            request_key: None,
         };
         std::fs::write(
             &path,

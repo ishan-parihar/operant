@@ -164,6 +164,17 @@ struct SubAgentArgs {
     /// delegation by its `delegation_id`.
     #[serde(default)]
     query: Option<String>,
+    /// A caller-chosen key that makes a re-dispatch of the same work return the
+    /// existing handle instead of starting a second child (background mode).
+    ///
+    /// MEASURED 2026-11-14 (audit finding 6): without it, losing the handle —
+    /// context compaction, a dropped tool result, a torn-down turn — and
+    /// re-dispatching the same goal silently ran the work TWICE: two children,
+    /// two token spends, two ledger rows, nothing joining them. Pass any stable
+    /// string that identifies this unit of work (a task id, a slug) and a
+    /// replay returns the original delegation.
+    #[serde(default)]
+    request_key: Option<String>,
 }
 
 /// Runtime state for delegation
@@ -1064,6 +1075,7 @@ impl SubAgentTool {
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
         parent_session: Option<String>,
+        request_key: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         // Refuse BEFORE the handle exists when there is no breadth headroom at
         // all. MEASURED 2026-11-14: with the process-wide cap already full, this
@@ -1082,18 +1094,42 @@ impl SubAgentTool {
             .into());
         }
 
-        let Some(delegation_id) = async_delegation::try_create_record(
+        let delegation_id = match async_delegation::try_create_record(
             &goal,
             &self.model,
             async_delegation::DEFAULT_MAX_ASYNC_CHILDREN,
             parent_session.as_deref(),
-        ) else {
-            return Err(format!(
-                "Too many background delegations in flight (max {}); \
-                 wait for one to complete or use synchronous delegation.",
-                async_delegation::DEFAULT_MAX_ASYNC_CHILDREN
-            )
-            .into());
+            request_key.as_deref(),
+        ) {
+            Ok(async_delegation::DelegationAdmission::Created(id)) => id,
+            // Audit finding 6: the same key is already in flight, so this
+            // dispatch is a REPLAY. Returning the existing handle is the whole
+            // point — but a child must NOT be started for it, or the replay
+            // costs exactly what the key exists to prevent.
+            Ok(async_delegation::DelegationAdmission::Reused(id)) => {
+                return Ok(serde_json::json!({
+                    "delegation_id": id,
+                    "status": "already_dispatched",
+                    "reused": true,
+                    "model": self.model,
+                    "goal": preview_of(&goal, 80),
+                    "note": "a delegation with this request_key is already in \
+                             flight; this is the SAME work, not a new one. Poll it \
+                             with delegate_task query=\"{id}\".",
+                    "poll": format!("delegate_task query=\"{id}\""),
+                })
+                .to_string());
+            }
+            Err(async_delegation::TryCreateError::TooManyPending { max_pending }) => {
+                return Err(format!(
+                    "Too many background delegations in flight (max {max_pending}); \
+                     wait for one to complete or use synchronous delegation."
+                )
+                .into());
+            }
+            Err(async_delegation::TryCreateError::RegistryPoisoned) => {
+                return Err("the delegation registry is poisoned; no handle can be trusted".into());
+            }
         };
 
         let tool = self.clone_for_task();
@@ -1714,6 +1750,7 @@ impl SubAgentTool {
                 parsed.toolsets,
                 parsed.working_dir,
                 parent_session,
+                parsed.request_key.clone(),
             )
             .await
         {

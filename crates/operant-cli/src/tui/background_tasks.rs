@@ -391,6 +391,7 @@ mod tests {
             error: None,
             session_id: None,
             parent_session_id: None,
+            request_key: None,
         }
     }
 
