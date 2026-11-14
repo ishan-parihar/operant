@@ -16511,6 +16511,23 @@ mod effort_picker_surface {
             .collect()
     }
 
+    /// Point the app at an endpoint no provider mapping knows, so the capability
+    /// lookup resolves to `EffortSupport::Unknown` deterministically — without
+    /// depending on whether a models.dev cache happens to sit on this machine.
+    ///
+    /// The ladder and picker tests need this because `AppConfig::default()` is
+    /// `gpt-4`, which models.dev reports as `reasoning: false`, so the M3 gate
+    /// correctly refuses to open. A test that wants the ladder must say which
+    /// capability state it is testing.
+    fn with_unknown_capabilities(app: &mut App) {
+        app.config.client.base_url = "http://127.0.0.1:1/v1".to_string();
+        assert_eq!(
+            app.effort_support_for_current_model(),
+            crate::tui::model_effort::EffortSupport::Unknown,
+            "an unmapped base URL must resolve to Unknown"
+        );
+    }
+
     #[test]
     fn the_ladder_covers_the_whole_wire_vocabulary() {
         // The M2 contract: one rung per wire value, no gaps and no extras. If a
@@ -16536,6 +16553,7 @@ mod effort_picker_surface {
     fn an_effort_row_sets_an_effort_and_never_a_model() {
         for (symbol, wire) in rows() {
             let mut app = make_app();
+            with_unknown_capabilities(&mut app);
             let model_before = app.model_name.clone();
             let config_before = app.config.agent.model.clone();
 
@@ -16601,6 +16619,7 @@ mod effort_picker_surface {
     #[test]
     fn the_effort_rows_read_as_their_wire_levels() {
         let mut app = make_app();
+        with_unknown_capabilities(&mut app);
         app.open_effort_picker_inline("");
         let picker = app.inline_interactive.as_ref().expect("picker");
         // The label carries the level's own name, so what the operator reads is
@@ -16630,6 +16649,7 @@ mod effort_picker_surface {
         // it is derived from — the kind it branches on — rather than reaching
         // into that module for a test-only export.
         let mut app = make_app();
+        with_unknown_capabilities(&mut app);
         app.open_effort_picker_inline("");
         let kind = app
             .inline_interactive
@@ -16652,6 +16672,7 @@ mod effort_picker_surface {
         // operator pressed the key once more to turn reasoning off and the display
         // said "low". The level and the wire must now agree.
         let mut app = make_app();
+        with_unknown_capabilities(&mut app);
         app.effort_level = EffortLevel::Max;
         app.cycle_effort();
         assert_eq!(
@@ -16685,10 +16706,104 @@ mod effort_picker_surface {
         );
     }
 
+    // ── the capability gate (model plan M3) ──────────────────────────────
+
+    #[test]
+    fn an_unknown_model_is_never_blocked() {
+        // The safety property of the whole gate: operant resolves capabilities
+        // from a cache that covers mapped providers only, so "no metadata" is the
+        // COMMON case and must not disable the control. Only a model the metadata
+        // says is `reasoning: false` is refused.
+        use crate::tui::model_effort::{EffortSupport, clamp_effort, effort_support};
+        let support = effort_support("no-such-provider", "no-such-model");
+        assert_eq!(
+            support,
+            EffortSupport::Unknown,
+            "a model with no metadata must be Unknown, not blocking"
+        );
+        assert!(
+            support.allows_effort(),
+            "an unknown model must still allow the effort controls"
+        );
+        assert_eq!(
+            support.refusal(),
+            None,
+            "an unknown model has no reason to refuse"
+        );
+        assert_eq!(
+            clamp_effort("no-such-provider", "no-such-model", EffortLevel::Max),
+            Some(EffortLevel::Max),
+            "an unknown model's requested level must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn a_model_the_catalogue_says_cannot_reason_is_refused_everywhere() {
+        // The positive half of the gate, and the one that matters: the default
+        // config model is `gpt-4`, which models.dev reports as `reasoning: false`.
+        // An operator on it must be told there is no effort to set rather than
+        // being offered a ladder the provider will ignore.
+        //
+        // This depends on the models.dev cache being present on the machine, so it
+        // steps aside when it is not rather than failing on a fresh checkout — a
+        // capability assertion needs capability data. The unit contract is pinned
+        // unconditionally by `only_a_known_non_reasoning_model_is_refused`.
+        let mut app = make_app();
+        if app.effort_support_for_current_model() != crate::tui::model_effort::EffortSupport::None {
+            eprintln!(
+                "skipping: no models.dev row for {:?} on this machine",
+                app.config.agent.model
+            );
+            return;
+        }
+
+        // The ladder refuses and says why.
+        let before = app.effort_level;
+        app.cycle_effort();
+        assert_eq!(app.effort_level, before, "the ladder must not move");
+        assert!(
+            app.pending_effort.is_none(),
+            "nothing may be forwarded to the agent"
+        );
+
+        // The picker does not open.
+        app.open_effort_picker_inline("");
+        assert!(
+            app.inline_interactive.is_none(),
+            "the picker must not open for a model that cannot reason"
+        );
+
+        // And the command refuses rather than applying.
+        app.handle_tui_command("effort-set", "high");
+        assert!(
+            app.pending_effort.is_none(),
+            "/effort-set must not apply a level the model cannot use"
+        );
+        assert_eq!(
+            app.effort_level, before,
+            "/effort-set must not move the level"
+        );
+    }
+
+    #[test]
+    fn only_a_known_non_reasoning_model_is_refused() {
+        use crate::tui::model_effort::EffortSupport;
+        // The two blocking-state contracts, checked on the type rather than
+        // through a seeded cache: `None` is the only variant that refuses, and it
+        // is the only one with a sentence to show.
+        assert!(!EffortSupport::None.allows_effort());
+        assert!(EffortSupport::None.refusal().is_some());
+        for allowed in [EffortSupport::Full, EffortSupport::Unknown] {
+            assert!(allowed.allows_effort(), "{allowed:?} must not block");
+            assert_eq!(allowed.refusal(), None, "{allowed:?} must not refuse");
+        }
+    }
+
     #[test]
     fn effort_set_accepts_every_rung_and_refuses_anything_else() {
         for wire in WIRE {
             let mut app = make_app();
+            with_unknown_capabilities(&mut app);
             app.handle_tui_command("effort-set", wire);
             assert_eq!(
                 app.pending_effort.as_deref(),
@@ -16705,6 +16820,7 @@ mod effort_picker_surface {
         // A value the vocabulary does not hold must change nothing. The TOML path
         // used to substitute `High` for a typo — the most expensive rung.
         let mut app = make_app();
+        with_unknown_capabilities(&mut app);
         app.effort_level = EffortLevel::Medium;
         app.pending_effort = None;
         app.handle_tui_command("effort-set", "ultra");

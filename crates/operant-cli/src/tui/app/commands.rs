@@ -1358,10 +1358,38 @@ impl App {
                 let value = args.trim().to_ascii_lowercase();
                 match crate::tui::model_effort::EffortLevel::from_wire(&value) {
                     Some(level) => {
-                        self.effort_level = level;
-                        // Send the type's own spelling, not the operator's: a
-                        // trailing space or an odd case must not reach the agent.
-                        self.pending_effort = Some(level.wire().to_string());
+                        // (2026-11-15, model plan M3) The clamp is the last gate
+                        // before the agent: a known non-reasoning model refuses
+                        // here rather than on the next request. An unknown model
+                        // passes through — see `EffortSupport::Unknown`.
+                        let provider = crate::provider::provider_from_url(
+                            self.config.client.base_url.trim_end_matches('/'),
+                        )
+                        .map(|p| p.name)
+                        .unwrap_or_default();
+                        match crate::tui::model_effort::clamp_effort(
+                            provider,
+                            &self.config.agent.model,
+                            level,
+                        ) {
+                            Some(clamped) => {
+                                self.effort_level = clamped;
+                                // Send the type's own spelling, not the operator's:
+                                // a trailing space or an odd case must not reach
+                                // the agent.
+                                self.pending_effort = Some(clamped.wire().to_string());
+                            }
+                            None => {
+                                if let Some(why) = crate::tui::model_effort::effort_support(
+                                    provider,
+                                    &self.config.agent.model,
+                                )
+                                .refusal()
+                                {
+                                    self.set_status_notice(why.to_string());
+                                }
+                            }
+                        }
                     }
                     None => {
                         let options: Vec<&str> = crate::tui::model_effort::EffortLevel::ALL
