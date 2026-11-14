@@ -277,6 +277,17 @@ shows in the transcript as "Auto-poke", not as a message you typed.
 
 Two traps worth knowing: `~/.operant/config.toml` is read by no binary path (the loader warns when it sits beside `operant.toml`), and **proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`) never redirect provider traffic**.
 
+### Undoing a bad config change
+
+Every write that changes `operant.toml` — `config set`, `channel add`/`remove`, `config migrate --apply`, the setup wizard, a plugin toggle — saves the previous bytes first, into `backups/config/` beside the file. The five most recent copies are kept; a write rejected by the loader leaves nothing behind, so what is listed is always a version that actually existed.
+
+```sh
+operant config backups list                       # newest first
+operant config backups restore <path-from-list>   # validated, then swapped in
+```
+
+A restore is itself undoable: the file being replaced is saved as a copy before it goes, and the copy being restored is re-parsed through the normal loader first, so a truncated snapshot can never become the live config. Snapshots are owner-only, because the config may hold a provider key.
+
 One switch worth knowing: operant checks GitHub once per session for a newer `aft`/`sourcehound` build, in the background. `OPERANT_NO_AUTO_UPDATE=1` turns that off — set it on a machine that must not reach GitHub on its own.
 
 ### Terminal scrollback mode (opt-in)
