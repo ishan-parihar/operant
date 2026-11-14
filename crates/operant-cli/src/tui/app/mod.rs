@@ -1267,7 +1267,7 @@ impl App {
     /// `packages/tui/src/tools/todo.ts:131`): the status stays `pending`, the
     /// display treats it as current work.
     pub(super) fn subagent_live_todo_ids(&self) -> Vec<String> {
-        let pendings = operant_core::tools::async_delegation::list_records()
+        let pendings = operant_core::tools::async_delegation::live_records()
             .into_iter()
             .filter(|rec| {
                 rec.status == operant_core::tools::async_delegation::AsyncDelegationStatus::Pending
@@ -1320,13 +1320,18 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        operant_core::tools::async_delegation::list_records()
+        // Pick the source by what the caller can actually use. The live path
+        // only ever wanted pending rows and used to clone every finished child's
+        // full answer in order to throw them away; the transcript path needs the
+        // finished ones, because a card is matched to a worker that has already
+        // reported (audit finding 13).
+        let records = if live_only {
+            operant_core::tools::async_delegation::live_records()
+        } else {
+            operant_core::tools::async_delegation::list_records()
+        };
+        records
             .into_iter()
-            .filter(move |rec| {
-                !live_only
-                    || rec.status
-                        == operant_core::tools::async_delegation::AsyncDelegationStatus::Pending
-            })
             .map(move |rec| {
                 // Scope this child's slice of the plan by its own handle, so
                 // two children running sibling tasks never show each other's

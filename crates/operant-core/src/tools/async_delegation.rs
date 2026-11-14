@@ -331,6 +331,30 @@ pub fn list_records() -> Vec<AsyncDelegationRecord> {
     records
 }
 
+/// Only the records still pending, newest dispatch first.
+///
+/// The per-frame callers (`App::swarm_gallery_members(live_only)`, the hub's
+/// `Working` count) ask for live rows and used to clone EVERY record first —
+/// including each finished child's full answer — then throw the finished ones
+/// away (audit finding 13). Filtering before the clone is the whole fix.
+pub fn live_records() -> Vec<AsyncDelegationRecord> {
+    let mut records: Vec<AsyncDelegationRecord> = registry()
+        .lock()
+        .map(|map| {
+            map.values()
+                .filter(|r| r.status == AsyncDelegationStatus::Pending)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    records.sort_by(|a, b| {
+        b.dispatch_time
+            .cmp(&a.dispatch_time)
+            .then_with(|| b.delegation_id.cmp(&a.delegation_id))
+    });
+    records
+}
+
 /// The registry as `SessionEntryV2` subagent rows — the unified listing's
 /// join point for live delegations (plan 2026-10-28 iter-C). Pending rows
 /// first (the ones an operator would act on), then terminal records within

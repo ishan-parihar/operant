@@ -37,6 +37,15 @@ struct Row {
     started_at: u64,
 }
 
+/// How many FINISHED workers to keep.
+///
+/// MEASURED 2026-11-14 (audit finding 13): this registry never pruned, so a
+/// long-lived gateway accumulated one row per worker for the life of the
+/// process — the same unbounded-map defect the async registry bounds at
+/// `async_delegation::MAX_RETAINED_TERMINAL`. Live rows are never pruned: a
+/// running worker must stay visible.
+const MAX_RETAINED_TERMINAL: usize = 50;
+
 static LIVE: OnceLock<Mutex<Vec<Row>>> = OnceLock::new();
 
 fn live() -> &'static Mutex<Vec<Row>> {
@@ -74,6 +83,66 @@ pub fn finish(id: &str, status: &str, detail: Option<String>) {
     {
         row.status = status.to_string();
         row.detail = detail;
+    }
+    prune();
+}
+
+/// Drop the OLDEST finished rows beyond the retention cap.
+///
+/// Ordered by `started_at`, with the id as a tiebreak so the survivor of a
+/// same-second prune does not depend on `Vec` order — the same total-order rule
+/// the async pruner follows.
+fn prune() {
+    if let Ok(mut rows) = live().lock() {
+        let terminal: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.status != "running")
+            .map(|(i, _)| i)
+            .collect();
+        if terminal.len() <= MAX_RETAINED_TERMINAL {
+            return;
+        }
+        let mut ordered: Vec<(u64, &String, usize)> = terminal
+            .iter()
+            .map(|i| (rows[*i].started_at, &rows[*i].id, *i))
+            .collect();
+        ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        let drop: std::collections::HashSet<usize> = ordered
+            .into_iter()
+            .take(terminal.len() - MAX_RETAINED_TERMINAL)
+            .map(|(_, _, i)| i)
+            .collect();
+        let mut i = 0;
+        rows.retain(|_| {
+            let keep = !drop.contains(&i);
+            i += 1;
+            keep
+        });
+    }
+}
+
+/// Only the workers still running, newest last.
+///
+/// The per-frame path (`App::inline_swarm_members`) asks for live rows and used
+/// to get every row this process had ever seen, cloned with its label and
+/// detail — five times per prepare pass (audit finding 13). Filtering before the
+/// clone is the whole fix: the caller throws the finished rows away anyway.
+pub fn list_live() -> Vec<ForegroundMember> {
+    let now = now_secs();
+    match live().lock() {
+        Ok(rows) => rows
+            .iter()
+            .filter(|r| r.status == "running")
+            .map(|r| ForegroundMember {
+                id: r.id.clone(),
+                label: r.label.clone(),
+                status: r.status.clone(),
+                detail: r.detail.clone(),
+                age_secs: now.saturating_sub(r.started_at),
+            })
+            .collect(),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -153,6 +222,48 @@ mod tests {
                 .map(|r| r.label.as_str()),
             Some("second run")
         );
+
+        // Audit finding 13: `list_live` returns ONLY the running rows, and the
+        // finished ones are retained up to a cap rather than forever.
+        clear();
+        for i in 0..MAX_RETAINED_TERMINAL + 5 {
+            begin(format!("sub-old-{i}"), "old work");
+            finish(&format!("sub-old-{i}"), "completed", None);
+        }
+        let kept = list();
+        assert_eq!(
+            kept.len(),
+            MAX_RETAINED_TERMINAL,
+            "the finished rows must be capped at {MAX_RETAINED_TERMINAL}"
+        );
+        // The five dropped are the ones the documented order picks: every row
+        // in this test is created inside the same second, so `started_at` ties
+        // and the ID tiebreak decides — and IDs are compared as STRINGS, so
+        // "sub-old-10" sorts before "sub-old-2". Compute the expectation with
+        // the same rule rather than assuming numeric order.
+        let mut expected: Vec<String> = (0..MAX_RETAINED_TERMINAL + 5)
+            .map(|i| format!("sub-old-{i}"))
+            .collect();
+        expected.sort();
+        for dropped in expected.iter().take(5) {
+            assert!(
+                !kept.iter().any(|r| &r.id == dropped),
+                "{dropped} should have been pruned"
+            );
+        }
+        assert!(
+            kept.iter()
+                .any(|r| r.id == format!("sub-old-{}", MAX_RETAINED_TERMINAL + 4)),
+            "the newest finished row must survive"
+        );
+        assert!(
+            list_live().is_empty(),
+            "a finished worker must not appear in the live list"
+        );
+
+        begin("sub-live", "still working");
+        assert_eq!(list_live().len(), 1);
+        assert_eq!(list_live()[0].id, "sub-live");
 
         clear();
         assert!(list().is_empty());
