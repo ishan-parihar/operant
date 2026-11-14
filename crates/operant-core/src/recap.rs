@@ -41,9 +41,14 @@ pub struct Recap {
 }
 
 /// Handle for the host to signal user activity (re-arm/cancel the timer).
+///
+/// `None` is the DISABLED state: no engine was spawned, so there is no
+/// receiver and `notify` is a no-op. An `Option` rather than a channel whose
+/// receiver is dropped on purpose — the off state exists to cost nothing, and
+/// allocating a channel to immediately break it was a lie about that cost.
 #[derive(Clone)]
 pub struct RecapActivity {
-    tx: mpsc::Sender<()>,
+    tx: Option<mpsc::Sender<()>>,
 }
 
 impl RecapActivity {
@@ -57,17 +62,22 @@ impl RecapActivity {
     /// `Duration::from_secs(0)` straight into `sleep`, which is already
     /// elapsed, so a recap fired on EVERY turn end instead of never.
     pub fn disabled() -> Self {
-        let (tx, _rx) = mpsc::channel::<()>(1);
-        // The receiver is dropped immediately: `try_send` then fails and the
-        // notify is discarded, which is exactly the disabled behavior.
-        Self { tx }
+        Self { tx: None }
+    }
+
+    /// Whether this handle is the disabled (off) one. The observable a host or
+    /// a test needs: a disabled handle owns no sender, so no engine is running.
+    pub fn is_disabled(&self) -> bool {
+        self.tx.is_none()
     }
 
     /// Signal activity: cancels any pending recap and re-arms the idle
     /// timer. Cheap (one try_send); lossy is fine — activity is a flood
     /// signal, not a queue.
     pub fn notify(&self) {
-        let _ = self.tx.try_send(());
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(());
+        }
     }
 }
 
@@ -177,7 +187,7 @@ pub fn spawn_recap_engine(
             deliver(Recap { session_id, text });
         }
     });
-    RecapActivity { tx: act_tx }
+    RecapActivity { tx: Some(act_tx) }
 }
 
 #[cfg(test)]
@@ -360,8 +370,9 @@ mod tests {
         // handle's receiver is gone, so `try_send` fails. That difference is
         // the whole contract.
         assert!(
-            handle.tx.is_closed(),
-            "a zero idle window must attach a DISABLED handle — a live engine              here is the zero-second timer that fired a recap after every turn"
+            handle.is_disabled(),
+            "a zero idle window must attach a DISABLED handle — a live engine here is the \
+             zero-second timer that fired a recap after every turn"
         );
         // And the host can still notify unconditionally.
         handle.notify();
@@ -378,7 +389,7 @@ mod tests {
             crate::client::ClientConfig::default(),
         );
         assert!(
-            !handle.tx.is_closed(),
+            !handle.is_disabled(),
             "a 240s window must attach a live engine, or the recap never runs at all"
         );
     }

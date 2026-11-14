@@ -331,6 +331,17 @@ impl LlmCompressor {
         now < self.cooldown_until
     }
 
+    /// Consecutive summarizer failures since the last success.
+    ///
+    /// The counter existed but nothing outside this module could read it, so a
+    /// configured-but-broken summarizer (wrong model name, expired key, quota)
+    /// degraded to deterministic truncation with only a `warn!` in a log
+    /// nobody tails — indistinguishable from a working one. This is the
+    /// observable the doctor reads.
+    pub fn consecutive_failures(&self) -> usize {
+        self.consecutive_failures
+    }
+
     /// Record a compression failure and arm the cooldown.
     fn record_failure(&mut self) {
         self.consecutive_failures += 1;

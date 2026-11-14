@@ -1164,9 +1164,7 @@ pub(crate) fn llm_compressor_config(
 ) -> operant_core::agent::llm_compressor::LlmCompressorConfig {
     let slot = config.auxiliary_models.compression.as_ref();
     let summarizer_model = slot
-        .and_then(|slot| slot.model.clone())
-        .map(|m| m.trim().to_string())
-        .filter(|m| !m.is_empty())
+        .and_then(|slot| slot.named_model().map(str::to_string))
         .unwrap_or_else(|| {
             // WARN, not debug: this is the one path where the flagship
             // context feature silently does not do what it claims. The

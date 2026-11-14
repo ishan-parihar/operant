@@ -240,7 +240,18 @@ pub fn resolve(
 
 /// One `state_meta` read, parsed.
 pub fn learned_from_meta(value: Option<String>) -> Option<usize> {
-    value?.trim().parse::<usize>().ok().filter(|n| *n > 0)
+    value?
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        // The SAME floor the discovered window gets. A learned limit is hard
+        // evidence from a real 400, but it is stored in a DB row, and a corrupt
+        // row of `1` would set a 1-token window: the protected floor then
+        // exceeds it and every turn fails typed — the original outage through a
+        // different door. Below the runtime floor a learned number is not
+        // evidence, it is corruption.
+        .filter(|n| *n >= MIN_CONTEXT_WINDOW)
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +350,24 @@ pub async fn discover(
     discovered
 }
 
+/// The sanity band a DISCOVERED window must fall inside, applied at the trust
+/// boundary.
+///
+/// A `/models` listing is authoritative for what the provider serves, but it
+/// is still a remote string: a value below the runtime floor or above any real
+/// model is a corrupt answer, not a window. Clamping HERE (not in `resolve`)
+/// keeps the "endpoint" label honest — after `resolve` a clamped value would
+/// be indistinguishable from one the provider really sent.
+///
+/// Separate from the fetch so the band is testable without a live endpoint; a
+/// first draft inlined it, and its test asserted on the CONSTANTS instead of on
+/// this mapping, so deleting the clamp left the test green.
+fn discovered_window(tokens: usize) -> Option<usize> {
+    (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW)
+        .contains(&tokens)
+        .then_some(tokens)
+}
+
 async fn discover_endpoint(
     provider: &str,
     base_url: &str,
@@ -375,11 +404,7 @@ async fn discover_endpoint(
             // a window. Clamping here keeps the "endpoint" label honest —
             // after `resolve` it would be indistinguishable from a value the
             // provider really sent.
-            context_window: row.context_length.and_then(|tokens| {
-                (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW)
-                    .contains(&tokens)
-                    .then_some(tokens)
-            }),
+            context_window: row.context_length.and_then(discovered_window),
             window_source: row.context_length.map(|_| WindowSource::Endpoint),
             max_output: row.max_output,
             endpoint_reachable: true,
@@ -436,25 +461,27 @@ mod tests {
 
     /// A corrupt or absurd number from a `/models` listing must not become
     /// the window. Below the runtime floor, every turn fails typed as
-    /// `ContextExhausted` with an error that blames the model; above any
-    /// real model, the protected floor can never fit and the same thing
-    /// happens at the other end. Both are clamp-and-reject, at the trust
-    /// boundary, so the endpoint stays the authority for every real value.
+    /// `ContextExhausted` with an error that blames the model; above any real
+    /// model, the protected floor can never fit and the same thing happens at
+    /// the other end.
+    ///
+    /// Exercises the REAL mapping (`discovered_window`), not the constants: a
+    /// first draft asserted `MIN..=MAX` contains the right numbers, which
+    /// would still pass if the clamp were deleted from the fetch.
     #[test]
     fn an_absurd_discovered_window_is_rejected() {
-        // The band edges, inclusive.
         for good in [
             MIN_CONTEXT_WINDOW,
             128_000,
             1_048_576,
             MAX_DISCOVERED_CONTEXT_WINDOW,
         ] {
-            assert!(
-                (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW).contains(&good),
-                "{good} is inside the band and must be accepted"
+            assert_eq!(
+                discovered_window(good),
+                Some(good),
+                "{good} is inside the band and must pass through unchanged"
             );
         }
-        // Below the floor and above the ceiling: a corrupt listing.
         for bad in [
             0usize,
             1,
@@ -463,8 +490,11 @@ mod tests {
             MAX_DISCOVERED_CONTEXT_WINDOW + 1,
             usize::MAX,
         ] {
-            let accepted = (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW).contains(&bad);
-            assert!(!accepted, "{bad} is outside the band and must be rejected");
+            assert_eq!(
+                discovered_window(bad),
+                None,
+                "{bad} is outside the band and must be rejected, not clamped into range"
+            );
         }
     }
 
@@ -585,6 +615,32 @@ mod tests {
         assert_eq!(learned_from_meta(Some("".into())), None);
         assert_eq!(learned_from_meta(Some("nope".into())), None);
         assert_eq!(learned_from_meta(None), None);
+    }
+
+    /// A corrupt learned row below the runtime floor is rejected, not
+    /// believed. `context_limit:… = 1` in state_meta would otherwise set a
+    /// 1-token window and every turn would fail typed as ContextExhausted —
+    /// the original outage through the DB rather than the endpoint.
+    #[test]
+    fn a_learned_limit_below_the_runtime_floor_is_rejected() {
+        for bad in ["1", "128", "4096", "4_096"] {
+            assert_eq!(
+                learned_from_meta(Some(bad.into())),
+                None,
+                "{bad} is below MIN_CONTEXT_WINDOW and must not become the window"
+            );
+        }
+        // The floor itself is accepted: a window exactly at the floor can
+        // still hold the response reserve.
+        assert_eq!(
+            learned_from_meta(Some(MIN_CONTEXT_WINDOW.to_string())),
+            Some(MIN_CONTEXT_WINDOW)
+        );
+        assert_eq!(
+            learned_from_meta(Some("200000".into())),
+            Some(200_000),
+            "a real learned limit still passes through unchanged"
+        );
     }
 
     #[test]

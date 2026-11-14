@@ -664,9 +664,7 @@ pub(crate) fn compression_route_verdict(config: &AppConfig) -> CompressionRoute 
         .auxiliary_models
         .compression
         .as_ref()
-        .and_then(|slot| slot.model.clone())
-        .map(|m| m.trim().to_string())
-        .filter(|m| !m.is_empty())
+        .and_then(|slot| slot.named_model().map(str::to_string))
     {
         Some(model) => CompressionRoute::Configured(model),
         None => CompressionRoute::FallsBackToOpenAIDefault,
@@ -704,6 +702,25 @@ pub fn check_context_telemetry(
             return;
         }
     };
+    // A summarizer that is configured but FAILING degrades compaction to
+    // deterministic truncation with only a `warn!` in a log nobody tails —
+    // compaction still "works", so nothing else surfaces it. The count is
+    // persisted per session under this key (`llm_compressor.rs:387`), so the
+    // newest session is the observable.
+    if config.agent.context_compression
+        && let Some(sid) = db.newest_session_id().ok().flatten()
+        && let Some(raw) = db.get_session_metadata(&sid, "compression_consecutive_failures")
+        && let Ok(failures) = raw.trim().parse::<usize>()
+        && failures >= 3
+    {
+        check_warn(
+            "Context compaction is degraded — the summarizer keeps failing",
+            &format!(
+                "{failures} consecutive summarization failure(s) on the newest session. Every                  compaction is falling back to deterministic truncation, so the model is NOT                  receiving an LLM summary. Check the summarizer's model name, key and quota on                  the route [auxiliary_models.compression] names."
+            ),
+        );
+    }
+
     let metered = db.sessions_with_recorded_usage().unwrap_or(0);
     let sessions = db.list_sessions(10_000).map(|s| s.len()).unwrap_or(0);
     if metered > 0 {

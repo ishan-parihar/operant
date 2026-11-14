@@ -312,9 +312,11 @@ enabled = false
 # Lowest severity that wakes an idle agent for one continuation:
 # "nit", "concern" (default), or "blocker".
 # continue_severity = "concern"
-# Hard cap on the notes one review may inject (default 4). The prompt asks
-# for at most three, but this is the rule that enforces it: a verbose
-# advisory model cannot inflate the injected block past this.
+# Cap on the NON-BLOCKER notes one review may inject (default 4). The prompt
+# asks for at most three, but this is the rule that enforces it: a verbose
+# advisory model cannot inflate the injected block past this. A `blocker` is
+# EXEMPT — it always reaches the model and always continues the run, because
+# dropping the highest-severity signal is the one thing this cap must not do.
 # max_notes_per_update = 4
 # Consecutive-identical-note suppression streak (default 3).
 # suppress_streak = 3

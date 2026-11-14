@@ -2514,6 +2514,23 @@ pub struct AuxiliaryModelConfig {
     pub api_key: Option<String>,
 }
 
+impl AuxiliaryModelConfig {
+    /// The slot's model name, trimmed, or `None` when it is unset or blank.
+    ///
+    /// ONE reader for every caller that asks "which model does this slot
+    /// name?". The config builder and the doctor each derived this answer
+    /// separately, so a change to the fallback rule in one silently made the
+    /// doctor report the wrong verdict — the two-writers-one-truth shape. A
+    /// blank string is the same as absent, because the config loader filters
+    /// empty values and so must every reader.
+    pub fn named_model(&self) -> Option<&str> {
+        self.model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+    }
+}
+
 /// Mixture-of-Agents (MoA) configuration (`[moa]` section, hermes
 /// `hermes_cli/moa_config.py` + `agent/moa_loop.py` parity).
 ///
@@ -4129,6 +4146,30 @@ mod rt418_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slot reader treats a blank model as absent, because the loader
+    /// filters empty values and so must every reader of the same slot.
+    #[test]
+    fn a_blank_slot_model_is_absent() {
+        assert_eq!(AuxiliaryModelConfig::default().named_model(), None);
+        assert_eq!(
+            AuxiliaryModelConfig {
+                model: Some("   ".to_string()),
+                ..Default::default()
+            }
+            .named_model(),
+            None
+        );
+        assert_eq!(
+            AuxiliaryModelConfig {
+                model: Some(" gpt-4o-mini ".to_string()),
+                ..Default::default()
+            }
+            .named_model(),
+            Some("gpt-4o-mini"),
+            "the name is trimmed, so a padded config matches the same route"
+        );
+    }
 
     /// The deprecated `client.max_context_length` key must still PARSE.
     ///

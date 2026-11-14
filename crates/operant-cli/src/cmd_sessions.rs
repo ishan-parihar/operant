@@ -74,9 +74,16 @@ pub enum SessionsSubcommand {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
-    /// Show a local recap of a session's recent activity (hermes
+    /// Show a local digest of a session's recent activity (hermes
     /// session_recap.py parity — pure local computation, no LLM call).
     /// Defaults to the most recently updated session.
+    ///
+    /// Also spelled `digest`, because TWO unrelated mechanisms in this repo
+    /// are called "recap": this pure-local one, and the idle LLM side-call
+    /// configured by `[recap]` / `agent.recap_idle_seconds`. Same word,
+    /// opposite cost profiles — an operator reading this help and then
+    /// editing `[recap.model]` would be configuring the other one.
+    #[command(alias = "digest")]
     Recap {
         /// Session ID to recap (default: most recent)
         id: Option<String>,
@@ -670,7 +677,10 @@ async fn cmd_resume(config: &AppConfig, id: Option<&str>, last: bool) -> Result<
     // the operator who ran `sessions resume <id>` already has the id — the
     // shortest path from here is the command that attaches, not a walk through
     // the TUI's own picker.
-    println!("  • Shell:    {}", crate::cmd_continue::continue_command_line(&session.id));
+    println!(
+        "  • Shell:    {}",
+        crate::cmd_continue::continue_command_line(&session.id)
+    );
     println!("  • TUI:      operant chat  →  /resume  →  pick this session");
     println!("  • Gateway:  send a message on the same platform channel");
     Ok(())

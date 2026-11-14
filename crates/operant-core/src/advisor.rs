@@ -482,6 +482,18 @@ pub fn spawn_advisor(
             tracing::debug!(model = %advisor_model, "advisor woke on turn end");
             let messages = snapshot();
             let cursor = st.cursor.load(Ordering::Relaxed) as usize;
+            // An EMPTY snapshot is not a wipe. The host snapshot is
+            // `try_read().unwrap_or_default()`, so a lock momentarily held by
+            // the compaction write yields an empty vec. Reading that as a
+            // shrink-to-zero cleared the guards and replayed the whole history
+            // as one delta — and the guard reset leaked through as a DUPLICATE
+            // note (the emission guard had been cleared). Reproduced before the
+            // fix: two deliveries where one is correct. Nothing to see is not
+            // something to review.
+            if messages.is_empty() {
+                tracing::trace!("advisor: empty snapshot (lock contended) — nothing to review");
+                continue;
+            }
             // The transcript can SHRINK: compaction folds each old exchange
             // into one marker, and /new wipes the whole conversation. The
             // cursor is a message COUNT, so a shrink leaves it past the end —
@@ -504,13 +516,20 @@ pub fn spawn_advisor(
             } else {
                 (cursor, false)
             };
-            // A rewind is a fresh transcript for this engine's purposes: the
-            // guards that key off transcript content (the loop guard's
-            // fingerprint, the emission guard's last note) belong to the
-            // PRE-shrink material and must not suppress the replay.
+            // A rewind is a fresh transcript for this engine's purposes: every
+            // guard that keys off transcript content belongs to the PRE-shrink
+            // material and must not suppress the replay.
+            //
+            // ALL THREE, not two. The continuation counter is transcript
+            // state too: a continuation emitted before the wipe left it at 1,
+            // and the replay consumed it — skipping the very review the rewind
+            // exists to run, then advancing the cursor so that material was
+            // never reviewed at all. (A first draft reset the fingerprint and
+            // the last note and missed this one.)
             if rewound {
                 *st.last_delta_fingerprint.lock() = 0;
                 *st.last_note.lock() = (String::new(), 0);
+                st.continuations_outstanding.store(0, Ordering::Relaxed);
             }
             if messages.len() <= cursor {
                 // No new material since the last review (loop guard's other
@@ -642,13 +661,28 @@ pub fn spawn_advisor(
             // The note budget, enforced HERE rather than trusted to the
             // prompt: a verbose advisory model can otherwise inflate the
             // injected block without bound.
+            //
+            // BLOCKERS ARE EXEMPT. A plain `truncate` ran BEFORE the severity
+            // decision, so a `[blocker]` at position 5 was discarded and
+            // `should_continue` was computed over a list that no longer held
+            // it — the run never continued on the one note that demanded it.
+            // omp is explicit: "A `blocker` is exempt from the budget: it must
+            // always" reach the primary (`emission-guard.ts:140`, module doc
+            // `:5-13`: "default 4 non-blockers, `blocker` exempt").
             if accepted.len() > max_notes_per_update {
+                let (blockers, non_blockers): (Vec<ParsedNote>, Vec<ParsedNote>) = accepted
+                    .into_iter()
+                    .partition(|note| note.severity == Severity::Blocker);
                 tracing::debug!(
-                    parsed = accepted.len(),
-                    kept = max_notes_per_update,
-                    "advisor: note budget applied — the batch is capped"
+                    parsed = blockers.len() + non_blockers.len(),
+                    blockers = blockers.len(),
+                    non_blockers = non_blockers.len(),
+                    budget = max_notes_per_update,
+                    "advisor: note budget applied — blockers exempt"
                 );
-                accepted.truncate(max_notes_per_update);
+                let mut kept = blockers;
+                kept.extend(non_blockers.into_iter().take(max_notes_per_update));
+                accepted = kept;
             }
             let should_continue = review_should_continue(&accepted, continue_severity);
             // The batch below is a continuation: the host submits it as the
@@ -676,14 +710,26 @@ pub fn spawn_advisor(
 /// length-weighted fold of the last content. Collision-resistant enough for
 /// replay detection (not a security hash).
 fn delta_fingerprint(delta: &[Message]) -> u64 {
-    let mut h: u64 = delta.len() as u64;
-    h = h
-        .wrapping_mul(31)
-        .wrapping_add(delta.iter().map(|m| m.content.len()).sum::<usize>() as u64);
-    if let Some(last) = delta.last() {
-        for (i, b) in last.content.bytes().enumerate().take(64) {
-            h = h.wrapping_mul(31).wrapping_add((b as u64) << (i % 8));
+    // FNV-1a over the WHOLE delta: role, length, and every content byte.
+    //
+    // The first version hashed the message count, the total length, and the
+    // first 64 bytes of the last message. Two different deltas with the same
+    // length and the same opening bytes collided, and the loop guard then
+    // dropped a real review. Findings 1 and 2 both showed this guard is
+    // load-bearing; a 64-bit length-plus-prefix is too thin for it. The delta
+    // is already in hand, so hashing all of it costs one pass over bytes
+    // already in cache.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8], h: &mut u64| {
+        for b in bytes {
+            *h ^= u64::from(*b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
+    };
+    for m in delta {
+        mix(m.role.as_str().as_bytes(), &mut h);
+        mix(&(m.content.len() as u64).to_le_bytes(), &mut h);
+        mix(m.content.as_bytes(), &mut h);
     }
     h
 }
@@ -937,6 +983,38 @@ mod tests {
         assert_eq!(delta_fingerprint(&a), delta_fingerprint(&b));
         assert_ne!(delta_fingerprint(&a), delta_fingerprint(&c));
     }
+
+    /// Same length, same opening bytes, DIFFERENT content — the collision the
+    /// old length-plus-64-byte-prefix fingerprint allowed. The loop guard would
+    /// then drop a real review as a replay.
+    #[test]
+    fn a_same_length_same_prefix_delta_is_not_a_replay() {
+        // "aaaa...X" and "aaaa...Y": identical length, identical first 64 bytes.
+        let prefix = "a".repeat(128);
+        let one = vec![Message::user(format!("{prefix}X"))];
+        let two = vec![Message::user(format!("{prefix}Y"))];
+        assert_eq!(one[0].content.len(), two[0].content.len());
+        assert_eq!(
+            &one[0].content[..64],
+            &two[0].content[..64],
+            "the fixtures must actually collide on the old prefix rule"
+        );
+        assert_ne!(
+            delta_fingerprint(&one),
+            delta_fingerprint(&two),
+            "different content must fingerprint differently even when the length and the \
+             first 64 bytes agree"
+        );
+    }
+
+    /// A different ROLE is different material: a user turn and an assistant
+    /// turn of the same length must not share a fingerprint.
+    #[test]
+    fn the_role_is_part_of_the_fingerprint() {
+        let user = vec![Message::user("same text")];
+        let assistant = vec![Message::assistant("same text")];
+        assert_ne!(delta_fingerprint(&user), delta_fingerprint(&assistant));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -984,9 +1062,12 @@ mod engine {
                     let mut buf = vec![0u8; 256 * 1024];
                     let read = socket.read(&mut buf).await.unwrap_or(0);
                     *c2.lock() += 1;
-                    // Drain the request so the socket sees EOF and the client
-                    // finishes its write; the body is not asserted on.
-                    let _ = read;
+                    // The request BODY is deliberately not asserted on: it is
+                    // read so the client's write completes and the connection
+                    // closes cleanly. Asserting on it would couple these tests
+                    // to the OpenAI wire format; the transcript the engine
+                    // SNAPSHOT is the input under test, not the HTTP body.
+                    debug_assert!(read > 0, "the client always sends a request body");
                     let response = format!(
                         "{{\"id\":\"1\",\"object\":\"chat.completion\",\"created\":0,\
                          \"model\":\"adv\",\"choices\":[{{\"index\":0,\"message\":{{\
@@ -1088,7 +1169,15 @@ mod engine {
 
         /// A completed turn: the engine's only stimulus.
         fn end_turn(&self) {
-            self.bus.emit("sess", 1, 0, "done", None);
+            // `emit` returns the number of receivers the event reached, and 0
+            // when there is no subscriber. Asserting on it turns a silent
+            // hang — the engine never wakes, every `eventually` burns its full
+            // deadline — into an immediate, named failure.
+            let delivered = self.bus.emit("sess", 1, 0, "done", None);
+            assert!(
+                delivered > 0,
+                "the engine must still be subscribed to the bus"
+            );
         }
 
         fn set_transcript(&self, messages: Vec<Message>) {
@@ -1245,6 +1334,126 @@ mod engine {
             h.model.calls(),
             1,
             "the counter must hold the latch after the tag is folded away"
+        );
+    }
+
+    /// A transient EMPTY snapshot must not read as a wipe.
+    ///
+    /// The host snapshot is `try_read().unwrap_or_default()`, so a lock held
+    /// by the compaction write yields an empty vec. The rewind keyed on length
+    /// alone read that as "wiped": guards cleared, cursor reset. The observable
+    /// is the DELIVERY COUNT — the emission guard was cleared, so the next
+    /// identical note was delivered a second time. Reproduced before the fix:
+    /// `left: 2, right: 1`.
+    ///
+    /// Note the timing: the engine takes NO action on an empty snapshot, so
+    /// there is no observable to poll — a real pause is the only way to let it
+    /// consume the turn end before the transcript returns. A first draft
+    /// asserted `calls == 1`, which was already true and so returned instantly,
+    /// letting the engine never see the empty snapshot: a test that passes on
+    /// the broken path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_transient_empty_snapshot_does_not_clear_the_emission_guard() {
+        let h = Harness::start("- [nit] the same note", vec![Message::user("one")]).await;
+        h.end_turn();
+        assert!(
+            eventually(|| !h.delivered().is_empty()).await,
+            "the first review must deliver"
+        );
+        assert_eq!(h.delivered().len(), 1);
+
+        // The lock is held: the snapshot is empty for this turn. Nothing is
+        // lost, but the guards must survive it.
+        h.set_transcript(Vec::new());
+        h.end_turn();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // A new message arrives and the model repeats the SAME note. The
+        // emission guard must suppress the duplicate.
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user("two"),
+        ]);
+        h.end_turn();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            h.delivered().len(),
+            1,
+            "a transient empty snapshot cleared the emission guard, so an identical note was \
+             delivered a second time"
+        );
+    }
+
+    /// A rewind must clear the continuation counter too.
+    ///
+    /// A continuation emitted before the wipe leaves the counter at 1; the
+    /// replay consumed it and skipped the very review the rewind exists to run.
+    /// The rewind reset the fingerprint and the last note but not this — a
+    /// third piece of transcript state the first fix missed.
+    ///
+    /// The shrink must be REAL: the cursor is a message count, so a rewind
+    /// fires only when the new length is BELOW it. A first draft rewound from
+    /// 1 message to 3 — a GROWTH, which never rewound and so proved nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rewind_clears_the_continuation_counter() {
+        // A long transcript, so the first review consumes it and the cursor
+        // ends high.
+        let mut long = vec![Message::user("one")];
+        for i in 0..5 {
+            long.push(Message::assistant(format!("a{i}")));
+            long.push(Message::user(format!("q{i}")));
+        }
+        // A concern continues the run, so a counter is latched.
+        let h = Harness::with_severity("- [concern] fix the race", long, Severity::Concern).await;
+        h.end_turn();
+        assert!(eventually(|| !h.delivered().is_empty()).await);
+        assert!(h.delivered()[0].should_continue, "a concern continues");
+        let calls_after_continue = h.model.calls();
+
+        // Compaction folds the history: the transcript is now SHORTER than the
+        // cursor, so the rewind fires.
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user("two"),
+        ]);
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() > calls_after_continue).await,
+            "the rewind must review the surviving transcript — a stale continuation counter \
+             consumed the replay and skipped the review"
+        );
+    }
+
+    /// A blocker past the note budget still reaches the delivery and still
+    /// continues the run. omp exempts blockers from the budget
+    /// (`emission-guard.ts:140`); a plain truncate dropped a blocker at
+    /// position 5 and the run never continued on it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blocker_survives_the_note_budget() {
+        // Four nits, then a blocker: the blocker is past a budget of 4.
+        let h = Harness::with_severity(
+            "- [nit] one\n- [nit] two\n- [nit] three\n- [nit] four\n- [blocker] the build is red",
+            vec![Message::user("go")],
+            Severity::Concern,
+        )
+        .await;
+        h.end_turn();
+        assert!(eventually(|| !h.delivered().is_empty()).await);
+        let d = &h.delivered()[0];
+        assert!(
+            d.notes.iter().any(|n| n.severity == Severity::Blocker),
+            "a blocker past the non-blocker budget must survive: {:?}",
+            d.notes
+        );
+        assert!(
+            d.should_continue,
+            "the surviving blocker must still continue the run"
+        );
+        assert!(
+            d.batch.contains("the build is red"),
+            "the blocker's text must be in the batch the model receives"
         );
     }
 
