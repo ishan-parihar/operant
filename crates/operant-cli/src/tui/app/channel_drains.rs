@@ -180,11 +180,23 @@ impl App {
                 // The store total, so the header can say "500 of 3,302"
                 // instead of a bare "500" that reads as everything.
                 self.session_hub.set_store_total(total);
-                // J2: a FULL page means the store very likely has more, which
-                // is what draws the `Show more` row; a short page is the end
-                // of the list.
+                // J2: a FULL DATABASE page means the store very likely has
+                // more, which is what draws the `Show more` row; a short page
+                // is the end of the list. The live subagent rows are appended
+                // to the page in the load, so they are excluded from the count
+                // — a 498-row page plus three delegations is a SHORT page and
+                // must not offer a page that returns nothing (audit finding 8).
                 let was_more = std::mem::take(&mut self.session_load_more);
-                self.session_hub.set_has_more(rows.len() >= HUB_PAGE);
+                let db_page = rows
+                    .iter()
+                    .filter(|r| {
+                        !matches!(
+                            r.kind,
+                            operant_core::session::listing::RowKind::Subagent { .. }
+                        )
+                    })
+                    .count();
+                self.session_hub.set_has_more(db_page >= HUB_PAGE);
                 // The roster, so the employee axis can reach every seat the
                 // store knows about — not only the ones with a session inside
                 // the loaded page (audit finding 3).
