@@ -614,7 +614,15 @@ async fn cmd_run(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Resu
     // NOT an auto-attach, same reasoning as the TUI: Ctrl+C is how an operator
     // escapes a turn that is going badly, and silently reattaching the gateway
     // would be the opposite of a rescue.
-    if let Some(marker) = operant_core::session_interrupted::consume_marker() {
+    // (iter-2329) READ, not consume. This daemon restarts on every deploy and
+    // under `Restart=always` (measured: 1017 start/stop events in 24 hours, so
+    // roughly one every 1.4 minutes), and every boot used to DELETE the marker.
+    // The TUI's boot notice — the surface the operator actually reads after a
+    // crash — therefore found nothing within a minute or two of the crash and
+    // silently said nothing at all. A boot notice is a read; the file is
+    // retired by whoever ACTS on it (a resume that attaches) or by the next
+    // turn's `clear_marker_for`.
+    if let Some(marker) = operant_core::session_interrupted::read_marker() {
         let live = operant_core::active_sessions::session_is_live(&marker.session_id);
         let label = if marker.title.is_empty() {
             marker.session_id.clone()

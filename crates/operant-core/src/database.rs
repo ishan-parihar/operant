@@ -3241,6 +3241,33 @@ impl Database {
         Ok(count as u64)
     }
 
+    /// One session's id and title, or `None` when the store has no such row.
+    ///
+    /// (iter-2329) Why this exists rather than `list_sessions(10_000)` +
+    /// `find`: `operant continue` needed a yes/no about ONE id, and the list
+    /// form read every row, built a `Vec` of them and then scanned it linearly —
+    /// two call sites did that, and the cost grows with the store for no gain.
+    /// `sessions.id` is the `PRIMARY KEY`, so this is an indexed point lookup.
+    ///
+    /// Returns the TITLE too, because both callers want it: the explicit-id path
+    /// prints the session the operator named, and the marker path falls back to
+    /// recency when the row is gone.
+    pub fn get_session_id_and_title(&self, session_id: &str) -> Result<Option<(String, Option<String>)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id, title FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare session lookup: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query session: {}", e)))?;
+        match rows.next() {
+            Some(row) => row.map(Some).map_err(|e| Error::Agent(format!("Session row error: {}", e))),
+            None => Ok(None),
+        }
+    }
+
     /// Get recently updated sessions with message counts and tags.
     pub fn get_recent_sessions(&self, limit: u32) -> Result<Vec<SessionSummary>> {
         let conn = self.lock_conn()?;
@@ -3816,6 +3843,29 @@ mod tests {
         )
         .expect("Failed to create test session");
         db
+    }
+
+    /// `get_session_id_and_title` is a point lookup: it finds a seeded row and
+    /// returns `None` for one that was never created.
+    ///
+    /// (iter-2329) This is what replaced a `list_sessions(10_000)` + `find` in
+    /// `operant continue`, which read every row to answer a yes/no about one id.
+    #[test]
+    fn get_session_id_and_title_is_a_point_lookup() {
+        let db = test_db();
+        let (id, title) = db
+            .get_session_id_and_title("test-session")
+            .expect("the lookup must not fail")
+            .expect("the seeded session must be found");
+        assert_eq!(id, "test-session");
+        assert_eq!(title.as_deref(), Some("test"), "the title rides along");
+
+        assert!(
+            db.get_session_id_and_title("no-such-session")
+                .expect("a miss is not an error")
+                .is_none(),
+            "an id the store does not have must be None, so a stale marker can fall back"
+        );
     }
 
     /// The crashed session is the most recently ACTIVE one, even though

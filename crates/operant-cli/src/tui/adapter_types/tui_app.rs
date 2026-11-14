@@ -294,16 +294,24 @@ impl TuiApp {
         // The leftover rides the hook too. An unwind skips `run_exit_teardown`
         // — and with it the exit leftover — so without this the session that
         // was streaming when the panic hit is the one session the operator gets
-        // no way back to. The closure holds only owned `String`/`bool` copies
-        // (the hook outlives `self`), so the session id and title are read
-        // here, before the unwind starts.
+        // no way back to.
+        //
+        // (iter-2329) The id is read LAZILY out of a shared cell, not frozen
+        // here. The first version of this read `self.app.core_session_switch`
+        // directly — but that field is `None` until the agent is built and
+        // installed further down THIS SAME FUNCTION, so the capture was always
+        // `None`, `panic_leftover` was `None`, and the hook printed NOTHING.
+        // The panic path this whole mechanism exists for had never once fired on
+        // a real run, and the wiring test could not tell: it only checked that
+        // the hook CALLS the printer.
+        //
+        // The cell is written when the session is attached (see the frame-loop
+        // refresh below) so it is `None` before the first turn and correct
+        // after any in-TUI session switch — which the frozen copy was not.
         let no_mouse = self.no_mouse;
-        let panic_leftover = self
-            .app
-            .core_session_switch
-            .as_ref()
-            .and_then(|s| s.session_id())
-            .map(|session_id| (session_id, self.app.session_label()));
+        let panic_leftover: std::sync::Arc<std::sync::Mutex<Option<(String, Option<String>)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let hook_leftover = std::sync::Arc::clone(&panic_leftover);
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
@@ -322,7 +330,17 @@ impl TuiApp {
             // AFTER the screen is popped, so it lands in the scrollback rather
             // than being erased with the frame — the ordering the module's
             // print ban protects and the teardown's own print obeys.
-            if let Some((session_id, title)) = panic_leftover.as_ref() {
+            //
+            // The lock is taken here, not held across the frame: a panic while
+            // the frame loop is writing the cell would otherwise deadlock the
+            // hook, and a hook that hangs replaces a panic message with a frozen
+            // terminal. A poisoned lock is the intended recovery — the panic is
+            // the reason we are here.
+            let captured = hook_leftover
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some((session_id, title)) = captured.as_ref() {
                 crate::cmd_continue::print_exit_leftover(Some(session_id), title.as_deref());
             }
             prev_hook(info);
@@ -494,6 +512,20 @@ impl TuiApp {
                         move || agent_for_id.session_id(),
                     ),
                 ));
+                // (iter-2329) Seed the panic hook's cell. The hook is installed
+                // before this point, when there is no session yet, so its cell
+                // starts empty and is filled HERE — the first moment the agent
+                // is attached and an id can exist. The frame-loop refresh keeps
+                // it right as the operator switches sessions.
+                if let Some(session_id) = self
+                    .app
+                    .core_session_switch
+                    .as_ref()
+                    .and_then(|s| s.session_id())
+                {
+                    *panic_leftover.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some((session_id, self.app.session_label()));
+                }
             }
             // Claim the session for THIS process (plan 2026-11-02, P0).
             //
@@ -697,7 +729,7 @@ impl TuiApp {
             // notice an OPENING notice: it fires on the boot iteration only.
             if !self.app.is_simulating
                 && !boot_notice_done
-                && let Some(marker) = operant_core::session_interrupted::consume_marker()
+                && let Some(marker) = operant_core::session_interrupted::read_marker()
             {
                 // The announcement lives on the App so it is TESTABLE and so
                 // the adapter holds no session logic of its own: the hub
@@ -719,6 +751,20 @@ impl TuiApp {
 
             match run_app_loop(&mut self.app, &mut terminal) {
                 Ok(Some(input)) => {
+                    // (iter-2329) Refresh the panic hook's cell on every pass, so
+                    // a panic after an in-TUI session switch names the session
+                    // the operator is actually in. The read is the agent's live
+                    // id (the same authority Ctrl+B uses); the write is skipped
+                    // when there is no id yet, which keeps the cell at its
+                    // previous value rather than blanking it before the first
+                    // turn.
+                    if let Some(source) = self.app.core_session_switch.as_ref()
+                        && let Some(session_id) = source.session_id()
+                    {
+                        let label = self.app.session_label();
+                        *panic_leftover.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some((session_id, label));
+                    }
                     // A model / provider / effort chosen in a picker INSIDE
                     // `run()` only set a `pending_*` flag. Apply it to the
                     // agent now, before this input is acted on — it used to

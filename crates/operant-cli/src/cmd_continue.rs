@@ -82,17 +82,6 @@ pub fn session_label<'a>(session_id: &'a str, title: Option<&'a str>) -> &'a str
         .unwrap_or(session_id)
 }
 
-/// The headline for a leftover that was printed WITHOUT a teardown deciding
-/// what the exit was.
-///
-/// A PANIC is the one exit that reaches the leftover without going through
-/// `ExitKind`: `run_exit_teardown` never runs on the unwind path, so
-/// there is no deliberate/interrupted flag to read. The sentence still must
-/// not claim a save that never happened — `Session ended` says the process
-/// is gone (which is true) and nothing about whether the session was cut off
-/// (which the panic path does not know).
-pub const FORCED_EXIT_STATE: &str = "Session ended";
-
 /// Print a leftover the teardown never got to write, on the way out of a
 /// panic.
 ///
@@ -113,7 +102,14 @@ pub fn print_exit_leftover(session_id: Option<&str>, title: Option<&str>) {
         // turn), so there is no session to continue and nothing to print.
         return;
     };
-    let block = format_continue_hint(FORCED_EXIT_STATE, session_id, title);
+    // `Session ended`, not `Session saved` / `Session was interrupted`: a PANIC
+    // is the one exit that reaches this printer without going through
+    // `ExitKind`, because `run_exit_teardown` never runs on the unwind path, so
+    // there is no deliberate/interrupted flag to read. This sentence must not
+    // claim a save that never happened, nor an interruption the panic path
+    // cannot know about — only that the process is gone, which is true.
+    const PANIC_EXIT_STATE: &str = "Session ended";
+    let block = format_continue_hint(PANIC_EXIT_STATE, session_id, title);
     let mut stdout = std::io::stdout().lock();
     // A closed pipe is not a reason to abort the unwind: the operator is
     // already looking at a panic, and losing the leftover beats replacing
@@ -217,17 +213,13 @@ fn resolve_target_session(
     marker: Option<&SessionInterrupted>,
 ) -> Result<TargetSession> {
     if let Some(id) = id {
-        let sessions = db
-            .list_sessions(10_000)
-            .context("Failed to list sessions")?;
-        let found = sessions
-            .into_iter()
-            .find(|s| s.id == id)
-            .context(format!("Session not found: {id}"))?;
-        return Ok(TargetSession {
-            id: found.id,
-            title: found.title,
-        });
+        // (iter-2329) An indexed point lookup, not a 10,000-row scan: `id` is the
+        // `PRIMARY KEY`, so "does this session exist" costs one row.
+        let found = db
+            .get_session_id_and_title(id)
+            .context("Failed to look up session")?;
+        let (id, title) = found.context(format!("Session not found: {id}"))?;
+        return Ok(TargetSession { id, title });
     }
     if let Some(marker) = marker {
         // A marker is a promise that the session can be reopened. The file is a
@@ -242,10 +234,10 @@ fn resolve_target_session(
         // So the marker is a HINT, not an authority: it wins only when the
         // store can actually honour it, and otherwise the answer degrades to
         // recency (the same fallback the no-marker case uses).
-        let sessions = db
-            .list_sessions(10_000)
-            .context("Failed to list sessions")?;
-        if sessions.iter().any(|s| s.id == marker.session_id) {
+        let row = db
+            .get_session_id_and_title(&marker.session_id)
+            .context("Failed to look up the marker's session")?;
+        if row.is_some() {
             return Ok(TargetSession {
                 id: marker.session_id.clone(),
                 title: Some(marker.title.clone()).filter(|t| !t.trim().is_empty()),
@@ -389,8 +381,8 @@ mod tests {
         // The panic path's headline is its own sentence: it cannot know
         // whether the session was cut off, so it must not claim either of the
         // two the teardown can prove.
-        assert_ne!(FORCED_EXIT_STATE, ExitKind::Deliberate.state());
-        assert_ne!(FORCED_EXIT_STATE, ExitKind::Interrupted.state());
+        assert_ne!("Session ended", ExitKind::Deliberate.state());
+        assert_ne!("Session ended", ExitKind::Interrupted.state());
         let interrupted = exit_leftover(
             ExitKind::Interrupted,
             "sess_abc123",
@@ -544,6 +536,102 @@ mod tests {
         );
     }
 
+    /// The hook must capture the session id from a source that ALREADY has it.
+    ///
+    /// (iter-2329, found by the iter-2321 audit's follow-through) The hook reads
+    /// `self.app.core_session_switch` near the TOP of `TuiApp::run`, but that
+    /// field is `None` until the agent is built and installed further down the
+    /// same function. So the capture always produced `None`, `panic_leftover`
+    /// was `None`, and the hook printed NOTHING — the panic path this whole
+    /// mechanism exists for never fired on a real run. The wiring test above
+    /// passed the entire time, because it only checks that the hook CALLS the
+    /// printer, not that it has anything to print.
+    ///
+    /// The fix is to read the id LAZILY: the closure holds the agent (or a
+    /// shared cell the switch writes) and resolves the id when the panic
+    /// happens, which is after the session exists.
+    #[test]
+    fn the_panic_hook_resolves_the_session_id_lazily() {
+        let source = include_str!("tui/adapter_types/tui_app.rs");
+        let hook_start = source
+            .find("std::panic::set_hook(")
+            .expect("the panic hook must be installed in tui_app.rs");
+        let before = &source[..hook_start];
+        // The captured value must not be read from `core_session_switch` before
+        // the hook is installed: that field is None at this point.
+        let capture = before
+            .rfind("panic_leftover")
+            .expect("the hook must capture a leftover");
+        let capture_line_end = before[..capture].rfind('\n').unwrap_or(0);
+        let capture_stmt = &before[capture_line_end..];
+        assert!(
+            !capture_stmt.contains("core_session_switch"),
+            "the leftover must not be read from `core_session_switch` before the agent exists \
+             (it is None there, so the capture is always empty): {capture_stmt}"
+        );
+        // And the hook body must obtain the id at panic time, not from a value
+        // frozen at install time.
+        let hook_body = source[hook_start..]
+            .split("prev_hook(info);")
+            .next()
+            .unwrap_or("");
+        assert!(
+            hook_body.contains("session_label") || hook_body.contains("print_exit_leftover"),
+            "the hook must resolve the label when it runs"
+        );
+    }
+
+    /// A BOOT notice must READ the marker, never consume it.
+    ///
+    /// (iter-2329, measured) The gateway daemon runs under `Restart=always` and
+    /// restarted 1017 times in 24 hours on this host — about one every 1.4
+    /// minutes. Each boot used to call `consume_marker()`, which DELETES the
+    /// file, so a crash's resume offer was almost always taken by the gateway
+    /// before the operator could relaunch the TUI. The TUI's boot notice then
+    /// found nothing and silently printed nothing, which is the exact surface the
+    /// operator reported as broken.
+    ///
+    /// A boot notice is a read: the file is retired by whoever ACTS on it (a
+    /// resume that attaches) or by the next turn's `clear_marker_for`.
+    #[test]
+    fn no_boot_notice_consumes_the_marker() {
+        // The TUI boot notice.
+        let tui = include_str!("tui/adapter_types/tui_app.rs");
+        // Anchor on the `if`, not on the first mention of the flag: the comment
+        // above the gate explains the OLD behaviour and names `consume_marker`,
+        // so a window starting at the comment would assert against prose.
+        let boot = tui
+            .split_once("if !self.app.is_simulating")
+            .expect("the boot notice gate must exist")
+            .1;
+        let gate = boot
+            .split_once("announce_interrupted_session")
+            .expect("the boot notice must announce")
+            .0;
+        assert!(
+            gate.contains("read_marker()"),
+            "the TUI boot notice must read the marker: {gate}"
+        );
+        assert!(
+            !gate.contains("consume_marker()"),
+            "the TUI boot notice must not delete the marker — a daemon restart would take it first"
+        );
+        // The gateway boot notice, in its own process on the same home.
+        let gateway = include_str!("cmd_gateway.rs");
+        let gw = gateway
+            .split_once("fn cmd_run(")
+            .expect("the gateway daemon entry point must exist")
+            .1;
+        assert!(
+            gw.contains("read_marker()"),
+            "the gateway boot notice must read the marker, not delete it: the TUI's notice depends on it"
+        );
+        assert!(
+            !gw.contains("consume_marker()"),
+            "the gateway daemon must not consume the marker: it restarts ~every 1.4 min and would              silence the TUI's boot notice every time"
+        );
+    }
+
     /// The opening notice must fire ONCE per process, on the boot iteration only.
     ///
     /// (iter-2255/2256, the operator's report) The loop that offers the interrupted
@@ -556,10 +644,15 @@ mod tests {
     #[test]
     fn the_opening_notice_is_gated_on_the_boot_iteration_only() {
         let source = include_str!("tui/adapter_types/tui_app.rs");
+        // (iter-2329) The boot notice READS the marker now, it does not consume
+        // it (see `no_boot_notice_consumes_the_marker`), so the anchor is the
+        // read. What this test pins is unchanged: the READ is gated on the boot
+        // iteration, so the block cannot re-appear above the composer after the
+        // operator's first message.
         let consume = source
-            .split_once("operant_core::session_interrupted::consume_marker()")
-            .expect("the adapter must consume the marker on the boot path");
-        // The gate is the token immediately BEFORE the consume, on the same `if`.
+            .split_once("operant_core::session_interrupted::read_marker()")
+            .expect("the adapter must read the marker on the boot path");
+        // The gate is the token immediately BEFORE the read, on the same `if`.
         let gate_window = consume
             .0
             .rsplit_once("if ")
@@ -567,7 +660,7 @@ mod tests {
             .unwrap_or("");
         assert!(
             gate_window.contains("!boot_notice_done"),
-            "the marker consume must be gated on the boot iteration, or the block \
+            "the marker read must be gated on the boot iteration, or the block \
              re-appears above the composer after the operator's first message"
         );
         // And the flag must be SET on the offer branch, or the gate never closes.

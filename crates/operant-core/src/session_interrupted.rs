@@ -141,6 +141,19 @@ fn consume_at(path: &Path) -> Option<SessionInterrupted> {
 }
 
 /// Consume the live marker: read it, then delete it.
+///
+/// (iter-2329) Prefer [`read_marker`] for a BOOT notice. This deletes the file,
+/// and several independent processes read the same file at boot — the TUI, the
+/// gateway daemon (which on this host restarts roughly every minute and a half
+/// under `Restart=always`) and `sessions resume --last`. Whichever gets there
+/// first silently takes the offer away from the others, so a TUI restart after a
+/// crash usually found nothing to announce even though the interruption had just
+/// happened. Measured: 1017 gateway start/stop events in 24 hours, and the
+/// gateway logs nothing when it takes the marker.
+///
+/// A boot notice is a READ; the file is retired by whoever actually ACTS on it
+/// (a resume that attaches), or by the next turn's `clear_marker_for`. Retiring
+/// it on read is what made one reader able to silence all the others.
 pub fn consume_marker() -> Option<SessionInterrupted> {
     consume_at(&marker_path())
 }
