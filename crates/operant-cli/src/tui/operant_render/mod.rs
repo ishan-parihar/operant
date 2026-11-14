@@ -14,8 +14,8 @@ pub mod layout;
 // [port-decision] markers naming W7.
 // swarm_gallery.rs (3,099) was excised with swarm_tiles at iter-591, then
 // RE-PORTED at batch-4 as a PARTIAL leaf: the transcript-card closure
-// (status/age/glyph helpers, spinner consts, GalleryMember/GalleryTodo/
-// GalleryToolIntent, member sort, render_swarm_chat_cards) is live because
+// (status/age/glyph helpers, spinner consts, GalleryMember, member sort,
+// render_swarm_chat_cards) is live because
 // the batch-4 port of the info_widget swarm adapters + protocol::
 // SwarmMemberStatus wired the live transcript path (ui_messages/ui_prepare
 // -> render_swarm_chat_card_lines) and the info-widget swarm dock

@@ -5,8 +5,8 @@
 //
 // TRUTH CLAUSE: this is the bounded transcript-card closure of upstream
 // swarm_gallery.rs (3,099) — the status/age/glyph helpers, the spinner
-// cadence consts, the GalleryMember/GalleryTodo/GalleryToolIntent data
-// types, the member sort, and `render_swarm_chat_cards`, which the live
+// cadence consts, the GalleryMember data type, the member sort, and
+// `render_swarm_chat_cards`, which the live
 // transcript path (ui_messages/ui_prepare -> info_widget::swarm_gallery::
 // render_swarm_chat_card_lines) renders beneath `swarm spawn` tool calls.
 //
@@ -195,24 +195,15 @@ fn status_rank(status: &str) -> u8 {
 
 /// A member of the swarm gallery, renderer-agnostic: the live TUI adapter
 /// builds these from session state, and the renderer owns how they look.
-///
-/// Callers are responsible for building the `body` lines (e.g. choosing live
-/// output tail vs. status detail); everything else about how the tile looks is
-/// handled here.
 /// [port-source] swarm_gallery.rs:195-233
 ///
-/// One member on the swarm strip. `task`, `body`, `todo`, `todo_items`,
-/// `effort` and `elapsed_secs` describe what the member is doing; the strip
-/// renders the name, the glyph and the task line, so the rest have no reader in
-/// this build. They stay as the strip's data contract with the feed that reports
-/// a member's work.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "jcode-parity port: the member's work detail; the strip renders the name, glyph and task line"
-    )
-)]
+/// Six fields were removed 2026-11-14: `task`, `body`, `todo`, `todo_items`,
+/// `effort`, `elapsed_secs`. They had no reader in this build (the chat card
+/// reads label, icon, status, model, provider, auth_method; the sort reads role
+/// and sort_key), and they were kept against a `dead_code` allow as "the strip's
+/// data contract". A field no code reads is not a contract: the source
+/// [`SwarmMemberStatus`] still carries all six, and re-adding a mapping arm is
+/// one line each when the strip surface is ported.
 #[derive(Clone, Debug)]
 pub struct GalleryMember {
     /// Display title (friendly name or short id).
@@ -222,74 +213,15 @@ pub struct GalleryMember {
     pub icon: Option<String>,
     /// Lifecycle status string (drives the badge text and accent color).
     pub status: String,
-    /// Short label of the task this member was spawned/assigned for. Shown
-    /// dimmed next to the name on the strip so the line answers "who is doing
-    /// what", not just "who exists".
-    pub task: Option<String>,
     /// Swarm role, if any (drives the title glyph and sort order).
     pub role: Option<String>,
-    /// Pre-rendered body lines shown inside the tile.
-    pub body: Vec<String>,
     /// Stable tiebreaker for sorting members with equal role rank (e.g. id).
     pub sort_key: String,
-    /// Optional todo progress as (completed, total) for the agent's plan/todos.
-    /// Rendered as "C/T" next to the agent on the strip when present.
-    pub todo: Option<(u32, u32)>,
-    /// Compact todo entries (content, status) for the focused detail view.
-    /// Status is one of "pending", "in_progress", "completed".
-    pub todo_items: Vec<GalleryTodo>,
     /// Provider model currently running this member, when known.
     pub model: Option<String>,
     /// Provider display name and credential route used by this member.
     pub provider: Option<String>,
     pub auth_method: Option<String>,
-    /// Reasoning effort selected for this member.
-    pub effort: Option<String>,
-    /// Seconds since this member was spawned.
-    pub elapsed_secs: Option<u64>,
-}
-
-/// One compact todo entry shown in the focused swarm detail view.
-/// [port-source] swarm_gallery.rs:235-243
-///
-/// One todo line for a member. `content`, `status` and `tool_intents` are the
-/// item's own detail; the gallery renders the line, so they have no reader yet.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "jcode-parity port: the todo item's own detail; the gallery renders the line"
-    )
-)]
-#[derive(Clone, Debug)]
-pub struct GalleryTodo {
-    pub content: String,
-    /// "pending", "in_progress", or "completed".
-    pub status: String,
-    /// Up to three recent tool calls made while this item was active.
-    pub tool_intents: Vec<GalleryToolIntent>,
-}
-
-/// [port-source] swarm_gallery.rs:245-253
-///
-/// One tool call a todo item made. `tool_name`, `intent`, `status` and
-/// `progress` describe the call; the gallery renders the intent text, so the
-/// rest have no reader yet.
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "jcode-parity port: the tool call's full detail; the gallery renders the intent text"
-    )
-)]
-#[derive(Clone, Debug)]
-pub struct GalleryToolIntent {
-    pub tool_name: String,
-    pub intent: String,
-    /// "running", "completed", or "error".
-    pub status: String,
-    /// Optional live progress as (current, total, unit).
-    pub progress: Option<(u64, u64, Option<String>)>,
 }
 
 /// Render stable, one-line swarm summaries beneath `swarm spawn` tool calls.

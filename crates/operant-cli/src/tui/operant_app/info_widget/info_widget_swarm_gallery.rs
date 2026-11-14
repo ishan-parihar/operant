@@ -16,7 +16,7 @@ use crate::tui::operant_app::protocol::SwarmMemberStatus;
 // render_swarm_strip_vertical, SwarmStripHint) live in the excised swarm_tiles
 // surface (iter-591), and the fns that called them were the gated bodies deleted
 // this round. Only what the live adapters use is imported now.
-use crate::tui::operant_render::swarm_gallery::{GalleryMember, humanize_age};
+use crate::tui::operant_render::swarm_gallery::GalleryMember;
 use ratatui::prelude::*;
 
 fn member_label(member: &SwarmMemberStatus) -> String {
@@ -43,37 +43,6 @@ fn member_icon(member: &SwarmMemberStatus) -> Option<String> {
 /// Age marker appended to member bodies, e.g. "· 7s ago" or "· now".
 /// `humanize_age` already yields "now" for fresh updates, which reads wrong
 /// with an "ago" suffix.
-fn age_marker(age: u64) -> String {
-    let human = humanize_age(age);
-    if human == "now" {
-        "· now".to_string()
-    } else {
-        format!("· {human} ago")
-    }
-}
-
-/// Build the body lines shown inside a member's viewport. Prefers live streamed
-/// output (the tail) when present; otherwise surfaces the latest detail plus a
-/// status-age hint.
-fn member_body(member: &SwarmMemberStatus) -> Vec<String> {
-    // Live streamed output wins: show the worker's in-progress assistant text.
-    if let Some(tail) = member.output_tail.as_ref().filter(|t| !t.trim().is_empty()) {
-        let mut body: Vec<String> = tail.lines().map(|l| l.to_string()).collect();
-        if let Some(age) = member.status_age_secs {
-            body.push(age_marker(age));
-        }
-        return body;
-    }
-    let mut body: Vec<String> = Vec::new();
-    if let Some(detail) = member.detail.as_ref().filter(|d| !d.trim().is_empty()) {
-        body.push(detail.clone());
-    }
-    if let Some(age) = member.status_age_secs {
-        body.push(age_marker(age));
-    }
-    body
-}
-
 /// Convert swarm members into renderer-agnostic gallery members.
 pub(crate) fn members_to_gallery(members: &[SwarmMemberStatus]) -> Vec<GalleryMember> {
     members
@@ -82,38 +51,11 @@ pub(crate) fn members_to_gallery(members: &[SwarmMemberStatus]) -> Vec<GalleryMe
             label: member_label(member),
             icon: member_icon(member),
             status: member.status.clone(),
-            task: member.task_label.clone(),
             role: member.role.clone(),
-            body: member_body(member),
             sort_key: member.session_id.clone(),
-            todo: member.todo_progress,
             model: member.runtime.model.clone(),
             provider: member.runtime.provider.clone(),
             auth_method: member.runtime.auth_method.clone(),
-            effort: member.runtime.effort.clone(),
-            elapsed_secs: member.runtime.elapsed_secs,
-            todo_items: member
-                .todo_items
-                .iter()
-                .map(|t| crate::tui::operant_render::swarm_gallery::GalleryTodo {
-                    content: t.content.clone(),
-                    status: t.status.clone(),
-                    tool_intents: t
-                        .tool_intents
-                        .iter()
-                        .map(
-                            |tool| crate::tui::operant_render::swarm_gallery::GalleryToolIntent {
-                                tool_name: tool.tool_name.clone(),
-                                intent: tool.intent.clone(),
-                                status: tool.status.clone(),
-                                progress: tool.progress.as_ref().map(|progress| {
-                                    (progress.current, progress.total, progress.unit.clone())
-                                }),
-                            },
-                        )
-                        .collect(),
-                })
-                .collect(),
         })
         .collect()
 }
@@ -193,10 +135,6 @@ pub(crate) fn render_swarm_strip_lines(
 /// `focus_key` is the configured chord to enter the controls (e.g. "ctrl+t"),
 /// used for the unfocused enter-hint.
 /// `spinner_frame` animates active agents' glyphs. `max_height` bounds the
-/// focused strip (chips + expanded hovered-agent detail + hints).
-/// Render the swarm dock widget body: a narrow vertical agent list for the
-/// info-widget margins. `plan` is the coordinator's swarm plan progress
-/// (completed, total), shown in the header when present.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,20 +164,6 @@ mod tests {
             todo_items: Vec::new(),
             runtime: crate::tui::operant_app::protocol::SwarmMemberRuntime::default(),
         }
-    }
-
-    /// Regression: pop-out selection resolves `swarm_panel_selected` through
-    /// `members_display_order`, so its order must match what the renderer
-    /// actually draws (tile order) for mixed roles, ties, and unnamed
-    /// sessions. If this ever diverges, pop-out opens the wrong agent.
-    #[test]
-    fn output_tail_takes_priority_over_detail() {
-        let mut m = member("alpha", "running", Some("the detail line"), None);
-        m.output_tail = Some("line one\nline two".to_string());
-        let body = member_body(&m);
-        assert_eq!(body[0], "line one");
-        assert_eq!(body[1], "line two");
-        assert!(!body.iter().any(|l| l.contains("the detail line")));
     }
 
     #[test]
