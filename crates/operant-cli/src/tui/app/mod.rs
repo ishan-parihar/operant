@@ -1761,9 +1761,16 @@ impl App {
             // The copy-pasteable way back, as a TRANSCRIPT annotation and not
             // only a status line: the operator needs this to survive long
             // enough to select and copy it, and the id has to be the WHOLE id.
+            //
+            // The block is the SAME one the exit teardown prints into the
+            // terminal's scrollback (`cmd_continue::exit_leftover`), so a
+            // restart shows the operator one sentence, not two that disagree.
+            // The kind is Interrupted because the only way a marker reaches
+            // this notice is a process that did not exit cleanly: a deliberate
+            // `/exit` clears the marker and never gets here.
             self.push_system_message(
-                crate::cmd_continue::format_continue_hint(
-                    "Last session was interrupted",
+                crate::cmd_continue::exit_leftover(
+                    crate::cmd_continue::ExitKind::Interrupted,
                     &marker.session_id,
                     Some(&marker.title),
                 ),

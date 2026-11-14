@@ -762,7 +762,7 @@ impl App {
                     return true;
                 };
                 let hint = crate::cmd_continue::format_continue_hint(
-                    "Current session",
+                    crate::cmd_continue::CURRENT_SESSION_STATE,
                     &session_id,
                     self.session_title.as_deref(),
                 );

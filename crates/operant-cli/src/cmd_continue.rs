@@ -64,19 +64,99 @@ pub fn format_continue_hint(state: &str, session_id: &str, title: Option<&str>) 
     )
 }
 
-/// The headline the exit leftover carries.
+/// The headline for a leftover that was printed WITHOUT a teardown deciding
+/// what the exit was.
 ///
-/// A deliberate close (`/exit`) SAVED the session; a Ctrl+C INTERRUPTED it —
-/// the session was cut off mid-flight. The leftover has to say which: the
-/// session row says `interrupted`, and two records that disagree about the
-/// same exit are worse than either alone. An operator deciding whether to
-/// continue a half-finished turn reads the sentence, not the row.
-pub fn exit_state(deliberate: bool) -> &'static str {
-    if deliberate {
-        "Session saved"
-    } else {
-        "Session was interrupted"
+/// A PANIC is the one exit that reaches the leftover without going through
+/// `ExitKind`: `run_exit_teardown` never runs on the unwind path, so
+/// there is no deliberate/interrupted flag to read. The sentence still must
+/// not claim a save that never happened — `Session ended` says the process
+/// is gone (which is true) and nothing about whether the session was cut off
+/// (which the panic path does not know).
+pub const FORCED_EXIT_STATE: &str = "Session ended";
+
+/// Print a leftover the teardown never got to write, on the way out of a
+/// panic.
+///
+/// The normal exit leftover lives in `TuiApp::run`'s teardown, which an
+/// unwind skips entirely. A session that was streaming when the process
+/// died is exactly the one an operator most needs to get back into, so the
+/// same copy-pasteable block is printed here, after the terminal has been
+/// restored and the alternate screen popped — the same two conditions the
+/// teardown's own print is exempted on.
+///
+/// Best-effort by construction: the terminal restore is allowed to fail (the
+/// panic hook ignores it too), and nothing here may panic — a panicking
+/// panic hook aborts the process and takes the message with it.
+pub fn print_exit_leftover(session_id: Option<&str>, title: Option<&str>) {
+    use std::io::Write;
+    let Some(session_id) = session_id else {
+        // No id means no turn ever ran (the agent mints the id on the first
+        // turn), so there is no session to continue and nothing to print.
+        return;
+    };
+    let block = format_continue_hint(FORCED_EXIT_STATE, session_id, title);
+    let mut stdout = std::io::stdout().lock();
+    // A closed pipe is not a reason to abort the unwind: the operator is
+    // already looking at a panic, and losing the leftover beats replacing
+    // their terminal with a broken-pipe abort.
+    let _ = writeln!(stdout);
+    let _ = writeln!(stdout, "{block}");
+    let _ = stdout.flush();
+}
+
+/// The headline for a leftover the operator asked for while the TUI is open.
+///
+/// `/continue` is the third surface, and its sentence must not borrow either
+/// of the other two: nothing was closed (this is the open TUI) and nothing was
+/// interrupted. It names WHAT the session is, and the command below it is the
+/// same one every other surface prints.
+pub const CURRENT_SESSION_STATE: &str = "Current session";
+
+/// What the exit was, for the two places that have to agree on it.
+///
+/// `deliberate` is the exit's own flag, read from `App::exit_is_deliberate`.
+/// It decides which sentence the leftover carries — and the DECIDING belongs
+/// here rather than at the print site, because the print site is not the only
+/// reader: the boot surface re-prints the same leftover, and a boot that
+/// guessed "interrupted" while the teardown said "saved" would show the
+/// operator two contradictory sentences about one session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitKind {
+    /// A deliberate close (`/exit`, `/quit`): the session was saved.
+    Deliberate,
+    /// A Ctrl+C or a killed terminal: the session was cut off mid-flight.
+    Interrupted,
+}
+
+impl ExitKind {
+    /// Classify a teardown's exit from the flag the `/exit` arm sets.
+    pub fn from_deliberate(deliberate: bool) -> Self {
+        if deliberate {
+            Self::Deliberate
+        } else {
+            Self::Interrupted
+        }
     }
+
+    /// The sentence the leftover opens with.
+    pub fn state(self) -> &'static str {
+        match self {
+            Self::Deliberate => "Session saved",
+            Self::Interrupted => "Session was interrupted",
+        }
+    }
+}
+
+/// The one exit leftover, for BOTH surfaces that print it.
+///
+/// The teardown prints it into the terminal's scrollback; the next launch
+/// re-prints the same block as a transcript annotation for the session the
+/// last one was in. They must be ONE string: two copies of the sentence are
+/// two things to keep in step, and an operator who closes the TUI and
+/// restarts it is exactly the operator who would see both.
+pub fn exit_leftover(kind: ExitKind, session_id: &str, title: Option<&str>) -> String {
+    format_continue_hint(kind.state(), session_id, title)
 }
 
 /// The short title for a session's first prompt — the SAME rule the store's
@@ -119,7 +199,9 @@ fn resolve_target_session(
     marker: Option<&SessionInterrupted>,
 ) -> Result<TargetSession> {
     if let Some(id) = id {
-        let sessions = db.list_sessions(10_000).context("Failed to list sessions")?;
+        let sessions = db
+            .list_sessions(10_000)
+            .context("Failed to list sessions")?;
         let found = sessions
             .into_iter()
             .find(|s| s.id == id)
@@ -222,8 +304,8 @@ mod tests {
     /// command, not merely that the id appears somewhere in the text.
     #[test]
     fn the_leftover_prints_the_exact_continue_command() {
-        let leftover = format_continue_hint(
-            exit_state(true),
+        let leftover = exit_leftover(
+            ExitKind::Deliberate,
             "sess_abc123",
             Some("Fix the importer"),
         );
@@ -241,12 +323,12 @@ mod tests {
     /// id alone is enough to continue it.
     #[test]
     fn an_untitled_session_still_prints_the_command() {
-        let leftover = format_continue_hint(exit_state(true), "sess_abc123", None);
+        let leftover = exit_leftover(ExitKind::Deliberate, "sess_abc123", None);
         assert!(
             leftover.contains("operant continue sess_abc123"),
             "the leftover must name the command verbatim: {leftover:?}"
         );
-        let blank = format_continue_hint(exit_state(true), "sess_abc123", Some("   "));
+        let blank = exit_leftover(ExitKind::Deliberate, "sess_abc123", Some("   "));
         assert!(
             blank.contains("operant continue sess_abc123"),
             "a blank title must not swallow the command: {blank:?}"
@@ -259,10 +341,18 @@ mod tests {
     /// the same exit are worse than either alone.
     #[test]
     fn the_exit_headline_distinguishes_a_deliberate_close_from_an_interruption() {
-        assert_eq!(exit_state(true), "Session saved");
-        assert_eq!(exit_state(false), "Session was interrupted");
-        let interrupted = format_continue_hint(
-            exit_state(false),
+        assert_eq!(ExitKind::from_deliberate(true).state(), "Session saved");
+        assert_eq!(
+            ExitKind::from_deliberate(false).state(),
+            "Session was interrupted"
+        );
+        // The panic path's headline is its own sentence: it cannot know
+        // whether the session was cut off, so it must not claim either of the
+        // two the teardown can prove.
+        assert_ne!(FORCED_EXIT_STATE, ExitKind::Deliberate.state());
+        assert_ne!(FORCED_EXIT_STATE, ExitKind::Interrupted.state());
+        let interrupted = exit_leftover(
+            ExitKind::Interrupted,
             "sess_abc123",
             Some("Fix the importer"),
         );
@@ -277,8 +367,14 @@ mod tests {
     #[test]
     fn an_unknown_id_is_an_error_not_a_fallback() {
         let db = test_db();
-        db.save_session("sess_real", Some("real"), "test", "2026-01-01", "2026-01-01")
-            .expect("save_session");
+        db.save_session(
+            "sess_real",
+            Some("real"),
+            "test",
+            "2026-01-01",
+            "2026-01-01",
+        )
+        .expect("save_session");
         let err = resolve_target_session(&db, Some("sess_typo"), None)
             .expect_err("a typo must not resolve");
         assert!(
@@ -317,15 +413,37 @@ mod tests {
         let db = test_db();
         // Started days earlier, never ended, and its last turn is the NEWEST
         // thing in the store.
-        db.save_session("sess_crashed", Some("crashed"), "test", "2026-01-01", "2026-01-01")
-            .expect("save_session");
-        db.save_message("sess_crashed", "user", "the last thing I asked", "2026-01-09T10:00:00Z")
-            .expect("save_message");
+        db.save_session(
+            "sess_crashed",
+            Some("crashed"),
+            "test",
+            "2026-01-01",
+            "2026-01-01",
+        )
+        .expect("save_session");
+        db.save_message(
+            "sess_crashed",
+            "user",
+            "the last thing I asked",
+            "2026-01-09T10:00:00Z",
+        )
+        .expect("save_message");
         // Started later and finished normally, but its last turn is OLDER.
-        db.save_session("sess_finished", Some("finished"), "test", "2026-01-05", "2026-01-05")
-            .expect("save_session");
-        db.save_message("sess_finished", "user", "an older turn", "2026-01-06T09:00:00Z")
-            .expect("save_message");
+        db.save_session(
+            "sess_finished",
+            Some("finished"),
+            "test",
+            "2026-01-05",
+            "2026-01-05",
+        )
+        .expect("save_session");
+        db.save_message(
+            "sess_finished",
+            "user",
+            "an older turn",
+            "2026-01-06T09:00:00Z",
+        )
+        .expect("save_message");
 
         let target = resolve_target_session(&db, None, None).expect("resolve");
         assert_eq!(target.id, "sess_crashed");
@@ -333,7 +451,7 @@ mod tests {
     }
 
     /// The title rule the store's auto-title uses: the first 60 characters,
-/// ellipsised. Two labels that must read as one sentence cannot drift.
+    /// ellipsised. Two labels that must read as one sentence cannot drift.
     #[test]
     fn the_title_rule_matches_the_stores_auto_title() {
         assert_eq!(title_from_first_prompt("  padded  "), "padded");
@@ -352,6 +470,37 @@ mod tests {
         assert!(
             err.to_string().contains("operant chat"),
             "the error must name the way out: {err}"
+        );
+    }
+
+    /// The leftover is not only the teardown's to print: a PANIC unwinds past
+    /// `run_exit_teardown` entirely, so the panic hook is the only thing left
+    /// that can offer the session back. The hook is installed in another module
+    /// with no test seam of its own (the process-global hook cannot be
+    /// exercised here), so this pins the WIRING — the hook must actually call
+    /// the printer — the same source-contract way `tui::mod`'s seam tests do.
+    #[test]
+    fn the_panic_hook_prints_the_leftover_for_a_session_it_cannot_tear_down() {
+        let source = include_str!("tui/adapter_types/tui_app.rs");
+        let hook = source
+            .split_once("std::panic::set_hook(")
+            .expect("the panic hook must be installed in tui_app.rs");
+        assert!(
+            hook.1.contains("print_exit_leftover"),
+            "a panic must leave the same copy-pasteable way back the teardown prints, or the session streaming when the panic hit is the one session with no way back"
+        );
+        // And the print must be AFTER the alternate screen is popped: before it,
+        // the terminal erases the leftover with the frame it just restored.
+        let hook_body = hook.1.split("prev_hook(info);").next().unwrap_or("");
+        let pop = hook_body
+            .find("LeaveAlternateScreen")
+            .expect("the hook must pop the alternate screen");
+        let print = hook_body
+            .find("print_exit_leftover")
+            .expect("the hook must print the leftover");
+        assert!(
+            pop < print,
+            "the leftover must be printed after LeaveAlternateScreen, or the terminal erases it with the frame"
         );
     }
 }

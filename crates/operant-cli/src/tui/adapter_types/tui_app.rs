@@ -229,7 +229,20 @@ impl TuiApp {
         // the panic message. Without this, any panic between enable_raw_mode
         // and disable_raw_mode leaves the user's terminal in raw mode +
         // alternate screen (broken terminal, garbled output).
+        //
+        // The leftover rides the hook too. An unwind skips `run_exit_teardown`
+        // — and with it the exit leftover — so without this the session that
+        // was streaming when the panic hit is the one session the operator gets
+        // no way back to. The closure holds only owned `String`/`bool` copies
+        // (the hook outlives `self`), so the session id and title are read
+        // here, before the unwind starts.
         let no_mouse = self.no_mouse;
+        let panic_leftover = self
+            .app
+            .core_session_switch
+            .as_ref()
+            .and_then(|s| s.session_id())
+            .map(|session_id| (session_id, self.app.session_label()));
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
@@ -245,6 +258,12 @@ impl TuiApp {
             // shell in paste-bracketing mode, which would make the next
             // program wrap every paste in `ESC[200~`/`ESC[201~`.
             let _ = execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+            // AFTER the screen is popped, so it lands in the scrollback rather
+            // than being erased with the frame — the ordering the module's
+            // print ban protects and the teardown's own print obeys.
+            if let Some((session_id, title)) = panic_leftover.as_ref() {
+                crate::cmd_continue::print_exit_leftover(Some(session_id), title.as_deref());
+            }
             prev_hook(info);
         }));
 
@@ -496,6 +515,14 @@ impl TuiApp {
             self.submit_user_message(agent, query).await;
         }
 
+        // (iter-2253) The guard that keeps the opening notice an OPENING
+        // notice. The loop below runs once per submit as well as once per boot,
+        // and a turn RE-WRITES the marker at its start — so an unguarded
+        // consume fired again after the operator's first message and announced
+        // an interruption for the session they were already in. Declared here
+        // (before the loop) so the boot iteration is the only one that can
+        // offer a continuation.
+        let mut boot_notice_done = false;
         let result = loop {
             // /skill <name> and /bundle <name>: drain pending_user_message set
             // by the intercept arm at the TOP of the loop so the expansion
@@ -571,9 +598,18 @@ impl TuiApp {
             // Consumed here rather than in the teardown-safe `App` so the read
             // happens on the real boot path and not on `operant tui debug
             // simulate`, which drives the loop directly.
+            //
+            // (iter-2253) The offer is made ONCE, before the first frame — and
+            // this loop runs once per SUBMIT as well as once per boot, so an
+            // unguarded `consume_marker()` here read a marker a turn had just
+            // re-written and re-announced an interruption for a session the
+            // operator was already sitting in. The guard is what keeps the
+            // notice an OPENING notice: it fires on the boot iteration only.
             if !self.app.is_simulating
+                && !boot_notice_done
                 && let Some(marker) = operant_core::session_interrupted::consume_marker()
             {
+                boot_notice_done = true;
                 // The announcement lives on the App so it is TESTABLE and so
                 // the adapter holds no session logic of its own: the hub
                 // cursor, the status line, AND the copy-pasteable command that
@@ -773,8 +809,8 @@ impl TuiApp {
             println!();
             println!(
                 "{}",
-                crate::cmd_continue::format_continue_hint(
-                    crate::cmd_continue::exit_state(self.app.exit_is_deliberate),
+                crate::cmd_continue::exit_leftover(
+                    crate::cmd_continue::ExitKind::from_deliberate(self.app.exit_is_deliberate),
                     &session_id,
                     self.app.session_label().as_deref()
                 )
