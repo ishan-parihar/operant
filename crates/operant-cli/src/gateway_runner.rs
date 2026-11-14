@@ -7755,6 +7755,7 @@ pub async fn start_gateway(
         // killing scheduled work because the worklog is unavailable is the
         // worse failure.
         let scheduler = operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+            .with_retry(app_config.agent.retry.clone())
             .with_observer(Arc::clone(&cron_observer))
             .with_seat_memory_root(
                 app_config

@@ -643,7 +643,8 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     let scheduler = operant_core::cronjobs::CronScheduler::new(
         std::sync::Arc::new(db),
         std::sync::Arc::new(agent),
-    );
+    )
+    .with_retry(config.agent.retry.clone());
 
     scheduler.run_job_now(id).await.context("Cron job failed")?;
 

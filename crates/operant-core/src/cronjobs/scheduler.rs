@@ -132,6 +132,18 @@ impl CronScheduler {
         self
     }
 
+    /// The operator's two-span retry posture, from `[agent.retry]`.
+    ///
+    /// Without this the scheduler ran on `RetrySettings::default()`, so the
+    /// cadence an operator configured for the interactive agent silently did
+    /// not apply to their cron jobs — the seam read a value nothing ever set.
+    /// `new()` keeps the default so a caller that genuinely has no config
+    /// (a test, a one-shot CLI path) still runs.
+    pub fn with_retry(mut self, retry: crate::config::RetrySettings) -> Self {
+        self.retry = retry;
+        self
+    }
+
     /// Mount the operant root for seat-memory injection (iter-666). Without
     /// it the run path never reads a seat file — prompts stay
     /// byte-identical, dark-mergeable like the org gate.
@@ -1676,6 +1688,46 @@ mod tests {
             scheduler.transient_retry_backoff("job_c"),
             Some(300),
             "the large span is what a job waits between retries"
+        );
+    }
+
+    /// The operator's `[agent.retry]` must reach the scheduler.
+    ///
+    /// `new()` hardwires `RetrySettings::default()`, so before `with_retry`
+    /// existed the seam read a value nothing ever set: an operator who
+    /// configured a 600 s large span for the interactive agent silently got
+    /// 300 s on cron. This drives the BUILDER, not the field, because the
+    /// field is what the builder exists to set — a test that assigned
+    /// `scheduler.retry` directly would pass with the wiring removed.
+    #[test]
+    fn the_configured_retry_posture_reaches_the_scheduler() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db =
+            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db =
+            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+
+        let configured = crate::config::RetrySettings {
+            small_span_retries: 0,
+            large_span_secs: 600,
+            max_span_secs: 0,
+            announce_large_span: true,
+        };
+        let scheduler =
+            super::CronScheduler::new(Arc::clone(&cron_db), agent).with_retry(configured);
+
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_cfg"),
+            Some(600),
+            "the operator's 600 s large span, not the 300 s default"
         );
     }
 
