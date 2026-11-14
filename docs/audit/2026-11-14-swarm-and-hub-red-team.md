@@ -1,9 +1,38 @@
 # Red-team audit — the subagent swarm and the command-center plan (2026-11-14)
 
-> **STATUS (updated 2026-11-14, after the fix round). Read this before acting
+> **STATUS (updated 2026-11-14, after BOTH fix rounds). Read this before acting
 > on any row.** This document was written against `main @ 651bc708`. Nine
-> iterations have landed since; the rows below are NOT all still open, and a
-> slice that re-fixes a closed row is the waste this header exists to prevent.
+> iterations landed in the first fix round; a SECOND audit pass then measured the
+> swarm again against both reference implementations (jcode `@ f9604362`, codex
+> `@ 38cdc4d6`) and produced findings 1-7 of that pass, all of which have landed.
+> The rows below are NOT all still open, and a slice that re-fixes a closed row
+> is the waste this header exists to prevent.
+>
+> **Second-pass findings, all landed** (each one iteration, each
+> mutation-proven, each recorded in `docs/CHANGELOG.md`):
+>
+> | # | finding | landed as |
+> |---|---|---|
+> | 1 | `ToolContext.session_id` was populated only as metadata, so `file_state` and `evidence_recall` ran session-less; the test covering it built its context on the dead channel | iter-2354 |
+> | 2 | a delegation record had no parent edge, so the hub could not place a worker under its parent | iter-2355 |
+> | 3a | a truncated worker report named a session that NO tool could open — `session_search` required an anchor rowid | iter-2356 |
+> | 3b | a swarm pushed every worker's full report into the transcript (25,050 → 4,582 bytes, 5.5x) | iter-2357 |
+> | 4 | a restart counted its recovered delegations and threw the count away | iter-2358 |
+> | 5 | the breadth refusal said "wait for a worker" for a wait that does not exist | iter-2359 |
+> | 6 | a re-dispatched delegation ran the work twice — no idempotency key | iter-2360 |
+> | 7 | a swarm was all-or-nothing: one wedged worker held every finished one for the 600 s worker timeout | iter-2361 |
+>
+> The second pass also **corrected its own finding 3**: it assumed "the pull path
+> exists" when `session_search(session_id=…)` silently listed unrelated recent
+> sessions. iter-2356 built the path; iter-2357 shrank the push. Both are
+> recorded so nobody re-derives the wrong order.
+>
+> **Where operant is ahead of both references** (do not "harmonise" these):
+> tool scoping is computed per child and narrow-only (jcode's production spawns
+> get the full default registry; codex has no intersection function at all);
+> approval inheritance survives every hop (codex pins delegates to `Never`, jcode
+> has no per-member scope); and one atomic `fetch_update` claim with RAII release
+> on every exit path beats jcode's per-swarm admission mutex.
 >
 > | row | state | landed as |
 > |---|---|---|

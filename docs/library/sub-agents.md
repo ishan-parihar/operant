@@ -63,8 +63,26 @@ live in the process only: the durable account of a finished swarm is the
 transcript card, which carries each worker's report.
 
 A worker's answer carries its own handles: the section heading names the
-worker id and the session it ran in, so a truncated report can be read back
-from the store (iter-2320).
+worker id and the session it ran in, and a truncated report can be read back
+with `session_search(session_id="…")` — which reads a session's tail from the
+id alone (iter-2356). The heading alone was not enough before that: the id
+travelled from iter-2320, but no tool would open a session by id.
+
+What the parent receives is a **preview** per worker, not the full report
+(iter-2357). A 6-worker swarm pushes ~4.6 KB rather than ~25 KB; the rest of a
+report is one `session_search` call away. The preview is a deliberate middle
+between "pay for every word" and "make the parent guess at dispatch time which
+workers it will need" — it is enough to decide which reports matter.
+
+A swarm returns at its own deadline (`SWARM_RESULT_DEADLINE_SECS = 120`), not
+when its slowest worker does (iter-2361). Finished sections are delivered as
+they land; workers still running at the deadline are reported `[cut off]` and
+cancelled. They are not detached: a detached worker would free the spawn
+reservation while a model stream was still live.
+
+A re-dispatched background delegation with the same `request_key` returns the
+existing handle instead of starting a second child (iter-2360). Without a key,
+losing the handle and re-dispatching ran the work twice.
 
 ## Intention
 
