@@ -2702,6 +2702,59 @@ fn register_mention_skills(entries: &[(&str, &str)]) -> std::sync::MutexGuard<'s
     guard
 }
 
+/// A skill is findable by what it DOES, not only by its name.
+///
+/// The description is displayed beside every row already, so matching on name
+/// alone was backwards: a caller who remembered "the one about PDF forms" had
+/// to guess the name to find it. Measured before this fix: `$pdf` offered
+/// nothing for a skill described as "fill and flatten PDF forms".
+///
+/// MUTATION-PROOF: removing the description arm from the filter fails the
+/// first assertion.
+#[test]
+fn a_skill_mention_is_found_by_its_description() {
+    let _guard = register_mention_skills(&[
+        ("ntn-forms", "Fill and flatten PDF forms"),
+        ("axi", "Agent CLI standards"),
+    ]);
+    let cmds: [(&str, &str); 0] = [];
+
+    // The capability is in the description; the name shares no substring with
+    // the query, so only a description match can find it.
+    let s = compute_typeahead("apply $pdf", &cmds, &UsageStore::default(), 15, false);
+    assert!(
+        s.iter().any(|x| x.text == "$ntn-forms"),
+        "a skill must be findable by what it does, not only by its name: {s:?}"
+    );
+    assert!(
+        !s.iter().any(|x| x.text == "$axi"),
+        "an unrelated skill is not offered: {s:?}"
+    );
+
+    // A NAME hit still sorts ahead of a description-only hit -- see
+    // `a_skill_mention_name_hit_sorts_ahead_of_a_description_hit`, a separate
+    // test because the snapshot lock is a plain `Mutex` and a second
+    // `register_mention_skills` on this thread would self-deadlock.
+}
+
+/// A NAME hit sorts ahead of a description-only hit, so an exact name is never
+/// buried under a description coincidence.
+#[test]
+fn a_skill_mention_name_hit_sorts_ahead_of_a_description_hit() {
+    let _guard = register_mention_skills(&[
+        ("pdf-fill", "Fill and flatten PDF forms"),
+        ("ntn-forms", "Fill and flatten PDF forms"),
+    ]);
+    let cmds: [(&str, &str); 0] = [];
+    let s = compute_typeahead("apply $pdf", &cmds, &UsageStore::default(), 15, false);
+    let order: Vec<&str> = s.iter().map(|x| x.text.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["$pdf-fill", "$ntn-forms"],
+        "a name hit must sort ahead of a description-only hit: {order:?}"
+    );
+}
+
 #[test]
 fn typeahead_skill_mentions_complete_mid_sentence() {
     let _guard = register_mention_skills(&[

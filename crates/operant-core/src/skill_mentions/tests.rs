@@ -284,6 +284,52 @@ fn search_ranks_exact_before_prefix_before_substring() {
     assert_eq!(search_skills(dir.path(), &[], "nope", 10).len(), 0);
 }
 
+/// A skill is findable by what it DOES, not only by its name.
+///
+/// `search_skills` matches the name; the description is part of what a caller
+/// can see and remember, so it has to be searchable too. A description hit
+/// ranks AFTER every name hit, so a real name match is never displaced by a
+/// description coincidence.
+///
+/// MUTATION-PROOF: removing the description tier fails the first assertion.
+#[test]
+fn search_matches_the_description_after_every_name_hit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let forms = dir.path().join("ntn-forms");
+    std::fs::create_dir_all(&forms).unwrap();
+    std::fs::write(
+        forms.join("SKILL.md"),
+        "---\nname: ntn-forms\ndescription: Fill and flatten PDF forms.\n---\n\nbody\n",
+    )
+    .unwrap();
+    let named = dir.path().join("pdf-fill");
+    std::fs::create_dir_all(&named).unwrap();
+    std::fs::write(
+        named.join("SKILL.md"),
+        "---\nname: pdf-fill\ndescription: Fill and flatten PDF forms.\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    // Only the description carries the query for `ntn-forms`, so a name-only
+    // search cannot find it.
+    let hits = search_skills(dir.path(), &[], "forms", 10);
+    let ranked: Vec<&str> = hits.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(
+        ranked.contains(&"ntn-forms"),
+        "a skill must be findable by what it does: {ranked:?}"
+    );
+
+    // `pdf` is IN the name of one skill and only in the description of the
+    // other: the name hit comes first.
+    let hits = search_skills(dir.path(), &[], "pdf", 10);
+    let ranked: Vec<&str> = hits.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        ranked,
+        vec!["pdf-fill", "ntn-forms"],
+        "a name hit must rank ahead of a description-only hit: {ranked:?}"
+    );
+}
+
 #[test]
 fn loadable_skills_includes_the_vendor_roots() {
     // The invocable pool is the operator's own skills PLUS the vendor roots

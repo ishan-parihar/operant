@@ -546,9 +546,22 @@ fn compute_skill_mention_suggestions(input: &str) -> Vec<TypeaheadSuggestion> {
     let query = token.query.to_lowercase();
     let snapshot = SKILL_MENTION_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
     let entries = snapshot.read().unwrap_or_else(|e| e.into_inner());
-    entries
+    // A skill is matched on its NAME and on its DESCRIPTION. The description is
+    // already displayed beside every row, so hiding it from the match was
+    // backwards: a caller who remembers "the one about PDF forms" had to guess
+    // the name to find it. Name hits sort before description hits, so an exact
+    // name is never buried under a description coincidence.
+    let mut matched: Vec<&(String, String)> = entries
         .iter()
-        .filter(|(name, _)| query.is_empty() || name.to_lowercase().contains(&query))
+        .filter(|(name, description)| {
+            query.is_empty()
+                || name.to_lowercase().contains(&query)
+                || description.to_lowercase().contains(&query)
+        })
+        .collect();
+    matched.sort_by_key(|(name, _)| !name.to_lowercase().contains(&query));
+    matched
+        .into_iter()
         .take(20)
         .map(|(name, description)| {
             TypeaheadSuggestion::skill_ref(

@@ -292,12 +292,20 @@ pub fn search_skills_in(
     let mut matched: Vec<(u8, String, String)> = Vec::new();
     for (name, description) in loadable_skills_in(roots) {
         let lowered = name.to_lowercase();
+        // The tiers are NAMED so the ordering stays legible: an exact name wins,
+        // then a name prefix, then a name substring, then a description match
+        // last. Searching by what a skill DOES was silently impossible before
+        // this tier existed -- `jsonpath` returned nothing for a skill whose
+        // whole description was "query and filter nested JSON documents", so the
+        // only way to find a skill was to already know its name.
         let tier = if lowered == needle {
             0
         } else if lowered.starts_with(&needle) {
             1
         } else if lowered.contains(&needle) {
             2
+        } else if description.to_lowercase().contains(&needle) {
+            3
         } else {
             continue;
         };
