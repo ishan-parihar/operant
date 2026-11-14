@@ -6,12 +6,24 @@ use crate::tui::operant_model::vendor_types::ToolCall;
 use crate::tui::operant_ui::tools_ui;
 use ratatui::prelude::*;
 
+/// Diff "added" ink (plan 2026-11-14 U6).
+///
+/// Was a hardcoded `Rgb(100, 200, 100)`, so added/removed rows ignored both
+/// `/theme` and the `deuteranopia` palette — the one theme whose whole point is
+/// that red/green is not the only signal.
+///
+/// U3 had to move this role's default off that literal: `(100,200,100)` is
+/// `Role::Success`'s frozen default, and the per-frame substitution attributes
+/// a cell to the FIRST role whose default matches, so sharing it would have
+/// made one of the two permanently unconfigurable. The default is now
+/// `(110,200,120)`, which is why added rows shift very slightly.
 pub(super) fn diff_add_color() -> Color {
-    Color::Rgb(100, 200, 100)
+    crate::tui::vendor::style::theme::diff_added_color()
 }
 
+/// Diff "removed" ink (plan 2026-11-14 U6). See [`diff_add_color`].
 pub(super) fn diff_del_color() -> Color {
-    Color::Rgb(200, 100, 100)
+    crate::tui::vendor::style::theme::diff_removed_color()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,5 +502,61 @@ mod tests {
         assert_eq!(lines[1].prefix, "3+ ");
         assert_eq!(lines[2].kind, DiffLineKind::Add);
         assert_eq!(lines[2].prefix, "4+ ");
+    }
+}
+
+#[cfg(test)]
+mod diff_theme_tests {
+    use super::{diff_add_color, diff_del_color};
+    use ratatui::prelude::Color;
+
+    /// U6: diff rows must READ the palette. Asserting the helpers return the
+    /// roles' frozen defaults is what distinguishes a wired helper from the old
+    /// hardcoded literal — and it pins the deliberate one-time colour shift, so
+    /// if someone "restores" the old literal this fails and says why.
+    #[test]
+    fn diff_helpers_return_the_role_defaults() {
+        use crate::tui::vendor::style::palette::Role;
+        let (ar, ag, ab) = Role::ToolDiffAdded.default_rgb();
+        let (rr, rg, rb) = Role::ToolDiffRemoved.default_rgb();
+        assert_eq!(diff_add_color(), Color::Rgb(ar, ag, ab));
+        assert_eq!(diff_del_color(), Color::Rgb(rr, rg, rb));
+        // The historical literals, which U3 had to move off because each
+        // collided with a seeded role's frozen default.
+        assert_ne!(
+            diff_add_color(),
+            Color::Rgb(100, 200, 100),
+            "collides with Role::Success"
+        );
+        assert_ne!(
+            diff_del_color(),
+            Color::Rgb(200, 100, 100),
+            "must be unique"
+        );
+    }
+
+    /// And the roles must be CONFIGURABLE — the point of the unit. This is the
+    /// check that would have caught the whole class of defect U6 closes:
+    /// under the `deuteranopia` theme, red/green must not be the only signal.
+    #[test]
+    fn diff_roles_are_configurable() {
+        let guard = crate::tui::vendor::style::STYLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut pairs = std::collections::BTreeMap::new();
+        pairs.insert("tool_diff_added".to_string(), "#0a0b0c".to_string());
+        pairs.insert("tool_diff_removed".to_string(), "#0d0e0f".to_string());
+        crate::tui::theme_colors::set_role_overrides(&pairs);
+        crate::tui::theme_colors::set_active_theme("deuteranopia");
+
+        let live = crate::tui::vendor::style::palette::configured_palette()
+            .expect("a configured role must install a palette");
+        use crate::tui::vendor::style::palette::Role;
+        assert_eq!(live.rgb(Role::ToolDiffAdded), (10, 11, 12));
+        assert_eq!(live.rgb(Role::ToolDiffRemoved), (13, 14, 15));
+
+        crate::tui::theme_colors::set_role_overrides(&std::collections::BTreeMap::new());
+        crate::tui::theme_colors::set_active_theme("default");
+        drop(guard);
     }
 }

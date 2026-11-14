@@ -82,6 +82,15 @@ pub fn link_color() -> Color {
     super::palette::role_color(super::palette::Role::MdLink)
 }
 
+/// Diff "added" row ink (plan 2026-11-14 U6).
+pub fn diff_added_color() -> Color {
+    super::palette::role_color(super::palette::Role::ToolDiffAdded)
+}
+/// Diff "removed" row ink (plan 2026-11-14 U6).
+pub fn diff_removed_color() -> Color {
+    super::palette::role_color(super::palette::Role::ToolDiffRemoved)
+}
+
 /// Foreground for one syntax category (plan 2026-11-14 U5).
 ///
 /// Every `syntax_*` role resolves through here so the highlighter has a single
