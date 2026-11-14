@@ -831,6 +831,12 @@ pub struct BehaviorSettings {
     /// ladder only shrinks `messages`), so an oversized recall does not
     /// degrade the request, it FAILS it typed.
     ///
+    /// The recall is bounded by COUNT, not by size: `recall_text(query, 5)`
+    /// plus up to `PREFETCH_QUEUE_CAP`(8) queued queries at 3 hits each —
+    /// 29 recalled blocks, none truncated. The session fold caps each message
+    /// (300 user / 700 assistant chars) but not the message COUNT, so a
+    /// 500-turn session stores one ~125k-token document recalled whole.
+    ///
     /// 0 means the built-in default (4,000 tokens).
     #[serde(default = "default_memory_injection_budget")]
     pub memory_injection_budget_tokens: usize,
@@ -2350,28 +2356,6 @@ pub struct MemorySettings {
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
-    /// Token ceiling on the recalled-memory block injected each turn as
-    /// `<memory_context>` (audit iter-2345).
-    ///
-    /// Every OTHER injected context has a ceiling: the advertised-skills
-    /// block has `agent.advertised_skills_token_budget` (4,000) and the
-    /// kernel feed-forward block is built at 1,200 chars. Memory had none,
-    /// and the recall is bounded by COUNT, not by size: `recall_text(query,
-    /// 5)` plus up to `PREFETCH_QUEUE_CAP`(8) queued queries at 3 hits each
-    /// — 29 recalled blocks, none truncated.
-    ///
-    /// The session fold made that unbounded in practice. It caps each
-    /// message (300 user / 700 assistant chars) but not the message COUNT,
-    /// so a 500-turn session stores one ~125k-token document that is then
-    /// recalled whole. The tail is charged against the window but is never
-    /// evictable (the ladder only shrinks `messages`), so past the hard cap
-    /// the turn fails TYPED — "the protected context alone exceeds it" —
-    /// and one oversized recalled document can make a session permanently
-    /// unusable, with no knob to trim it.
-    ///
-    /// 0 = the built-in default (4,000), matching the skills ceiling.
-    #[serde(default = "default_memory_injection_budget_tokens")]
-    pub injection_budget_tokens: usize,
     /// (retired, plan 08) agentmemory server base URL — accepted, ignored.
     pub agentmemory_url: Option<String>,
     /// (retired, plan 08) agentmemory REST secret — accepted, ignored.
@@ -2459,7 +2443,6 @@ impl Default for MemorySettings {
         Self {
             provider: "memory-wire".to_string(),
             enabled: true,
-            injection_budget_tokens: default_memory_injection_budget_tokens(),
             agentmemory_url: None,
             agentmemory_secret: None,
             agentmemory_auto_spawn: None,
@@ -2468,12 +2451,6 @@ impl Default for MemorySettings {
             response_cache_enabled: None,
         }
     }
-}
-
-/// The recalled-memory block's default ceiling, mirroring the advertised-skills
-/// ceiling it sits beside in the same request (audit iter-2345).
-fn default_memory_injection_budget_tokens() -> usize {
-    crate::context_management::MEMORY_INJECTION_TOKEN_BUDGET
 }
 
 /// Browser provider configuration.
@@ -3625,7 +3602,9 @@ fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Resul
     let raw = {
         let sidecar = crate::config_heal::unknown_sidecar_for(source);
         match crate::config_heal::read_parked_value(&sidecar) {
-            Some(parked) => crate::config_heal::merge_parked(raw, &parked).unwrap_or_else(|| raw.to_string()),
+            Some(parked) => {
+                crate::config_heal::merge_parked(raw, &parked).unwrap_or_else(|| raw.to_string())
+            }
             None => raw.to_string(),
         }
     };
@@ -5310,14 +5289,13 @@ wonderful_unknown_key = 42
         // and `write_parked_sidecar` OVERWRITES. Parking a config named
         // `bogus.toml` in the test CWD made every such test read and write the
         // same file, so an assertion could pass on another test's parked keys.
-        let path = std::env::temp_dir().join(format!(
-            "operant-harness-park-{}.toml",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("operant-harness-park-{}.toml", std::process::id()));
         let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.harness.enabled, "the known key beside it still binds");
-        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
-            .expect("the unknown key is recorded for the operator");
+        let parked =
+            crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+                .expect("the unknown key is recorded for the operator");
         assert!(
             parked.contains("wonderful_unknown_key"),
             "the parked key is named: {parked}"
@@ -5418,14 +5396,13 @@ wonderful_unknown_key = 42
         // Own sidecar path, same reason as `harness_settings_roundtrip`: one
         // sidecar per directory is one sidecar too many for parallel tests
         // (iter-2364).
-        let path = std::env::temp_dir().join(format!(
-            "operant-pk-park-{}.toml",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("operant-pk-park-{}.toml", std::process::id()));
         let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.pk.enabled, "the known key beside it still binds");
-        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
-            .expect("the parked key is recorded for the operator");
+        let parked =
+            crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+                .expect("the parked key is recorded for the operator");
         assert!(parked.contains("wonderful_unknown_key"), "named: {parked}");
         let _ = std::fs::remove_file(crate::config_heal::unknown_sidecar_for(&path));
     }
@@ -6015,7 +5992,6 @@ wonderful_unknown_key = 42
         let loud = MemorySettings {
             provider: "agentmemory".to_string(),
             enabled: true,
-            injection_budget_tokens: 0,
             agentmemory_url: None,
             agentmemory_secret: None,
             agentmemory_auto_spawn: Some(true),
@@ -6071,7 +6047,6 @@ wonderful_unknown_key = 42
             let s = MemorySettings {
                 provider: name.to_string(),
                 enabled: true,
-                injection_budget_tokens: 0,
                 agentmemory_url: None,
                 agentmemory_secret: None,
                 agentmemory_auto_spawn: None,
@@ -6094,7 +6069,6 @@ wonderful_unknown_key = 42
             let s = MemorySettings {
                 provider: name.to_string(),
                 enabled: true,
-                injection_budget_tokens: 0,
                 agentmemory_url: None,
                 agentmemory_secret: None,
                 agentmemory_auto_spawn: None,

@@ -351,6 +351,16 @@ pub fn fit_to_token_budget(text: &str, budget_tokens: usize) -> String {
         keep_chars = text.chars().count();
     }
     let kept: String = text.chars().take(keep_chars).collect();
+    // Land on an ITEM boundary when one is in reach. The recall is a run of
+    // `format_hits` blocks joined by newlines, so cutting at the last newline
+    // keeps every retained item whole. A character cut leaves the boundary
+    // item ending mid-sentence, which reads as a complete memory and is not
+    // one. A single item longer than the whole budget has no newline in reach,
+    // and that is the only case where an item is still divided.
+    let kept = match kept.rfind('\n') {
+        Some(pos) if pos > 0 => kept[..pos].to_string(),
+        _ => kept,
+    };
     format!("{kept}{marker}")
 }
 
@@ -1766,6 +1776,22 @@ pub const MEMORY_INJECTION_TOKEN_BUDGET: usize = 4_000;
 /// a ceiling that under-counts its own wrapper is the same defect as no ceiling.
 pub const MEMORY_INJECTION_WRAP_TOKENS: usize = 20;
 
+/// The budget the recall text is fitted to, once the wrapper's own cost is
+/// paid — the one place the subtraction happens.
+///
+/// Clamped to 1, never to 0: [`fit_to_token_budget`] reads 0 as "unset" and
+/// substitutes the 4,000 default, so a raw `saturating_sub` turned every
+/// ceiling at or below the wrapper's cost into a 4,000-token block. That was
+/// both wrong and inverted — a *smaller* configured ceiling produced a *bigger*
+/// injected block, by 400x at a ceiling of 10. At 1 the marker's reserve
+/// exceeds the budget and the block comes back empty, which is the honest
+/// answer for a ceiling that cannot hold one token of recall.
+pub fn recall_fit_budget(budget_tokens: usize) -> usize {
+    budget_tokens
+        .saturating_sub(MEMORY_INJECTION_WRAP_TOKENS)
+        .max(1)
+}
+
 /// The smallest ceiling one tool result may be trimmed to.
 ///
 /// Above the guard's own marker + reserve (~111 tokens), so a trimmed result
@@ -1960,6 +1986,60 @@ mod tests {
         assert!(estimate_tokens(&fit_to_token_budget(text, 4_000)) <= 4_000);
     }
 
+    /// A ceiling at or below the wrapper's own cost must not become the DEFAULT.
+    ///
+    /// `fit_to_token_budget` reads 0 as "unset" and substitutes 4,000, so the
+    /// subtraction that pays the wrapper must clamp to 1. Saturating instead
+    /// made every ceiling from 0 to `MEMORY_INJECTION_WRAP_TOKENS` produce the
+    /// full 4,000-token block — 400x the ceiling at a setting of 10, and
+    /// inverted: a smaller ceiling produced a bigger block.
+    #[test]
+    fn a_recall_ceiling_below_the_wrapper_cost_never_becomes_the_default() {
+        let text = "recalled text long enough that the difference is visible";
+        for ceiling in 0..=MEMORY_INJECTION_WRAP_TOKENS {
+            let fitted = recall_fit_budget(ceiling);
+            assert!(fitted >= 1, "ceiling {ceiling} fitted to {fitted}");
+            let out = fit_to_token_budget(text, fitted);
+            assert!(
+                out.len() < text.len(),
+                "ceiling {ceiling} produced {out:?}, which is not a fitted block"
+            );
+        }
+        assert!(recall_fit_budget(4_000) > MEMORY_INJECTION_WRAP_TOKENS);
+    }
+
+    /// A truncated recall ends on an ITEM boundary, not inside one.
+    ///
+    /// The recall is a run of `format_hits` blocks joined by newlines. A plain
+    /// character cut leaves the boundary item ending mid-sentence, which reads
+    /// as a complete memory and is not one.
+    #[test]
+    fn a_truncated_recall_ends_on_an_item_boundary() {
+        let item = "x".repeat(200);
+        let text = format!("{item}\n{item}\n{item}");
+        let marker =
+            "\n[operant: recalled memory withheld — the injection is over its token budget]";
+        // Aim the cut inside the SECOND item. The budget is derived from the
+        // marker's real cost, and the keep window is one item plus a little
+        // more, so the arithmetic holds if either constant moves.
+        let budget = estimate_tokens(marker) + (item.len() / 4) + 10;
+        assert!(
+            estimate_tokens(&text) > budget,
+            "the fixture must not fit, or the truncation never runs"
+        );
+        let out = fit_to_token_budget(&text, budget);
+        let kept = out
+            .strip_suffix(marker)
+            .expect("the marker is appended to a truncated block");
+        assert!(!kept.is_empty(), "the truncation kept nothing");
+        assert!(kept.len() < text.len(), "the block was not truncated");
+        assert!(
+            text[kept.len()..].starts_with('\n'),
+            "the kept prefix stops at {:?}, which is inside an item",
+            &text[kept.len()..]
+        );
+    }
+
     /// The wrapper-cost constant must equal the wrapper the injection site
     /// actually builds (iter-2364). A ceiling that under-counts its own wrapper
     /// is the same defect as no ceiling — this is the guard that makes the
@@ -1993,7 +2073,10 @@ mod tests {
         // The growth the escape adds. Non-zero, or the test below would pass
         // for the wrong reason.
         let growth = estimate_tokens(&escaped) - estimate_tokens(&raw);
-        assert!(growth > 0, "the escape must grow the text for this test to mean anything");
+        assert!(
+            growth > 0,
+            "the escape must grow the text for this test to mean anything"
+        );
 
         let budget = MEMORY_INJECTION_TOKEN_BUDGET;
         let inner = budget - MEMORY_INJECTION_WRAP_TOKENS;

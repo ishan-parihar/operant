@@ -4242,9 +4242,12 @@ impl OperantAgent {
                     // fitted to — measured at 4,766 tokens against a 4,000
                     // ceiling. Escaping first makes the measured string the sent
                     // string.
+                    // Pays the wrapper's own cost; see `recall_fit_budget`
+                    // for why the subtraction is clamped rather than saturating.
+                    let recall_budget = crate::context_management::recall_fit_budget(budget);
                     let provider_context = crate::context_management::fit_to_token_budget(
                         &provider_context,
-                        budget.saturating_sub(crate::context_management::MEMORY_INJECTION_WRAP_TOKENS),
+                        recall_budget,
                     );
                     // Recalled text is untrusted: label it as data, and keep it
                     // from closing the wrapper (KB-6). The label and the tags
