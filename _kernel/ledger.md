@@ -1542,3 +1542,35 @@ of them, and its owned Rust files pass rustfmt.
 - Context truth: `ContextExhausted.required` carries the protected floor; protected overflow names the required/configured tokens and `agent.context_window`, never `/compact`; only foldable exhaustion (`required == 0`) triggers gateway compact-and-retry.
 - Gates: full `operant-core` lib+integration suite green (3,011 tests), focused CLI settings 15/15, strict core and CLI clippy green, fmt clean, genome lint 0 errors (5 existing warnings).
 - Upstream peer commits `ae436c4b`/`3a34f649` were integrated first; peer audit ids RT-486/RT-487 were preserved and this fix uses RT-488.
+
+## iter-2233 — context-lifecycle audit (the advisor survives compaction, the recap off-switch works)
+
+Six findings from the magic-context / oh-my-pi contrast audit, committed as
+`09e2b46e` on origin/main. The slices:
+
+1.  [x] Advisor cursor reset on transcript shrink — a compaction that folds
+       exchanges into markers shortens the store past the cursor, so the
+       engine skipped every later turn with only a trace line. Now a rewind.
+2.  [x] Continuation latch independent of the tag's bytes — the tag rode a
+       user message micro_compact replaces with a marker; the latch is now a
+       counter set on continue-channel EMISSION, decremented at the next turn.
+3.  [x] `recap_idle_seconds = 0` is a real off switch — the duration reached
+       `sleep(ZERO)` and fired a recap after every turn; attach now returns a
+       disabled handle.
+4.  [x] Preserve-channel doc honesty — a sub-threshold card is NOT
+       model-visible (system_annotations is UI-only); the doc claimed it was.
+5.  [x] Compression-route silent off — an unset slot fell back to the
+       hardcoded gpt-4o-mini and degraded to truncation on every non-OpenAI
+       route. Now a warn log plus a `operant doctor` check; the verdict is a
+       pure, testable function.
+6.  [x] Advisor engine tests — 7 tests drive the real engine over a loopback
+       model (replay, shrunk rewind, wiped rewind, continuation latch by tag
+       and by folded marker, nit no-latch, blocker delivery). Both off-path
+       guards are mutation-proven.
+
+- Pushed `09e2b46e`; the CLI test target is red from a peer's iter-2217
+  (`gateway_commands.rs:3767` carries the literal `[REDACTED]` where the
+  identifier should be — the peer red is RT-555, recorded by iter-2246).
+  Core lib suite: 3,278 passed; 5 pre-existing tools::kernel failures need the
+  git submodule this worktree does not have. 12 core + 31 CLI tests cover the
+  new paths. clippy clean with --all-targets.
