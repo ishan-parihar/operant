@@ -1030,11 +1030,15 @@ fn skill_surface_for(
     }
     let vendor_roots = vendor_skill_roots_for(handler);
     let session = derived_gateway_session_id(session_key);
+    // The configured extra roots ride beside the vendor roots so a `$skill`
+    // over a channel resolves the SAME set the TUI's `$` popup offers.
+    let mut roots = vendor_roots.clone();
+    roots.extend(handler.skills_extra_roots.iter().cloned());
     let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
         &handler.skills_root_dir,
         content,
         Some(session.as_str()),
-        &vendor_roots,
+        &roots,
     );
     match expansion.message {
         Some(text) => SkillSurface::Invoke(text),
@@ -1243,6 +1247,12 @@ async fn handle_runtime_command(
                 let host: Vec<std::path::PathBuf> = Vec::new();
                 for root in operant_core::skills::vendor_skill_roots(&host) {
                     mgr.add_extra_root(Some(root));
+                }
+                // The operator's configured extra roots: a `/reload-skills`
+                // that dropped them would make every skill in them fail right
+                // after a reload.
+                for root in &handler.skills_extra_roots {
+                    mgr.add_extra_root(Some(root.clone()));
                 }
                 mgr.load_all().map(|loaded| (mgr, loaded.len()))
             };
@@ -1633,12 +1643,17 @@ async fn handle_runtime_command(
             // plugin roots captured at start: ONE list, the same one the
             // SkillManager and the in-loop tools read.
             let vendor_roots = vendor_skill_roots_for(handler);
+            // The configured extra roots belong in every gateway skill surface
+            // too: the browse, the invoke and the picker all resolve against
+            // the same set the TUI and `operant doctor` report.
+            let mut roots = vendor_roots.clone();
+            roots.extend(handler.skills_extra_roots.iter().cloned());
             if rest.is_empty() {
                 // The browse half, over a channel: the REAL installed list,
                 // not a canned "see the TUI". A root with no skills says so
                 // rather than reading as an empty reply.
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
-                for root in &vendor_roots {
+                for root in &roots {
                     mgr.add_extra_root(Some(root.clone()));
                 }
                 let loaded = mgr.load_all().unwrap_or_default();
@@ -1693,7 +1708,7 @@ async fn handle_runtime_command(
                 // persisted session id differs; the derived one is the
                 // default this arm can resolve without the gateway lock).
                 Some(derived_gateway_session_id(session_key).as_str()),
-                &vendor_roots,
+                &roots,
             ) {
                 Some(msg) => {
                     // Bounded to the same 1200-char head /memory uses, with
@@ -3125,6 +3140,12 @@ struct GatewayMessageHandler {
     queue_waits: tokio::sync::Mutex<QueueWaitStats>,
     /// RT-175 — the configured skills root for `/reload-skills`' rescan.
     skills_root_dir: std::path::PathBuf,
+    /// `[skills] extra_roots` — the roots the operator configured beyond the
+    /// pool. The handler has no config handle, so the list is captured at
+    /// start like `skills_root_dir`; without it the gateway's picker and
+    /// `/reload-skills` listed the pool only, while `operant doctor` and the
+    /// in-loop tools saw every root.
+    skills_extra_roots: Vec<std::path::PathBuf>,
     /// iter-1720 — skill-plugin `skills/` dirs captured at gateway start
     /// (the handler has no config handle, same reason as
     /// `summary_ttl_minutes`). `/reload-skills` re-adds them so a rescan
@@ -5396,6 +5417,7 @@ pub async fn start_gateway(
             })
             .collect(),
         skills_root_dir: app_config.skills.root_dir.clone(),
+        skills_extra_roots: app_config.skills.extra_roots.clone(),
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: crate::plugin_tools::plugin_skill_roots(app_config),
         queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
@@ -7044,7 +7066,11 @@ pub async fn start_gateway(
                                     //   * a bare `$`, or a name that resolves to nothing —
                                     //     answered by the picker, the utility surface a
                                     //     channel can render (tappable rows + navigation).
-                                    let skill_vendor_roots = vendor_skill_roots_for(&handler_for_stop);
+                                    let skill_vendor_roots = {
+                                        let mut r = vendor_skill_roots_for(&handler_for_stop);
+                                        r.extend(handler_for_stop.skills_extra_roots.iter().cloned());
+                                        r
+                                    };
                                     if let Some(marker) = msg.raw.get("skill_callback").cloned() {
                                         let key = format!("{platform}:{}", msg.channel_id);
                                         match skill_tap_action(&marker, &key) {

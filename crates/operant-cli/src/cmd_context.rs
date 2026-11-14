@@ -860,7 +860,9 @@ pub(crate) async fn measure_protected_floor(
     // The skills advertised in the frozen prefix: the same shape the prefix
     // writes (`  <skill name="X">description</skill>`), so the number is the
     // one the runtime carries.
-    let mut manager = operant_core::skills::SkillManager::new(config.skills.root_dir.clone());
+    // Every resolved root, so the advertised block measured here is the one
+    // the runtime builds (which includes `[skills] extra_roots`).
+    let mut manager = crate::skill_roots::skill_manager(config);
     let _ = manager.load_all();
     // The SAME ceiling the runtime applies to the advertised block
     // (ADVERTISED_SKILLS_TOKEN_BUDGET): the runtime advertises the skills

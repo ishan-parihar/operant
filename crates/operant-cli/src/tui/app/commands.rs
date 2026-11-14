@@ -587,9 +587,10 @@ impl App {
             "skill" => {
                 let name = args.trim();
                 let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
+                let pool = self.config.skills.root_dir.clone();
                 if name.is_empty() {
-                    let skills_dir = self.config.skills.root_dir.clone();
-                    self.skills_view.open(skills_dir, vendor_roots);
+                    self.skills_view
+                        .open(pool, vendor_roots, self.config.skills.extra_roots.clone());
                     return true;
                 }
                 // Optional trailing instruction after the skill name:
@@ -670,9 +671,12 @@ impl App {
                 }
             }
             "skills" => {
-                let skills_dir = self.config.skills.root_dir.clone();
                 let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
-                self.skills_view.open(skills_dir, vendor_roots);
+                self.skills_view.open(
+                    self.config.skills.root_dir.clone(),
+                    vendor_roots,
+                    self.config.skills.extra_roots.clone(),
+                );
                 true
             }
             "plugins" => {

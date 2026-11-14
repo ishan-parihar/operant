@@ -363,7 +363,6 @@ impl App {
             current_session: None,
             exit_is_deliberate: false,
             pending_advisor_continuation: None,
-            pending_delegation_continuation: None,
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,
@@ -411,9 +410,12 @@ impl App {
             .into_iter()
             .map(|b| b.slug.clone())
             .collect();
-        crate::tui::prompt_input::register_invocable_skills(
-            &app.config.skills.root_dir,
-            &crate::skill_roots::vendor_skill_roots(&app.config),
+        // The RESOLVED root list, not the pool plus the vendor roots: the
+        // boot-time name set has to equal what the `$` expander will run, or
+        // a skill in `[skills] extra_roots` is offered by the popup and
+        // rejected by the expander (or the reverse).
+        crate::tui::prompt_input::register_invocable_skills_in(
+            &crate::skill_roots::skill_roots(&app.config),
             bundle_names,
         );
 

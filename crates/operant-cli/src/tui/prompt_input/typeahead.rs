@@ -491,6 +491,26 @@ pub fn register_invocable_skills(
     set_invocable_skills(skills_dir, vendor_roots, bundle_names);
 }
 
+/// The same registration over a RESOLVED root list.
+///
+/// The two-argument form above concatenates the pool and the vendor roots and
+/// stops there, so it cannot see `[skills] extra_roots`; this is the form the
+/// boot path uses, and it is the only one that makes the popup's name set
+/// equal to the set the `$` expander will run.
+pub fn register_invocable_skills_in(
+    roots: &operant_core::skills::SkillRoots,
+    bundle_names: Vec<String>,
+) {
+    let _guard = SKILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let loadable = operant_core::skill_mentions::loadable_skills_in(roots);
+    let mention_rows = loadable.clone();
+    let names: Vec<String> = loadable.into_iter().map(|(name, _)| name).collect();
+    set_typeahead_names(names, bundle_names);
+    set_skill_mentions(mention_rows);
+}
+
 /// Lock-free inner writer used by `register_invocable_skills` and by the
 /// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
 pub(super) fn set_invocable_skills(

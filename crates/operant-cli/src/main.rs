@@ -1804,15 +1804,19 @@ async fn build_agent_core_with_memory(
     };
     let skills_dir: &Path = holon_skills.as_deref().unwrap_or(skills_dir);
 
-    let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
-    // The vendor roots — the installed content integrations (the ponytail
-    // package) and plugin-contributed skill dirs — ride as extra roots:
-    // invocable/listable, never creatable/deletable, and the operator's
-    // pool wins a name collision. ONE list (iter-2159): the same roots the
-    // in-loop tools, the overlays and the slash-command surfaces read.
-    for root in crate::skill_roots::vendor_skill_roots(config) {
-        skill_manager.add_extra_root(Some(root));
-    }
+    // ONE resolved root list — the pool, `[skills] extra_roots`, the project
+    // root and the vendor roots, in precedence order. The agent is the surface
+    // that matters most: a skill in `extra_roots` that only `operant doctor`
+    // could see was an operator-facing promise nothing kept.
+    //
+    // A Holon run resolves to the brief's library only (`holon_override`), so
+    // its `skills_dir` above is passed through unchanged and no personal or
+    // vendor root rides along.
+    let mut skill_manager = if holon_skills.is_some() {
+        SkillManager::new(skills_dir.to_path_buf())
+    } else {
+        crate::skill_roots::skill_manager(config)
+    };
     if let Err(e) = skill_manager.load_all() {
         warn!(
             error = %e,
@@ -3491,12 +3495,6 @@ async fn run(
     }
     if let Some(enabled) = cli_config.delegation.orchestrator_enabled {
         operant_core::tools::sub_agent_tool::set_orchestrator_enabled(enabled);
-    }
-    if let Some(iterations) = cli_config.delegation.max_iterations {
-        operant_core::tools::sub_agent_tool::set_default_child_max_iterations(iterations);
-    }
-    if let Some(workers) = cli_config.delegation.max_global_workers {
-        operant_core::tools::sub_agent_tool::set_max_global_workers(workers);
     }
     if let Some(count) = cli_config.delegation.max_concurrent_children {
         operant_core::tools::sub_agent_tool::set_max_concurrent_children(count as usize);

@@ -27,6 +27,35 @@ pub fn vendor_skill_roots(config: &AppConfig) -> Vec<PathBuf> {
     operant_core::skills::vendor_skill_roots(&host_roots)
 }
 
+/// Every skill root for this install, in precedence order — the ONE list the
+/// TUI, the CLI, the gateway and the in-loop tools read.
+///
+/// This is what makes `[skills] extra_roots` and `project_root` reach a
+/// surface at all. Before it, each caller passed `config.skills.root_dir`
+/// plus the vendor roots, so a root the operator wrote in the config was
+/// visible to the resolver (and therefore to `operant doctor`) and to nothing
+/// that actually loads a skill. The resolver is the only place the config is
+/// read, so a surface cannot pick up a subset by accident.
+pub fn skill_roots(config: &AppConfig) -> operant_core::skills::SkillRoots {
+    operant_core::skills::SkillRoots::resolve(
+        &config.skills,
+        &vendor_skill_roots(config),
+        None,
+        None,
+    )
+}
+
+/// A [`SkillManager`] over the config's resolved roots, with the extra roots
+/// already applied.
+///
+/// `SkillManager::new(pool)` + `add_extra_root` per vendor root is what every
+/// call site used to do; it silently ignored `extra_roots` and the project
+/// root, which is the whole point of the config keys.
+#[must_use]
+pub fn skill_manager(config: &AppConfig) -> operant_core::skills::SkillManager {
+    operant_core::skills::SkillManager::from_roots(&skill_roots(config))
+}
+
 /// The vendor skills as `(name, description)` rows — the slash-command
 /// surfaces show them (the TUI command palette, the gateway's `/help`, the
 /// Telegram command menu), because a skill name IS a command:

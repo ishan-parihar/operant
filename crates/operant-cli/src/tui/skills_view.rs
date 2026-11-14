@@ -59,7 +59,16 @@ impl SkillsViewState {
         Self::default()
     }
 
-    pub fn open(&mut self, skills_dir: PathBuf, vendor_roots: Vec<std::path::PathBuf>) {
+    /// Open over the operator's pool, the vendor roots, and any additional
+    /// roots the operator configured (`[skills] extra_roots`). All three are
+    /// roots; the pool is only the first one, so the overlay lists what the
+    /// resolver lists instead of the pool alone.
+    pub fn open(
+        &mut self,
+        skills_dir: PathBuf,
+        vendor_roots: Vec<std::path::PathBuf>,
+        extra_roots: Vec<PathBuf>,
+    ) {
         self.visible = true;
         self.stage = SkillsStage::List;
         self.selected = 0;
@@ -73,11 +82,12 @@ impl SkillsViewState {
         // Errors (e.g. dir doesn't exist yet on a fresh install) are surfaced
         // inline rather than crashing the overlay.
         let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
-        // The vendor roots ride as extra roots, so the overlay lists the
-        // installed integrations and plugin skills too — the typeahead
-        // derives from this view, so they are invocable as well
-        // (iter-2159).
-        for root in vendor_roots {
+        // The vendor roots AND the operator's own extra roots ride as extra
+        // roots, so the overlay lists the installed integrations and plugin
+        // skills too — the typeahead derives from this view, so they are
+        // invocable as well (iter-2159). Without `extra_roots` here the
+        // overlay and the resolver disagreed, and the panel showed a subset.
+        for root in vendor_roots.into_iter().chain(extra_roots) {
             mgr.add_extra_root(Some(root));
         }
         match mgr.load_all() {

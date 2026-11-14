@@ -491,10 +491,15 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
     }
 
     let mut manager = SkillManager::new(skills_dir.clone());
-    // The vendor roots — the installed content integrations and
-    // plugin-contributed skill dirs — ride as extra roots, so the CLI
-    // lists exactly what the agent can run (iter-2159).
-    for root in crate::skill_roots::vendor_skill_roots(config) {
+    // Every root the resolver produces — the vendor roots (installed content
+    // integrations and plugin-contributed dirs) AND `[skills] extra_roots` —
+    // so the CLI lists exactly what the agent can run. Without the extra
+    // roots this listing was a subset of the agent's, which is the whole
+    // complaint the plan was written for.
+    for root in crate::skill_roots::vendor_skill_roots(config)
+        .into_iter()
+        .chain(config.skills.extra_roots.iter().cloned())
+    {
         manager.add_extra_root(Some(root));
     }
     manager
@@ -573,7 +578,16 @@ fn search_skills(config: &AppConfig, query: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Every resolved root, the same set `list` and the agent read: a search
+    // that saw only the pool would report "no match" for a skill the agent
+    // can run.
     let mut manager = SkillManager::new(skills_dir.clone());
+    for root in crate::skill_roots::vendor_skill_roots(config)
+        .into_iter()
+        .chain(config.skills.extra_roots.iter().cloned())
+    {
+        manager.add_extra_root(Some(root));
+    }
     let all = manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;

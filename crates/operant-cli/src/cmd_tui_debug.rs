@@ -348,14 +348,11 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
 // ---------------------------------------------------------------------------
 
 async fn debug_skills(config: &AppConfig) -> Result<()> {
-    let skills_dir = config.skills.root_dir.clone();
-    let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
-    // The vendor roots the live /skills overlay reads (iter-2159): a debug
-    // surface that shows FEWER skills than the overlay it simulates is a
-    // second skill set pretending to be the first.
-    for root in crate::skill_roots::vendor_skill_roots(config) {
-        mgr.add_extra_root(Some(root));
-    }
+    // The RESOLVED roots the live /skills overlay reads (iter-2159, and
+    // `[skills] extra_roots` since): a debug surface that shows FEWER skills
+    // than the overlay it simulates is a second skill set pretending to be
+    // the first.
+    let mut mgr = crate::skill_roots::skill_manager(config);
     let skills = mgr.load_all()?;
 
     if skills.is_empty() {
@@ -448,7 +445,7 @@ async fn debug_journey(config: &AppConfig) -> Result<()> {
 
     // Skills column.
     println!("--- Skills ---");
-    let mut skills_mgr = operant_core::skills::SkillManager::new(config.skills.root_dir.clone());
+    let mut skills_mgr = crate::skill_roots::skill_manager(config);
     match skills_mgr.load_all() {
         Ok(skills) if skills.is_empty() => {
             println!("  (no skills installed)");

@@ -636,21 +636,6 @@ impl TuiApp {
             // message path; the engine's continuation latch (advisor.rs)
             // sees the tag in the next delta and skips its review, so one
             // batch can never cascade into two continuations.
-            // A finished background delegation gets the same turn boundary: the
-            // parent model must READ the answer, not just see a card. The card
-            // went out when the event landed; this is the model's copy.
-            if !self.app.is_streaming
-                && let Some(agent) = agent.as_ref()
-                && let Some(batch) = self.app.pending_delegation_continuation.take()
-            {
-                self.app.clear_failed_input_recovery();
-                self.app.set_status_notice(
-                    "\u{2139} background delegation finished: continuing with its answer."
-                        .to_string(),
-                );
-                self.submit_user_message(agent, batch).await;
-                continue;
-            }
             if !self.app.is_streaming
                 && let Some(agent) = agent.as_ref()
                 && let Some(batch) = self.app.pending_advisor_continuation.take()
@@ -943,12 +928,16 @@ impl TuiApp {
     /// mention that does not resolve is reported in the status line and the
     /// text is left alone — a typo must not silently swallow the user's words.
     fn expand_skill_mentions(&mut self, input: String) -> String {
-        let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.app.config);
+        // The RESOLVED roots: the popup offers this exact set, so the
+        // expander must run it. Concatenating the pool and the vendor roots
+        // here would resolve fewer skills than the popup offered.
+        let mut roots = crate::skill_roots::skill_roots(&self.app.config).roots;
+        roots.extend(crate::skill_roots::vendor_skill_roots(&self.app.config));
         let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
             &self.app.config.skills.root_dir,
             &input,
             self.app.current_session.as_deref(),
-            &vendor_roots,
+            &roots,
         );
         if !expansion.unresolved.is_empty() {
             self.app.set_status_notice(format!(
