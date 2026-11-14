@@ -48,7 +48,10 @@ pub fn separator() -> &'static str {
 }
 
 /// The separator as a styled span, in the dim ink every boundary used.
-pub fn separator_span() -> Span<'static> {
+///
+/// Private: `push_separator` is the only caller in the tree, so the `pub` promised
+/// a shared API nobody uses.
+fn separator_span() -> Span<'static> {
     Span::styled(separator(), Style::default().fg(dim()))
 }
 
@@ -133,13 +136,20 @@ mod tests {
     /// style-setting test ran first — a parallel-test race, not a defect.
     #[test]
     fn a_separator_is_pushed_before_every_later_segment() {
-        let glyph = crate::tui::status_line::style::style().glyph();
         let mut spans = vec![Span::raw("one")];
         push_separator(&mut spans);
         push_separator(&mut spans);
         assert_eq!(spans.len(), 3);
-        assert_eq!(spans[1].content.as_ref(), glyph);
-        assert_eq!(spans[2].content.as_ref(), glyph);
+        // Placement, not glyph: `push_separator` reads the process-global style on
+        // every call, so a test that sampled `style()` first and then called it
+        // raced `a_configured_style_reaches_the_boundary` between the two reads.
+        // Both boundaries must be the SAME span, and neither may be the segment.
+        assert_eq!(
+            spans[1].content, spans[2].content,
+            "every boundary is the same rule"
+        );
+        assert_ne!(spans[1].content.as_ref(), "one");
+        assert_eq!(spans[1].style, spans[2].style);
     }
 
     /// The separator is dim, which is what makes it read as a rule between
@@ -154,26 +164,115 @@ mod tests {
     /// reach the whole bar at once. A newly hand-written `" · "` literal is a new
     /// boundary nobody can restyle — the exact defect U10 closes.
     ///
-    /// Scoped to the PRODUCTION half of `ui_input.rs`: it ends at the file's main
-    /// `mod tests`, and the three further `#[cfg(test)]` blocks below that are all
-    /// inside it. The search is over that whole half, not a line window, so a
-    /// boundary added anywhere in the production code is caught. Test assertions
-    /// are deliberately out of scope: they pin what the bar RENDERS, and a literal
-    /// there is the expected value, not a second implementation.
+    /// The scan covers the WHOLE file minus its test-module bodies. It used to stop
+    /// at the first `mod tests {`, which is line 1442 of 3816 — 613 lines before
+    /// `build_notification_spans` begins, so the notification bar was never checked
+    /// at all. MEASURED: reverting that function to a hand-written boundary left
+    /// this guard green. A guard whose scope excludes half its subject is worse than
+    /// no guard, because it reports coverage it does not have.
     ///
-    /// The PROSE sites are not needles this can match. Their `·` sits mid-string,
-    /// so the `" · ` prefix below cannot see them — and forcing them through the
-    /// helper is exactly the corruption the module doc warns about.
+    /// The strip matches `#[cfg(test)]` immediately followed by a `mod <name> {`
+    /// header, and nothing else. An earlier version keyed on "the next `{` after
+    /// `#[cfg(test)]`", which desynced on the first gated ITEM — this file gates a
+    /// helper function at line 194 — and leaked test bodies into the production
+    /// slice, reporting a defect in `mod tests` itself. Test assertions pin what the
+    /// bar RENDERS, so a literal there is the expected value, not an implementation.
+    ///
+    /// The PROSE sites are not needles this can match. Their `·` sits mid-string, so
+    /// the `" · ` prefix below cannot see them — and forcing them through the helper
+    /// is exactly the corruption the module doc warns about.
     #[test]
     fn every_bar_boundary_goes_through_the_separator_helper() {
         const UI_INPUT: &str = include_str!("../operant_ui/ui_input.rs");
 
-        let production = match UI_INPUT.find("\nmod tests {") {
-            Some(at) => &UI_INPUT[..at],
-            // A renamed test module must fail loudly, not silently widen the scan
-            // into assertions and report a defect that is not there.
-            None => panic!("ui_input.rs has no `mod tests`; this guard's scope is undefined"),
-        };
+        // Every `#[cfg(test)] mod <name> {` in ui_input.rs. Anything outside one of
+        // these bodies is production code and IS in scope. Each entry is asserted
+        // below, so a module that is renamed or added fails the guard rather than
+        // silently moving the scope line.
+        const TEST_MODULES: &[&str] = &["tests", "copy_selection_tests", "composer_hint_tests"];
+
+        let mut production = String::with_capacity(UI_INPUT.len());
+        let mut rest = UI_INPUT;
+        let mut stripped = 0usize;
+
+        while let Some(attr) = rest.find("#[cfg(test)]") {
+            let after_attr = attr + "#[cfg(test)]".len();
+            let tail = &rest[after_attr..];
+            // Only a MODULE header counts. Whitespace between the attribute and the
+            // `mod` keyword is allowed; anything else is a gated item, which stays in
+            // scope, so emit through the attribute and continue searching after it.
+            let header_start = tail.len() - tail.trim_start().len();
+            let trimmed = tail.trim_start();
+            let Some(mod_at) = trimmed.find("mod ") else {
+                production.push_str(&rest[..after_attr]);
+                rest = &rest[after_attr..];
+                continue;
+            };
+            if !trimmed[..mod_at].trim().is_empty() {
+                production.push_str(&rest[..after_attr]);
+                rest = &rest[after_attr..];
+                continue;
+            }
+            let after_mod = &trimmed[mod_at + 4..];
+            let name: String = after_mod
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !TEST_MODULES.contains(&name.as_str()) {
+                production.push_str(&rest[..after_attr]);
+                rest = &rest[after_attr..];
+                continue;
+            }
+            let Some(brace_at) = after_mod.find('{') else {
+                panic!("test module `{name}` has no opening brace");
+            };
+            let body = &after_mod[brace_at..];
+            let mut depth = 0usize;
+            let mut end = None;
+            for (i, ch) in body.char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else {
+                panic!("test module `{name}` has unbalanced braces");
+            };
+            // Emit the attribute line, then the module body's newlines in place of
+            // its text. Keeping the newlines is what makes every reported line
+            // number refer to ui_input.rs itself: a count over a shorter string
+            // sends the next reader to unrelated code.
+            production.push_str(&rest[..attr]);
+            let line_end = rest[attr..]
+                .find('\n')
+                .map(|i| attr + i + 1)
+                .unwrap_or(rest.len());
+            production.push_str(&rest[attr..line_end]);
+            let newlines = body[..end].matches('\n').count();
+            production.push_str(&"\n".repeat(newlines));
+            rest = &body[end..];
+            stripped += 1;
+            let _ = header_start;
+        }
+        production.push_str(rest);
+
+        let found: Vec<&str> = TEST_MODULES.to_vec();
+        assert_eq!(
+            stripped,
+            found.len(),
+            "expected to strip {} test modules from ui_input.rs ({}); a module was \
+             renamed or added, so this guard's scope is wrong and its green means \
+             nothing",
+            found.len(),
+            found.join(", ")
+        );
 
         // A boundary literal is `" · ` — a leading separator at the start of a
         // format string. Prose carries ` · ` mid-string and cannot match it.

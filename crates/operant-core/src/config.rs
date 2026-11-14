@@ -1450,8 +1450,9 @@ pub struct TuiSettings {
     ///
     /// An unknown value warns at startup and falls back to `dot` rather than
     /// to a style that renders nothing — see
-    /// `tui::status_line::style::SeparatorStyle::from_key` for why that is
-    /// NOT OMP's `powerline-thin` fallback.
+    /// `tui::status_line::style::SeparatorStyle::parse`, which returns the
+    /// style plus whether the key was recognised, for why that is NOT OMP's
+    /// `powerline-thin` fallback.
     ///
     /// The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1);
     /// without one the terminal draws tofu. `ascii` exists for that case.

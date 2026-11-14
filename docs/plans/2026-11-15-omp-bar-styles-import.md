@@ -326,3 +326,42 @@ cited inline above.
 - **`ui_messages.rs` / `context_viz.rs` meters.** They use `meter_cells` but their
   surround was not read for separator style; if the bar gains a style, ask whether those
   surfaces should follow.
+---
+
+## Post-audit fixes (iter-2382)
+
+The /ponytail-audit of U10–U14 found seven items. Five were fixed here; two were not.
+
+| # | Finding | State |
+|---|---|---|
+| 1 | The boundary guard stopped at the first `mod tests` (line 1442 of 3816), so `build_notification_spans` — the notification bar — was never scanned. Reverting that function to a hand-written boundary left the guard GREEN. | **fixed** |
+| 2 | `add_caps` overflowed the rect by two cells when the text filled or exceeded the width, pushing the right cap off-screen. Measured reachable: a 105-character streaming status overflows an 80-column bar by 27. | **fixed** |
+| 3 | Every cap test used width 20 with 4 characters, so finding 2's path was never exercised. | **fixed** |
+| 4 | The `[tui] bar_style` doc pointed at `SeparatorStyle::from_key`, renamed to `parse` during U11. | **fixed** |
+| 5 | `operant.example.toml` described `pipe` as ASCII `" | "`; the code renders `" │ "` (U+2502). | **fixed** |
+| 6 | `separator_span` was `pub` with no caller outside its own module. | **fixed** — now private |
+| 7 | Caps are placed at the rect edges under `centered_mode`, where the fill has no defined edge. | **NOT fixed — latent** |
+
+**Finding 7 is deliberately open.** `centered_mode()` is hardcoded `false` with a
+`[port-decision]` note at `tui/app/tui_state_impl.rs:853-857`, so no frame reaches it.
+`add_caps` pads to the full rect width, which in a centered layout would put the caps at
+the rect edges rather than around the centered content. Whoever wires centered mode must
+rethink this; it is recorded here rather than guessed at now.
+
+**Finding 1's guard was rewritten, not patched.** The first fix keyed on "the next `{`
+after `#[cfg(test)]`", which desynced immediately: `ui_input.rs:194` gates a helper
+FUNCTION, not a module, so the brace walker exited early and leaked test bodies into the
+"production" slice — the guard then reported a defect inside `mod tests` itself. The
+second version matches `#[cfg(test)] mod <name> {` by name, asserts the module count it
+stripped (so a rename fails loudly rather than moving the scope line), and preserves the
+line count while blanking the bodies so every reported line number refers to
+`ui_input.rs` rather than to a shorter string.
+
+Both fixes were mutation-proven against the code that shipped:
+- reverting `build_notification_spans` to a hand-written boundary now FAILS the guard and names line 2062;
+- removing the `used + caps > width` guard FAILS `a_bar_too_narrow_for_its_caps_gets_none` at 19 chars.
+
+A third race surfaced and was fixed: `a_separator_is_pushed_before_every_later_segment`
+sampled `style()` and then called `push_separator`, which reads the cell again, so a
+sibling test changing the style between the two reads made it fail. It now asserts
+placement (both boundaries are the same span, in order) rather than a sampled glyph.

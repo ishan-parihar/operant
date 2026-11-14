@@ -448,7 +448,7 @@ theme = "default"
 #   powerline      U+E0B0  -- needs a patched (Nerd) font
 #   powerline-thin U+E0B1  -- needs a patched (Nerd) font
 #   slash          " / "
-#   pipe           " | "
+#   pipe           " │ "   -- U+2502, box-drawing (not ASCII)
 #   block          "█"
 #   none           " "     -- segments touch, no visible rule
 #   ascii          "|"     -- for a terminal with no powerline glyphs

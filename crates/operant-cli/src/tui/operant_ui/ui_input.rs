@@ -1404,7 +1404,20 @@ fn add_caps(
 
     let used = line.width();
     let caps = left.width() + right.width();
-    let gap = (width as usize).saturating_sub(used + caps);
+
+    // No room for both caps means no caps at all. `saturating_sub` alone would
+    // clamp the GAP to zero and still append two glyphs, making the line two cells
+    // wider than the rect — MEASURED on an 80-column bar carrying a 105-character
+    // streaming status ("streaming… 12.3s · 45.6 tps · ↑128k ↓4.2k · using
+    // websocket · via OpenRouter · 12.3s · ⚠ 128k cache miss"), which overflows by
+    // 27 and pushes the right cap off-screen entirely. Dropping both caps degrades
+    // to the un-capped bar, which is the six other styles' behaviour and is always
+    // correct; drawing one cap without the other is not a shape OMP defines.
+    if used + caps > width as usize {
+        return line;
+    }
+
+    let gap = width as usize - (used + caps);
     let cap_style = crate::tui::status_line::bar::cap_style();
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
@@ -1484,6 +1497,50 @@ mod tests {
             .find(|s| s.content.chars().all(|c| c == ' ') && s.style == cap)
             .expect("a spacer in the fill colour");
         assert_eq!(gap.content.width(), 20 - " hi ".len() - 2);
+    }
+
+    /// THE BOUNDARY: a bar whose text is as wide as the rect gets no caps.
+    ///
+    /// The first version of `add_caps` clamped the gap with `saturating_sub` and
+    /// appended the caps anyway, so the line came out two cells wider than the rect
+    /// and the right cap was clipped off-screen. Every other cap test used width 20
+    /// with 4 characters of text, so nothing exercised this. MEASURED reachable: the
+    /// streaming status branch concatenates six parts and reaches 105 characters,
+    /// which overflows an 80-column bar by 27.
+    #[test]
+    fn a_bar_too_narrow_for_its_caps_gets_none() {
+        use crate::tui::status_line::style::SeparatorStyle;
+
+        for text_len in [18usize, 19, 20, 25, 105] {
+            let text = "x".repeat(text_len);
+            let line = add_caps(
+                Line::from(vec![Span::raw(text.clone())]),
+                20,
+                SeparatorStyle::Powerline,
+            );
+            let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
+
+            if text_len + 2 <= 20 {
+                // Both caps fit: the row is padded to exactly the rect width, with a
+                // cap at each end.
+                assert_eq!(total, 20, "{text_len} chars must pad to the full 20");
+                assert_eq!(line.spans[0].content.as_ref(), "\u{e0b2}");
+                assert_eq!(line.spans.last().unwrap().content.as_ref(), "\u{e0b0}");
+            } else {
+                // No room for both: add NOTHING, so the caller's own clipping is
+                // unchanged and the bar degrades to the un-capped shape.
+                //
+                // The contract is what `add_caps` ADDS, not what the row measures:
+                // a 25-character string in a 20-column rect already overflows by
+                // itself, ratatui clips that, and that predates caps.
+                assert_eq!(
+                    line.spans.len(),
+                    1,
+                    "{text_len} chars + 2 caps cannot fit in 20, so no span may be added"
+                );
+                assert_eq!(line.spans[0].content.as_ref(), text);
+            }
+        }
     }
 
     /// Every style without caps returns the line UNTOUCHED — same span count, same
