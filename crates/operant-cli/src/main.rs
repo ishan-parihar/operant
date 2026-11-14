@@ -3170,7 +3170,7 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     // observer rides the shared feed and prints after each turn.
     let summary_observer: std::sync::Arc<dyn Observer> =
         std::sync::Arc::new(TurnSummaryObserver::new());
-    let agent = create_runtime_agent(
+    let mut agent = create_runtime_agent(
         config,
         &config.agent,
         system_prompt,
@@ -3181,6 +3181,25 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     )
     .await?
     .with_observer(summary_observer);
+
+    // The two background engines attach in the TUI and the gateway ONLY. The
+    // headless host has a `BackgroundReview` print arm and nothing to print:
+    // `[advisor] enabled = true` and `recap_idle_seconds` were silently inert
+    // here. The handle must be held for the loop's life — dropping it stops
+    // the engine (`attach_recap_engine`'s own doc).
+    let _recap_activity = {
+        let idle = config.agent.recap_idle_seconds;
+        if idle == 0 {
+            None
+        } else {
+            Some(agent.attach_recap_engine(
+                std::time::Duration::from_secs(idle),
+                config.recap.clone(),
+                crate::client_config(config),
+            ))
+        }
+    };
+    agent.attach_advisor(config.advisor.clone(), crate::client_config(config));
 
     // Spawn task to display tool events in real-time
     tokio::spawn(async move {

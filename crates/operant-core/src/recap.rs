@@ -37,6 +37,42 @@ root-cause narrative, fix internals, secondary to-dos, em-dash tangents.";
 /// Kept as a function rather than an inline `format!` so the default path is
 /// byte-identical to the pre-knob behaviour — an empty instruction returns
 /// the constant unchanged, not the constant with a trailing separator.
+/// Token ceiling on the transcript snapshot one recap call may carry.
+///
+/// The recap is a ~40-word status line over a disposable copy of the
+/// transcript, so it does not need the whole session — and a session longer
+/// than the model's window made every recap fail rather than degrade. 8,000
+/// tokens is far more than a 40-word summary can read, and matches the
+/// disposable-copy budget the MoA reference models already get.
+const RECAP_VIEW_TOKEN_BUDGET: usize = 8_000;
+
+/// Cut a built advisory view to the NEWEST messages that fit the budget.
+///
+/// The view arrives oldest-first, so the tail is kept and the head dropped —
+/// a recap is about where the session stands, and that is the recent turns.
+/// Returns the view unchanged when it already fits, byte for byte.
+fn fit_recap_view(view: Vec<Message>) -> Vec<Message> {
+    let total: usize = view
+        .iter()
+        .map(|m| crate::context_management::estimate_tokens(&m.content))
+        .sum();
+    if total <= RECAP_VIEW_TOKEN_BUDGET {
+        return view;
+    }
+    let mut kept: Vec<Message> = Vec::new();
+    let mut used = 0usize;
+    for msg in view.into_iter().rev() {
+        let cost = crate::context_management::estimate_tokens(&msg.content);
+        if used + cost > RECAP_VIEW_TOKEN_BUDGET {
+            break;
+        }
+        used += cost;
+        kept.push(msg);
+    }
+    kept.reverse();
+    kept
+}
+
 fn recap_instruction(instructions: &str) -> String {
     let extra = instructions.trim();
     if extra.is_empty() {
@@ -188,7 +224,15 @@ pub fn spawn_recap_engine(
             if messages.is_empty() {
                 continue;
             }
-            let mut view = crate::moa::build_advisory_messages(&messages);
+            // FIT THE VIEW TO A BUDGET. `build_advisory_messages` bounds tool
+            // results only, so user and assistant text pass through whole: a
+            // session longer than the window made EVERY recap fail
+            // `context_length_exceeded`, log a warn and deliver nothing —
+            // permanently, with no knob. The fix is to keep the TAIL (a recap
+            // is "where the session stands", and the tail is where it stands)
+            // and cut the view to the budget the main path already uses for an
+            // injected block.
+            let mut view = fit_recap_view(crate::moa::build_advisory_messages(&messages));
             view.push(Message::user(recap_instruction(&instructions)));
             let request = ChatRequest::new(model.clone(), view).with_stream(false);
             let reply = match client.chat(request).await {
@@ -385,6 +429,42 @@ mod tests {
     /// turn instead of never — the opposite of off. Proven by probe before the
     /// fix: one recap inside 150 ms with `Duration::from_secs(0)`.
     ///
+    /// A transcript longer than the budget is cut to the NEWEST turns.
+    ///
+    /// Before this the whole snapshot went to the model: `build_advisory_messages`
+    /// bounds tool results only, so a session longer than the window made every
+    /// recap fail `context_length_exceeded` and deliver nothing, permanently.
+    #[test]
+    fn a_long_snapshot_is_cut_to_the_newest_turns() {
+        let view: Vec<Message> = (0..400)
+            .map(|i| Message::user(format!("message {i} {}", "x".repeat(400))))
+            .collect();
+        let fitted = fit_recap_view(view.clone());
+        let total: usize = fitted
+            .iter()
+            .map(|m| crate::context_management::estimate_tokens(&m.content))
+            .sum();
+        assert!(total <= RECAP_VIEW_TOKEN_BUDGET, "fitted to {total}");
+        assert!(fitted.len() < view.len(), "must actually cut");
+        // The TAIL survives: the recap is about where the session stands.
+        assert_eq!(fitted.last().unwrap().content, view.last().unwrap().content);
+        assert_eq!(
+            fitted[0].content,
+            view[view.len() - fitted.len()].content,
+            "the kept window must be a contiguous newest slice"
+        );
+    }
+
+    /// A view under the budget comes back byte-identical, not rebuilt.
+    #[test]
+    fn a_short_view_is_returned_unchanged() {
+        let view = vec![Message::user("one"), Message::assistant("two")];
+        let fitted = fit_recap_view(view.clone());
+        assert_eq!(fitted.len(), view.len());
+        assert_eq!(fitted[0].content, view[0].content);
+        assert_eq!(fitted[1].content, view[1].content);
+    }
+
     /// The guard lives in `attach_recap_engine`, so the observable is the
     /// HANDLE it returns: a live engine owns a broadcast receiver and a
     /// disabled one has dropped it. Asserting on `RecapActivity::disabled()`
