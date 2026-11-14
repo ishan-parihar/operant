@@ -844,6 +844,848 @@ impl OperantAgent {
         reason = "masked_tools is held only for short non-panicking sections; poisoning is treated as a bug"
     )]
     /// Execute tools and handle self-healing
+    /// Phase 1 of [`Self::execute_tools`]: the sequential pre-flight pass.
+    ///
+    /// Every check here MUST run before any tool executes, because permission
+    /// prompts are interactive (the operator sees one dialog at a time) and a
+    /// rejection must not have already mutated anything.
+    ///
+    /// Split out because the pass owns ten unrelated concerns and the inline
+    /// form was 816 lines inside a 1,108-line function. A change to approval
+    /// policy had to be threaded through arg parsing, retry-storm detection and
+    /// result ordering to land. This is a MOVE, not a rewrite: the bodies are
+    /// byte-for-byte what they were, and the existing suite is the evidence.
+    ///
+    /// Returns the calls that passed (`pending`, in call order, each with its
+    /// original index and parsed args), the results that already have an answer
+    /// (rejections, denials, skips), and the call names for stamping.
+    async fn preflight_tool_calls(
+        &self,
+        tool_calls: Vec<ToolCall>,
+    ) -> (
+        Vec<(usize, ToolCall, serde_json::Value)>,
+        Vec<Option<ToolResult>>,
+        Vec<String>,
+    ) {
+    // ── Phase 1: Pre-flight (sequential) ────────────────────────────
+    let mut pending: Vec<(usize, ToolCall, serde_json::Value)> = Vec::new();
+    let mut early_results: Vec<Option<ToolResult>> = vec![None; tool_calls.len()];
+    // Pre-flight rejections build results with no name; the guardrail
+    // keys its ladders on the name, so every rejection used to pool under
+    // tool "" (2026-10-13: "Tool '' has failed 12 times"). Stamped back
+    // from the call at collection.
+    let call_names: Vec<String> = tool_calls.iter().map(|c| c.function.name.clone()).collect();
+    // T6: within-batch dedupe (hermes `_deduplicate_tool_calls`) — only
+    // the first occurrence of each (tool, arguments) pair in a single
+    // assistant message executes; exact duplicates are skipped with a
+    // synthetic result so result ordering is preserved and degenerate
+    // batches don't double-mutate.
+    let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    // Pre-flight failure-streak gate bookkeeping: parse-refusals from
+    // EARLIER calls in this same batch, per tool. The post-result
+    // ladder observes results only after the batch drains, so without
+    // this counter a 64-call parallel batch would answer every call
+    // with a refusal before the gate could say stop (RC3, plan
+    // 2026-10-25 tooling-surface).
+    let mut batch_parse_fails: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for (idx, mut tool_call) in tool_calls.into_iter().enumerate() {
+        // Check interrupt flag
+        if self.interrupt_flag.is_triggered() {
+            early_results[idx] = Some(ToolResult::error(
+                &tool_call.id,
+                "Skipped: interrupted by user (Ctrl-C)".to_string(),
+            ));
+            continue;
+        }
+
+        // A call with no function name cannot run; say so plainly instead
+        // of a "tool not found" for the empty string.
+        if tool_call.function.name.trim().is_empty() {
+            warn!("Tool call with an empty function name — refused");
+            early_results[idx] = Some(ToolResult::error_with_name(
+                "(unnamed)",
+                &tool_call.id,
+                "This tool call had no function name, so nothing ran. Re-issue it \
+                 with the exact name of the tool you meant to call."
+                    .to_string(),
+            ));
+            continue;
+        }
+
+        // T6: skip exact duplicates within this batch.
+        let dup_key = (
+            tool_call.function.name.clone(),
+            tool_call.function.arguments.trim().to_string(),
+        );
+        if !seen_tool_calls.insert(dup_key) {
+            warn!(
+                tool = %tool_call.function.name,
+                "Duplicate tool call with identical arguments — skipped (T6 within-batch dedupe)"
+            );
+            early_results[idx] = Some(ToolResult::error(
+                &tool_call.id,
+                format!(
+                    "Duplicate tool call '{}' with identical arguments skipped — already \
+                     invoked once in this batch.",
+                    tool_call.function.name
+                ),
+            ));
+            continue;
+        }
+
+        // ── S2 timeout-breaker mask ────────────────────────────────
+        // A tool that timed out 3× consecutively this turn is refused
+        // here WITHOUT executing — no fourth timeout burn — and the
+        // model gets a named error it can act on. The schema list also
+        // omits it (`tools_for_turn`), so a well-behaved model never
+        // reaches this arm; this is the backstop for one that calls it
+        // anyway.
+        if self
+            .masked_tools
+            .lock()
+            .expect("masked_tools lock poisoned")
+            .contains(&tool_call.function.name)
+        {
+            warn!(
+                tool = %tool_call.function.name,
+                "Tool masked by the timeout breaker — refusing call without executing"
+            );
+            early_results[idx] = Some(ToolResult::error_with_name(
+                &tool_call.function.name,
+                &tool_call.id,
+                format!(
+                    "Tool '{}' is disabled for the rest of this turn after repeated \
+                      timeouts — take a different approach.",
+                    tool_call.function.name
+                ),
+            ));
+            continue;
+        }
+
+        // ── Pre-flight failure-streak gate ─────────────────────────
+        // The post-result ladder only informs the NEXT iteration: the
+        // 2026-10-24 storm dispatched 64 parallel `process` calls and
+        // executed 32 of them before the ladder halted at 12 (plan
+        // 2026-10-25 tooling-surface, RC3). Gate the batch itself:
+        // once this tool has failed the warn threshold's worth of
+        // times — from earlier turns (the live streak) or from
+        // parse-refusals earlier in THIS batch — later same-tool
+        // calls in the batch are answered without executing. The
+        // skip text carries the guardrail prefix, so the post-batch
+        // observation excludes it (no double count).
+        {
+            let global_streak = self
+                .tool_guardrails
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failure_streak(&tool_call.function.name);
+            let batch_fails = batch_parse_fails
+                .get(&tool_call.function.name)
+                .copied()
+                .unwrap_or(0);
+            let prior_fails = global_streak + batch_fails;
+            if prior_fails >= crate::tool_guardrails::FAILURE_WARN_THRESHOLD {
+                warn!(
+                    tool = %tool_call.function.name,
+                    prior_fails,
+                    "Batch streak gate — refusing call without executing"
+                );
+                early_results[idx] = Some(ToolResult {
+                    tool_call_id: tool_call.id.clone(),
+                    name: tool_call.function.name.clone(),
+                    // A deliberate guardrail skip is guidance, not a
+                    // tool failure: success-shaped like the
+                    // GuardrailDecision::Skip arm below, with the
+                    // prefix in `content` so the post-batch observation
+                    // excludes it. The skip text in `error` (the
+                    // error_with_name shape) would be observed as a
+                    // failure and the ladder would halt on skips.
+                    success: true,
+                    content: format!(
+                        "{}tool '{}' has already failed {prior_fails} times in a row this \
+                         turn and the rest of this batch's calls to it are skipped. Take \
+                         a different approach or report back instead of retrying.",
+                        crate::tool_guardrails::SKIP_MESSAGE_PREFIX,
+                        tool_call.function.name
+                    ),
+                    error: None,
+                    timed_out: false,
+                });
+                continue;
+            }
+        }
+
+        let mut name = tool_call.function.name.clone();
+        let raw_args = tool_call.function.arguments.clone();
+        let trimmed = raw_args.trim();
+        let args_str = if trimmed.is_empty() {
+            "{}".to_string()
+        } else {
+            raw_args
+        };
+
+        debug!(tool = %name, args = %args_str, "Executing tool");
+
+        // Emit ToolCallStart observer event
+        if let Some(ref obs) = self.observer {
+            obs.record_event(&ObserverEvent::ToolCallStart {
+                tool: name.clone(),
+                arguments: Some(args_str.clone()),
+            });
+            // Park the input size for the completion emit, where
+            // `ObserverEvent::ToolCall` reports both ends of the payload.
+            self.record_tool_input_bytes(&tool_call.id, args_str.len());
+        }
+
+        // Skip emitting ToolStart if it was already emitted during
+        // streaming (process_stream extracts XML tool calls and emits
+        // ToolStart early so the gateway can split messages chronologically).
+        let already_streamed = self
+            .stream_emitted_tool_starts
+            .lock()
+            .map(|s| s.contains(&tool_call.id))
+            .unwrap_or(false);
+        if !already_streamed {
+            self.emit(AgentEvent::ToolStart {
+                tool_call_id: tool_call.id.clone(),
+                name: name.clone(),
+                arguments: args_str.clone(),
+            })
+            .await;
+        }
+
+        // Parse arguments — with auto-repair for common truncation issues.
+        // (iter-123 — fixes "Invalid JSON: EOF while parsing" errors
+        // caused by streaming tool-call argument fragmentation.)
+        let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
+            Ok(a) => a,
+            Err(orig_parse_err) => {
+                // Try to repair common truncation issues:
+                // 1. Missing closing brace — append }
+                // 2. Missing closing bracket — append ]
+                // 3. Truncated string value — append "
+                //
+                // S4 (iter-602): when no repair succeeds, do NOT
+                // execute on dummied-up `{}` — the pre-B2 last resort
+                // did exactly that, and the resulting
+                // schema-validation failure was retried into a
+                // 1,938-substitution cascade in the measured window.
+                // Answer the call with a named not-executed error the
+                // model can correct from in one round trip; it never
+                // reaches phase 2. The log carries the parse error and
+                // lengths only — raw model output does not go into
+                // logs, but the RESULT quotes a truncated preview (the
+                // model already owns its own args, and the 2026-10-24
+                // storm proved a content-free refusal cannot break a
+                // retry loop: 12 identical dumps, zero corrections).
+                let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
+                let repaired_value = match &repaired {
+                    // Fixed is parseable by construction (the repair
+                    // only returns strings it validated); the second
+                    // from_str routes an invariant break to the same
+                    // honest refusal instead of executing garbage.
+                    message_safety::RepairOutcome::Fixed(fixed) => {
+                        serde_json::from_str(fixed).ok()
+                    }
+                    message_safety::RepairOutcome::Unrepairable => None,
+                };
+                match repaired_value {
+                    Some(a) => {
+                        debug!(tool = %name, "Tool arguments auto-repaired");
+                        a
+                    }
+                    None => {
+                        warn!(
+                            tool = %name,
+                            args_len = args_str.len(),
+                            error = %orig_parse_err,
+                            "Unrepairable tool arguments — call not executed, error returned to the model"
+                        );
+                        // Feed the batch gate: later same-tool calls
+                        // in THIS batch must see this refusal before
+                        // the post-batch ladder ever runs.
+                        *batch_parse_fails.entry(name.clone()).or_insert(0) += 1;
+                        early_results[idx] = Some(ToolResult::error_with_name(
+                            &name,
+                            &tool_call.id,
+                            message_safety::unrepairable_args_message(
+                                &orig_parse_err,
+                                &args_str,
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // ── Tool-call guardrails (R4 — hermes tool_guardrails.py) ──
+        // Detect retry storms: the model calling the same tool with
+        // identical args repeatedly within one turn. Side-effecting tools
+        // are skipped on the 3rd identical call; no-effect tools (cheap,
+        // read-only) get a warning then skip on the 4th. The synthetic
+        // result tells the model to stop repeating, saving round-trips and
+        // preventing repeated mutations.
+        {
+            use crate::tool_guardrails::GuardrailDecision;
+            let (decision, pattern) = {
+                let mut g = self
+                    .tool_guardrails
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let d = g.observe(&name, &args_str);
+                (d, g.last_pattern())
+            };
+            match decision {
+                GuardrailDecision::Allow => {}
+                // observe() (pre-execution) never returns Halt — only the
+                // post-result rungs do; handled in observe_guardrail_results.
+                GuardrailDecision::Halt(_) => {}
+                GuardrailDecision::Warn => {
+                    warn!(
+                        tool = %name,
+                        pattern = ?pattern,
+                        "Repetitive tool-call pattern — warning model"
+                    );
+                    self.emit(AgentEvent::Content {
+                        text: crate::tool_guardrails::pattern_warning_message(
+                            &name,
+                            pattern.as_ref(),
+                        ),
+                    })
+                    .await;
+                }
+                GuardrailDecision::Skip => {
+                    warn!(
+                        tool = %name,
+                        pattern = ?pattern,
+                        "Repetitive tool-call pattern — skipping duplicate"
+                    );
+                    self.metrics.record_guardrail_skip();
+                    early_results[idx] = Some(ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        name: name.to_string(),
+                        // A deliberate guardrail skip is guidance, not a
+                        // tool failure: success-shaped so the degenerate-
+                        // loop circuit (consecutive failed iterations)
+                        // doesn't count skips as failures and break turns
+                        // whose models merely re-emit calls.
+                        success: true,
+                        content: crate::tool_guardrails::build_pattern_skip_message(
+                            &name,
+                            pattern.as_ref(),
+                        ),
+                        error: None,
+                        timed_out: false,
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // Validate tool exists — with bounded edit-distance recovery for
+        // hallucinated / near-miss names. A model that writes
+        // `read_files` for `read_file`, or a name from an MCP server
+        // that has since disconnected, otherwise gets a bare
+        // "not found" and retries the same wrong name forever. Recovery
+        // rewrites the name in the ToolCall that flows into `pending`, so
+        // BOTH execution branches (single-tool and the concurrent pool)
+        // dispatch the canonical name without a second hook. A tie at the
+        // minimum distance is refused, never guessed. The caller detects
+        // the recovery by comparing the result's stamped name with the
+        // name the model asked for, and tells the model about it.
+        if !self.registry.contains(&name).await {
+            let recovery =
+                crate::tools::tool_search::name_recovery::resolve(&self.registry, &name).await;
+            match &recovery {
+                crate::tools::tool_search::name_recovery::Recovery::Recovered {
+                    canonical,
+                    distance,
+                    ..
+                } => {
+                    warn!(
+                        tool = %name,
+                        canonical = %canonical,
+                        distance,
+                        "Recovered near-miss tool name"
+                    );
+                    tool_call.function.name.clone_from(canonical);
+                    name.clone_from(canonical);
+                }
+                crate::tools::tool_search::name_recovery::Recovery::Exact => {}
+                refused => {
+                    error!(tool = %name, "Tool not found and not recoverable");
+                    early_results[idx] = Some(ToolResult::error(
+                        &tool_call.id,
+                        crate::tools::tool_search::name_recovery::refusal_message(
+                            &name, refused,
+                        ),
+                    ));
+                    continue;
+                }
+            }
+        }
+
+        // ── Centralized argument validation (iter-262) ───────────
+        // Validate required fields BEFORE calling tool.execute().
+        // Without this, each tool's serde_json::from_value() would fail
+        // independently with opaque "missing field 'query'" errors.
+        // Centralized validation gives a clear, consistent error message
+        // and prevents truncated tool calls from reaching the tool impl.
+        if let Some(tool) = self.registry.get(&name).await {
+            let schema = tool.schema();
+            schema.sanitize_args(&mut args);
+            if let Err(e) = schema.validate_args(&args) {
+                warn!(tool = %name, error = %e, "Tool argument validation failed");
+                // Use the schema validation error message directly — it
+                // already includes the field name (e.g. "Missing required
+                // field: query"). Avoid duplicating the tool name.
+                early_results[idx] = Some(ToolResult::error(&tool_call.id, e.to_string()));
+                continue;
+            }
+        }
+
+        // Smart approval gate
+        let mut guardian_approved = false;
+        // R48-2: `approval_result` is scoped to the gate block; hoist the
+        // verdict the headless deny below needs.
+        let mut gate_flagged = false;
+        if self.config.approval_mode != "off" {
+            let approval_result = crate::approval::check_tool_approval(
+                &name,
+                &args,
+                Some(&self.config.approval_mode),
+            );
+            if approval_result.verdict == "requires_approval" {
+                gate_flagged = true;
+            }
+            match approval_result.verdict.as_str() {
+                "blocked" => {
+                    warn!(tool = %name, "Tool call blocked by approval guard");
+                    early_results[idx] = Some(ToolResult::error(
+                        &tool_call.id,
+                        format!(
+                            "{}: {}",
+                            crate::tool_guardrails::HARD_REJECT_PREFIX,
+                            approval_result
+                                .reason
+                                .unwrap_or_else(|| "blocked".to_string())
+                        ),
+                    ));
+                    continue;
+                }
+                "requires_approval" => {
+                    warn!(tool = %name, "Tool call flagged — will prompt user");
+                    // ── Guardian-LLM arm (hermes `approval_smart.py`
+                    // parity, opt-in via `OPERANT_GUARDIAN_LLM` at
+                    // construction) ──────
+                    // The auxiliary classifier may APPROVE a flagged
+                    // command (skipping the channel) or DENY it (shaped
+                    // like a smart-gate block). Anything else —
+                    // ESCALATE, call failure, unarmed env — is today's
+                    // behavior: the channel below decides. Seat policy
+                    // keeps precedence: the guardian sits in the
+                    // UNGOVERNED chain only (an Escalate/Deny from a
+                    // policy row is never overridden — the classifier
+                    // classifies, the policy decides).
+                    if self.guardian_llm {
+                        match self.guardian_classify(&name, &args).await {
+                            Some(crate::approval::GuardianVerdict::Approve) => {
+                                info!(
+                                    tool = %name,
+                                    "Guardian-LLM approved the flagged command — skipping the permission prompt"
+                                );
+                                guardian_approved = true;
+                            }
+                            Some(crate::approval::GuardianVerdict::Deny) => {
+                                warn!(
+                                    tool = %name,
+                                    "Tool call blocked by the guardian-LLM classifier"
+                                );
+                                early_results[idx] = Some(ToolResult::error(
+                                    &tool_call.id,
+                                    format!(
+                                        "{}: the guardian-LLM classifier denied this command",
+                                        crate::tool_guardrails::HARD_REJECT_PREFIX
+                                    ),
+                                ));
+                                continue;
+                            }
+                            _ => {
+                                debug!(
+                                    tool = %name,
+                                    "Guardian-LLM escalated — the permission channel decides"
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // ── P1/P2 seat policy (permission-bylaws slices E + F2) ──────
+        // With a seat authority attached AND a session id (the employee
+        // id), `decide()` owns the verdict for this seat: `Run` skips the
+        // prompt outright (a yolo mode or a seat allow entry), `Escalate`
+        // enters the channel below with the policy's `why` as the danger
+        // explanation (in-flight asks resolve interactively; the durable
+        // approvals queue retired to Holon's board), and `Deny` is
+        // returned shaped like a declined permission. Everything sits
+        // behind the Option: no authority, no session id, or no policy
+        // row for this seat → `None` → the branches below are today's
+        // allowlist-then-hardcoded-list logic, unchanged.
+        //
+        // The consult is hoisted ABOVE the permission-channel block so
+        // unattended agents (which may still carry a channel nobody
+        // drains — see `with_unattended`) consult the bylaws too.
+        //
+        // `blocked` is `false` because the smart approval gate above
+        // already denied blocked tools — the hardline floor fires before
+        // any seat mode can see (let alone widen) a blocked call.
+        // `dangerous` reuses `is_permission_gated_tool`, the same list
+        // the prompt below has always keyed on (one list so the gate and
+        // the predicate cannot drift apart).
+        let seat: Option<SeatDecision> = match (
+            self.seat_authority.as_ref(),
+            // Wave 2: the seat is the bound EMPLOYEE when the gateway set
+            // one; the session id otherwise (cron already runs as its
+            // derived employee id, so its path is unchanged).
+            self.seat_id().or_else(|| self.session_id()),
+        ) {
+            (Some(authority), Some(seat)) => {
+                authority.consult(&seat, &name, is_permission_gated_tool(&name))
+            }
+            _ => None,
+        };
+
+        // ── F2 unattended semantics ─────────────────────────────────
+        // An unattended run (cron) never waits on an interactive
+        // approver: a governed Escalate is queued (once) and denied THIS
+        // run; the next run consults the grant the senior minted between
+        // ticks (§8's two timelines). The UNGOVERDED path is not here at
+        // all — `seat == None` keeps today's channel behaviour
+        // byte-for-byte, including the dispatcher's no-active-channel
+        // auto-AllowSession arm.
+        if let Some(SeatDecision::Escalate(why)) = &seat
+            && self.unattended
+        {
+            warn!(tool = %name, "Tool call escalated by seat policy — unattended run: denied");
+            // O-17 (W3): in a Holon run the refusal is recorded for the
+            // result — `result.refusals[]` is the blocker the kernel and
+            // the Chair read; there is no grant to consult (an approved
+            // plan IS the grant, phase C). A personal unattended run
+            // keeps today's behaviour: queue + deny (if an authority is
+            // attached at all).
+            if let Some(run_dir) = crate::platform::holon_run_dir() {
+                crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!(
+                        "Refused under policy.json: {why}. Report this refusal \
+                         in your result's `refusals` so the stage records the \
+                         blocker"
+                    ),
+                ));
+                continue;
+            }
+            let session_id = self.session_id().unwrap_or_default();
+            let queued = self
+                .seat_authority
+                .as_ref()
+                .map(|authority| authority.escalate(&session_id, &name, why))
+                .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
+                    escalation: None,
+                    note: String::from("could not be persisted (no seat authority attached)"),
+                });
+            let reference = if queued.note.is_empty() {
+                format!(
+                    "was queued as {}",
+                    queued
+                        .escalation
+                        .as_ref()
+                        .map(|e| e.request_id.as_str())
+                        .unwrap_or("(unrecorded)")
+                )
+            } else {
+                queued.note.clone()
+            };
+            early_results[idx] = Some(ToolResult::error(
+                &tool_call.id,
+                format!(
+                    "Permission denied by seat policy: {why}. No interactive \
+                     approver is attached to this unattended run, so this \
+                     attempt is denied; the ask {reference} and the next \
+                     run consults the grant the approver mints"
+                ),
+            ));
+            continue;
+        }
+
+        // Permission guard for dangerous tools (interactive — sequential)
+        //
+        // Phase C (docs/agentic-os/): a GOVERNED Escalate with no interactive
+        // channel attached — `operant run` builds the agent without a
+        // permission channel — must deny, never fall through to execution.
+        // The same holds for a governed call that needs a prompt: without a
+        // consumer the 120s wait would stall a headless run for nothing.
+        // The unattended arm above already covers the cron path; this guard
+        // covers the headless-run path. Ungoverned (`seat == None`) keeps
+        // today's behavior byte-identical: run whatever the tool config
+        // allows (invariant 5 — personal mode is untouched).
+        if let Some(SeatDecision::Escalate(why)) = &seat
+            && self.permission_tx.is_none()
+        {
+            warn!(tool = %name, "Tool call escalated by seat policy — no interactive approver attached: deny");
+            // O-17 (W3, the multi-turn e2e's catch): in a Holon run the
+            // refusal is RECORDED for the result — the same org-mode
+            // semantics the unattended path carries. The queue-then-wait
+            // behavior ("the next run consults the grant the approver
+            // mints") is the PERSONAL-run path; in org mode there is no
+            // approver and no grant — an approved plan IS the grant, and
+            // result.refusals[] is the blocker the kernel and the Chair
+            // read.
+            if let Some(run_dir) = crate::platform::holon_run_dir() {
+                crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!(
+                        "Refused under policy.json (escalated): {why}. Report this \
+                         refusal in your result's `refusals` so the stage records the blocker"
+                    ),
+                ));
+                continue;
+            }
+            let session_id = self.session_id().unwrap_or_default();
+            let queued = self
+                .seat_authority
+                .as_ref()
+                .map(|authority| authority.escalate(&session_id, &name, why))
+                .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
+                    escalation: None,
+                    note: String::from("could not be persisted (no seat authority attached)"),
+                });
+            let reference = if queued.note.is_empty() {
+                format!(
+                    "was queued as {}",
+                    queued
+                        .escalation
+                        .as_ref()
+                        .map(|e| e.request_id.as_str())
+                        .unwrap_or("(unrecorded)")
+                )
+            } else {
+                queued.note.clone()
+            };
+            early_results[idx] = Some(ToolResult::error(
+                &tool_call.id,
+                format!(
+                    "Permission denied by seat policy: {why}. No interactive \
+                     approver is attached to this run, so this \
+                     attempt is denied; the ask {reference} and the next \
+                     run consults the grant the approver mints"
+                ),
+            ));
+            continue;
+        }
+
+        // ── R48-2 (2026-10-25 ponytail round 2): headless flagged-call deny ──
+        // A call the smart gate FLAGGED (verdict `requires_approval`) with
+        // NO interactive approver attached must deny, never fall through
+        // to execution — the governed Escalate path already denies above;
+        // this is its ungoverned twin. The flag used to log "will prompt
+        // user" and then execute silently in every headless run (`operant
+        // run`, sub-agent children) and for every tool outside the prompt
+        // list in attended ones. Scope is deliberately narrow: benign
+        // calls (verdict "allowed") keep invariant 5's headless behavior
+        // byte-for-byte, allowlisted calls run (the operator already
+        // approved them), a guardian approval runs, and a seat `Run`
+        // decision runs — only the flagged-and-nobody-to-ask case denies.
+        if !guardian_approved
+            && gate_flagged
+            && seat.is_none()
+            && self.permission_tx.is_none()
+            && !self.tool_allowed_by_allowlist(&name)
+        {
+            warn!(
+                tool = %name,
+                "Smart gate flagged the call — no interactive approver attached: deny"
+            );
+            early_results[idx] = Some(ToolResult::error_with_name(
+                &name,
+                &tool_call.id,
+                "Refused: this call was flagged for approval and no interactive \
+                 approver is attached to this run (headless). Run interactively \
+                 to approve it once, or add it to your approval allowlist."
+                    .to_string(),
+            ));
+            continue;
+        }
+
+        if let Some(permission_tx) = &self.permission_tx {
+            // Whether this call prompts, and with what danger sentence.
+            // The ungoverned arm is today's logic, lifted unchanged:
+            // hermes parity — a tool covered by the session or permanent
+            // allowlist (`command_allowlist` / `always`) never prompts,
+            // checked before the hardcoded dangerous-tool list so
+            // allowlisted tools bypass the gate
+            // (`_command_matches_permanent_allowlist` fires before
+            // detection, with only the hardline floor above it).
+            //
+            // F2: a governed Escalate persists its ask to the queue
+            // BEFORE the prompt leaves (§8.1 push-then-queue) — the row
+            // below is what the approver's /approve mints a grant
+            // against and resolves.
+            let mut seat_escalation: Option<crate::org::seat_authority::SeatEscalation> = None;
+            let (needs_prompt, danger): (bool, String) = if let Some(decision) = seat {
+                match decision {
+                    SeatDecision::Run(_) => (false, String::new()),
+                    SeatDecision::Escalate(why) => {
+                        let session_id = self.session_id().unwrap_or_default();
+                        seat_escalation = self.seat_authority.as_ref().and_then(|authority| {
+                            authority.escalate(&session_id, &name, &why).escalation
+                        });
+                        (true, why)
+                    }
+                    SeatDecision::Deny(why) => {
+                        warn!(tool = %name, "Tool call denied by seat policy");
+                        // O-17: a Holon run's denial is a recorded
+                        // refusal, for the result's `refusals[]`.
+                        if let Some(run_dir) = crate::platform::holon_run_dir() {
+                            crate::org::record_refusal(
+                                &run_dir,
+                                &name,
+                                &why,
+                                "policy.json:deny",
+                            );
+                            early_results[idx] = Some(ToolResult::error(
+                                &tool_call.id,
+                                format!(
+                                    "Refused under policy.json: {why}. Report this \
+                                     refusal in your result's `refusals` so the stage \
+                                     records the blocker"
+                                ),
+                            ));
+                            continue;
+                        }
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call.id,
+                            format!("Permission denied by seat policy: {why}"),
+                        ));
+                        continue;
+                    }
+                }
+            } else if guardian_approved {
+                // The guardian-LLM approved this specific call — skip the
+                // prompt, keep the approval's own audit trail (the info!
+                // above).
+                (false, String::new())
+            } else if self.tool_allowed_by_allowlist(&name) {
+                // allowed by allowlist — no prompt
+                (false, String::new())
+            } else {
+                let needs_permission = is_permission_gated_tool(&name);
+                if needs_permission {
+                    (
+                        true,
+                        match name.as_str() {
+                            "bash" | "terminal" | "execute_command" => {
+                                "This runs a shell command on your system".to_string()
+                            }
+                            "code_execution" => {
+                                "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
+                            }
+                            "file_read" => "This reads a file from your system".to_string(),
+                            "file_write" => "This writes content to a file".to_string(),
+                            "file_edit" | "patch" => "This modifies an existing file".to_string(),
+                            "process" => "This manages background processes".to_string(),
+                            "browser" => "This opens and interacts with a browser".to_string(),
+                            "memory_store" | "skill_manage" | "learning_manage" => {
+                                "This changes what the agent remembers or how it behaves in later turns"
+                                    .to_string()
+                            }
+                            _ => "This tool may modify your system".to_string(),
+                        },
+                    )
+                } else {
+                    (false, String::new())
+                }
+            };
+            if needs_prompt {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let description = format!("Execute {} tool", name);
+                let input_preview = Some(args_str.clone());
+                let _ = permission_tx
+                    .send(ToolPermissionRequest {
+                        tool_name: name.clone(),
+                        tool_id: tool_call.id.clone(),
+                        description,
+                        danger_explanation: danger,
+                        seat_escalation,
+                        // D-2: the receiver's unattended-posture consult
+                        // keys on this; attended runs never carry it.
+                        unattended: self.unattended,
+                        input_preview,
+                        response_tx: resp_tx,
+                    })
+                    .await;
+                let response = tokio::select! {
+                    r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
+                    _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
+                };
+                match response {
+                    ToolPermissionResponse::AllowOnce => {}
+                    ToolPermissionResponse::AllowSession => {
+                        // hermes `approve_session`: remember the tool
+                        // for the rest of this agent instance so it
+                        // never prompts again this session.
+                        self.session_allowlist
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(name.clone());
+                    }
+                    ToolPermissionResponse::AllowAlways => {
+                        // hermes `approve_permanent` +
+                        // `save_permanent_allowlist`: remember forever
+                        // and persist to disk so later sessions honor
+                        // the choice too.
+                        self.session_allowlist
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(name.clone());
+                        let patterns = {
+                            let mut guard = self
+                                .persistent_allowlist
+                                .write()
+                                .unwrap_or_else(|e| e.into_inner());
+                            guard.insert(name.clone());
+                            guard.clone()
+                        };
+                        persist_approval_allowlist(
+                            self.config.approval_allowlist_path.as_deref(),
+                            &patterns,
+                        );
+                    }
+                    ToolPermissionResponse::Deny => {
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call.id,
+                            "Permission denied by user".to_string(),
+                        ));
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Tool passed all pre-flight checks — queue for concurrent execution
+        pending.push((idx, tool_call, args));
+    }
+        (pending, early_results, call_names)
+    }
+
     pub(crate) async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {
         // ── Concurrent tool execution (iter-56) ──────────────────────────
         // Previously this was a sequential for-loop. Now it's two phases:
@@ -866,821 +1708,12 @@ impl OperantAgent {
         use tokio::sync::Semaphore;
 
         // ── Phase 1: Pre-flight (sequential) ────────────────────────────
-        let mut pending: Vec<(usize, ToolCall, serde_json::Value)> = Vec::new();
-        let mut early_results: Vec<Option<ToolResult>> = vec![None; tool_calls.len()];
-        // Pre-flight rejections build results with no name; the guardrail
-        // keys its ladders on the name, so every rejection used to pool under
-        // tool "" (2026-10-13: "Tool '' has failed 12 times"). Stamped back
-        // from the call at collection.
-        let call_names: Vec<String> = tool_calls.iter().map(|c| c.function.name.clone()).collect();
-        // T6: within-batch dedupe (hermes `_deduplicate_tool_calls`) — only
-        // the first occurrence of each (tool, arguments) pair in a single
-        // assistant message executes; exact duplicates are skipped with a
-        // synthetic result so result ordering is preserved and degenerate
-        // batches don't double-mutate.
-        let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        // Pre-flight failure-streak gate bookkeeping: parse-refusals from
-        // EARLIER calls in this same batch, per tool. The post-result
-        // ladder observes results only after the batch drains, so without
-        // this counter a 64-call parallel batch would answer every call
-        // with a refusal before the gate could say stop (RC3, plan
-        // 2026-10-25 tooling-surface).
-        let mut batch_parse_fails: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-
-        for (idx, mut tool_call) in tool_calls.into_iter().enumerate() {
-            // Check interrupt flag
-            if self.interrupt_flag.is_triggered() {
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    "Skipped: interrupted by user (Ctrl-C)".to_string(),
-                ));
-                continue;
-            }
-
-            // A call with no function name cannot run; say so plainly instead
-            // of a "tool not found" for the empty string.
-            if tool_call.function.name.trim().is_empty() {
-                warn!("Tool call with an empty function name — refused");
-                early_results[idx] = Some(ToolResult::error_with_name(
-                    "(unnamed)",
-                    &tool_call.id,
-                    "This tool call had no function name, so nothing ran. Re-issue it \
-                     with the exact name of the tool you meant to call."
-                        .to_string(),
-                ));
-                continue;
-            }
-
-            // T6: skip exact duplicates within this batch.
-            let dup_key = (
-                tool_call.function.name.clone(),
-                tool_call.function.arguments.trim().to_string(),
-            );
-            if !seen_tool_calls.insert(dup_key) {
-                warn!(
-                    tool = %tool_call.function.name,
-                    "Duplicate tool call with identical arguments — skipped (T6 within-batch dedupe)"
-                );
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    format!(
-                        "Duplicate tool call '{}' with identical arguments skipped — already \
-                         invoked once in this batch.",
-                        tool_call.function.name
-                    ),
-                ));
-                continue;
-            }
-
-            // ── S2 timeout-breaker mask ────────────────────────────────
-            // A tool that timed out 3× consecutively this turn is refused
-            // here WITHOUT executing — no fourth timeout burn — and the
-            // model gets a named error it can act on. The schema list also
-            // omits it (`tools_for_turn`), so a well-behaved model never
-            // reaches this arm; this is the backstop for one that calls it
-            // anyway.
-            if self
-                .masked_tools
-                .lock()
-                .expect("masked_tools lock poisoned")
-                .contains(&tool_call.function.name)
-            {
-                warn!(
-                    tool = %tool_call.function.name,
-                    "Tool masked by the timeout breaker — refusing call without executing"
-                );
-                early_results[idx] = Some(ToolResult::error_with_name(
-                    &tool_call.function.name,
-                    &tool_call.id,
-                    format!(
-                        "Tool '{}' is disabled for the rest of this turn after repeated \
-                          timeouts — take a different approach.",
-                        tool_call.function.name
-                    ),
-                ));
-                continue;
-            }
-
-            // ── Pre-flight failure-streak gate ─────────────────────────
-            // The post-result ladder only informs the NEXT iteration: the
-            // 2026-10-24 storm dispatched 64 parallel `process` calls and
-            // executed 32 of them before the ladder halted at 12 (plan
-            // 2026-10-25 tooling-surface, RC3). Gate the batch itself:
-            // once this tool has failed the warn threshold's worth of
-            // times — from earlier turns (the live streak) or from
-            // parse-refusals earlier in THIS batch — later same-tool
-            // calls in the batch are answered without executing. The
-            // skip text carries the guardrail prefix, so the post-batch
-            // observation excludes it (no double count).
-            {
-                let global_streak = self
-                    .tool_guardrails
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .failure_streak(&tool_call.function.name);
-                let batch_fails = batch_parse_fails
-                    .get(&tool_call.function.name)
-                    .copied()
-                    .unwrap_or(0);
-                let prior_fails = global_streak + batch_fails;
-                if prior_fails >= crate::tool_guardrails::FAILURE_WARN_THRESHOLD {
-                    warn!(
-                        tool = %tool_call.function.name,
-                        prior_fails,
-                        "Batch streak gate — refusing call without executing"
-                    );
-                    early_results[idx] = Some(ToolResult {
-                        tool_call_id: tool_call.id.clone(),
-                        name: tool_call.function.name.clone(),
-                        // A deliberate guardrail skip is guidance, not a
-                        // tool failure: success-shaped like the
-                        // GuardrailDecision::Skip arm below, with the
-                        // prefix in `content` so the post-batch observation
-                        // excludes it. The skip text in `error` (the
-                        // error_with_name shape) would be observed as a
-                        // failure and the ladder would halt on skips.
-                        success: true,
-                        content: format!(
-                            "{}tool '{}' has already failed {prior_fails} times in a row this \
-                             turn and the rest of this batch's calls to it are skipped. Take \
-                             a different approach or report back instead of retrying.",
-                            crate::tool_guardrails::SKIP_MESSAGE_PREFIX,
-                            tool_call.function.name
-                        ),
-                        error: None,
-                        timed_out: false,
-                    });
-                    continue;
-                }
-            }
-
-            let mut name = tool_call.function.name.clone();
-            let raw_args = tool_call.function.arguments.clone();
-            let trimmed = raw_args.trim();
-            let args_str = if trimmed.is_empty() {
-                "{}".to_string()
-            } else {
-                raw_args
-            };
-
-            debug!(tool = %name, args = %args_str, "Executing tool");
-
-            // Emit ToolCallStart observer event
-            if let Some(ref obs) = self.observer {
-                obs.record_event(&ObserverEvent::ToolCallStart {
-                    tool: name.clone(),
-                    arguments: Some(args_str.clone()),
-                });
-                // Park the input size for the completion emit, where
-                // `ObserverEvent::ToolCall` reports both ends of the payload.
-                self.record_tool_input_bytes(&tool_call.id, args_str.len());
-            }
-
-            // Skip emitting ToolStart if it was already emitted during
-            // streaming (process_stream extracts XML tool calls and emits
-            // ToolStart early so the gateway can split messages chronologically).
-            let already_streamed = self
-                .stream_emitted_tool_starts
-                .lock()
-                .map(|s| s.contains(&tool_call.id))
-                .unwrap_or(false);
-            if !already_streamed {
-                self.emit(AgentEvent::ToolStart {
-                    tool_call_id: tool_call.id.clone(),
-                    name: name.clone(),
-                    arguments: args_str.clone(),
-                })
-                .await;
-            }
-
-            // Parse arguments — with auto-repair for common truncation issues.
-            // (iter-123 — fixes "Invalid JSON: EOF while parsing" errors
-            // caused by streaming tool-call argument fragmentation.)
-            let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
-                Ok(a) => a,
-                Err(orig_parse_err) => {
-                    // Try to repair common truncation issues:
-                    // 1. Missing closing brace — append }
-                    // 2. Missing closing bracket — append ]
-                    // 3. Truncated string value — append "
-                    //
-                    // S4 (iter-602): when no repair succeeds, do NOT
-                    // execute on dummied-up `{}` — the pre-B2 last resort
-                    // did exactly that, and the resulting
-                    // schema-validation failure was retried into a
-                    // 1,938-substitution cascade in the measured window.
-                    // Answer the call with a named not-executed error the
-                    // model can correct from in one round trip; it never
-                    // reaches phase 2. The log carries the parse error and
-                    // lengths only — raw model output does not go into
-                    // logs, but the RESULT quotes a truncated preview (the
-                    // model already owns its own args, and the 2026-10-24
-                    // storm proved a content-free refusal cannot break a
-                    // retry loop: 12 identical dumps, zero corrections).
-                    let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
-                    let repaired_value = match &repaired {
-                        // Fixed is parseable by construction (the repair
-                        // only returns strings it validated); the second
-                        // from_str routes an invariant break to the same
-                        // honest refusal instead of executing garbage.
-                        message_safety::RepairOutcome::Fixed(fixed) => {
-                            serde_json::from_str(fixed).ok()
-                        }
-                        message_safety::RepairOutcome::Unrepairable => None,
-                    };
-                    match repaired_value {
-                        Some(a) => {
-                            debug!(tool = %name, "Tool arguments auto-repaired");
-                            a
-                        }
-                        None => {
-                            warn!(
-                                tool = %name,
-                                args_len = args_str.len(),
-                                error = %orig_parse_err,
-                                "Unrepairable tool arguments — call not executed, error returned to the model"
-                            );
-                            // Feed the batch gate: later same-tool calls
-                            // in THIS batch must see this refusal before
-                            // the post-batch ladder ever runs.
-                            *batch_parse_fails.entry(name.clone()).or_insert(0) += 1;
-                            early_results[idx] = Some(ToolResult::error_with_name(
-                                &name,
-                                &tool_call.id,
-                                message_safety::unrepairable_args_message(
-                                    &orig_parse_err,
-                                    &args_str,
-                                ),
-                            ));
-                            continue;
-                        }
-                    }
-                }
-            };
-
-            // ── Tool-call guardrails (R4 — hermes tool_guardrails.py) ──
-            // Detect retry storms: the model calling the same tool with
-            // identical args repeatedly within one turn. Side-effecting tools
-            // are skipped on the 3rd identical call; no-effect tools (cheap,
-            // read-only) get a warning then skip on the 4th. The synthetic
-            // result tells the model to stop repeating, saving round-trips and
-            // preventing repeated mutations.
-            {
-                use crate::tool_guardrails::GuardrailDecision;
-                let (decision, pattern) = {
-                    let mut g = self
-                        .tool_guardrails
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let d = g.observe(&name, &args_str);
-                    (d, g.last_pattern())
-                };
-                match decision {
-                    GuardrailDecision::Allow => {}
-                    // observe() (pre-execution) never returns Halt — only the
-                    // post-result rungs do; handled in observe_guardrail_results.
-                    GuardrailDecision::Halt(_) => {}
-                    GuardrailDecision::Warn => {
-                        warn!(
-                            tool = %name,
-                            pattern = ?pattern,
-                            "Repetitive tool-call pattern — warning model"
-                        );
-                        self.emit(AgentEvent::Content {
-                            text: crate::tool_guardrails::pattern_warning_message(
-                                &name,
-                                pattern.as_ref(),
-                            ),
-                        })
-                        .await;
-                    }
-                    GuardrailDecision::Skip => {
-                        warn!(
-                            tool = %name,
-                            pattern = ?pattern,
-                            "Repetitive tool-call pattern — skipping duplicate"
-                        );
-                        self.metrics.record_guardrail_skip();
-                        early_results[idx] = Some(ToolResult {
-                            tool_call_id: tool_call.id.clone(),
-                            name: name.to_string(),
-                            // A deliberate guardrail skip is guidance, not a
-                            // tool failure: success-shaped so the degenerate-
-                            // loop circuit (consecutive failed iterations)
-                            // doesn't count skips as failures and break turns
-                            // whose models merely re-emit calls.
-                            success: true,
-                            content: crate::tool_guardrails::build_pattern_skip_message(
-                                &name,
-                                pattern.as_ref(),
-                            ),
-                            error: None,
-                            timed_out: false,
-                        });
-                        continue;
-                    }
-                }
-            }
-
-            // Validate tool exists — with bounded edit-distance recovery for
-            // hallucinated / near-miss names. A model that writes
-            // `read_files` for `read_file`, or a name from an MCP server
-            // that has since disconnected, otherwise gets a bare
-            // "not found" and retries the same wrong name forever. Recovery
-            // rewrites the name in the ToolCall that flows into `pending`, so
-            // BOTH execution branches (single-tool and the concurrent pool)
-            // dispatch the canonical name without a second hook. A tie at the
-            // minimum distance is refused, never guessed. The caller detects
-            // the recovery by comparing the result's stamped name with the
-            // name the model asked for, and tells the model about it.
-            if !self.registry.contains(&name).await {
-                let recovery =
-                    crate::tools::tool_search::name_recovery::resolve(&self.registry, &name).await;
-                match &recovery {
-                    crate::tools::tool_search::name_recovery::Recovery::Recovered {
-                        canonical,
-                        distance,
-                        ..
-                    } => {
-                        warn!(
-                            tool = %name,
-                            canonical = %canonical,
-                            distance,
-                            "Recovered near-miss tool name"
-                        );
-                        tool_call.function.name.clone_from(canonical);
-                        name.clone_from(canonical);
-                    }
-                    crate::tools::tool_search::name_recovery::Recovery::Exact => {}
-                    refused => {
-                        error!(tool = %name, "Tool not found and not recoverable");
-                        early_results[idx] = Some(ToolResult::error(
-                            &tool_call.id,
-                            crate::tools::tool_search::name_recovery::refusal_message(
-                                &name, refused,
-                            ),
-                        ));
-                        continue;
-                    }
-                }
-            }
-
-            // ── Centralized argument validation (iter-262) ───────────
-            // Validate required fields BEFORE calling tool.execute().
-            // Without this, each tool's serde_json::from_value() would fail
-            // independently with opaque "missing field 'query'" errors.
-            // Centralized validation gives a clear, consistent error message
-            // and prevents truncated tool calls from reaching the tool impl.
-            if let Some(tool) = self.registry.get(&name).await {
-                let schema = tool.schema();
-                schema.sanitize_args(&mut args);
-                if let Err(e) = schema.validate_args(&args) {
-                    warn!(tool = %name, error = %e, "Tool argument validation failed");
-                    // Use the schema validation error message directly — it
-                    // already includes the field name (e.g. "Missing required
-                    // field: query"). Avoid duplicating the tool name.
-                    early_results[idx] = Some(ToolResult::error(&tool_call.id, e.to_string()));
-                    continue;
-                }
-            }
-
-            // Smart approval gate
-            let mut guardian_approved = false;
-            // R48-2: `approval_result` is scoped to the gate block; hoist the
-            // verdict the headless deny below needs.
-            let mut gate_flagged = false;
-            if self.config.approval_mode != "off" {
-                let approval_result = crate::approval::check_tool_approval(
-                    &name,
-                    &args,
-                    Some(&self.config.approval_mode),
-                );
-                if approval_result.verdict == "requires_approval" {
-                    gate_flagged = true;
-                }
-                match approval_result.verdict.as_str() {
-                    "blocked" => {
-                        warn!(tool = %name, "Tool call blocked by approval guard");
-                        early_results[idx] = Some(ToolResult::error(
-                            &tool_call.id,
-                            format!(
-                                "{}: {}",
-                                crate::tool_guardrails::HARD_REJECT_PREFIX,
-                                approval_result
-                                    .reason
-                                    .unwrap_or_else(|| "blocked".to_string())
-                            ),
-                        ));
-                        continue;
-                    }
-                    "requires_approval" => {
-                        warn!(tool = %name, "Tool call flagged — will prompt user");
-                        // ── Guardian-LLM arm (hermes `approval_smart.py`
-                        // parity, opt-in via `OPERANT_GUARDIAN_LLM` at
-                        // construction) ──────
-                        // The auxiliary classifier may APPROVE a flagged
-                        // command (skipping the channel) or DENY it (shaped
-                        // like a smart-gate block). Anything else —
-                        // ESCALATE, call failure, unarmed env — is today's
-                        // behavior: the channel below decides. Seat policy
-                        // keeps precedence: the guardian sits in the
-                        // UNGOVERNED chain only (an Escalate/Deny from a
-                        // policy row is never overridden — the classifier
-                        // classifies, the policy decides).
-                        if self.guardian_llm {
-                            match self.guardian_classify(&name, &args).await {
-                                Some(crate::approval::GuardianVerdict::Approve) => {
-                                    info!(
-                                        tool = %name,
-                                        "Guardian-LLM approved the flagged command — skipping the permission prompt"
-                                    );
-                                    guardian_approved = true;
-                                }
-                                Some(crate::approval::GuardianVerdict::Deny) => {
-                                    warn!(
-                                        tool = %name,
-                                        "Tool call blocked by the guardian-LLM classifier"
-                                    );
-                                    early_results[idx] = Some(ToolResult::error(
-                                        &tool_call.id,
-                                        format!(
-                                            "{}: the guardian-LLM classifier denied this command",
-                                            crate::tool_guardrails::HARD_REJECT_PREFIX
-                                        ),
-                                    ));
-                                    continue;
-                                }
-                                _ => {
-                                    debug!(
-                                        tool = %name,
-                                        "Guardian-LLM escalated — the permission channel decides"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            // ── P1/P2 seat policy (permission-bylaws slices E + F2) ──────
-            // With a seat authority attached AND a session id (the employee
-            // id), `decide()` owns the verdict for this seat: `Run` skips the
-            // prompt outright (a yolo mode or a seat allow entry), `Escalate`
-            // enters the channel below with the policy's `why` as the danger
-            // explanation (in-flight asks resolve interactively; the durable
-            // approvals queue retired to Holon's board), and `Deny` is
-            // returned shaped like a declined permission. Everything sits
-            // behind the Option: no authority, no session id, or no policy
-            // row for this seat → `None` → the branches below are today's
-            // allowlist-then-hardcoded-list logic, unchanged.
-            //
-            // The consult is hoisted ABOVE the permission-channel block so
-            // unattended agents (which may still carry a channel nobody
-            // drains — see `with_unattended`) consult the bylaws too.
-            //
-            // `blocked` is `false` because the smart approval gate above
-            // already denied blocked tools — the hardline floor fires before
-            // any seat mode can see (let alone widen) a blocked call.
-            // `dangerous` reuses `is_permission_gated_tool`, the same list
-            // the prompt below has always keyed on (one list so the gate and
-            // the predicate cannot drift apart).
-            let seat: Option<SeatDecision> = match (
-                self.seat_authority.as_ref(),
-                // Wave 2: the seat is the bound EMPLOYEE when the gateway set
-                // one; the session id otherwise (cron already runs as its
-                // derived employee id, so its path is unchanged).
-                self.seat_id().or_else(|| self.session_id()),
-            ) {
-                (Some(authority), Some(seat)) => {
-                    authority.consult(&seat, &name, is_permission_gated_tool(&name))
-                }
-                _ => None,
-            };
-
-            // ── F2 unattended semantics ─────────────────────────────────
-            // An unattended run (cron) never waits on an interactive
-            // approver: a governed Escalate is queued (once) and denied THIS
-            // run; the next run consults the grant the senior minted between
-            // ticks (§8's two timelines). The UNGOVERDED path is not here at
-            // all — `seat == None` keeps today's channel behaviour
-            // byte-for-byte, including the dispatcher's no-active-channel
-            // auto-AllowSession arm.
-            if let Some(SeatDecision::Escalate(why)) = &seat
-                && self.unattended
-            {
-                warn!(tool = %name, "Tool call escalated by seat policy — unattended run: denied");
-                // O-17 (W3): in a Holon run the refusal is recorded for the
-                // result — `result.refusals[]` is the blocker the kernel and
-                // the Chair read; there is no grant to consult (an approved
-                // plan IS the grant, phase C). A personal unattended run
-                // keeps today's behaviour: queue + deny (if an authority is
-                // attached at all).
-                if let Some(run_dir) = crate::platform::holon_run_dir() {
-                    crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
-                    early_results[idx] = Some(ToolResult::error(
-                        &tool_call.id,
-                        format!(
-                            "Refused under policy.json: {why}. Report this refusal \
-                             in your result's `refusals` so the stage records the \
-                             blocker"
-                        ),
-                    ));
-                    continue;
-                }
-                let session_id = self.session_id().unwrap_or_default();
-                let queued = self
-                    .seat_authority
-                    .as_ref()
-                    .map(|authority| authority.escalate(&session_id, &name, why))
-                    .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
-                        escalation: None,
-                        note: String::from("could not be persisted (no seat authority attached)"),
-                    });
-                let reference = if queued.note.is_empty() {
-                    format!(
-                        "was queued as {}",
-                        queued
-                            .escalation
-                            .as_ref()
-                            .map(|e| e.request_id.as_str())
-                            .unwrap_or("(unrecorded)")
-                    )
-                } else {
-                    queued.note.clone()
-                };
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    format!(
-                        "Permission denied by seat policy: {why}. No interactive \
-                         approver is attached to this unattended run, so this \
-                         attempt is denied; the ask {reference} and the next \
-                         run consults the grant the approver mints"
-                    ),
-                ));
-                continue;
-            }
-
-            // Permission guard for dangerous tools (interactive — sequential)
-            //
-            // Phase C (docs/agentic-os/): a GOVERNED Escalate with no interactive
-            // channel attached — `operant run` builds the agent without a
-            // permission channel — must deny, never fall through to execution.
-            // The same holds for a governed call that needs a prompt: without a
-            // consumer the 120s wait would stall a headless run for nothing.
-            // The unattended arm above already covers the cron path; this guard
-            // covers the headless-run path. Ungoverned (`seat == None`) keeps
-            // today's behavior byte-identical: run whatever the tool config
-            // allows (invariant 5 — personal mode is untouched).
-            if let Some(SeatDecision::Escalate(why)) = &seat
-                && self.permission_tx.is_none()
-            {
-                warn!(tool = %name, "Tool call escalated by seat policy — no interactive approver attached: deny");
-                // O-17 (W3, the multi-turn e2e's catch): in a Holon run the
-                // refusal is RECORDED for the result — the same org-mode
-                // semantics the unattended path carries. The queue-then-wait
-                // behavior ("the next run consults the grant the approver
-                // mints") is the PERSONAL-run path; in org mode there is no
-                // approver and no grant — an approved plan IS the grant, and
-                // result.refusals[] is the blocker the kernel and the Chair
-                // read.
-                if let Some(run_dir) = crate::platform::holon_run_dir() {
-                    crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
-                    early_results[idx] = Some(ToolResult::error(
-                        &tool_call.id,
-                        format!(
-                            "Refused under policy.json (escalated): {why}. Report this \
-                             refusal in your result's `refusals` so the stage records the blocker"
-                        ),
-                    ));
-                    continue;
-                }
-                let session_id = self.session_id().unwrap_or_default();
-                let queued = self
-                    .seat_authority
-                    .as_ref()
-                    .map(|authority| authority.escalate(&session_id, &name, why))
-                    .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
-                        escalation: None,
-                        note: String::from("could not be persisted (no seat authority attached)"),
-                    });
-                let reference = if queued.note.is_empty() {
-                    format!(
-                        "was queued as {}",
-                        queued
-                            .escalation
-                            .as_ref()
-                            .map(|e| e.request_id.as_str())
-                            .unwrap_or("(unrecorded)")
-                    )
-                } else {
-                    queued.note.clone()
-                };
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    format!(
-                        "Permission denied by seat policy: {why}. No interactive \
-                         approver is attached to this run, so this \
-                         attempt is denied; the ask {reference} and the next \
-                         run consults the grant the approver mints"
-                    ),
-                ));
-                continue;
-            }
-
-            // ── R48-2 (2026-10-25 ponytail round 2): headless flagged-call deny ──
-            // A call the smart gate FLAGGED (verdict `requires_approval`) with
-            // NO interactive approver attached must deny, never fall through
-            // to execution — the governed Escalate path already denies above;
-            // this is its ungoverned twin. The flag used to log "will prompt
-            // user" and then execute silently in every headless run (`operant
-            // run`, sub-agent children) and for every tool outside the prompt
-            // list in attended ones. Scope is deliberately narrow: benign
-            // calls (verdict "allowed") keep invariant 5's headless behavior
-            // byte-for-byte, allowlisted calls run (the operator already
-            // approved them), a guardian approval runs, and a seat `Run`
-            // decision runs — only the flagged-and-nobody-to-ask case denies.
-            if !guardian_approved
-                && gate_flagged
-                && seat.is_none()
-                && self.permission_tx.is_none()
-                && !self.tool_allowed_by_allowlist(&name)
-            {
-                warn!(
-                    tool = %name,
-                    "Smart gate flagged the call — no interactive approver attached: deny"
-                );
-                early_results[idx] = Some(ToolResult::error_with_name(
-                    &name,
-                    &tool_call.id,
-                    "Refused: this call was flagged for approval and no interactive \
-                     approver is attached to this run (headless). Run interactively \
-                     to approve it once, or add it to your approval allowlist."
-                        .to_string(),
-                ));
-                continue;
-            }
-
-            if let Some(permission_tx) = &self.permission_tx {
-                // Whether this call prompts, and with what danger sentence.
-                // The ungoverned arm is today's logic, lifted unchanged:
-                // hermes parity — a tool covered by the session or permanent
-                // allowlist (`command_allowlist` / `always`) never prompts,
-                // checked before the hardcoded dangerous-tool list so
-                // allowlisted tools bypass the gate
-                // (`_command_matches_permanent_allowlist` fires before
-                // detection, with only the hardline floor above it).
-                //
-                // F2: a governed Escalate persists its ask to the queue
-                // BEFORE the prompt leaves (§8.1 push-then-queue) — the row
-                // below is what the approver's /approve mints a grant
-                // against and resolves.
-                let mut seat_escalation: Option<crate::org::seat_authority::SeatEscalation> = None;
-                let (needs_prompt, danger): (bool, String) = if let Some(decision) = seat {
-                    match decision {
-                        SeatDecision::Run(_) => (false, String::new()),
-                        SeatDecision::Escalate(why) => {
-                            let session_id = self.session_id().unwrap_or_default();
-                            seat_escalation = self.seat_authority.as_ref().and_then(|authority| {
-                                authority.escalate(&session_id, &name, &why).escalation
-                            });
-                            (true, why)
-                        }
-                        SeatDecision::Deny(why) => {
-                            warn!(tool = %name, "Tool call denied by seat policy");
-                            // O-17: a Holon run's denial is a recorded
-                            // refusal, for the result's `refusals[]`.
-                            if let Some(run_dir) = crate::platform::holon_run_dir() {
-                                crate::org::record_refusal(
-                                    &run_dir,
-                                    &name,
-                                    &why,
-                                    "policy.json:deny",
-                                );
-                                early_results[idx] = Some(ToolResult::error(
-                                    &tool_call.id,
-                                    format!(
-                                        "Refused under policy.json: {why}. Report this \
-                                         refusal in your result's `refusals` so the stage \
-                                         records the blocker"
-                                    ),
-                                ));
-                                continue;
-                            }
-                            early_results[idx] = Some(ToolResult::error(
-                                &tool_call.id,
-                                format!("Permission denied by seat policy: {why}"),
-                            ));
-                            continue;
-                        }
-                    }
-                } else if guardian_approved {
-                    // The guardian-LLM approved this specific call — skip the
-                    // prompt, keep the approval's own audit trail (the info!
-                    // above).
-                    (false, String::new())
-                } else if self.tool_allowed_by_allowlist(&name) {
-                    // allowed by allowlist — no prompt
-                    (false, String::new())
-                } else {
-                    let needs_permission = is_permission_gated_tool(&name);
-                    if needs_permission {
-                        (
-                            true,
-                            match name.as_str() {
-                                "bash" | "terminal" | "execute_command" => {
-                                    "This runs a shell command on your system".to_string()
-                                }
-                                "code_execution" => {
-                                    "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
-                                }
-                                "file_read" => "This reads a file from your system".to_string(),
-                                "file_write" => "This writes content to a file".to_string(),
-                                "file_edit" | "patch" => "This modifies an existing file".to_string(),
-                                "process" => "This manages background processes".to_string(),
-                                "browser" => "This opens and interacts with a browser".to_string(),
-                                "memory_store" | "skill_manage" | "learning_manage" => {
-                                    "This changes what the agent remembers or how it behaves in later turns"
-                                        .to_string()
-                                }
-                                _ => "This tool may modify your system".to_string(),
-                            },
-                        )
-                    } else {
-                        (false, String::new())
-                    }
-                };
-                if needs_prompt {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let description = format!("Execute {} tool", name);
-                    let input_preview = Some(args_str.clone());
-                    let _ = permission_tx
-                        .send(ToolPermissionRequest {
-                            tool_name: name.clone(),
-                            tool_id: tool_call.id.clone(),
-                            description,
-                            danger_explanation: danger,
-                            seat_escalation,
-                            // D-2: the receiver's unattended-posture consult
-                            // keys on this; attended runs never carry it.
-                            unattended: self.unattended,
-                            input_preview,
-                            response_tx: resp_tx,
-                        })
-                        .await;
-                    let response = tokio::select! {
-                        r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
-                        _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
-                    };
-                    match response {
-                        ToolPermissionResponse::AllowOnce => {}
-                        ToolPermissionResponse::AllowSession => {
-                            // hermes `approve_session`: remember the tool
-                            // for the rest of this agent instance so it
-                            // never prompts again this session.
-                            self.session_allowlist
-                                .write()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .insert(name.clone());
-                        }
-                        ToolPermissionResponse::AllowAlways => {
-                            // hermes `approve_permanent` +
-                            // `save_permanent_allowlist`: remember forever
-                            // and persist to disk so later sessions honor
-                            // the choice too.
-                            self.session_allowlist
-                                .write()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .insert(name.clone());
-                            let patterns = {
-                                let mut guard = self
-                                    .persistent_allowlist
-                                    .write()
-                                    .unwrap_or_else(|e| e.into_inner());
-                                guard.insert(name.clone());
-                                guard.clone()
-                            };
-                            persist_approval_allowlist(
-                                self.config.approval_allowlist_path.as_deref(),
-                                &patterns,
-                            );
-                        }
-                        ToolPermissionResponse::Deny => {
-                            early_results[idx] = Some(ToolResult::error(
-                                &tool_call.id,
-                                "Permission denied by user".to_string(),
-                            ));
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            // Tool passed all pre-flight checks — queue for concurrent execution
-            pending.push((idx, tool_call, args));
-        }
+        // The body is `preflight_tool_calls`: it owns ten unrelated concerns
+        // (interrupt, dedupe, timeout breaker, failure streak, guardrails, arg
+        // parsing/repair, existence, validation, approval, seat policy) and the
+        // inline form was 816 lines. Moved verbatim, not rewritten.
+        let (pending, mut early_results, call_names) =
+            self.preflight_tool_calls(tool_calls).await;
 
         // Phase 2: Execute. Batches that can interfere with each other run
         // sequentially; everything else uses the 8-worker pool.
