@@ -189,7 +189,45 @@ pub fn recover_interrupted() -> usize {
     let Ok(records) = serde_json::from_str::<Vec<AsyncDelegationRecord>>(&text) else {
         return 0; // a corrupt ledger must not stop a process from starting
     };
-    let mut recovered: Vec<AsyncDelegationRecord> = records
+    let (recovered, settled) = settle_interrupted(records);
+    // Retention still applies across a restart: a ledger that only grows is the
+    // same unbounded-map defect persistence would otherwise introduce.
+    let recovered = if recovered.len() > MAX_RETAINED_TERMINAL {
+        let mut recovered = recovered;
+        recovered.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
+        recovered.truncate(MAX_RETAINED_TERMINAL);
+        recovered
+    } else {
+        recovered
+    };
+    if let Ok(mut map) = registry().lock() {
+        *map = recovered
+            .into_iter()
+            .map(|rec| (rec.delegation_id.clone(), rec))
+            .collect();
+    }
+    persist();
+    settled
+}
+
+/// Settle every `Pending` row in a loaded ledger and say how many were settled.
+///
+/// Count the TRANSITION, not the survivors. MEASURED 2026-11-15 (third-pass
+/// audit, finding 2): the count used to be read back out of the registry by
+/// matching the error text `starts_with("the process restarted")`. But the
+/// ledger is reloaded whole on every start, so a row settled by an EARLIER
+/// restart still carries that text and was counted again — the operator was told
+/// 2, then 3, then 4 for one piece of work, and re-dispatching what the warning
+/// named did the work N times. A row this call did not touch is not a row this
+/// call recovered, however it is worded.
+///
+/// Split out so the count is testable without the process-global ledger path
+/// (`LEDGER_PATH` is a `OnceLock`: only the first caller in a process can set it,
+/// so a test that drives the real path would race whichever test got there
+/// first).
+fn settle_interrupted(records: Vec<AsyncDelegationRecord>) -> (Vec<AsyncDelegationRecord>, usize) {
+    let mut settled = 0usize;
+    let recovered: Vec<AsyncDelegationRecord> = records
         .into_iter()
         .map(|mut rec| {
             if rec.status == AsyncDelegationStatus::Pending {
@@ -200,44 +238,12 @@ pub fn recover_interrupted() -> usize {
                      with that process, so the work must be re-dispatched if it is still wanted"
                         .to_string(),
                 );
+                settled += 1;
             }
             rec
         })
         .collect();
-    // Retention still applies across a restart: a ledger that only grows is the
-    // same unbounded-map defect persistence would otherwise introduce.
-    if recovered.len() > MAX_RETAINED_TERMINAL {
-        recovered.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
-        recovered.truncate(MAX_RETAINED_TERMINAL);
-    }
-    if let Ok(mut map) = registry().lock() {
-        *map = recovered
-            .into_iter()
-            .map(|rec| (rec.delegation_id.clone(), rec))
-            .collect();
-    }
-    persist();
-    LEDGER_PATH.get().map_or(0, |_| count_recovered())
-}
-
-/// How many recovered records this process settled as interrupted.
-///
-/// Read back out of the registry rather than counted during the map, because the
-/// status is what the caller asked about and the registry is the only truth.
-fn count_recovered() -> usize {
-    registry()
-        .lock()
-        .map(|map| {
-            map.values()
-                .filter(|r| {
-                    r.status == AsyncDelegationStatus::Failed
-                        && r.error
-                            .as_deref()
-                            .is_some_and(|e| e.starts_with("the process restarted"))
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    (recovered, settled)
 }
 
 fn now_secs() -> u64 {
@@ -967,5 +973,74 @@ mod tests {
         // The process-global path stays set for the rest of the test binary;
         // deleting the directory under it would only make later best-effort
         // writes fail, so the per-pid temp dir is left for the OS to reap.
+    }
+
+    /// A row an EARLIER restart already settled must not be counted again.
+    ///
+    /// MEASURED 2026-11-15 (third-pass audit, finding 2): the count was read
+    /// back out of the registry by matching the error text
+    /// `starts_with("the process restarted")`, and the ledger is reloaded whole
+    /// on every start — so a previously-settled row still matched and was
+    /// recounted. Proven by execution before the fix: a ledger holding one
+    /// already-settled row plus one still pending reported **2**, where the
+    /// truth is 1.
+    ///
+    /// Drives `settle_interrupted` rather than `enable_persistence`:
+    /// `LEDGER_PATH` is a `OnceLock`, so only the first test in the process can
+    /// set it, and a test that drove the real path would race whichever of these
+    /// got there first.
+    ///
+    /// MUTATION PROVEN: counting by error-text prefix over the settled set makes
+    /// this fail with `left: 2, right: 1`.
+    #[test]
+    fn a_row_settled_by_an_earlier_restart_is_not_counted_again() {
+        // Settled by a PREVIOUS process's restart: it already carries the
+        // restart wording, which is exactly what the old counter matched on.
+        let settled_before = AsyncDelegationRecord {
+            delegation_id: "dlg-prev-1".to_string(),
+            status: AsyncDelegationStatus::Failed,
+            goal: "settled by an earlier restart".to_string(),
+            model: "m".to_string(),
+            dispatch_time: 100,
+            completed_time: Some(110),
+            result: None,
+            error: Some(
+                "the process restarted while this delegation was running; its child died with \
+                 that process, so the work must be re-dispatched if it is still wanted"
+                    .to_string(),
+            ),
+            session_id: None,
+            parent_session_id: None,
+            request_key: None,
+        };
+        let still_pending = AsyncDelegationRecord {
+            delegation_id: "dlg-now-1".to_string(),
+            status: AsyncDelegationStatus::Pending,
+            goal: "left running by the last process".to_string(),
+            model: "m".to_string(),
+            dispatch_time: 100,
+            completed_time: None,
+            result: None,
+            error: None,
+            session_id: None,
+            parent_session_id: None,
+            request_key: None,
+        };
+
+        let (recovered, settled) = settle_interrupted(vec![settled_before, still_pending]);
+
+        // ONE row is newly settled by this call. The other was settled before
+        // this process existed, so it is history, not a casualty.
+        assert_eq!(settled, 1, "only the pending row is recovered by THIS start");
+        assert_eq!(recovered.len(), 2, "both rows still load");
+        assert_eq!(
+            recovered[0].status,
+            AsyncDelegationStatus::Failed,
+            "the previously-settled row must stay settled"
+        );
+        assert_eq!(
+            recovered[1].delegation_id, "dlg-now-1",
+            "the pending row is the one that transitions"
+        );
     }
 }
