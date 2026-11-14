@@ -3496,6 +3496,12 @@ async fn run(
     if let Some(enabled) = cli_config.delegation.orchestrator_enabled {
         operant_core::tools::sub_agent_tool::set_orchestrator_enabled(enabled);
     }
+    if let Some(iterations) = cli_config.delegation.max_iterations {
+        operant_core::tools::sub_agent_tool::set_default_child_max_iterations(iterations);
+    }
+    if let Some(workers) = cli_config.delegation.max_global_workers {
+        operant_core::tools::sub_agent_tool::set_max_global_workers(workers);
+    }
     if let Some(count) = cli_config.delegation.max_concurrent_children {
         operant_core::tools::sub_agent_tool::set_max_concurrent_children(count as usize);
     }

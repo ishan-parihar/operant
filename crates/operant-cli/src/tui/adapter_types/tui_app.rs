@@ -647,6 +647,21 @@ impl TuiApp {
                 self.submit_user_message(agent, batch).await;
                 continue;
             }
+            // A finished background delegation gets the same turn boundary: the
+            // parent model must READ the answer, not just see a card. The card
+            // went out when the event landed; this is the model's copy.
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && let Some(batch) = self.app.pending_delegation_continuation.take()
+            {
+                self.app.clear_failed_input_recovery();
+                self.app.set_status_notice(
+                    "\u{2139} background delegation finished: continuing with its answer."
+                        .to_string(),
+                );
+                self.submit_user_message(agent, batch).await;
+                continue;
+            }
             // (plan 03 §2) /clear, /new, /undo deferred from a mid-stream
             // invocation: the agent-side work runs once the turn has fully
             // finished (is_streaming false), so the stopping turn's tail
