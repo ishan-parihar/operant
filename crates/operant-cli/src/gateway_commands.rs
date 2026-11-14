@@ -3382,7 +3382,6 @@ pub fn telegram_bot_commands(vendor_skill_commands: &[(String, String)]) -> Stri
         }
         first = false;
 
-
         let escaped_desc: String = telegram_command_description(description)
             .chars()
             .flat_map(|ch| match ch {
@@ -3762,9 +3761,12 @@ mod tests {
     fn a_built_in_command_owns_its_name_over_a_vendor_skill() {
         let vendor = vec![
             ("ponytail".to_string(), "Lazy senior dev mode".to_string()),
-            ("ponytail-audit".to_string(), "Quality audit of a whole repo".to_string()),
+            (
+                "ponytail-audit".to_string(),
+                "Quality audit of a whole repo".to_string(),
+            ),
         ];
-        let json = telegr[REDACTED](&vendor);
+        let json = telegram_bot_commands(&vendor);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         let commands: Vec<&str> = parsed
             .as_array()

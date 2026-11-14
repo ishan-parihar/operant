@@ -1317,6 +1317,17 @@ pub struct TuiSettings {
     /// session should land. Unset means "follow `[agent] model`".
     #[serde(default)]
     pub model_default: Option<String>,
+    /// (plan 2026-11-14 U1) Per-role TUI colour overrides, `role = "#rrggbb"`.
+    /// Applied ON TOP of the active theme's palette by
+    /// `tui::theme_colors::set_active_theme`, so a key here wins over the
+    /// theme's own value for that role. Keys are the `Role::key()` names the
+    /// vendored palette publishes (`accent`, `ai_text`, `border`, …); an
+    /// unknown key or a non-hex value is reported by
+    /// `Palette::from_pairs` and skipped rather than failing the whole
+    /// palette. Empty by default, which is byte-identical to the historical
+    /// look because the role palette already defaults to it.
+    #[serde(default)]
+    pub colors: std::collections::BTreeMap<String, String>,
 }
 
 fn default_word_completion() -> String {
@@ -1350,6 +1361,7 @@ impl Default for TuiSettings {
             word_completion_threshold: None,
             model_favorites: Vec::new(),
             model_default: None,
+            colors: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -4192,6 +4204,28 @@ show_turn_attribution = false
             example.contains("show_turn_attribution"),
             "operant.example.toml must advertise the kill switch -- a flag the \
              operator cannot find is the same as no flag"
+        );
+    }
+
+    /// (plan 2026-11-14 U1) The example config must PARSE and must advertise
+    /// `[tui.colors]`. Two failures this catches that a syntax-only check
+    /// misses: the section being present but misspelled (a key that silently
+    /// fails to deserialize under `deny_unknown_fields` is a knob that does
+    /// not exist), and the example drifting into something `AppConfig` can no
+    /// longer read — which would break every operator's existing file.
+    #[test]
+    fn the_example_config_parses_and_advertises_the_role_colour_section() {
+        let example = include_str!("../../../operant.example.toml");
+        let parsed: AppConfig = toml::from_str(example).expect("operant.example.toml must parse");
+        assert!(
+            example.contains("[tui.colors]"),
+            "operant.example.toml must advertise the [tui.colors] section -- an \
+             unreachable colour override is the same as no override"
+        );
+        // Empty by default: unread must mean byte-identical to the theme.
+        assert!(
+            parsed.tui.colors.is_empty(),
+            "the example must not ship a role override as a live default"
         );
     }
 

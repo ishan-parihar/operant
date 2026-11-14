@@ -345,6 +345,19 @@ backend = "none"
 # Override the engine's show threshold (default 0.15; lower shows more).
 #word_completion_threshold = 0.15
 theme = "opencode"
+# (plan 2026-11-14 U1) Per-role colour overrides, applied ON TOP of the active
+# theme, so a key here wins over that theme's own value for the role. The key is
+# a role name (the `Role::key()` set in
+# crates/operant-cli/src/tui/vendor/style/palette.rs — accent, ai_text, border,
+# dim, error, success, user_bg, …); the value is "#rrggbb" or "#rgb".
+# An unknown role or a malformed colour is logged and SKIPPED, so one typo does
+# not cost you the rest of the palette. Empty (the default) is byte-identical to
+# the theme's own look, and these survive a /theme switch: the theme seeds the
+# palette, then these replace the roles you named.
+# [tui.colors]
+# accent = "#febc38"
+# ai_text = "#e5e5e7"
+# border = "#3d424a"
 rich_output = true
 show_tool_calls = true
 # `show_iterations`, `landing_title`, `prompt_placeholder`, `compact_width`,

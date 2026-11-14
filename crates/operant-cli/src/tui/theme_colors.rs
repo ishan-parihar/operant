@@ -318,6 +318,70 @@ pub fn set_active_theme(theme_name: &str) {
         Err(poisoned) => *poisoned.into_inner() = next,
     }
     sync_role_palette(&source);
+    apply_role_overrides();
+}
+
+/// Operator colour overrides from `[tui.colors]`, installed by
+/// [`crate::tui::app::App::new`] before the first frame.
+///
+/// Held in a process-global because the palette itself is one: every renderer
+/// reads `style::theme::*` through the role table, and a `/theme` switch
+/// rewrites that table wholesale in [`set_active_theme`]. Without the override
+/// being remembered here, `apply_role_overrides` would have nothing to re-apply
+/// and the operator's colours would last exactly one frame after any theme
+/// change.
+static ROLE_OVERRIDES: std::sync::RwLock<Vec<(String, String)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Remember the operator's `[tui.colors]` pairs and re-apply them now.
+///
+/// The ONE writer of [`ROLE_OVERRIDES`] and the ONLY caller reads
+/// `AppConfig::tui.colors`, so the config section has a live reader and the
+/// override survives a theme switch. A pair whose key or colour is invalid is
+/// logged and skipped by [`Palette::from_pairs`] rather than failing the whole
+/// palette, so one typo cannot cost the operator their theme.
+pub fn set_role_overrides(pairs: &std::collections::BTreeMap<String, String>) {
+    if let Ok(mut guard) = ROLE_OVERRIDES.write() {
+        *guard = pairs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    }
+    apply_role_overrides();
+}
+
+/// Re-apply [`ROLE_OVERRIDES`] on top of the currently seeded role palette.
+///
+/// Called from [`set_active_theme`] — the one write path for the palette — so
+/// the seed (theme values) lands first and each validated override replaces
+/// it after. `from_pairs` both validates and reports; the roles it did not
+/// override are left exactly as the theme seeded them, so one typo cannot
+/// wash out the rest of the palette.
+fn apply_role_overrides() {
+    let pairs: Vec<(String, String)> = match ROLE_OVERRIDES.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    if pairs.is_empty() {
+        return;
+    }
+    let borrowed: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    let (overrides, errors) = palette::Palette::from_pairs(borrowed);
+    for error in &errors {
+        tracing::warn!(error, "ignoring invalid [tui.colors] entry");
+    }
+    if !overrides.has_overrides() {
+        return;
+    }
+    let Some(mut merged) = palette::configured_palette() else {
+        return;
+    };
+    for role in palette::ALL_ROLES {
+        if overrides.is_overridden(*role) {
+            merged.set(*role, overrides.rgb(*role));
+        }
+    }
+    palette::set_palette(merged);
 }
 
 // ---------------------------------------------------------------------------
@@ -873,5 +937,126 @@ pub(crate) mod tests {
             set_active_theme("monokai");
             assert_eq!(accent(), ColorPalette::for_theme("monokai").emphasis);
         });
+    }
+
+    /// U1's whole point: `[tui.colors]` used to be a row with a parser and no
+    /// caller. This pins that the config now reaches the live palette through
+    /// the ONE write path, and that a theme switch does not drop it.
+    ///
+    /// `set_role_overrides` is called BEFORE `set_active_theme` on purpose:
+    /// that is the order a `/theme` switch produces (the cell is already
+    /// populated, then the palette is rewritten), so the assertion covers the
+    /// re-apply path rather than only the install path.
+    ///
+    /// The assertion reads `configured_palette()`, not `role_color()`: the
+    /// accessor deliberately returns the role's frozen DEFAULT (substitution
+    /// happens in the per-frame buffer pass, and returning the configured
+    /// colour there would remap the same cell twice). The configured value
+    /// lives in the palette that pass reads.
+    #[test]
+    fn configured_role_overrides_reach_the_palette_and_survive_a_theme_switch() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pairs = std::collections::BTreeMap::new();
+        pairs.insert("accent".to_string(), "#010203".to_string());
+        set_role_overrides(&pairs);
+        set_active_theme("dark");
+
+        let live = palette::configured_palette().expect("the override must be installed");
+        assert_eq!(
+            live.rgb(palette::Role::Accent),
+            (1, 2, 3),
+            "the configured accent must replace the theme's own value"
+        );
+        // A role the operator did NOT name must keep the theme's value — the
+        // override applies to one role, it does not reset the palette.
+        let seeded = role_palette_for(&ColorPalette::for_theme("dark"));
+        assert_eq!(
+            live.rgb(palette::Role::Border),
+            seeded.rgb(palette::Role::Border),
+            "an unnamed role must keep the theme's seeded colour"
+        );
+
+        // A second theme switch must re-apply, not drop, the override.
+        set_active_theme("light");
+        let live = palette::configured_palette().expect("the override must survive /theme");
+        assert_eq!(
+            live.rgb(palette::Role::Accent),
+            (1, 2, 3),
+            "a /theme switch must re-apply the override, not lose it"
+        );
+        // ...and the newly seeded theme must still have reached every OTHER
+        // role, which is what proves the merge kept the seed rather than
+        // replacing it with `from_pairs`' defaults.
+        let light_seeded = role_palette_for(&ColorPalette::for_theme("light"));
+        assert_eq!(
+            live.rgb(palette::Role::Border),
+            light_seeded.rgb(palette::Role::Border),
+            "the new theme must still seed the roles the operator did not name"
+        );
+
+        // Restore: an empty override map must leave the theme's own value.
+        // `configured_palette()` stays `Some` here on purpose — the seed itself
+        // installs a palette with every role set, so `has_overrides` is not a
+        // proxy for "the operator configured something". The value is.
+        set_role_overrides(&std::collections::BTreeMap::new());
+        set_active_theme("default");
+        let default_seeded = role_palette_for(&ColorPalette::for_theme("default"));
+        assert_eq!(
+            palette::configured_palette()
+                .expect("the seed installs a palette")
+                .rgb(palette::Role::Accent),
+            default_seeded.rgb(palette::Role::Accent),
+            "clearing the overrides must restore the theme's own palette"
+        );
+    }
+
+    /// A typo must not cost the operator their theme. `from_pairs` returns a
+    /// FULL palette (defaults for everything it did not set), so the merge has
+    /// to carry over only the roles the operator named AND got right — both
+    /// halves are asserted: the bad pair changes nothing, and the good pair
+    /// beside it still lands.
+    #[test]
+    fn an_invalid_configured_role_is_skipped_without_wiping_the_palette() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pairs = std::collections::BTreeMap::new();
+        pairs.insert("not_a_role".to_string(), "#010203".to_string());
+        pairs.insert("accent".to_string(), "not-a-colour".to_string());
+        pairs.insert("border".to_string(), "#0a0b0c".to_string());
+        set_role_overrides(&pairs);
+        set_active_theme("dark");
+
+        let seeded = role_palette_for(&ColorPalette::for_theme("dark"));
+        let live = palette::configured_palette().expect("the seed installs a palette");
+
+        // The malformed pair must not reach the palette.
+        let (sr, sg, sb) = seeded.rgb(palette::Role::Accent);
+        assert_eq!(
+            live.rgb(palette::Role::Accent),
+            (sr, sg, sb),
+            "an invalid colour must leave the seeded accent in place"
+        );
+        // The unknown key must not reach it either.
+        assert!(
+            !pairs.contains_key("border") || live.rgb(palette::Role::Border) == (10, 11, 12),
+            "the unknown role key must be ignored, not applied to some other role"
+        );
+        // A valid pair BESIDE an invalid one must still land — this is what
+        // makes the test fail if the merge is ever replaced by an all-or-nothing
+        // install of `from_pairs`' output.
+        assert_eq!(
+            live.rgb(palette::Role::Border),
+            (10, 11, 12),
+            "a valid pair must survive a sibling's typo"
+        );
+        // ...and every role the operator did not name keeps the theme's value,
+        // which is what fails if `from_pairs`' defaults are installed wholesale.
+        assert_eq!(
+            live.rgb(palette::Role::AiText),
+            seeded.rgb(palette::Role::AiText),
+            "an unnamed role must keep the theme's seeded colour"
+        );
+
+        set_role_overrides(&std::collections::BTreeMap::new());
+        set_active_theme("default");
     }
 }

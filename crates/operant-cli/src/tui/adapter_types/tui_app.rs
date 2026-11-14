@@ -77,9 +77,16 @@ impl TuiApp {
         // (plan 05) `[tui] double_escape_action` from the TOML — hoisted
         // BEFORE the config moves into App::new.
         let double_escape_action = app_config.tui.double_escape_action.clone();
+        // (plan 2026-11-14 U1) `[tui] colors` from the TOML, hoisted for the
+        // same reason: `App::new` calls `set_active_theme` below, which seeds
+        // the palette and then re-applies these overrides, so the operator's
+        // role colours are live on the FIRST frame rather than after a theme
+        // switch. Without this the config section would have no reader at all.
+        let role_colors = app_config.tui.colors.clone();
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
         app.double_escape_action = double_escape_action;
+        crate::tui::theme_colors::set_role_overrides(&role_colors);
 
         // Share the runtime-metrics registry with the footer so stream-drop
         // retries and memory-sync failures render as a status pill. The same
