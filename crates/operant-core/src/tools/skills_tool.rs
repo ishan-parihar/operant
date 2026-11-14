@@ -3569,8 +3569,14 @@ mod tests {
         assert!(view.success, "skill_view failed: {}", view.content);
         let listed: serde_json::Value = serde_json::from_str(&list.content).unwrap();
         let entries = listed["skills"].as_array().unwrap();
-        let names: Vec<&str> = entries.iter().map(|s| s["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"ponytail-review"), "listed names: {names:?}");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"ponytail-review"),
+            "listed names: {names:?}"
+        );
         assert!(names.contains(&"plugin-skill"), "listed names: {names:?}");
         let vendor_entry = entries
             .iter()
@@ -3666,10 +3672,16 @@ mod tests {
             .await;
 
         assert_eq!(listed.len(), 1, "the pool copy must be the only entry");
-        assert_eq!(listed[0].origin, None, "the pool copy is not a vendor skill");
+        assert_eq!(
+            listed[0].origin, None,
+            "the pool copy is not a vendor skill"
+        );
         let viewed: serde_json::Value = serde_json::from_str(&view.content).unwrap();
         assert!(
-            viewed["content"].as_str().unwrap().contains("OPERATOR BODY"),
+            viewed["content"]
+                .as_str()
+                .unwrap()
+                .contains("OPERATOR BODY"),
             "the operator's copy must win: {viewed}"
         );
     }

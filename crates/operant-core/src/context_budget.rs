@@ -309,7 +309,10 @@ mod tests {
              extra hop. got: {}",
             proposals[0].risk
         );
-        assert_eq!(proposals[0].saves_per_request, 274, "the marginal saving, capped at the overshoot");
+        assert_eq!(
+            proposals[0].saves_per_request, 274,
+            "the marginal saving, capped at the overshoot"
+        );
     }
 
     #[test]

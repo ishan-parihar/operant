@@ -150,10 +150,16 @@ pub async fn register_builtin_tools(
     registry.register(PatchTool).await?;
     registry.register(VisionTool).await?;
     registry
-        .register(SkillsTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
+        .register(
+            SkillsTool::new(skills_dir.to_path_buf())
+                .with_vendor_roots(vendor_skill_roots.to_vec()),
+        )
         .await?;
     registry
-        .register(SkillViewTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
+        .register(
+            SkillViewTool::new(skills_dir.to_path_buf())
+                .with_vendor_roots(vendor_skill_roots.to_vec()),
+        )
         .await?;
     registry
         .register(SkillManageTool::new(skills_dir.to_path_buf()))

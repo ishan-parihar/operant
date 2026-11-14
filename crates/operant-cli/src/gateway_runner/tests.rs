@@ -3594,7 +3594,10 @@ async fn a_queued_message_waits_for_the_next_turn() {
     );
     match replies.as_slice() {
         [WireMessage::Error { message, .. }] => {
-            assert!(message.contains("queued"), "the queue must be named, got {message}")
+            assert!(
+                message.contains("queued"),
+                "the queue must be named, got {message}"
+            )
         }
         other => panic!("a queue must be answered with one error, got {other:?}"),
     }
@@ -3608,7 +3611,11 @@ async fn a_queued_message_waits_for_the_next_turn() {
         .get("s1")
         .cloned()
         .unwrap_or_default();
-    assert_eq!(parked, vec!["later".to_string()], "the message must be parked");
+    assert_eq!(
+        parked,
+        vec!["later".to_string()],
+        "the message must be parked"
+    );
 
     // The next turn in that session takes it.
     let _ = operant_core::session_server::SessionHandler::handle(

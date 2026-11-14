@@ -1292,7 +1292,7 @@ impl OperantAgent {
         // the level or the install changes these prefix bytes: cache
         // invalidation is the documented consequence (same class as any
         // config change).
-            if let Some(block) =
+        if let Some(block) =
             crate::ponytail::frozen_prefix_block(&self.config.ponytail, self.posture_override())
         {
             frozen.push_str(&block);

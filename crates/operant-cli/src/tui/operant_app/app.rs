@@ -377,7 +377,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Show or set the ponytail posture (lite|full|ultra|off)",
     ),
     RegisteredCommand::public("/plugins", "Open the plugins panel"),
-    RegisteredCommand::public("/queue", "Queue a prompt for the next turn (doesn't interrupt)"),
+    RegisteredCommand::public(
+        "/queue",
+        "Queue a prompt for the next turn (doesn't interrupt)",
+    ),
     RegisteredCommand::public("/redraw", "Force a full redraw"),
     RegisteredCommand::public("/reload-mcp", "Reconnect MCP servers"),
     RegisteredCommand::public("/reload-skills", "Reload skills from disk"),
@@ -391,7 +394,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/skill", "Run a saved skill"),
     RegisteredCommand::public("/skin", "Show or switch the terminal skin"),
     RegisteredCommand::public("/status", "Show gateway and runtime status"),
-    RegisteredCommand::public("/steer", "Steer the running turn (inject a message mid-run)"),
+    RegisteredCommand::public(
+        "/steer",
+        "Steer the running turn (inject a message mid-run)",
+    ),
     RegisteredCommand::public("/stop", "Stop the running turn"),
     RegisteredCommand::public(
         "/subgoal",

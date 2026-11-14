@@ -247,7 +247,12 @@ mod tests {
         let payload: Value = serde_json::from_str(&second.content).expect("parses");
         let next = payload["content"].as_str().expect("a string");
         assert!(
-            next.starts_with(&big.chars().skip(RECALL_WINDOW_CHARS).take(20).collect::<String>()),
+            next.starts_with(
+                &big.chars()
+                    .skip(RECALL_WINDOW_CHARS)
+                    .take(20)
+                    .collect::<String>()
+            ),
             "the second window continues where the first stopped"
         );
         assert_ne!(head, next, "the two windows are different text");

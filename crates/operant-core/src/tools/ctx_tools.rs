@@ -103,7 +103,11 @@ fn resolve_session(
     {
         return Ok((sid.to_string(), "tool context"));
     }
-    if let Some(sid) = context.get("session_id").map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(sid) = context
+        .get("session_id")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return Ok((sid.to_string(), "tool context"));
     }
     // The fallback is allowed ONLY when it is unambiguous — exactly one
@@ -152,7 +156,10 @@ impl OperantTool for CtxStatusTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<CtxStatusArgs>("ctx_status", "Report the shape and cost of the current context")
+        ToolSchema::from_type::<CtxStatusArgs>(
+            "ctx_status",
+            "Report the shape and cost of the current context",
+        )
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
@@ -167,7 +174,9 @@ impl OperantTool for CtxStatusTool {
             };
         let usage = match self.db.session_usage(&session_id) {
             Ok(u) => u,
-            Err(e) => return ToolResult::error("ctx_status", format!("could not read the session: {e}")),
+            Err(e) => {
+                return ToolResult::error("ctx_status", format!("could not read the session: {e}"));
+            }
         };
         let rows = match self.db.context_ledger_for_session(&session_id, 1) {
             Ok(r) => r,
@@ -176,18 +185,24 @@ impl OperantTool for CtxStatusTool {
             }
         };
         let last = rows.last();
-        let (budget_tokens, window_tokens, estimated, tool_result_tokens, message_count, ladder_fired) =
-            match last {
-                Some(r) => (
-                    r.budget_tokens,
-                    r.window_tokens,
-                    r.estimated_context_tokens,
-                    r.tool_result_tokens,
-                    r.message_count,
-                    r.ladder_fired,
-                ),
-                None => (0, 0, 0, 0, 0, false),
-            };
+        let (
+            budget_tokens,
+            window_tokens,
+            estimated,
+            tool_result_tokens,
+            message_count,
+            ladder_fired,
+        ) = match last {
+            Some(r) => (
+                r.budget_tokens,
+                r.window_tokens,
+                r.estimated_context_tokens,
+                r.tool_result_tokens,
+                r.message_count,
+                r.ladder_fired,
+            ),
+            None => (0, 0, 0, 0, 0, false),
+        };
         let share = if estimated > 0 {
             (tool_result_tokens as f64 * 100.0 / estimated as f64).round() as i64
         } else {
@@ -259,7 +274,10 @@ impl OperantTool for CtxSearchTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<CtxSearchArgs>("ctx_search", "Recall earlier content from this session's context")
+        ToolSchema::from_type::<CtxSearchArgs>(
+            "ctx_search",
+            "Recall earlier content from this session's context",
+        )
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
@@ -280,13 +298,14 @@ impl OperantTool for CtxSearchTool {
                 Ok(v) => v,
                 Err(e) => return ToolResult::error("ctx_search", e),
             };
-        let hits = match self
-            .db
-            .search_messages_fts(&args.query, Some(&session_id), Some(limit as u32))
-        {
-            Ok(h) => h,
-            Err(e) => return ToolResult::error("ctx_search", format!("search failed: {e}")),
-        };
+        let hits =
+            match self
+                .db
+                .search_messages_fts(&args.query, Some(&session_id), Some(limit as u32))
+            {
+                Ok(h) => h,
+                Err(e) => return ToolResult::error("ctx_search", format!("search failed: {e}")),
+            };
         if hits.is_empty() {
             return ToolResult::success(
                 "ctx_search",
@@ -354,7 +373,6 @@ pub async fn register_ctx_tools(
     Ok(())
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -375,8 +393,15 @@ mod tests {
     fn seed(db: &Database, sid: &str) {
         let now = "2026-11-12T00:00:00Z";
         db.save_session(sid, None, "agent", now, now).unwrap();
-        db.save_message(sid, "user", "how does the compaction ladder work", now).unwrap();
-        db.save_message(sid, "assistant", "it evicts the oldest tool results first", now).unwrap();
+        db.save_message(sid, "user", "how does the compaction ladder work", now)
+            .unwrap();
+        db.save_message(
+            sid,
+            "assistant",
+            "it evicts the oldest tool results first",
+            now,
+        )
+        .unwrap();
         db.add_session_usage(sid, 29_067, 5, 1).unwrap();
         db.record_context_request(&ContextRequestRecord {
             session_id: sid.to_string(),
@@ -407,7 +432,11 @@ mod tests {
         let result = tool
             .execute(json!({"session": "s-ctx"}), ToolContext::default())
             .await;
-        assert!(result.success, "ctx_status must succeed: {}", result.content);
+        assert!(
+            result.success,
+            "ctx_status must succeed: {}",
+            result.content
+        );
         let v: serde_json::Value = serde_json::from_str(&result.content).expect("json");
         assert_eq!(v["session_id"], "s-ctx");
         assert_eq!(v["session_resolved_by"], "argument");
@@ -447,8 +476,10 @@ mod tests {
         assert!(result.success);
         let v: serde_json::Value = serde_json::from_str(&result.content).expect("json");
         assert_eq!(v["last_request"]["provider_prompt_tokens"], 0);
-        assert_eq!(v["last_request"]["tool_result_share_percent"], 0,
-                   "no request means no share, and no divide-by-zero");
+        assert_eq!(
+            v["last_request"]["tool_result_share_percent"], 0,
+            "no request means no share, and no divide-by-zero"
+        );
     }
 
     #[tokio::test]
@@ -496,7 +527,10 @@ mod tests {
         seed(&db, "s-ctx");
         let tool = CtxSearchTool::new(Arc::new(db));
         let result = tool
-            .execute(json!({"query": "compaction"}), ToolContext::default().with_session_id("s-ctx"))
+            .execute(
+                json!({"query": "compaction"}),
+                ToolContext::default().with_session_id("s-ctx"),
+            )
             .await;
         assert!(result.success);
         let v: serde_json::Value = serde_json::from_str(&result.content).expect("json");
@@ -504,7 +538,8 @@ mod tests {
         assert!(!hits.is_empty(), "the phrase is in the seeded user message");
         assert_eq!(hits[0]["role"], "user");
         assert!(
-            v["tokens_returned"].as_i64().expect("tokens") <= v["budget_tokens"].as_i64().expect("budget"),
+            v["tokens_returned"].as_i64().expect("tokens")
+                <= v["budget_tokens"].as_i64().expect("budget"),
             "the evidence respects its budget"
         );
     }
@@ -514,7 +549,8 @@ mod tests {
         let (_tmp, db) = temp_db();
         let now = "2026-11-12T00:00:00Z";
         db.save_session("s-big", None, "agent", now, now).unwrap();
-        db.save_message("s-big", "tool", &"verdict ".repeat(20_000), now).unwrap();
+        db.save_message("s-big", "tool", &"verdict ".repeat(20_000), now)
+            .unwrap();
         let tool = CtxSearchTool::new(Arc::new(db));
         let result = tool
             .execute(
@@ -538,11 +574,16 @@ mod tests {
         let now = "2026-11-12T00:00:00Z";
         db.save_session("s-a", None, "agent", now, now).unwrap();
         db.save_session("s-b", None, "agent", now, now).unwrap();
-        db.save_message("s-a", "user", "the alpha token appears here", now).unwrap();
-        db.save_message("s-b", "user", "the alpha token appears there", now).unwrap();
+        db.save_message("s-a", "user", "the alpha token appears here", now)
+            .unwrap();
+        db.save_message("s-b", "user", "the alpha token appears there", now)
+            .unwrap();
         let tool = CtxSearchTool::new(Arc::new(db));
         let result = tool
-            .execute(json!({"query": "alpha", "session": "s-a"}), ToolContext::default())
+            .execute(
+                json!({"query": "alpha", "session": "s-a"}),
+                ToolContext::default(),
+            )
             .await;
         let v: serde_json::Value = serde_json::from_str(&result.content).expect("json");
         let hits = v["hits"].as_array().expect("hits");

@@ -670,7 +670,10 @@ async fn cmd_resume(config: &AppConfig, id: Option<&str>, last: bool) -> Result<
     // the operator who ran `sessions resume <id>` already has the id — the
     // shortest path from here is the command that attaches, not a walk through
     // the TUI's own picker.
-    println!("  • Shell:    {}", crate::cmd_continue::continue_command_line(&session.id));
+    println!(
+        "  • Shell:    {}",
+        crate::cmd_continue::continue_command_line(&session.id)
+    );
     println!("  • TUI:      operant chat  →  /resume  →  pick this session");
     println!("  • Gateway:  send a message on the same platform channel");
     Ok(())

@@ -589,8 +589,11 @@ impl App {
                 let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
                 let pool = self.config.skills.root_dir.clone();
                 if name.is_empty() {
-                    self.skills_view
-                        .open(pool, vendor_roots, self.config.skills.extra_roots.clone());
+                    self.skills_view.open(
+                        pool,
+                        vendor_roots,
+                        self.config.skills.extra_roots.clone(),
+                    );
                     return true;
                 }
                 // Optional trailing instruction after the skill name:

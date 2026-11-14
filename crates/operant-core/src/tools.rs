@@ -102,6 +102,7 @@ pub use checkpoint_tool::{
 };
 pub use config_tool::{ConfigManageArgs, ConfigManageTool};
 pub use cron_tool::CronTool;
+pub use ctx_tools::register_ctx_tools;
 pub use delegation_output_schema::{
     MAX_SCHEMA_RETRIES, append_output_contract, build_retry_message, coerce_output_schema,
     extract_json_candidate, validate_output,
@@ -109,7 +110,6 @@ pub use delegation_output_schema::{
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use home_assistant_tool::HomeAssistantTool;
 pub use kanban_tool::KanbanTool;
-pub use ctx_tools::register_ctx_tools;
 pub use lcm_tools::register_lcm_tools;
 pub use mcp_tool::McpManagementTool;
 pub use osv_check::OsvCheckTool;
@@ -797,13 +797,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()
@@ -830,13 +829,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()
@@ -882,13 +880,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()
