@@ -314,8 +314,20 @@ def load_sources() -> dict[str, str]:
 
 
 def _normalise(text: str) -> str:
-    """Collapse whitespace so a `cargo fmt` reflow is not read as drift."""
-    return re.sub(r"\s+", " ", text).strip()
+    """Collapse whitespace so a `cargo fmt` reflow is not read as drift.
+
+    Rustfmt also moves spaces INSIDE punctuation — a one-line tuple
+    `("key", ...)` becomes `( "key", ... )` once it is reflowed across lines —
+    so collapsing runs is not enough on its own. Spaces adjacent to any of
+    `()[]{},;` are removed after the collapse, which is purely lexical and
+    cannot change a key, a default or a note.
+    """
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    # Rustfmt writes a TRAILING COMMA before a closing bracket when it reflows
+    # a tuple across lines; the generator's single-line form has none. It is
+    # semantically identical Rust, so drop it rather than read it as drift.
+    collapsed = re.sub(r",\s*([)\]}])", r"\1", collapsed)
+    return re.sub(r"\s*([()\[\]{},;])\s*", r"\1", collapsed)
 
 
 def main() -> int:

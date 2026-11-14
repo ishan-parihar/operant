@@ -1518,7 +1518,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "tui.bar_style",
         "default_bar_style()",
-        "Which glyph draws the boundary between two status-line segments (plan 2026-11-15 U11). One of the `SeparatorStyle::key()` names: `dot` (the default, and the historical look), `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. An unknown value warns at startup and falls back to `dot` rather than to a style that renders nothing — see `tui::status_line::style::SeparatorStyle::from_key` for why that is NOT OMP's `powerline-thin` fallback. The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1); without one the terminal draws tofu. `ascii` exists for that case.",
+        "Which glyph draws the boundary between two status-line segments (plan 2026-11-15 U11). One of the `SeparatorStyle::key()` names: `dot` (the default, and the historical look), `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. An unknown value warns at startup and falls back to `dot` rather than to a style that renders nothing — see `tui::status_line::style::SeparatorStyle::parse`, which returns the style plus whether the key was recognised, for why that is NOT OMP's `powerline-thin` fallback. The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1); without one the terminal draws tofu. `ascii` exists for that case.",
     ),
     (
         "tui.colors",
