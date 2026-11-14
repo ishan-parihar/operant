@@ -386,23 +386,18 @@ where
     F: Fn(WorkerSpec) -> WorkerRun,
 {
     let in_flight = max_in_flight.max(1);
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(in_flight));
 
+    // The bound is `buffer_unordered`'s, not a semaphore's: each future used to
+    // acquire one of `in_flight` permits AND then be polled through
+    // `buffer_unordered(in_flight)`, which is the same bound applied twice. The
+    // second copy also carried an unreachable arm — the semaphore was never
+    // closed, so "worker pool closed during shutdown" could not fire — and a
+    // `collect::<Vec<_>>()` that only existed to hand `stream::iter` a Vec.
     let futures = workers.into_iter().map(|worker| {
-        let semaphore = semaphore.clone();
         let run = &run;
         async move {
             let goal = worker.goal.clone();
             let secs = worker.timeout_secs;
-
-            // Closed semaphore only on shutdown; report it per worker rather
-            // than failing the whole batch.
-            let Ok(_permit) = semaphore.acquire_owned().await else {
-                return WorkerOutcome {
-                    goal,
-                    status: WorkerStatus::Failed("worker pool closed during shutdown".to_string()),
-                };
-            };
 
             // `run(worker)` is INSIDE the unwind boundary: building a worker's
             // future is as capable of panicking as running it.
@@ -422,7 +417,7 @@ where
         }
     });
 
-    stream::iter(futures.collect::<Vec<_>>())
+    stream::iter(futures)
         .buffer_unordered(in_flight)
         .collect::<Vec<_>>()
         .await
