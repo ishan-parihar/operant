@@ -34,7 +34,9 @@ mod prepared;
 pub mod swarm_collapse;
 pub mod transcription;
 pub use swarm_collapse::parse_collapsible_swarm_content;
-#[cfg(test)]
+// The `#[cfg(test)]` that used to sit here belonged to the swarm_collapse
+// re-export deleted in iter-2337. Left behind, it gated the module below, which
+// production imports unconditionally — so the plain binary stopped building.
 pub(crate) mod tool_display;
 pub(crate) mod vendor_types;
 mod wrapped_line_map;
