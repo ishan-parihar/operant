@@ -389,6 +389,7 @@ mod tests {
             completed_time: None,
             result: None,
             error: None,
+            session_id: None,
         }
     }
 

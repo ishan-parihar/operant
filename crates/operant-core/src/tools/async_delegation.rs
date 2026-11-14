@@ -58,6 +58,14 @@ pub struct AsyncDelegationRecord {
     pub result: Option<String>,
     /// Error text (Failed only).
     pub error: Option<String>,
+    /// The session the child actually ran in.
+    ///
+    /// MEASURED 2026-11-14 (audit finding 10): a delegated child mints its own
+    /// `sess_<uuid>` and nothing joined it to this record, so the operator could
+    /// see that a delegation had run and could not open what it did. `serde(default)`
+    /// so a ledger written before this field still loads.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, AsyncDelegationRecord>> {
@@ -255,6 +263,7 @@ fn insert_pending(
             completed_time: None,
             result: None,
             error: None,
+            session_id: None,
         },
     );
     id
@@ -284,6 +293,20 @@ pub fn try_create_record(goal: &str, model: &str, max_pending: usize) -> Option<
         return None;
     }
     Some(insert_pending(&mut map, goal, model))
+}
+
+/// Join a delegation to the session its child ran in.
+///
+/// Written before the terminal transition, and separately from it, because the
+/// two facts arrive from different places: the id is on the child's answer, the
+/// outcome is the task's. Idempotent, and a no-op for an unknown id.
+pub fn mark_session(id: &str, session_id: &str) {
+    if let Ok(mut map) = registry().lock()
+        && let Some(rec) = map.get_mut(id)
+    {
+        rec.session_id = Some(session_id.to_string());
+    }
+    persist();
 }
 
 /// Transition a record to completed and stash the child's final answer.
@@ -554,6 +577,43 @@ mod tests {
 
     /// Audit finding 3: a restart used to forget every delegation, and a record
     /// that was `Pending` when the process died then read as running forever.
+    /// Audit finding 10: the row must name the session that ran it, and the
+    /// terminal transition must not drop the join.
+    #[test]
+    fn a_delegation_records_the_session_its_child_ran_in() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let id = create_record("audit the pool", "m");
+        assert!(
+            get_record(&id).unwrap().session_id.is_none(),
+            "a fresh record has no session yet"
+        );
+        mark_session(&id, "sess_42");
+        assert_eq!(
+            get_record(&id).unwrap().session_id.as_deref(),
+            Some("sess_42")
+        );
+        mark_completed(&id, "done");
+        assert_eq!(
+            get_record(&id).unwrap().session_id.as_deref(),
+            Some("sess_42"),
+            "completing must not drop the join"
+        );
+        __test_reset_registry();
+    }
+
+    /// The field is additive: a ledger written before the join existed must
+    /// still load, or the first start after an upgrade would silently discard
+    /// every delegation the operator had.
+    #[test]
+    fn a_ledger_written_before_the_session_join_still_loads() {
+        let old = r#"{"delegation_id":"d1","status":"completed","goal":"g","model":"m",
+            "dispatch_time":1,"completed_time":2,"result":"r","error":null}"#;
+        let rec: AsyncDelegationRecord =
+            serde_json::from_str(old).expect("a pre-join ledger must load");
+        assert!(rec.session_id.is_none());
+    }
+
     #[test]
     fn a_ledger_left_by_a_dead_process_settles_its_pending_records() {
         let _guard = test_lock().lock().unwrap();
@@ -569,6 +629,7 @@ mod tests {
             completed_time: None,
             result: None,
             error: None,
+            session_id: None,
         };
         let done = AsyncDelegationRecord {
             delegation_id: "dlg-old-2".to_string(),
@@ -579,6 +640,7 @@ mod tests {
             completed_time: Some(110),
             result: Some("ok".to_string()),
             error: None,
+            session_id: None,
         };
         std::fs::write(
             &path,

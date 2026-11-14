@@ -623,6 +623,44 @@ impl SubAgentTool {
         .map(|answer| answer.text)
     }
 
+    /// The same guarded entry point, but it keeps the child's session id.
+    ///
+    /// The background path needs it: a delegation's row in the store has to be
+    /// joinable to the session that ran it, or the operator can see that work
+    /// happened without being able to open it (audit finding 10).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "identical to `call`; one delegates to the other"
+    )]
+    pub async fn call_with_session(
+        &self,
+        goal: impl Into<String>,
+        context: Option<impl Into<String>>,
+        role: SubAgentRole,
+        max_iterations: Option<u32>,
+        timeout_seconds: u64,
+        output_schema: Option<Value>,
+        toolsets: Option<Vec<String>>,
+        working_dir: Option<String>,
+    ) -> std::result::Result<ChildAnswer, BoxedToolError> {
+        let child_depth = self.parent_depth + 1;
+        let _permit =
+            SpawnPermit::reserve(1, child_depth).map_err(|refusal| refusal.to_string())?;
+        self.call_unguarded(WorkerSpec {
+            siblings: Vec::new(),
+            id: next_subagent_id(),
+            goal: goal.into(),
+            context: context.map(Into::into),
+            role,
+            max_iterations,
+            timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
+            output_schema,
+            toolsets,
+            working_dir,
+        })
+        .await
+    }
+
     /// Run one worker whose slot was ALREADY reserved by the caller.
     ///
     /// When `output_schema` is provided, the child's system prompt gets an
@@ -1064,7 +1102,7 @@ impl SubAgentTool {
             // in the process is refused with "Too many background delegations
             // in flight" and no error naming the cause. The join handle is
             // dropped, so nobody else observes the panic either.
-            let outcome = await_child(tool.call(
+            let outcome = await_child(tool.call_with_session(
                 spawn_goal,
                 context,
                 role,
@@ -1076,16 +1114,22 @@ impl SubAgentTool {
             ))
             .await;
             match outcome {
-                Ok(content) => {
+                Ok(answer) => {
+                    // The session join first (audit finding 10): the row must
+                    // name the session that ran it, or the operator can see
+                    // that work happened without being able to open it.
+                    if let Some(session_id) = answer.session_id.as_deref() {
+                        async_delegation::mark_session(&spawn_id, session_id);
+                    }
                     // Persist the record FIRST — the event send below is
                     // best-effort UI surfacing only (try_send so a full/slow
                     // parent channel can never stall the background task).
-                    async_delegation::mark_completed(&spawn_id, &content);
+                    async_delegation::mark_completed(&spawn_id, &answer.text);
                     if let Some(tx) = event_tx {
                         let _ = tx.try_send(AgentEvent::AsyncDelegation {
                             delegation_id: spawn_id.clone(),
                             status: "completed".to_string(),
-                            summary: preview_of(&content, 200),
+                            summary: preview_of(&answer.text, 200),
                         });
                     }
                 }
@@ -1914,9 +1958,9 @@ impl Drop for SubagentLifecycle<'_> {
 /// life of the process (measured 2026-11-14: three of them exhaust
 /// `DEFAULT_MAX_ASYNC_CHILDREN` for every session in the process, with no
 /// error naming the cause). This is the one wrapper both paths can share.
-async fn await_child(
-    child: impl std::future::Future<Output = std::result::Result<String, BoxedToolError>>,
-) -> std::result::Result<String, BoxedToolError> {
+async fn await_child<T>(
+    child: impl std::future::Future<Output = std::result::Result<T, BoxedToolError>>,
+) -> std::result::Result<T, BoxedToolError> {
     match AssertUnwindSafe(child).catch_unwind().await {
         Ok(inner) => inner,
         Err(_) => Err("the background child panicked before it produced an answer".into()),
@@ -2566,7 +2610,7 @@ mod tests {
     /// Pending one that holds a slot until the process exits.
     #[tokio::test]
     async fn a_panicking_background_child_becomes_an_ordinary_failure() {
-        let panicked = await_child(async {
+        let panicked: std::result::Result<String, BoxedToolError> = await_child(async {
             panic!("child blew up mid-turn");
         })
         .await;
@@ -2583,7 +2627,7 @@ mod tests {
         assert_eq!(ok, "the answer");
 
         // An ordinary error is passed through verbatim, not rewritten.
-        let failed = await_child(async { Err("child error: no model".into()) })
+        let failed = await_child(async { Err::<String, _>("child error: no model".into()) })
             .await
             .expect_err("an error stays an error");
         assert_eq!(failed.to_string(), "child error: no model");
