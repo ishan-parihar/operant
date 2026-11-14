@@ -838,7 +838,11 @@ fn transport_context_labels(app: &dyn TuiState) -> Vec<String> {
 
 fn append_transport_context(status_text: &mut String, app: &dyn TuiState) {
     for label in transport_context_labels(app) {
-        status_text.push_str(&format!(" · {}", label));
+        status_text.push_str(&format!(
+            "{}{}",
+            crate::tui::status_line::separator::separator(),
+            label
+        ));
     }
 }
 
@@ -884,21 +888,34 @@ fn append_batch_progress_spans(
 
     if total > 0 {
         spans.push(Span::styled(
-            format!(" · {}/{} done", completed, total),
+            format!(
+                "{}{}/{} done",
+                crate::tui::status_line::separator::separator(),
+                completed,
+                total
+            ),
             Style::default().fg(anim_color).bold(),
         ));
     }
 
     if let Some(running) = running_summary {
         spans.push(Span::styled(
-            format!(" · running: {}", running),
+            format!(
+                "{}running: {}",
+                crate::tui::status_line::separator::separator(),
+                running
+            ),
             Style::default().fg(dim_color()),
         ));
     }
 
     if let Some(tool_name) = last_completed.filter(|_| completed < total) {
         spans.push(Span::styled(
-            format!(" · last done: {}", tool_name),
+            format!(
+                "{}last done: {}",
+                crate::tui::status_line::separator::separator(),
+                tool_name
+            ),
             Style::default().fg(dim_color()),
         ));
     }
@@ -930,7 +947,7 @@ pub(super) fn draw_status(
     );
 
     let queued_suffix = if pending_count > 0 {
-        format!(" · +{} queued", pending_count)
+        format!("+{} queued", pending_count)
     } else {
         String::new()
     };
@@ -963,9 +980,19 @@ pub(super) fn draw_status(
         Line::from(vec![
             Span::styled(spinner, Style::default().fg(rgb(255, 193, 7))),
             Span::styled(
+                // PROSE, not a boundary: the queued count rides inside one span
+                // with the retry message, so the separator is interpolated here
+                // rather than pushed as its own span. `queued_suffix` carries no
+                // prefix precisely so the boundary sites can add one.
                 format!(
-                    " Rate limited. Auto-retry in {}...{}",
-                    time_str, queued_suffix
+                    " Rate limited. Auto-retry in {}...{}{}",
+                    time_str,
+                    if queued_suffix.is_empty() {
+                        ""
+                    } else {
+                        crate::tui::status_line::separator::separator()
+                    },
+                    queued_suffix
                 ),
                 Style::default().fg(rgb(255, 193, 7)),
             ),
@@ -1130,7 +1157,11 @@ pub(super) fn draw_status(
 
                 if let Some(notice) = experimental_notice {
                     spans.push(Span::styled(
-                        format!(" · ⚠ {}", notice),
+                        format!(
+                            "{}⚠ {}",
+                            crate::tui::status_line::separator::separator(),
+                            notice
+                        ),
                         Style::default().fg(rgb(255, 193, 7)).bold(),
                     ));
                 }
@@ -1143,12 +1174,20 @@ pub(super) fn draw_status(
                 }
                 for label in transport_context_labels(app) {
                     spans.push(Span::styled(
-                        format!(" · {}", label),
+                        format!(
+                            "{}{}",
+                            crate::tui::status_line::separator::separator(),
+                            label
+                        ),
                         Style::default().fg(dim_color()),
                     ));
                 }
                 spans.push(Span::styled(
-                    format!(" · {}", format_elapsed(elapsed)),
+                    format!(
+                        "{}{}",
+                        crate::tui::status_line::separator::separator(),
+                        format_elapsed(elapsed)
+                    ),
                     Style::default().fg(dim_color()),
                 ));
 
@@ -1162,7 +1201,11 @@ pub(super) fn draw_status(
                         "kv".to_string()
                     };
                     spans.push(Span::styled(
-                        format!(" · ⚠ {} cache miss", miss_str),
+                        format!(
+                            "{}⚠ {} cache miss",
+                            crate::tui::status_line::separator::separator(),
+                            miss_str
+                        ),
                         Style::default().fg(rgb(255, 193, 7)),
                     ));
                 }
@@ -1231,7 +1274,7 @@ pub(super) fn draw_status(
     // the input area, like tool-tips for using CTRL+ENTER").
     if let Some(hint) = composer_hint(app) {
         line.spans.push(Span::styled(
-            format!(" · {hint}"),
+            format!("{}{hint}", crate::tui::status_line::separator::separator()),
             Style::default().fg(dim_color()),
         ));
     }
@@ -1290,7 +1333,11 @@ fn running_tool_header_spans(
     ];
     if let Some(detail) = detail {
         spans.push(Span::styled(
-            format!(" · {}", detail),
+            format!(
+                "{}{}",
+                crate::tui::status_line::separator::separator(),
+                detail
+            ),
             Style::default().fg(anim_color).bold(),
         ));
     }
@@ -1300,8 +1347,13 @@ fn running_tool_header_spans(
 /// Append the "+N queued" suffix span (in the queued accent color) when there
 /// are queued follow-up messages. Centralizes the repeated check/styling shared
 /// by every processing-status branch in `draw_status`.
+///
+/// `queued_suffix` carries NO leading separator: it is also interpolated into a
+/// prose string (the rate-limited branch), where a span cannot reach. So the
+/// separator is pushed here, at the boundary, by the one helper that owns it.
 fn push_queued_suffix(spans: &mut Vec<Span<'static>>, queued_suffix: &str) {
     if !queued_suffix.is_empty() {
+        crate::tui::status_line::separator::push_separator(spans);
         spans.push(Span::styled(
             queued_suffix.to_string(),
             Style::default().fg(queued_color()),
@@ -1719,12 +1771,13 @@ mod tests {
 
     #[test]
     fn streaming_status_spans_keep_spinner_while_finalizing() {
-        let spans = streaming_status_spans("⠋", "4.2s".to_string(), false, false, " · +1 queued");
+        let spans = streaming_status_spans("⠋", "4.2s".to_string(), false, false, "+1 queued");
 
-        assert_eq!(spans.len(), 3);
+        assert_eq!(spans.len(), 4, "the boundary is its own span (U10)");
         assert_eq!(spans[0].content.as_ref(), "⠋");
         assert_eq!(spans[1].content.as_ref(), " 4.2s");
-        assert_eq!(spans[2].content.as_ref(), " · +1 queued");
+        assert_eq!(spans[2].content.as_ref(), " · ");
+        assert_eq!(spans[3].content.as_ref(), "+1 queued");
     }
 
     #[test]
@@ -1742,10 +1795,30 @@ mod tests {
         push_queued_suffix(&mut spans, "");
         assert!(spans.is_empty(), "empty suffix should add no span");
 
-        push_queued_suffix(&mut spans, " · +2 queued");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].content.as_ref(), " · +2 queued");
+        // The suffix arrives WITHOUT a leading separator (U10): the helper owns
+        // the boundary, so the value can also be interpolated into prose. When
+        // there IS a preceding segment the separator is its own span.
+        push_queued_suffix(&mut spans, "+2 queued");
+        assert_eq!(
+            spans.len(),
+            1,
+            "nothing precedes it, so no boundary is drawn"
+        );
+        assert_eq!(spans[0].content.as_ref(), "+2 queued");
         assert_eq!(spans[0].style.fg, Some(queued_color()));
+    }
+
+    /// After a real segment the boundary appears, as its own span, in the dim
+    /// ink every other boundary uses.
+    #[test]
+    fn push_queued_suffix_draws_a_boundary_after_a_segment() {
+        let mut spans = vec![Span::raw("thinking")];
+        push_queued_suffix(&mut spans, "+2 queued");
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[1].content.as_ref(), " · ");
+        assert_eq!(spans[1].style.fg, Some(dim_color()));
+        assert_eq!(spans[2].content.as_ref(), "+2 queued");
     }
 
     #[test]
@@ -1856,10 +1929,11 @@ mod tests {
 pub(super) fn build_notification_spans(app: &dyn TuiState) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
+    // The same boundary the status bar draws, from the same definition: this
+    // closure was a second copy of `push_separator`, which is how a style key
+    // would have reached one bar and missed the other.
     let push_sep = |spans: &mut Vec<Span<'static>>| {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" · ", Style::default().fg(dim_color())));
-        }
+        crate::tui::status_line::separator::push_separator(spans);
     };
 
     if let Some(selection) = app.copy_selection_status() {

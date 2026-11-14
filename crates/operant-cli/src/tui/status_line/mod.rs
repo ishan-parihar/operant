@@ -10,14 +10,17 @@
 //! - [`bar`] — the fill: one background colour behind the whole row, from
 //!   `Role::StatusLineBg` (OMP's `statusLineBg`).
 //! - [`meter`] — the one `█`/`░` meter the five hand-written copies now share.
+//! - [`separator`] — the one boundary drawn between two segments (U10), and the
+//!   record of which ` · ` sites are boundaries rather than prose.
 //!
-//! A segment model and a separator vocabulary were built here at U7/U8 and then
-//! DELETED: they had no production caller, because converting `draw_status`'s 51
-//! hand-written ` · ` joins is a rewiring that changes what the bar looks like at
+//! A segment model and an earlier separator vocabulary were built here at U7/U8
+//! and then DELETED: they had no production caller, because converting `draw_status`'s
+//! 51 hand-written ` · ` joins is a rewiring that changes what the bar looks like at
 //! every width. Shipping a vocabulary nothing speaks is worse than not having
 //! one — the next reader cannot tell which half is real, and unexercised code
-//! rots. If that rewiring is ever done, restore the two modules from the commit
-//! that deleted them and wire them in the SAME change.
+//! rots. `separator` is the first piece of that vocabulary with a live caller;
+//! the rest returns only when the bar is actually made of segments.
 
 pub mod bar;
 pub mod meter;
+pub mod separator;
