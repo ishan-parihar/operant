@@ -303,7 +303,20 @@ the loaded page), and J2 as **iter-2235**: the list pane has one slot past the
 last row, Enter on it pages forward over the cursor (`list_sessions_rich_page`
 with the last row's timestamp, appended rather than replaced), and a full page
 is what draws the row — so "500 of 3,314" now has a way forward instead of
-being a wall. The audit report is `docs/audit/2026-11-14-swarm-and-hub-red-team.md`.
+being a wall. F4's filter push-down landed as **iter-2240**: the page read
+(`list_sessions_rich_filtered_page`) carries the directory, employee and branch
+axes plus a fixed-literal status axis, so a filter reaches past the page instead
+of filtering only the newest 500 rows after the fact, and a `Show more` page
+continues inside the filter. `Working` stays a process-side predicate — no
+column can express it. The audit report is
+`docs/audit/2026-11-14-swarm-and-hub-red-team.md`.
+
+One deliberate remnant, named rather than hidden: the Rust `row_matches_filter`
+still guards the visible set of the loaded page, so the status/cwd/employee/
+branch definitions exist in two places (SQL and the predicate) that happen to
+agree, while `Working` is defined only in the predicate. Folding the predicate
+into the visible-set builder is a cleanup with its own test rework; it changes
+no behavior either way.
 
 ## Iteration order (as planned)
 
