@@ -16835,3 +16835,118 @@ mod effort_picker_surface {
         );
     }
 }
+
+// ── the selector grammar wired into /model (model plan M4, 2026-11-15) ───────
+//
+// Before this, `/model <arg>` used the argument as a FILTER for the picker, so
+// `/model slow:xhigh` narrowed the list to nothing and set nothing. The grammar
+// now resolves, and these pin what the resolved selector DOES — the resolution
+// itself is unit-tested in `tui::model_selector`.
+mod model_selector_wiring {
+    use super::*;
+    use crate::tui::model_effort::EffortLevel;
+    use crate::tui::model_selector::{ResolvedSelector, resolve};
+    use operant_core::model_roles::ModelSlot;
+
+    fn app_with_models(models: &[&str]) -> App {
+        let mut app = make_app();
+        app.config.agent.model = models[0].to_string();
+        app.config.agent.fallback_models = models[1..].iter().map(|m| m.to_string()).collect();
+        app
+    }
+
+    #[test]
+    fn a_model_selector_sets_a_model_and_no_effort() {
+        let mut app = app_with_models(&["gpt-5", "claude-opus-4-8"]);
+        let before = app.effort_level;
+        app.apply_resolved_selector(
+            resolve("claude-opus-4-8", &app.configured_model_ids()).expect("resolves"),
+        );
+        assert_eq!(app.pending_model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(
+            app.effort_level, before,
+            "a bare model selector must not move the effort"
+        );
+    }
+
+    #[test]
+    fn a_role_selector_sets_the_effort_without_touching_the_model() {
+        // A role selector names the slot's CURRENT model and an optional level; it
+        // reads, it does not assign. Assigning a slot is the Roles view (M6).
+        let mut app = app_with_models(&["gpt-5"]);
+        app.pending_model = None;
+        app.apply_resolved_selector(ResolvedSelector {
+            role: Some(ModelSlot::Vision),
+            model: None,
+            effort: Some(EffortLevel::High),
+        });
+        // The vision slot is unassigned in this fixture, so the selector must say
+        // so rather than silently setting the conversation's model to nothing.
+        assert!(
+            app.pending_model.is_none(),
+            "an unassigned slot must not become the conversation model"
+        );
+    }
+
+    #[test]
+    fn an_effort_only_selector_behaves_like_effort() {
+        let mut app = app_with_models(&["gpt-5"]);
+        app.pending_model = None;
+        // gpt-5 is a reasoning model in the catalogue, so the level applies.
+        app.apply_resolved_selector(ResolvedSelector {
+            role: None,
+            model: None,
+            effort: Some(EffortLevel::High),
+        });
+        assert!(
+            app.pending_model.is_none(),
+            "an effort-only selector must not set a model"
+        );
+        match app.effort_support_for_current_model() {
+            crate::tui::model_effort::EffortSupport::None => {
+                assert!(
+                    app.pending_effort.is_none(),
+                    "a non-reasoning model must refuse the level"
+                );
+            }
+            _ => {
+                assert_eq!(app.pending_effort.as_deref(), Some("high"));
+                assert_eq!(app.effort_level, EffortLevel::High);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unresolvable_selector_says_which_axis_was_wrong() {
+        let app = app_with_models(&["gpt-5"]);
+        let available = app.configured_model_ids();
+
+        let role_err = resolve("@nope", &available).expect_err("unknown role");
+        let said = crate::tui::app::commands::describe_selector_error(&role_err);
+        assert!(
+            said.contains("nope"),
+            "the message must name the word: {said}"
+        );
+        assert!(
+            said.contains("smol"),
+            "the message must list the roles: {said}"
+        );
+
+        let effort_err = resolve("gpt-5:ultra", &available).expect_err("unknown effort");
+        let said = crate::tui::app::commands::describe_selector_error(&effort_err);
+        assert!(
+            said.contains("ultra") && said.contains("xhigh"),
+            "the message must name the word and the vocabulary: {said}"
+        );
+    }
+
+    #[test]
+    fn the_configured_list_is_what_the_grammar_validates_against() {
+        let app = app_with_models(&["gpt-5", "claude-opus-4-8"]);
+        assert_eq!(
+            app.configured_model_ids(),
+            vec!["gpt-5".to_string(), "claude-opus-4-8".to_string()],
+            "the configured model plus fallbacks, in order, deduplicated"
+        );
+    }
+}

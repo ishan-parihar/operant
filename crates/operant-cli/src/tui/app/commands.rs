@@ -37,6 +37,36 @@ pub(crate) fn parse_last_n(args: &str, default: usize) -> Result<usize, String> 
 
 /// The role label a copied message carries, so a pasted multi-message
 /// selection still reads as a conversation rather than one run-on text.
+/// Say what was wrong with a model selector, in the operator's terms.
+///
+/// (2026-11-15, model plan M4) Each variant carries the offending text, so the
+/// message names it back rather than saying "invalid" — an error the operator
+/// cannot act on is a dead end.
+pub(super) fn describe_selector_error(e: &crate::tui::model_selector::SelectorError) -> String {
+    use crate::tui::model_selector::SelectorError;
+    match e {
+        SelectorError::UnknownRole(word) => format!(
+            "unknown role '{word}' — roles are: {}",
+            operant_core::model_roles::ALL_SLOTS
+                .iter()
+                .map(|s| s.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        SelectorError::UnknownEffort(level) => {
+            let options: Vec<&str> = crate::tui::model_effort::EffortLevel::ALL
+                .iter()
+                .map(|l| l.label())
+                .collect();
+            format!("unknown effort '{level}' — use {}", options.join("|"))
+        }
+        SelectorError::UnknownModel { typed, hint } => match hint {
+            Some(hint) => format!("unknown model '{typed}' — did you mean '{hint}'?"),
+            None => format!("unknown model '{typed}'"),
+        },
+    }
+}
+
 fn role_label(role: &Role) -> &'static str {
     match role {
         Role::User => "You",
@@ -719,10 +749,25 @@ impl App {
                     self.set_status_notice("Connect a provider to choose a model.".to_string());
                     return true;
                 }
-                // (plan 05B) the ported jcode unified inline picker over the
-                // agent's endpoint catalogue (05A's rows: base_url /models
-                // + the configured [agent] models).
-                self.open_model_picker_inline(args);
+                // (2026-11-15, model plan M4) With no argument this is the ported
+                // jcode unified inline picker over the agent's endpoint catalogue
+                // (05A's rows: base_url /models + the configured [agent] models).
+                //
+                // WITH an argument it is the selector grammar: `@role[:level]`,
+                // `role[:level]`, `[provider/]modelId[:level]`. Before this the
+                // argument was only ever a filter string, so `/model slow:xhigh`
+                // narrowed the list to nothing and set nothing.
+                let selector = args.trim();
+                if selector.is_empty() {
+                    self.open_model_picker_inline("");
+                    return true;
+                }
+                let available = self.configured_model_ids();
+                match crate::tui::model_selector::resolve(selector, &available) {
+                    Ok(resolved) if resolved.is_empty() => self.open_model_picker_inline(""),
+                    Ok(resolved) => self.apply_resolved_selector(resolved),
+                    Err(e) => self.set_status_notice(describe_selector_error(&e)),
+                }
                 true
             }
             // /model-status — status-tier (command backlog tier 1):
