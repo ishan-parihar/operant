@@ -68,6 +68,19 @@ pub fn header_session_color() -> Color {
 pub fn success_color() -> Color {
     super::palette::role_color(super::palette::Role::Success)
 }
+
+/// Markdown heading ink (plan 2026-11-14 U4).
+pub fn heading_color() -> Color {
+    super::palette::role_color(super::palette::Role::MdHeading)
+}
+/// Inline code foreground (plan 2026-11-14 U4).
+pub fn code_color() -> Color {
+    super::palette::role_color(super::palette::Role::MdCode)
+}
+/// Markdown link text (plan 2026-11-14 U4).
+pub fn link_color() -> Color {
+    super::palette::role_color(super::palette::Role::MdLink)
+}
 /// Warning accent.
 pub fn warning_color() -> Color {
     super::palette::role_color(super::palette::Role::Warning)

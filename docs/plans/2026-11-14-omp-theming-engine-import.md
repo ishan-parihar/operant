@@ -4,9 +4,8 @@ Dated-frozen: published `2026-11-14`. A plan that changes is a new plan (or decl
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
 **Resume here (2026-11-14, after U1/U2 landed):** U1 and U2 are DONE and on `origin/main`
-(iter-2265, iter-2270). U3 is IN PROGRESS and its shape has changed — read "U3 redesign"
-below before writing code. The original U3 as written here is NOT safe to implement as
-specified.
+(iter-2265, iter-2270). U3 is DONE (iter-2274) and its shape changed from what is written here — read
+"U3 redesign" below for the constraint it had to satisfy. U4 is next.
 
 Reference repository (read-only, NOT modified):
 `/home/ishanp/Documents/github/my-projects/agentic-harness/external-repos/oh-my-pi`
@@ -62,8 +61,8 @@ its own palette, and pins one foreign theme instead.
 |---|---|---|
 | U1 — `[tui.colors]` writer for the 22-role palette | **DONE** | iter-2265 |
 | U2 — theme selection total, default is a real theme | **DONE** | iter-2270 |
-| U3 — `md*` / `syntax*` / diff role keys | **IN PROGRESS — redesign required** | — |
-| U4 — route markdown helpers through the roles | pending | — |
+| U3 — `md*` / `syntax*` / diff role keys | **DONE** | iter-2274 |
+| U4 — route markdown helpers through the roles | **NEXT** | — |
 | U5 — map syntect scopes onto theme syntax roles | pending | — |
 | U6 — theme the diff colours | pending | — |
 | U7 — bar fill + separator vocabulary | pending | — |

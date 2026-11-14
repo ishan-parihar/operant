@@ -503,7 +503,9 @@ fn code_bg() -> Color {
     rgb(45, 45, 45)
 }
 fn code_fg() -> Color {
-    rgb(180, 180, 180)
+    // U4: the role's frozen default IS this literal, so the rendered pixel is
+    // unchanged and `/theme` + `[tui.colors]` can now repaint inline code.
+    crate::tui::vendor::style::theme::code_color()
 }
 fn math_fg() -> Color {
     rgb(MATH_FOREGROUND.0, MATH_FOREGROUND.1, MATH_FOREGROUND.2)
@@ -516,7 +518,8 @@ fn math_inline_fg() -> Color {
     )
 }
 fn link_fg() -> Color {
-    rgb(120, 180, 240)
+    // U4: role default == this literal; see `code_fg`.
+    crate::tui::vendor::style::theme::link_color()
 }
 fn html_fg() -> Color {
     rgb(140, 140, 150)
@@ -537,7 +540,10 @@ fn heading_h3_color() -> Color {
     rgb(220, 170, 80)
 }
 fn heading_color() -> Color {
-    rgb(200, 155, 75)
+    // U4: role default == this literal; see `code_fg`. H1-H3 keep their own
+    // literals: giving each depth a role would change those pixels, which is a
+    // separate appearance decision, not a wiring step.
+    crate::tui::vendor::style::theme::heading_color()
 }
 fn md_dim_color() -> Color {
     rgb(100, 100, 100)
