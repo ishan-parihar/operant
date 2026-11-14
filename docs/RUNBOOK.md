@@ -15,7 +15,24 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | test compile gate | `bash scripts/test-compile-gate.sh` | every kept crate's TEST targets compile |
 | doc claims gate | `bash scripts/check-doc-claims.sh` | derives AGENTS.md's code-surface claims (CLI command count and list, gateway platforms, error classes and their AGREEMENT across the doc, hook events, workspace members, AFT tools, TUI modules, every path in the Architecture Overview tree) FROM THE CODE and prints the differences. Exits 1 on any drift. A doc claim about the code is a test in disguise — RG-011. |
 | build script tests | `bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh` | the libclang resolver (three scripts resolving libclang three different ways broke the build) and the supply-chain gate's own fail-on-new-advisory contract |
+| config registry freshness | `python3 scripts/gen-config-registry.py --check` | the registry is generated from the settings structs' doc comments; run it after adding a config field, and commit the regenerated `config_registry.rs` |
+| config key surface gate | `python3 scripts/audit-config-keys.py --check` | a **ratchet**, not a wall: a NEW key must reach note + heal table + template + a doctor row; a LEGACY key may not get worse. 272 keys predate the note discipline, so the baseline is the honest number and can only shrink. `--list-legacy` regenerates it. |
+| config gate mutation test | `bash scripts/tests/config_key_gate_test.sh` | copies the tree to scratch, injects a fake key, asserts the gate fails naming all four surfaces; both halves must be observed failing |
 | format | `cargo fmt --all` | |
+
+## Config resilience commands
+
+| task | command | what it answers |
+|---|---|---|
+| every key, with its note | `operant config describe [section] [--json]` | the map: dotted path, default, current value, note (current marked non-default) |
+| one key's full note | `operant config notes <key>` | why the key exists, its range, its heal; an unknown key gets `Did you mean: ...?` |
+| the same map, from the loop | the `config_manage` tool's `describe` / `notes` actions | what an agent with only tools reads |
+| does my config have defects | `operant doctor` → `[config.resilience]` | unknown-key, deprecated-key, missing-section, range, two-files, unparseable; silent on a healthy config |
+| what healed on load | the `warn!` line naming every `Healed { key, old, new, why }` | the load heals once, atomically, and is idempotent |
+
+Where an unknown key is parked: the sidecar `~/.operant/operant.unknown.toml`
+(mode 0600), never the operator's own file. The sidecar is a downgrade
+round-trip, not a graveyard.
 
 ## Fleet protocol traps
 
