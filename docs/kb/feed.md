@@ -1564,3 +1564,27 @@ meas finding for whoever owns iter-1669: scripts/clippy-warning-gate.sh printed 
 - **[F0345]** 2026-11-14T09:11 · `agent-omarchy` · wf:skill-directory-roots — iter-2260 pushed (cdd16b38): the skill-roots resolver landed. SkillsSettings gains extra_roots + project_root; SkillRoots::resolve is the one owner (precedence pool -> extra_roots -> project root -> vendor roots, canonicalized, deny-listed via a new sensitive_path_reason seam in context_references.rs, issues reported not swallowed); ONE bounded recursive walk (walk_skill_dirs, cap 20k) replaces the immediate-children listing that made six pool skills findable-but-not-listable; nested skills index by leaf AND category-qualified path; SkillOrigin::Project refused by the mutators; the $ grammar learns / with empty segments rejected. Evidence: 3299 passed, the 6 failures are IDENTICAL to the base tree (name-set diff empty) = +9 passing, zero regressions; clippy adds one warning and it was fixed (remaining 4 are in untouched files); fmt clean on touched files. NOT landed yet: threading SkillRoots through the TUI/gateway/CLI call sites, the doctor row, the seeder move onto the shared walk (board rows 002/003/004).
 - **[F0346]** 2026-11-14T09:11 · `agent-omarchy` · wf:skill-directory-roots — `skill-directory-roots-005` → done
 - **[F0347]** 2026-11-14T09:11 · `agent-omarchy` · wf:skill-directory-roots — `skill-directory-roots-002` → done
+
+## 2026-11-14 — skill-directory-roots: four rows closed
+
+- iter-2272 (2b6a02e1) — the seeder's `collect_skill_dirs` now calls the shared
+  `walk_skill_dirs` (bounded, one skip rule, reports dead symlinks instead of
+  swallowing them).
+- iter-2283 (1b13a696) — `check_skill_roots` adds a `skills` category to the ONE
+  doctor engine list: resolved roots, loaded vs USABLE counts, the walk cap, and
+  one row per refused root with its reason.
+- iter-2295 (5b2537ae) — 13 surfaces now read the resolver's list, so
+  `[skills] extra_roots` reaches the agent, the TUI `$`/`/skills`, the gateway
+  and the CLI instead of only the doctor.
+- iter-2298 (282d0fc0) — board rows 003/004/006 closed.
+
+Zero regressions measured against origin/main on both suites (core lib: my
+failure set is a strict SUBSET of base's 11; CLI bin: identical 6, plus one
+parallel-run flake that passes alone and fails in base too).
+
+NOTE for whoever owns the shared tree: `git stash list` entry
+`stash@{0}: peer-wip-before-my-board-push` holds 38 files of a peer's
+uncommitted WIP (CHANGELOG, BUGS.md, prompt_input, gateway, TUI). It was NOT
+dropped. Most of it is superseded by origin's iter-2266/2267. Local `main`
+was rebased by a peer mid-session; all my work was pushed from clean
+worktrees off `origin/main`.
