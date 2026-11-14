@@ -68,3 +68,84 @@ pub fn vendor_skill_command_rows(config: &AppConfig) -> Vec<(String, String)> {
     let roots = vendor_skill_roots(config);
     crate::gateway_commands::skill_command_rows_for_roots(&config.skills.root_dir, &roots)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skill_dir(root: &std::path::Path, name: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).expect("skill dir");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: skill {name}\n---\n\nbody\n"),
+        )
+        .expect("SKILL.md");
+    }
+
+    /// THE contract of the whole resolver: a skill in `[skills] extra_roots`
+    /// must reach the manager the agent gets.
+    ///
+    /// iter-2295's defect was that 13 call sites passed only
+    /// `config.skills.root_dir` plus the vendor roots, so `extra_roots`
+    /// reached `operant doctor` and nothing that loads a skill. This test is
+    /// the one that fails if a surface is rewired to the old form.
+    #[test]
+    fn a_skill_in_extra_roots_reaches_the_manager() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pool = tmp.path().join("pool");
+        let extra = tmp.path().join("extra");
+        std::fs::create_dir_all(&pool).expect("pool dir");
+        std::fs::create_dir_all(&extra).expect("extra dir");
+        skill_dir(&pool, "from-pool");
+        skill_dir(&extra, "from-extra");
+
+        let mut config = AppConfig::default();
+        config.skills.root_dir = pool.clone();
+        config.skills.extra_roots = vec![extra.clone()];
+
+        let mut manager = skill_manager(&config);
+        manager.load_all().expect("load");
+
+        assert!(
+            manager.get("from-pool").is_some(),
+            "the pool's skill is missing"
+        );
+        assert!(
+            manager.get("from-extra").is_some(),
+            "a skill in extra_roots never reached the manager -- the resolver's \
+             whole point is that this cannot happen"
+        );
+    }
+
+    /// The project root rides the same list, and is only consulted when
+    /// `project_root` is not "off".
+    #[test]
+    fn the_project_root_rides_the_resolved_list() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pool = tmp.path().join("pool");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&pool).expect("pool");
+        std::fs::create_dir_all(&proj).expect("proj");
+        skill_dir(&pool, "from-pool");
+        skill_dir(&proj, "from-project");
+
+        let mut config = AppConfig::default();
+        config.skills.root_dir = pool;
+        config.skills.project_root = proj.display().to_string();
+
+        let roots = skill_roots(&config);
+        assert!(
+            roots.as_paths().iter().any(|p| p == &proj),
+            "the explicit project root did not resolve: {:?}",
+            roots.as_paths()
+        );
+
+        let mut manager = skill_manager(&config);
+        manager.load_all().expect("load");
+        assert!(
+            manager.get("from-project").is_some(),
+            "the project root's skill is missing"
+        );
+    }
+}
