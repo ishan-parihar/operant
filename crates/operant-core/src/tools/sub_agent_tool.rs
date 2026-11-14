@@ -610,9 +610,12 @@ impl SubAgentTool {
             let Some(schema_ref) = schema.as_ref() else {
                 return Ok(answer);
             };
-            let (valid, errors) = validate_output(&answer, schema_ref);
+            let (valid, errors, candidate) = validate_output(&answer, schema_ref);
             if valid {
-                return Ok(answer);
+                // Return the JSON the validator parsed, not the child's raw
+                // text: a child that wrapped its object in a fence or a sentence
+                // is contract-compliant, and the parent asked for the object.
+                return Ok(candidate.unwrap_or(answer));
             }
             if attempts >= MAX_SCHEMA_RETRIES {
                 // Persistent failure: keep the answer (the parent needs the

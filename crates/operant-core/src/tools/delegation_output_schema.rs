@@ -100,29 +100,43 @@ pub fn extract_json_candidate(text: &str) -> String {
 
 /// Validate a child's final answer against `schema`.
 ///
-/// Returns `(true, [])` on success or `(false, errors)` where errors are
-/// human-readable strings suitable for the retry turn (hermes
-/// `validate_output` parity, `$.path`-style rendering, bounded volume).
-pub fn validate_output(text: &str, schema: &Value) -> (bool, Vec<String>) {
+/// Returns `(valid, errors, candidate)`: `errors` are human-readable strings
+/// suitable for the retry turn (hermes `validate_output` parity, `$.path`-style
+/// rendering, bounded volume), and `candidate` is the JSON the validator
+/// actually parsed — fences and surrounding prose stripped.
+///
+/// The candidate is returned because it IS the contract answer: the parent asked
+/// for "a single JSON object that validates against this schema", so a child that
+/// wrapped it in prose or a fence is compliant and the parent must not be handed
+/// the prose. MEASURED defect (2026-11-14): the candidate was built here and
+/// thrown away, so the parent received the child's raw text and any caller that
+/// `serde_json::from_str`'d the tool result failed on a child that did everything
+/// asked of it.
+pub fn validate_output(text: &str, schema: &Value) -> (bool, Vec<String>, Option<String>) {
     let candidate = extract_json_candidate(text);
     if candidate.trim().is_empty() {
         return (
             false,
             vec!["Response was empty — expected a JSON object matching the schema.".to_string()],
+            None,
         );
     }
     let parsed: Value = match serde_json::from_str(&candidate) {
         Ok(value) => value,
         Err(error) => {
-            return (false, vec![format!("Response is not valid JSON: {error}")]);
+            return (
+                false,
+                vec![format!("Response is not valid JSON: {error}")],
+                None,
+            );
         }
     };
     let mut errors = Vec::new();
     validate_value(&parsed, schema, "$", &mut errors, 0);
     if errors.is_empty() {
-        (true, Vec::new())
+        (true, Vec::new(), Some(candidate))
     } else {
-        (false, errors)
+        (false, errors, Some(candidate))
     }
 }
 
@@ -130,10 +144,22 @@ pub fn validate_output(text: &str, schema: &Value) -> (bool, Vec<String>) {
 /// against adversarial deeply-nested schemas overflowing the stack.
 const MAX_VALIDATION_DEPTH: usize = 16;
 
-/// Lightweight JSON-Schema subset validation: root `type`, `required`,
-/// per-property `type`, nested `properties` recursion, and `items` for
-/// arrays. Errors rendered as `$.prop[0]`-style paths, bounded to
-/// [`MAX_RENDERED_ERRORS`] so a retry prompt never blows up.
+/// Lightweight JSON-Schema subset validation: `type`, `required`, `properties`
+/// recursion, `items` for arrays, `enum`, and `additionalProperties: false`.
+///
+/// MEASURED defect (2026-11-14): the validator parsed every schema verbatim but
+/// consulted only `type`/`required`/`properties`/`items`, while the contract told
+/// the child its answer was "machine-validated" — so `enum`, `additionalProperties`
+/// and every numeric/string bound passed unchecked and no retry fired. A caller
+/// who wrote `{"status": {"enum": ["pass","fail"]}}` got "maybe" delivered as a
+/// contract-valid answer. `enum` and `additionalProperties: false` are the two the
+/// contract's own example uses, so they are enforced; the rest are named below.
+///
+/// STILL NOT ENFORCED (stated so a caller can decide): `const`, `minimum`,
+/// `maximum`, `exclusiveMinimum`/`Maximum`, `minLength`, `maxLength`, `pattern`,
+/// `minItems`, `maxItems`, `uniqueItems`, `oneOf`, `anyOf`, `allOf`, `$ref`,
+/// `patternProperties`, `minProperties`, `maxProperties`, `format`. A schema that
+/// needs one of those is not machine-validated here; enforce it in the caller.
 fn validate_value(
     value: &Value,
     schema: &Value,
@@ -150,6 +176,20 @@ fn validate_value(
         errors.push(format!("{path}: value is not of type '{type_name}'"));
         return; // wrong type at this node is fatal for the subtree
     }
+    if let Some(allowed) = schema.get("enum").and_then(|e| e.as_array())
+        && !allowed.is_empty()
+        && !allowed.contains(value)
+    {
+        errors.push(format!(
+            "{path}: value is not one of the allowed values ({}), got {}",
+            allowed
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            value
+        ));
+    }
     match value {
         Value::Object(obj) => {
             if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
@@ -158,6 +198,18 @@ fn validate_value(
                         && !obj.contains_key(key)
                     {
                         errors.push(format!("{path}: missing required property '{key}'"));
+                    }
+                }
+            }
+            if schema.get("additionalProperties").and_then(|v| v.as_bool()) == Some(false)
+                && let Some(properties) = schema.get("properties").and_then(|p| p.as_object())
+            {
+                for key in obj.keys() {
+                    if !properties.contains_key(key) {
+                        errors.push(format!(
+                            "{path}: unexpected property '{key}' is not allowed \
+                             (additionalProperties is false)"
+                        ));
                     }
                 }
             }
@@ -299,7 +351,7 @@ mod tests {
                 "files": { "type": "array" }
             }
         });
-        let (valid, errors) = validate_output(
+        let (valid, errors, _candidate) = validate_output(
             "```json\n{\"summary\": \"done\", \"files\": [\"a.rs\"]}\n```",
             &schema,
         );
@@ -316,7 +368,7 @@ mod tests {
                 "count": { "type": "integer" }
             }
         });
-        let (valid, errors) = validate_output(r#"{"count": "not-an-int"}"#, &schema);
+        let (valid, errors, _candidate) = validate_output(r#"{"count": "not-an-int"}"#, &schema);
         assert!(!valid);
         assert!(
             errors
@@ -333,7 +385,7 @@ mod tests {
     #[test]
     fn validate_rejects_invalid_json() {
         let schema = json!({ "type": "object" });
-        let (valid, errors) = validate_output("this is not json at all", &schema);
+        let (valid, errors, _candidate) = validate_output("this is not json at all", &schema);
         assert!(!valid);
         assert!(errors[0].contains("not valid JSON"));
     }
@@ -349,13 +401,61 @@ mod tests {
                 }
             }
         });
-        let (valid, errors) = validate_output(r#"{"items": [{"id": 1}, {"wrong": 2}]}"#, &schema);
+        let (valid, errors, _candidate) =
+            validate_output(r#"{"items": [{"id": 1}, {"wrong": 2}]}"#, &schema);
         assert!(!valid);
         assert!(
             errors
                 .iter()
                 .any(|e| e.contains("$.items[1]: missing required property 'id'"))
         );
+    }
+
+    /// `enum` and `additionalProperties: false` are part of the contract's own
+    /// example, so they are enforced. MEASURED defect (2026-11-14): both were
+    /// parsed and ignored, and "maybe" reached the parent as contract-valid.
+    #[test]
+    fn validate_enforces_enum_and_additional_properties() {
+        let schema = json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": { "status": { "enum": ["pass", "fail"] } },
+            "additionalProperties": false
+        });
+        let (valid, errors, _) = validate_output(r#"{"status":"maybe","extra":null}"#, &schema);
+        assert!(!valid, "an out-of-enum value must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("$.status") && e.contains("allowed values")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unexpected property 'extra'")),
+            "{errors:?}"
+        );
+
+        let (valid, errors, _) = validate_output(r#"{"status":"pass"}"#, &schema);
+        assert!(valid, "the in-enum answer must pass: {errors:?}");
+    }
+
+    /// The parsed candidate is what the parent receives: fences and prose are
+    /// stripped, so a compliant child's answer is directly parseable.
+    #[test]
+    fn validate_returns_the_json_it_parsed() {
+        let schema = json!({ "type": "object", "required": ["ok"] });
+        let (valid, errors, candidate) =
+            validate_output("Sure — here you go:\n```json\n{\"ok\": true}\n```", &schema);
+        assert!(valid, "{errors:?}");
+        assert_eq!(candidate.as_deref(), Some("{\"ok\": true}"));
+
+        // An invalid answer still yields the candidate, so the retry path can
+        // show the child what it actually sent.
+        let (valid, errors, candidate) = validate_output(r#"{"nope": 1}"#, &schema);
+        assert!(!valid);
+        assert_eq!(candidate.as_deref(), Some("{\"nope\": 1}"));
     }
 
     #[test]
