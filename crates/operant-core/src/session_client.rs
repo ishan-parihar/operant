@@ -17,8 +17,8 @@ use crate::session_protocol::{PROTOCOL_VERSION, WireMessage, decode, encode};
 
 /// A connected session client.
 pub struct SessionClient {
-    reader: BufReader<tokio::net::unix::OwnedReadHalf>,
-    writer: tokio::net::unix::OwnedWriteHalf,
+    reader: SessionReader,
+    writer: SessionWriter,
     /// The sessions the server named at hello.
     pub sessions: Vec<String>,
 }
@@ -34,8 +34,10 @@ impl SessionClient {
             .map_err(|e| anyhow::anyhow!("cannot reach the server at {}: {e}", path.display()))?;
         let (read_half, write_half) = stream.into_split();
         let mut client = Self {
-            reader: BufReader::new(read_half),
-            writer: write_half,
+            reader: SessionReader {
+                reader: BufReader::new(read_half),
+            },
+            writer: SessionWriter { writer: write_half },
             sessions: Vec::new(),
         };
         // The hello is written first so the server knows this is a client.
@@ -61,22 +63,12 @@ impl SessionClient {
 
     /// Send one message to the server.
     pub async fn send(&mut self, message: &WireMessage) -> Result<()> {
-        let line = encode(message, PROTOCOL_VERSION)?;
-        self.writer.write_all(line.as_bytes()).await?;
-        self.writer.write_all(b"\n").await?;
-        self.writer.flush().await?;
-        Ok(())
+        self.writer.send(message).await
     }
 
     /// Read the server's next message, if it sends one.
     pub async fn recv(&mut self) -> Result<Option<WireMessage>> {
-        let mut line = String::new();
-        let read = self.reader.read_line(&mut line).await?;
-        if read == 0 {
-            return Ok(None);
-        }
-        let message = decode(&line, PROTOCOL_VERSION)?;
-        Ok(Some(message))
+        self.reader.recv().await
     }
 
     /// Split into a read half and a write half.
@@ -86,14 +78,7 @@ impl SessionClient {
     /// the whole client would make a slow read block the write. The halves are
     /// the socket's own; splitting them costs nothing.
     pub fn into_split(self) -> (SessionReader, SessionWriter) {
-        (
-            SessionReader {
-                reader: self.reader,
-            },
-            SessionWriter {
-                writer: self.writer,
-            },
-        )
+        (self.reader, self.writer)
     }
 }
 

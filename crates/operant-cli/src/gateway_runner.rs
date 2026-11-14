@@ -2611,17 +2611,31 @@ impl SessionBus {
 
     /// The sender for a session, created on first use.
     ///
-    /// Senders with no receivers left are dropped first. The map is keyed by a
-    /// session id ANY client can name (a `LoadHistory` for a made-up id
-    /// subscribes to it), so without this the map grows without bound for as
-    /// long as the daemon lives, and each entry is a 256-slot ring.
+    /// NO pruning here: `publish` calls this for every agent event, and a
+    /// `retain` over the whole map made each event O(sessions) — the hot path
+    /// got slower exactly as the session count grew, which is the scale the
+    /// socket exists for.
     fn sender_for(&self, session_id: &str) -> broadcast::Sender<WireMessage> {
         let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
-        senders.retain(|_, sender| sender.receiver_count() > 0);
         senders
             .entry(session_id.to_string())
             .or_insert_with(|| broadcast::channel(256).0)
             .clone()
+    }
+
+    /// Subscribe a client to a session, dropping the senders nobody reads.
+    ///
+    /// The map is keyed by a session id ANY client can name (a `LoadHistory`
+    /// for a made-up id subscribes to it), so without this it grows for as long
+    /// as the daemon lives and each entry is a 256-slot ring. A client joining
+    /// is rare; a turn emitting an event is not.
+    fn subscribe(&self, session_id: &str) -> broadcast::Receiver<WireMessage> {
+        let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
+        senders.retain(|_, sender| sender.receiver_count() > 0);
+        let sender = senders
+            .entry(session_id.to_string())
+            .or_insert_with(|| broadcast::channel(256).0);
+        sender.subscribe()
     }
 
     /// Publish one agent event to the session's subscribers.
@@ -2648,12 +2662,25 @@ struct GatewaySessionHandler {
     /// silent turn.
     handler: Option<std::sync::Arc<GatewayMessageHandler>>,
     bus: std::sync::Arc<SessionBus>,
-    /// The running turn per session (RT-550).
-    ///
-    /// A cancel has to reach the turn, so the handler keeps the task handle.
-    /// Without it a cancel was an acknowledgement and nothing more: the client
-    /// was told "cancelled" while the turn ran on.
-    running: std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
+}
+
+/// A session's claim on the concurrency cap, released when it drops.
+///
+/// The socket used to `acquire` and never `release`, so the tracker's lock file
+/// outlived the turn and was only reclaimed after `STALE_AFTER_SECS` (six
+/// hours): with a cap of four, four distinct socket sessions exhausted it for
+/// the rest of the day while the channels kept working. The guard is what makes
+/// the release unconditional — a finished turn, an error, or a panic all give
+/// the slot back.
+struct SessionLease {
+    tracker: operant_core::active_sessions::ActiveSessionTracker,
+    session_id: String,
+}
+
+impl Drop for SessionLease {
+    fn drop(&mut self) {
+        self.tracker.release(&self.session_id);
+    }
 }
 
 /// Resolve a pending tool-permission ask by its tool-call id (the session
@@ -2712,6 +2739,12 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     .unwrap_or_default();
                 vec![WireMessage::HelloOk { sessions }]
             }
+            // A client changing session: the connection re-subscribes to any
+            // session a message names (see `serve_client`), so the switch needs
+            // no state of its own — the answer is what the new session holds.
+            WireMessage::Switch { session_id } => {
+                return self.handle(WireMessage::LoadHistory { session_id });
+            }
             // A prompt runs the turn in the SLOT that owns this session.
             //
             // The reply is not the answer: the answer arrives as events on
@@ -2736,28 +2769,106 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                             .to_string(),
                     }];
                 }
-                if let Some(max) = handler.max_concurrent_sessions
-                    && !operant_core::active_sessions::ActiveSessionTracker::new(
-                        operant_core::active_sessions::ActiveSessionTracker::default_dir(),
-                        Some(max),
-                    )
-                    .acquire(&session_id)
-                    .unwrap_or(true)
-                {
+                // Another PROCESS already owns this session (a TUI that has it
+                // open writes the presence registry). Two writers on one
+                // transcript is the corruption the slot design exists to
+                // prevent, so the prompt is refused rather than interleaved.
+                if operant_core::active_sessions::session_is_live(&session_id) {
+                    let message = format!(
+                        "another live process owns session {session_id} — close it first \
+                         (`operant sessions` lists them)"
+                    );
                     return vec![WireMessage::Error {
                         session_id: Some(session_id),
-                        message: format!(
-                            "too many concurrent sessions (limit {max}) — the turn was not started"
-                        ),
+                        message,
                     }];
+                }
+                // The cap bounds IN-FLIGHT turns, so it may never exceed the
+                // slots there are to run them in. `max_concurrent_sessions`
+                // doubles as the slot count; set to 1000 it built 256 slots and
+                // admitted 1000 prompts, and the other 744 queued on a slot lock
+                // holding their text in memory — a cap that bounds nothing.
+                let cap = handler
+                    .max_concurrent_sessions
+                    .map(|max| max.min(handler.slots.slots.len().max(1)));
+                let lease = match cap {
+                    Some(max) => {
+                        let tracker = operant_core::active_sessions::ActiveSessionTracker::new(
+                            handler.session_tracker_dir.clone(),
+                            Some(max),
+                        );
+                        if !tracker.acquire(&session_id).unwrap_or(true) {
+                            return vec![WireMessage::Error {
+                                session_id: Some(session_id),
+                                message: format!(
+                                    "too many concurrent sessions (limit {max}) — the turn was not started"
+                                ),
+                            }];
+                        }
+                        Some(SessionLease {
+                            tracker,
+                            session_id: session_id.clone(),
+                        })
+                    }
+                    None => None,
+                };
+                // A command is a slash plus a KNOWN name, not any leading
+                // slash: a prompt about `/etc/hosts` is a prompt. The channel
+                // path intercepts its full command surface before the agent;
+                // these are the ones that make sense with no local runtime.
+                match text.split_whitespace().next().unwrap_or("") {
+                    "/stop" => {
+                        let holder = handler.running_session.lock().ok().and_then(|running| {
+                            running
+                                .contains_key(&session_id)
+                                .then(|| Arc::clone(&handler))
+                        });
+                        let message = match holder {
+                            Some(handler) => {
+                                handler
+                                    .slots
+                                    .slot_for(&session_id)
+                                    .agent
+                                    .interrupt_flag()
+                                    .trigger();
+                                "the turn was cancelled".to_string()
+                            }
+                            None => "there was no turn to cancel".to_string(),
+                        };
+                        return vec![WireMessage::Error {
+                            session_id: Some(session_id),
+                            message,
+                        }];
+                    }
+                    "/sessions" => {
+                        return vec![WireMessage::HelloOk {
+                            sessions: handler.live_session_ids(),
+                        }];
+                    }
+                    _ => {}
                 }
                 let bus = std::sync::Arc::clone(&self.bus);
                 let task_session = session_id.clone();
-                let task = tokio::spawn(async move {
+                tokio::spawn(async move {
+                    // Keeps the cap for exactly as long as the turn runs.
+                    let _lease = lease;
                     let slot = handler.slots.slot_for(&task_session);
                     // ONE turn at a time in this slot (the same lock every
                     // other gateway turn takes).
                     let _guard = slot.lock.lock().await;
+                    // The same turn bookkeeping a channel turn does: the
+                    // session claims its slot (so a cancel can tell this
+                    // session's turn from a neighbour's) and arms a clean
+                    // interrupt latch, released when the turn ends.
+                    let _running = RunningSessionGuard {
+                        running: &handler.running_session,
+                        session_key: task_session.clone(),
+                    };
+                    if let Ok(mut running) = handler.running_session.lock() {
+                        running
+                            .insert(task_session.clone(), handler.slots.index_for(&task_session));
+                    }
+                    slot.agent.interrupt_flag().reset();
                     // The slot's agent must be pointed at THIS session before
                     // the turn runs — the same binding the channel path does,
                     // or the transcript lands in the previous chat's history
@@ -2790,9 +2901,6 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         );
                     }
                 });
-                if let Ok(mut running) = self.running.lock() {
-                    running.insert(session_id, task);
-                }
                 vec![]
             }
             // RT-544: a client joining a live session is told what it has.
@@ -2827,19 +2935,25 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
             // flag is how `/stop` and the drain end a turn: the loop exits, the
             // tail is committed, and the slot's lock is released by its guard.
             WireMessage::Cancel { session_id, .. } => {
-                let handler = self.handler.as_ref().map(std::sync::Arc::clone);
-                let flagged = handler.is_some_and(|handler| {
+                // WHO holds the turn decides whether this cancel reaches it.
+                // The interrupt flag belongs to the SLOT, and two sessions can
+                // hash to one slot: triggering it for a session that is only
+                // QUEUED behind a neighbour stopped the neighbour's turn. The
+                // running set is the record — a session is in it exactly while
+                // its turn holds the slot lock, and it is also what tells a
+                // finished turn from a running one (a stale task handle used to
+                // answer "cancelled" for a turn that had already ended).
+                let holder = self.handler.as_ref().and_then(|handler| {
+                    let running = handler.running_session.lock().ok()?;
+                    running
+                        .contains_key(&session_id)
+                        .then(|| Arc::clone(handler))
+                });
+                let stopped = holder.is_some();
+                if let Some(handler) = holder {
                     let slot = handler.slots.slot_for(&session_id);
                     slot.agent.interrupt_flag().trigger();
-                    true
-                });
-                let stopped = flagged
-                    && self
-                        .running
-                        .lock()
-                        .ok()
-                        .and_then(|mut running| running.remove(&session_id))
-                        .is_some();
+                }
                 vec![WireMessage::Error {
                     session_id: Some(session_id),
                     message: if stopped {
@@ -2949,7 +3063,7 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
         &self,
         session_id: &str,
     ) -> Option<tokio::sync::broadcast::Receiver<operant_core::session_protocol::WireMessage>> {
-        Some(self.bus.sender_for(session_id).subscribe())
+        Some(self.bus.subscribe(session_id))
     }
 }
 
@@ -3159,13 +3273,14 @@ struct GatewayMessageHandler {
     /// the SAME cap the channel path does — a prompt path that skips it makes
     /// the cap decorative.
     max_concurrent_sessions: Option<usize>,
-    /// The sessions this daemon has been asked to serve (RT-542's handshake).
+    /// Where the session cap's lock files live.
     ///
-    /// `Hello` used to answer from the PRESENCE directory, which only the TUI
-    /// writes, so the gateway always reported zero sessions and an attaching
-    /// client fell back to a made-up id. The slot bindings are the daemon's own
-    /// record of what it can serve.
-    live_sessions: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// A field, not a call to `default_dir()` at the use site, for two reasons:
+    /// production must resolve the operator's data directory, and a TEST must
+    /// not — a cap test that writes into the live `~/.operant/sessions/active`
+    /// can refuse a real session, and two cap tests running in parallel share
+    /// one directory and refuse each other.
+    session_tracker_dir: std::path::PathBuf,
 }
 
 impl GatewayMessageHandler {
@@ -3209,9 +3324,6 @@ impl GatewayMessageHandler {
             }
             changed
         };
-        if let Ok(mut live) = self.live_sessions.lock() {
-            live.insert(session_id.to_string());
-        }
         if changed {
             tracing::info!(session = %session_id, source, "the slot is bound to a session");
         }
@@ -3265,13 +3377,24 @@ impl GatewayMessageHandler {
     }
 
     /// The sessions this daemon can serve right now (the `Hello` answer).
+    ///
+    /// Read from the SLOTS, which is the one record of what a daemon holds: the
+    /// slot's `loaded_session` is written by the same binding that runs the
+    /// turn. The set this replaced was insert-only — a client could mint session
+    /// ids forever and every `Hello` shipped the whole list.
+    ///
+    /// `try_lock`, not `lock`: the caller is a synchronous `handle` inside an
+    /// async connection task, and a blocking lock there would panic. A slot that
+    /// is mid-turn is simply absent from this snapshot.
     fn live_session_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
-            .live_sessions
-            .lock()
-            .map(|live| live.iter().cloned().collect())
-            .unwrap_or_default();
+            .slots
+            .slots
+            .iter()
+            .filter_map(|slot| slot.loaded_session.try_lock().ok().and_then(|h| h.clone()))
+            .collect();
         ids.sort();
+        ids.dedup();
         ids
     }
 
@@ -5374,7 +5497,7 @@ pub async fn start_gateway(
         slots: AgentSlots { slots },
         admins: app_config.gateway.admins.clone(),
         max_concurrent_sessions: app_config.gateway.max_concurrent_sessions,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+        session_tracker_dir: operant_core::active_sessions::ActiveSessionTracker::default_dir(),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
@@ -5432,7 +5555,6 @@ pub async fn start_gateway(
         let session_handler = std::sync::Arc::new(GatewaySessionHandler {
             handler: Some(std::sync::Arc::clone(&handler)),
             bus: std::sync::Arc::clone(&session_bus),
-            running: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         tokio::spawn(async move {
             if let Err(e) =

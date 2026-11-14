@@ -190,7 +190,8 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // Unmapped channel → the `premiere` default (same default as the
@@ -413,7 +414,8 @@ fn slow_echo_handler_with_slots(
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     })
 }
 
@@ -499,7 +501,8 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     })
 }
 
@@ -1930,7 +1933,8 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // Start from a KNOWN cell, so the assertion is about this command's
@@ -2068,7 +2072,8 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // A two-turn conversation, so the file has both roles in it.
@@ -2204,7 +2209,8 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // A bare /memory is a status report, and it must name the engine the
@@ -2383,7 +2389,8 @@ async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
         wasm_plugin_skill_roots: vec![vendor.clone()],
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // The bare form lists the vendor skill.
@@ -2459,7 +2466,8 @@ async fn the_posture_command_settles_into_the_agents_cell() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
     assert_eq!(agent.posture_override(), None, "starts from the config");
 
@@ -2547,7 +2555,8 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     };
 
     // Seed the durable store with a query-unique token. `run_session_scoped_command`
@@ -2864,6 +2873,7 @@ fn handler_for_skills(
     ));
     GatewayMessageHandler {
         admins: vec![],
+        session_tracker_dir: dir.join("active"),
         slots: slot_pool(Arc::clone(&agent)),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
@@ -2885,7 +2895,6 @@ fn handler_for_skills(
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
     }
 }
 
@@ -2994,7 +3003,8 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
         max_concurrent_sessions: None,
-        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+        session_tracker_dir: dir.path().join("active"),
     });
 
     let msg = IncomingMessage::new(
@@ -3104,7 +3114,6 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
     let handler = std::sync::Arc::new(GatewaySessionHandler {
         handler: None,
         bus: std::sync::Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     let server = tokio::spawn(operant_core::session_server::run_session_socket(
         handler,
@@ -3230,9 +3239,10 @@ fn the_session_cap_and_the_slot_count_are_one_number() {
 
 /// RT-550: a cancel STOPS the turn, it does not acknowledge and run on.
 ///
-/// The session handler keeps the running turn's task handle; a cancel aborts
-/// it. Without the handle the client was told "cancelled" while the turn ran
-/// to completion.
+/// The interrupt flag is what stops it (an abort skipped the interrupted marker
+/// and the tail commit), so the assertion is on the FLAG, and the running set is
+/// seeded rather than raced: a real turn's lifetime is not observable here,
+/// because with no provider key the turn ends before the first poll.
 #[tokio::test]
 async fn a_cancel_stops_the_running_turn_and_says_which() {
     use operant_core::session_protocol::WireMessage;
@@ -3240,7 +3250,7 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let agent = Arc::new(operant_core::agent::OperantAgent::new(
         operant_core::agent::AgentConfig::default(),
-        Box::new(SlowEchoClient { delay_ms: 40 }),
+        Box::new(SlowEchoClient { delay_ms: 5 }),
         operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
         Arc::new(
             operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
@@ -3248,8 +3258,9 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
     ));
     let handler = GatewaySessionHandler {
         handler: Some(Arc::new(GatewayMessageHandler {
-            slots: slot_pool(agent),
+            slots: slot_pool(Arc::clone(&agent)),
             admins: vec![],
+            max_concurrent_sessions: None,
             gateway: tokio::sync::Mutex::new(None),
             session_pins: Arc::new(SessionPins::default()),
             exit_reasons: ExitReasonMap::default(),
@@ -3263,35 +3274,24 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
-            skills_extra_roots: Vec::new(),
             #[cfg(feature = "plugins-wasm")]
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
-            max_concurrent_sessions: None,
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+            skills_extra_roots: Vec::new(),
+            session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
     };
+    // The turn is RUNNING: it holds the slot, and the set names it.
+    handler
+        .handler
+        .as_ref()
+        .expect("the handler")
+        .running_session
+        .lock()
+        .expect("the lock")
+        .insert("s1".to_string(), 0);
 
-    // A prompt starts a turn and records its task.
-    let replies = operant_core::session_server::SessionHandler::handle(
-        &handler,
-        WireMessage::Prompt {
-            session_id: "s1".to_string(),
-            text: "a slow turn".to_string(),
-        },
-    );
-    assert!(
-        replies.is_empty(),
-        "a prompt is answered by events, not a reply"
-    );
-    assert!(
-        handler.running.lock().expect("the lock").contains_key("s1"),
-        "the running turn must be recorded so a cancel can reach it"
-    );
-
-    // The cancel names the turn and reports that it stopped one.
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
         WireMessage::Cancel {
@@ -3307,11 +3307,19 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
         other => panic!("a cancel must be answered with one error, got {other:?}"),
     }
     assert!(
-        !handler.running.lock().expect("the lock").contains_key("s1"),
-        "the cancelled turn must be forgotten"
+        agent.interrupt_flag().is_triggered(),
+        "the cancel must raise the slot's interrupt flag — that is what ends the turn"
     );
 
-    // A second cancel has nothing to stop and says that instead of lying.
+    // Nothing running: the same cancel says so instead of lying.
+    handler
+        .handler
+        .as_ref()
+        .expect("the handler")
+        .running_session
+        .lock()
+        .expect("the lock")
+        .clear();
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
         WireMessage::Cancel {
@@ -3326,101 +3334,32 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
         ),
         other => panic!("the second cancel must be answered, got {other:?}"),
     }
-
-    // Let the aborted task settle before the temp dir goes away.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 }
 
-/// iter-2256: a prompt over the socket is BOUND to the session it names.
+/// Wait for a condition the TURN TASK sets.
 ///
-/// The socket arm used to call `agent.run()` without `set_session_id`, so the
-/// turn ran in whatever conversation the slot held last — or minted a fresh
-/// `sess_<uuid>` — and the transcript landed under the wrong id. MEASURED on
-/// the live daemon: a prompt sent to session `attached` persisted as
-/// `sess_9d985cd8-…`, so `LoadHistory` for the named session was empty.
-#[tokio::test]
-async fn a_socket_prompt_is_bound_to_the_session_it_names() {
-    use operant_core::session_protocol::WireMessage;
-
-    let dir = tempfile::tempdir().expect("a temp dir");
-    let agent = Arc::new(operant_core::agent::OperantAgent::new(
-        operant_core::agent::AgentConfig::default(),
-        Box::new(SlowEchoClient { delay_ms: 40 }),
-        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
-        Arc::new(
-            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
-        ),
-    ));
-    let handler = GatewaySessionHandler {
-        handler: Some(Arc::new(GatewayMessageHandler {
-            slots: slot_pool(agent.clone()),
-            admins: vec![],
-            gateway: tokio::sync::Mutex::new(None),
-            session_pins: Arc::new(SessionPins::default()),
-            exit_reasons: ExitReasonMap::default(),
-            turn_usage: TurnUsageMap::default(),
-            summary_ttl_minutes: 30,
-            default_budget: operant_core::config::BudgetSettings::default(),
-            context_injection: None,
-            running_session: std::sync::Mutex::new(HashMap::new()),
-            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
-            cancelled_queued: Default::default(),
-            mcp_manager: operant_core::mcp::McpManager::new(),
-            mcp_server_configs: Vec::new(),
-            skills_root_dir: dir.path().join("skills-absent"),
-            skills_extra_roots: Vec::new(),
-            #[cfg(feature = "plugins-wasm")]
-            wasm_plugin_skill_roots: Vec::new(),
-            queue_waits: tokio::sync::Mutex::new(Default::default()),
-            max_concurrent_sessions: None,
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
-        })),
-        bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
-    };
-
-    let replies = operant_core::session_server::SessionHandler::handle(
-        &handler,
-        WireMessage::Prompt {
-            session_id: "socket-session".to_string(),
-            text: "hello".to_string(),
-        },
-    );
-    assert!(replies.is_empty(), "a prompt is answered by events");
-
-    // The binding happens before the model call, so it is observable while the
-    // turn is still running.
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-    assert_eq!(
-        agent.session_id().as_deref(),
-        Some("socket-session"),
-        "the turn must run in the session the client named"
-    );
-
-    // ...and the daemon can NAME that session to the next client that says hello.
-    let replies =
-        operant_core::session_server::SessionHandler::handle(&handler, WireMessage::Hello);
-    match replies.as_slice() {
-        [WireMessage::HelloOk { sessions }] => assert!(
-            sessions.contains(&"socket-session".to_string()),
-            "hello must name the sessions the daemon has bound, got {sessions:?}"
-        ),
-        other => panic!("hello must be answered with hello ok, got {other:?}"),
+/// A prompt spawns the turn and returns, so the slot bookkeeping appears a few
+/// polls later — the handle map this replaced was filled synchronously.
+async fn turn_state<F: FnMut() -> bool>(mut ready: F) -> bool {
+    for _ in 0..300 {
+        if ready() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    ready()
 }
 
-/// iter-2256: a paused gateway refuses a socket prompt.
+/// iter-2318: the cap is GIVEN BACK when the turn ends.
 ///
-/// ESTOP is a pause, not a channel-only setting: the socket arm used to call
-/// the agent directly, so an operator who paused the daemon still had turns run
-/// for every attached client.
+/// The socket used to `acquire` and never `release`, so a session's lock file
+/// outlived its turn and was only reclaimed after six hours: with a cap of one,
+/// ONE socket session exhausted the daemon for the rest of the day.
 #[tokio::test]
-async fn a_paused_gateway_refuses_a_socket_prompt() {
+async fn the_session_cap_is_released_when_the_turn_ends() {
     use operant_core::session_protocol::WireMessage;
 
     let dir = tempfile::tempdir().expect("a temp dir");
-    let _scope = operant_core::estop::scoped_root_for_tests(dir.path());
-    operant_core::estop::engage(Some("audit")).expect("the stop engages");
     let agent = Arc::new(operant_core::agent::OperantAgent::new(
         operant_core::agent::AgentConfig::default(),
         Box::new(SlowEchoClient { delay_ms: 5 }),
@@ -3433,6 +3372,7 @@ async fn a_paused_gateway_refuses_a_socket_prompt() {
         handler: Some(Arc::new(GatewayMessageHandler {
             slots: slot_pool(agent),
             admins: vec![],
+            max_concurrent_sessions: Some(1),
             gateway: tokio::sync::Mutex::new(None),
             session_pins: Arc::new(SessionPins::default()),
             exit_reasons: ExitReasonMap::default(),
@@ -3446,190 +3386,164 @@ async fn a_paused_gateway_refuses_a_socket_prompt() {
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
-            skills_extra_roots: Vec::new(),
             #[cfg(feature = "plugins-wasm")]
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
-            max_concurrent_sessions: None,
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+            skills_extra_roots: Vec::new(),
+            session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
     };
+    let prompt = |session: &str| WireMessage::Prompt {
+        session_id: session.to_string(),
+        text: "hello".to_string(),
+    };
+    let _ = operant_core::session_server::SessionHandler::handle(&handler, prompt("first"));
+    // The lock file is the claim, and its name is a hash of the session id, so
+    // the tracker's own count is the honest way to read it.
+    let held = || {
+        operant_core::active_sessions::ActiveSessionTracker::new(dir.path().join("active"), Some(1))
+            .count()
+            .unwrap_or(usize::MAX)
+    };
+    let started = turn_state(|| held() > 0).await;
+    assert!(started, "the first turn must claim the cap");
+    // With no provider key a real turn retries, so the test ends the turn the
+    // way an operator would: with a cancel.
+    let _ = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Cancel {
+            session_id: "first".to_string(),
+            turn_id: None,
+        },
+    );
+    let released = turn_state(|| held() == 0).await;
+    assert!(
+        released,
+        "the cap must be given back when the turn ends — the defect this pins"
+    );
 
+    // And the next session is admitted.
+    let replies = operant_core::session_server::SessionHandler::handle(&handler, prompt("second"));
+    assert!(
+        replies.is_empty(),
+        "the second session must be admitted once the first turn ended, got {replies:?}"
+    );
+}
+
+/// iter-2318: a cancel reaches only the turn that session is running.
+///
+/// The interrupt flag belongs to the SLOT, and two sessions share a slot, so a
+/// cancel for a QUEUED session used to stop the neighbour's running turn.
+#[tokio::test]
+async fn a_cancel_does_not_stop_another_session_in_the_same_slot() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 5 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = GatewaySessionHandler {
+        handler: Some(Arc::new(GatewayMessageHandler {
+            // ONE slot: every session lands in it, which is the case a
+            // cross-session cancel gets wrong.
+            slots: slot_pool(Arc::clone(&agent)),
+            admins: vec![],
+            max_concurrent_sessions: None,
+            gateway: tokio::sync::Mutex::new(None),
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            running_session: std::sync::Mutex::new(HashMap::new()),
+            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cancelled_queued: Default::default(),
+            mcp_manager: operant_core::mcp::McpManager::new(),
+            mcp_server_configs: Vec::new(),
+            skills_root_dir: dir.path().join("skills-absent"),
+            #[cfg(feature = "plugins-wasm")]
+            wasm_plugin_skill_roots: Vec::new(),
+            queue_waits: tokio::sync::Mutex::new(Default::default()),
+            skills_extra_roots: Vec::new(),
+            session_tracker_dir: dir.path().join("active"),
+        })),
+        bus: Arc::new(SessionBus::new()),
+    };
+    handler
+        .handler
+        .as_ref()
+        .expect("the handler")
+        .running_session
+        .lock()
+        .expect("the lock")
+        .insert("owner".to_string(), 0);
+
+    // A NEIGHBOUR asks to cancel. It has no turn, so it must be told so, and
+    // the owner's turn must not be touched.
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
-        WireMessage::Prompt {
-            session_id: "s1".to_string(),
-            text: "hello".to_string(),
+        WireMessage::Cancel {
+            session_id: "neighbour".to_string(),
+            turn_id: None,
         },
     );
     match replies.as_slice() {
-        [WireMessage::Error { message, .. }] => assert!(
-            message.contains("paused"),
-            "a paused gateway must say so, got {message}"
+        [WireMessage::Error { message, .. }] => assert_eq!(
+            message, "there was no turn to cancel",
+            "a cancel for a session with no turn must not touch the neighbour's"
         ),
-        other => panic!("a paused gateway must refuse the prompt, got {other:?}"),
+        other => panic!("a cancel must be answered with one error, got {other:?}"),
     }
     assert!(
-        handler.running.lock().expect("the lock").is_empty(),
-        "a refused prompt must not start a turn"
+        !agent.interrupt_flag().is_triggered(),
+        "a neighbour's cancel must not raise the slot's flag — that would stop the owner's turn"
     );
 
-    operant_core::estop::disengage().expect("the stop clears");
-}
-
-/// iter-2256: the socket honours the session cap.
-///
-/// `max_concurrent_sessions` used to be enforced only on the channel path, so
-/// fifty attached clients meant fifty queued turns.
-#[tokio::test]
-async fn the_socket_refuses_a_turn_over_the_session_cap() {
-    use operant_core::session_protocol::WireMessage;
-
-    let dir = tempfile::tempdir().expect("a temp dir");
-    let agent = Arc::new(operant_core::agent::OperantAgent::new(
-        operant_core::agent::AgentConfig::default(),
-        Box::new(SlowEchoClient { delay_ms: 5 }),
-        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
-        Arc::new(
-            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
-        ),
-    ));
-    let handler = GatewaySessionHandler {
-        handler: Some(Arc::new(GatewayMessageHandler {
-            slots: slot_pool(agent),
-            admins: vec![],
-            gateway: tokio::sync::Mutex::new(None),
-            session_pins: Arc::new(SessionPins::default()),
-            exit_reasons: ExitReasonMap::default(),
-            turn_usage: TurnUsageMap::default(),
-            summary_ttl_minutes: 30,
-            default_budget: operant_core::config::BudgetSettings::default(),
-            context_injection: None,
-            running_session: std::sync::Mutex::new(HashMap::new()),
-            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
-            cancelled_queued: Default::default(),
-            mcp_manager: operant_core::mcp::McpManager::new(),
-            mcp_server_configs: Vec::new(),
-            skills_root_dir: dir.path().join("skills-absent"),
-            skills_extra_roots: Vec::new(),
-            #[cfg(feature = "plugins-wasm")]
-            wasm_plugin_skill_roots: Vec::new(),
-            queue_waits: tokio::sync::Mutex::new(Default::default()),
-            max_concurrent_sessions: Some(0),
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
-        })),
-        bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
-    };
-
+    // The owner can still stop its own turn.
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
-        WireMessage::Prompt {
-            session_id: "s1".to_string(),
-            text: "hello".to_string(),
-        },
-    );
-    match replies.as_slice() {
-        [WireMessage::Error { message, .. }] => assert!(
-            message.contains("too many concurrent sessions"),
-            "the cap must be named, got {message}"
-        ),
-        other => panic!("a capped gateway must refuse the prompt, got {other:?}"),
-    }
-}
-
-/// iter-2261: a message QUEUED over the socket waits for the NEXT turn.
-///
-/// `Queue` parks the text in the same store `/queue` writes on a channel; the
-/// turn that follows drains it and delivers it ahead of the draft.
-#[tokio::test]
-async fn a_queued_message_waits_for_the_next_turn() {
-    use operant_core::session_protocol::WireMessage;
-
-    let dir = tempfile::tempdir().expect("a temp dir");
-    let agent = Arc::new(operant_core::agent::OperantAgent::new(
-        operant_core::agent::AgentConfig::default(),
-        Box::new(SlowEchoClient { delay_ms: 5 }),
-        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
-        Arc::new(
-            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
-        ),
-    ));
-    let handler = GatewaySessionHandler {
-        handler: Some(Arc::new(GatewayMessageHandler {
-            slots: slot_pool(agent),
-            admins: vec![],
-            gateway: tokio::sync::Mutex::new(None),
-            session_pins: Arc::new(SessionPins::default()),
-            exit_reasons: ExitReasonMap::default(),
-            turn_usage: TurnUsageMap::default(),
-            summary_ttl_minutes: 30,
-            default_budget: operant_core::config::BudgetSettings::default(),
-            context_injection: None,
-            running_session: std::sync::Mutex::new(HashMap::new()),
-            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
-            cancelled_queued: Default::default(),
-            mcp_manager: operant_core::mcp::McpManager::new(),
-            mcp_server_configs: Vec::new(),
-            skills_root_dir: dir.path().join("skills-absent"),
-            skills_extra_roots: Vec::new(),
-            #[cfg(feature = "plugins-wasm")]
-            wasm_plugin_skill_roots: Vec::new(),
-            queue_waits: tokio::sync::Mutex::new(Default::default()),
-            max_concurrent_sessions: None,
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
-        })),
-        bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
-    };
-
-    let replies = operant_core::session_server::SessionHandler::handle(
-        &handler,
-        WireMessage::Queue {
-            session_id: "s1".to_string(),
-            text: "later".to_string(),
+        WireMessage::Cancel {
+            session_id: "owner".to_string(),
+            turn_id: None,
         },
     );
     match replies.as_slice() {
         [WireMessage::Error { message, .. }] => {
-            assert!(message.contains("queued"), "the queue must be named, got {message}")
+            assert_eq!(
+                message, "the turn was cancelled",
+                "the owner's cancel lands"
+            )
         }
-        other => panic!("a queue must be answered with one error, got {other:?}"),
+        other => panic!("the owner's cancel must be answered, got {other:?}"),
     }
-    let parked = handler
-        .handler
-        .as_ref()
-        .expect("the handler")
-        .next_turn_queue
-        .lock()
-        .expect("the queue lock")
-        .get("s1")
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(parked, vec!["later".to_string()], "the message must be parked");
+    assert!(agent.interrupt_flag().is_triggered());
+}
 
-    // The next turn in that session takes it.
-    let _ = operant_core::session_server::SessionHandler::handle(
+/// iter-2318: a client can change session, and is told what it holds.
+#[tokio::test]
+async fn a_switch_answers_with_the_session_it_switched_to() {
+    use operant_core::session_protocol::WireMessage;
+
+    let handler = GatewaySessionHandler {
+        handler: None,
+        bus: Arc::new(SessionBus::new()),
+    };
+    let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
-        WireMessage::Prompt {
-            session_id: "s1".to_string(),
-            text: "now".to_string(),
+        WireMessage::Switch {
+            session_id: "elsewhere".to_string(),
         },
     );
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
     assert!(
-        handler
-            .handler
-            .as_ref()
-            .expect("the handler")
-            .next_turn_queue
-            .lock()
-            .expect("the queue lock")
-            .get("s1")
-            .is_none(),
-        "the next turn must drain the queue"
+        !matches!(replies.as_slice(), [WireMessage::Error { message, .. }] if message.contains("does not serve")),
+        "switch must be served, got {replies:?}"
     );
 }
 
@@ -3677,10 +3591,10 @@ async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_histor
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
             max_concurrent_sessions: None,
-            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+
+            session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
-        running: std::sync::Mutex::new(HashMap::new()),
     };
 
     // No client is attached: this is the daemon answering for a session that

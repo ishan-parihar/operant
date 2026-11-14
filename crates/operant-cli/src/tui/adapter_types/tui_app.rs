@@ -192,7 +192,23 @@ impl TuiApp {
                         // socket's own, so the write never waits behind a read.
                         let (mut reader, writer) = client.into_split();
                         *client_slot.lock().await = Some(writer);
-                        while let Ok(Some(message)) = reader.recv().await {
+                        loop {
+                            // Three outcomes, not two: a message, a closed
+                            // connection, or a line this build cannot read. The
+                            // third used to be reported as the second, so a
+                            // protocol mismatch sent the operator looking for a
+                            // restart that never happened.
+                            let message = match reader.recv().await {
+                                Ok(Some(message)) => message,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        error = %error,
+                                        "the session server sent a line this build cannot read"
+                                    );
+                                    continue;
+                                }
+                            };
                             match message {
                                 WireMessage::HelloOk { .. } => {}
                                 WireMessage::Event { event, .. } => {
