@@ -49,10 +49,37 @@ cd "$DIR/.."
 # item is reported as unresolved (rustdoc's own note says so), and the gate
 # cannot tell a private link from a broken one. With it, the remaining
 # failures are links that point at nothing that exists.
+# Which cargo this script runs (2026-11-14, MEASURED). `~/.local/bin/cargo` is
+# first in PATH on this host and is a `systemd-run` wrapper, not cargo: it
+# `exec`s a user-scope bus that is not there, so it exits 1 with "Failed to
+# connect to user scope bus via local transport" — and a pipe hides it, because
+# a pipeline's status is the LAST command's, so `check.sh check ... | tail`
+# returned 0 having compiled nothing. Three "green" gates were vacuous before
+# this probe. build.sh has had the same probe since iter-1707; check.sh ended in
+# a bare `exec cargo "$@"`, so the loop's mandated gate was the one command that
+# could not run. Probe the candidate, fall back to the real binary, and fail
+# loudly if neither works — never exec a cargo that cannot start.
+CARGO_BIN="${CARGO_BIN:-$(command -v cargo || true)}"
+cargo_runs() {
+    [ -n "${1:-}" ] && "$1" --version >/dev/null 2>&1
+}
+if ! cargo_runs "$CARGO_BIN"; then
+    for candidate in /usr/bin/cargo /usr/local/bin/cargo; do
+        if [ -x "$candidate" ] && cargo_runs "$candidate"; then
+            CARGO_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if ! cargo_runs "$CARGO_BIN"; then
+    echo "[check] ERROR: no working cargo binary (tried PATH and /usr/bin/cargo)" >&2
+    exit 1
+fi
+
 if [ "${1:-}" = "doc" ]; then
     shift
     export RUSTDOCFLAGS="${RUSTDOCFLAGS:--Dwarnings}"
-    exec cargo doc --workspace --no-deps --all-features --document-private-items "$@"
+    exec "$CARGO_BIN" doc --workspace --no-deps --all-features --document-private-items "$@"
 elif [ "${1:-}" = "doc-test" ]; then
     # The SECOND doc profile RG-013 prescribes: `cfg(test)` ON, so a
     # `#[cfg(test)]` item is in the AST rustdoc sees and a broken doc link in
@@ -67,4 +94,4 @@ elif [ "${1:-}" = "doc-test" ]; then
     exec "$DIR/check-doc-test-profile.sh" "$@"
 fi
 
-exec cargo "$@"
+exec "$CARGO_BIN" "$@"
