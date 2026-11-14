@@ -2065,13 +2065,13 @@ impl App {
                 // always read `false`, so `Show more` replaced the list
                 // instead of adding to it (audit 2026-11-14, finding 1).
                 let load_more = self.session_load_more;
-                let page_cursor = if load_more {
-                    self.session_hub
-                        .rows
-                        .last()
-                        .map(|r| r.updated_at.to_rfc3339())
+                let (page_cursor, page_cursor_id) = if load_more {
+                    match self.session_hub.rows.last() {
+                        Some(row) => (Some(row.updated_at.to_rfc3339()), Some(row.id.clone())),
+                        None => (None, None),
+                    }
                 } else {
-                    None
+                    (None, None)
                 };
                 // The store-wide counts need the same axes the hub filters
                 // by, so they are read here and carried with the rows (F4):
@@ -2128,6 +2128,7 @@ impl App {
                                 d.list_sessions_rich_filtered_page(
                                     HUB_PAGE,
                                     page_cursor.as_deref(),
+                                    page_cursor_id.as_deref(),
                                     &row_filter,
                                 )
                                 .ok()

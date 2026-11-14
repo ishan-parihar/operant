@@ -1757,7 +1757,7 @@ impl Database {
         limit: usize,
         before: Option<&str>,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
-        self.list_sessions_rich_filtered_page(limit, before, &SessionRowFilter::default())
+        self.list_sessions_rich_filtered_page(limit, before, None, &SessionRowFilter::default())
     }
 
     /// One page of the unified row, FILTERED IN SQL and older than `before`.
@@ -1776,6 +1776,7 @@ impl Database {
         &self,
         limit: usize,
         before: Option<&str>,
+        before_id: Option<&str>,
         filter: &SessionRowFilter,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
         let conn = self.lock_conn()?;
@@ -1799,12 +1800,13 @@ impl Database {
                        CASE WHEN s.end_reason = 'interrupted' THEN 1 ELSE 0 END AS interrupted
                   FROM sessions s
                   LEFT JOIN messages m ON s.id = m.session_id
-                  WHERE COALESCE(s.ended_at, s.started_at) < ?2
+                  WHERE (COALESCE(s.ended_at, s.started_at) < ?2
+                         OR (COALESCE(s.ended_at, s.started_at) = ?2 AND s.id < ?6))
                     AND (?3 IS NULL OR s.cwd = ?3)
                     AND (?4 IS NULL OR s.employee_id = ?4)
                     AND (?5 IS NULL OR s.id = ?5 OR s.parent_session_id = ?5){status_sql}
                   GROUP BY s.id
-                  ORDER BY updated_at DESC
+                  ORDER BY updated_at DESC, s.id DESC
                   LIMIT ?1"
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| {
@@ -1825,7 +1827,8 @@ impl Database {
                     cursor,
                     filter.cwd,
                     filter.employee_id,
-                    filter.branch_root
+                    filter.branch_root,
+                    before_id.unwrap_or("")
                 ],
                 |row| {
                     Ok(RichSessionRow {
@@ -6143,6 +6146,7 @@ mod tests {
             .list_sessions_rich_filtered_page(
                 50,
                 None,
+                None,
                 &SessionRowFilter {
                     cwd: Some("/srv/a".to_string()),
                     ..Default::default()
@@ -6154,6 +6158,7 @@ mod tests {
         let interrupted = db
             .list_sessions_rich_filtered_page(
                 50,
+                None,
                 None,
                 &SessionRowFilter {
                     status: Some(SessionStatusFilter::Interrupted),
@@ -6167,6 +6172,7 @@ mod tests {
         let ann_and_a = db
             .list_sessions_rich_filtered_page(
                 50,
+                None,
                 None,
                 &SessionRowFilter {
                     cwd: Some("/srv/a".to_string()),
@@ -6188,6 +6194,7 @@ mod tests {
             .list_sessions_rich_filtered_page(
                 3,
                 None,
+                None,
                 &SessionRowFilter {
                     cwd: Some("/srv/a".to_string()),
                     ..Default::default()
@@ -6195,17 +6202,12 @@ mod tests {
             )
             .expect("page");
         assert_eq!(first.len(), 3, "a full page of the filter");
+        let last = first.last().expect("a row");
         let next = db
             .list_sessions_rich_filtered_page(
                 3,
-                Some(
-                    first
-                        .last()
-                        .expect("a row")
-                        .updated_at
-                        .to_rfc3339()
-                        .as_str(),
-                ),
+                Some(last.updated_at.to_rfc3339().as_str()),
+                Some(last.id.as_str()),
                 &SessionRowFilter {
                     cwd: Some("/srv/a".to_string()),
                     ..Default::default()
@@ -6216,6 +6218,53 @@ mod tests {
         assert!(
             next.iter().all(|r| r.cwd.as_deref() == Some("/srv/a")),
             "and never leaves it"
+        );
+    }
+
+    /// (audit 2026-11-14, finding 2) a page boundary that TIES must not drop a
+    /// row. The cursor was a timestamp-only comparison, so the second of two
+    /// sessions sharing an `updated_at` was excluded by every page after the
+    /// first — permanently unreachable from the picker. The id tie-break
+    /// (`ORDER BY updated_at DESC, s.id DESC` + `AND s.id < ?`) closes it.
+    #[test]
+    fn a_tied_page_boundary_does_not_drop_a_row() {
+        let db = test_db();
+        let tie = "2024-06-01T10:00:00+00:00";
+        db.save_session("tie-a", None, "agent", tie, tie)
+            .expect("a");
+        db.save_session("tie-b", None, "agent", tie, tie)
+            .expect("b");
+        db.save_session("tie-c", None, "agent", tie, tie)
+            .expect("c");
+
+        let page = db
+            .list_sessions_rich_filtered_page(2, None, None, &SessionRowFilter::default())
+            .expect("page one");
+        assert_eq!(page.len(), 2, "a full page of the tied rows");
+        let seen: Vec<&str> = page.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            seen,
+            vec!["tie-c", "tie-b"],
+            "newest id first inside the tie"
+        );
+
+        let last = page.last().expect("a row");
+        let next = db
+            .list_sessions_rich_filtered_page(
+                2,
+                Some(last.updated_at.to_rfc3339().as_str()),
+                Some(last.id.as_str()),
+                &SessionRowFilter::default(),
+            )
+            .expect("page two");
+        assert_eq!(
+            next.first().map(|r| r.id.as_str()),
+            Some("tie-a"),
+            "the third tied row leads page two — the tie-break keeps it (finding 2)"
+        );
+        assert!(
+            next.iter().any(|r| r.id == "tie-a"),
+            "and it is not the only row that survives the boundary"
         );
     }
 
