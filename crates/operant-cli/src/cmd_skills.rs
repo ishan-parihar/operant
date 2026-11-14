@@ -1747,6 +1747,45 @@ mod tests {
             seed_bundled_skills(&config, Some(pool.to_string_lossy().as_ref()), false).unwrap();
         assert_eq!(recopied, 0);
 
+        // The ONE skip rule. The seeder used to carry its own unscoped
+        // recursion with NO skip rule at all, so a bundled tree's `.git`,
+        // `_private` or `node_modules` got copied into the operator pool where
+        // the live loader refuses it -- an install that looks seeded and is
+        // not. `walk_skill_dirs` applies `is_skipped_walk_name`, so the seeder
+        // and the loader agree about what a root holds.
+        let skipped_pool = temp_dir("skipped-pool");
+        for name in ["_private", "node_modules", ".hidden", "target"] {
+            std::fs::create_dir_all(skipped_pool.join(name)).unwrap();
+            std::fs::write(
+                skipped_pool.join(name).join("SKILL.md"),
+                "---\nname: skipped\n---\n# skipped\n",
+            )
+            .unwrap();
+        }
+        std::fs::create_dir_all(skipped_pool.join("real")).unwrap();
+        std::fs::write(
+            skipped_pool.join("real").join("SKILL.md"),
+            "---\nname: real\n---\n# real\n",
+        )
+        .unwrap();
+
+        let skipped_target = temp_dir("skipped-target");
+        let mut cfg = AppConfig::default();
+        cfg.skills.root_dir = skipped_target.clone();
+        let kept = seed_bundled_skills(&cfg, Some(skipped_pool.to_string_lossy().as_ref()), false)
+            .unwrap();
+        assert_eq!(kept, 1, "only the unskipped skill seeds: {kept}");
+        assert!(skipped_target.join("real").join("SKILL.md").exists());
+        for name in ["_private", "node_modules", ".hidden", "target"] {
+            assert!(
+                !skipped_target.join(name).exists(),
+                "{name} was seeded into the operator pool"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(skipped_pool);
+        let _ = std::fs::remove_dir_all(skipped_target);
+
         let _ = std::fs::remove_dir_all(pool);
         let _ = std::fs::remove_dir_all(target);
     }
