@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Measure what a session costs: one server with N attached clients.
 
+A cold server is slow to bind: it builds its agents and provisions the AFT
+bridge before it binds the socket, which on a fresh home can take a minute.
+The wait is generous on purpose.
+
 The audit that opened this campaign measured the OLD shape by hand: 13 full
 `operant` processes, 792 MiB RSS, and 13 of 13 owning a separate AFT bridge —
 about 61 MiB per interactive session. This script measures the NEW shape the
@@ -85,7 +89,7 @@ def rss_tree(root_pid: int) -> tuple[int, int]:
     return total, len(seen)
 
 
-def wait_for_socket(path: Path, timeout: float = 30.0) -> bool:
+def wait_for_socket(path: Path, timeout: float = 240.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if path.exists():
@@ -106,6 +110,19 @@ def main() -> int:
         return 2
 
     home = Path(tempfile.mkdtemp(prefix="operant-bench-"))
+    # Borrow the operator's READ-ONLY caches (the same thing jcode's bench does
+    # with auth and config): a cold home spends a minute downloading the AFT
+    # binary before it binds the socket, and that download is not what this
+    # measures. The daemon lock still lives in the temporary home, so the
+    # operator's live gateway is never contended.
+    real_home = Path(os.environ.get("OPERANT_HOME") or (Path.home() / ".operant"))
+    for cache in ("aft", "integrations"):
+        source = real_home / cache
+        if source.is_dir() and not (home / cache).exists():
+            try:
+                (home / cache).symlink_to(source, target_is_directory=True)
+            except OSError:
+                pass
     socket = home / "session.sock"
     env = dict(os.environ, OPERANT_HOME=str(home), HERMES_HOME=str(home))
     procs: list[subprocess.Popen] = []
