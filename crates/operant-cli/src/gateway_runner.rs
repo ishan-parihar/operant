@@ -2750,6 +2750,19 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     handler
                         .bind_slot_to_session(slot, &task_session, "session-socket")
                         .await;
+                    // A message the operator QUEUED arrives WITH this turn,
+                    // ahead of the draft they just submitted — the same rule
+                    // the channel path applies at its turn entry.
+                    let text = {
+                        let parked = handler.take_queued_messages(&task_session);
+                        if parked.is_empty() {
+                            text
+                        } else {
+                            let marked: Vec<String> =
+                                parked.iter().map(|m| format!("[QUEUED] {m}")).collect();
+                            format!("{}\n\n{}", marked.join("\n\n"), text)
+                        }
+                    };
                     let agent = std::sync::Arc::clone(&slot.agent);
                     if let Err(error) = agent.run(text).await {
                         // A client must not sit in silence after a failed
@@ -2851,6 +2864,34 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         true => "the tool call was denied".to_string(),
                         false => format!("no pending tool call named {tool_call_id}"),
                     },
+                }]
+            }
+            // A QUEUE parks a message for the NEXT turn in this session — the
+            // same store `/queue` writes on a channel, keyed by session id.
+            WireMessage::Queue { session_id, text } => {
+                let Some(handler) = self.handler.as_ref().map(std::sync::Arc::clone) else {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "this server has no agent slots".to_string(),
+                    }];
+                };
+                let depth = match handler.next_turn_queue.lock() {
+                    Ok(mut map) => {
+                        map.entry(session_id.clone()).or_default().push(text);
+                        map.get(&session_id).map(|q| q.len()).unwrap_or(0)
+                    }
+                    Err(_) => {
+                        return vec![WireMessage::Error {
+                            session_id: Some(session_id),
+                            message:
+                                "the queue is being read right now — send it again in a moment"
+                                    .to_string(),
+                        }];
+                    }
+                };
+                vec![WireMessage::Error {
+                    session_id: Some(session_id),
+                    message: format!("queued for the next turn ({depth} waiting)"),
                 }]
             }
             // A steer reaches the RUNNING turn between iterations — the same

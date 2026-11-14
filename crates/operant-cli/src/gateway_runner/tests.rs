@@ -3525,6 +3525,98 @@ async fn the_socket_refuses_a_turn_over_the_session_cap() {
     }
 }
 
+/// iter-2261: a message QUEUED over the socket waits for the NEXT turn.
+///
+/// `Queue` parks the text in the same store `/queue` writes on a channel; the
+/// turn that follows drains it and delivers it ahead of the draft.
+#[tokio::test]
+async fn a_queued_message_waits_for_the_next_turn() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 5 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = GatewaySessionHandler {
+        handler: Some(Arc::new(GatewayMessageHandler {
+            slots: slot_pool(agent),
+            admins: vec![],
+            gateway: tokio::sync::Mutex::new(None),
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            running_session: std::sync::Mutex::new(HashMap::new()),
+            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cancelled_queued: Default::default(),
+            mcp_manager: operant_core::mcp::McpManager::new(),
+            mcp_server_configs: Vec::new(),
+            skills_root_dir: dir.path().join("skills-absent"),
+            #[cfg(feature = "plugins-wasm")]
+            wasm_plugin_skill_roots: Vec::new(),
+            queue_waits: tokio::sync::Mutex::new(Default::default()),
+            max_concurrent_sessions: None,
+            live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+        })),
+        bus: Arc::new(SessionBus::new()),
+        running: std::sync::Mutex::new(HashMap::new()),
+    };
+
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Queue {
+            session_id: "s1".to_string(),
+            text: "later".to_string(),
+        },
+    );
+    match replies.as_slice() {
+        [WireMessage::Error { message, .. }] => {
+            assert!(message.contains("queued"), "the queue must be named, got {message}")
+        }
+        other => panic!("a queue must be answered with one error, got {other:?}"),
+    }
+    let parked = handler
+        .handler
+        .as_ref()
+        .expect("the handler")
+        .next_turn_queue
+        .lock()
+        .expect("the queue lock")
+        .get("s1")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(parked, vec!["later".to_string()], "the message must be parked");
+
+    // The next turn in that session takes it.
+    let _ = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Prompt {
+            session_id: "s1".to_string(),
+            text: "now".to_string(),
+        },
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    assert!(
+        handler
+            .handler
+            .as_ref()
+            .expect("the handler")
+            .next_turn_queue
+            .lock()
+            .expect("the queue lock")
+            .get("s1")
+            .is_none(),
+        "the next turn must drain the queue"
+    );
+}
+
 /// RT-544: a session outlives its client.
 ///
 /// The conversation belongs to the SLOT, and the slot is the daemon's, so a
