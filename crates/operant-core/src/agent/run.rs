@@ -1005,10 +1005,19 @@ impl OperantAgent {
             // must refill it: the two spans are different ladders, and a
             // large-span attempt that the per-call budget refuses would make
             // the whole second half of the policy unreachable.
+            //
+            // The refill resets the PER-CALL counter ONLY. An earlier draft
+            // also zeroed `turn_retry_failures`, which defeated
+            // `TURN_MAX_RETRY_FAILURES` entirely: the turn-level cap is the
+            // only bound on a provider that fails forever (the policy is
+            // infinite by default), and zeroing it on every large-span
+            // attempt made the ladder run until the 20-minute wall clock —
+            // measured, 20 calls in 20 s and still going. A retry policy that
+            // ignores the one backstop that stops a dead provider is worse
+            // than no policy.
             let in_large_span = attempt >= self.config.retry.small_span_retries;
             if in_large_span {
                 retry_state.reset_on_success();
-                *turn_retry_failures = 0;
             }
             let Some(request) = self
                 .prepare_retry_request(

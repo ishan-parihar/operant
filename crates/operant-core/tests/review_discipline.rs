@@ -338,6 +338,7 @@ impl OperantTool for MemorySearchTool {
 
 fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfig {
     AgentConfig {
+        retry: Default::default(),
         advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
@@ -368,7 +369,6 @@ fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfi
         skill_nudge_interval,
         memory_review_interval: 0,
         max_retries: 3,
-        retry: operant_core::config::RetrySettings::default(),
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
         ponytail: Default::default(),

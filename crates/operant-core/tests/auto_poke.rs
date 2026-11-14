@@ -228,6 +228,7 @@ fn tool_call_response(tool: &str, arguments: &str) -> ChatResponse {
 
 fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        retry: Default::default(),
         advertised_skills_token_budget: 0,
         model: "demo".to_string(),
         max_iterations,
@@ -243,7 +244,6 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         skill_nudge_interval: 0,
         memory_review_interval: 0,
         max_retries: 3,
-        retry: operant_core::config::RetrySettings::default(),
         approval_mode: "off".to_string(),
         ..AgentConfig::default()
     }
