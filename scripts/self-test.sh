@@ -151,6 +151,18 @@ run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-clai
 # without anyone deciding what to do about it (RT-159).
 run_test "Config surface (scripts/audit-config-surface.py --check)" "python3 scripts/audit-config-surface.py --check 2>&1"
 
+# 4c-2. THE FORWARD GATE (plan 2026-11-14 §5). The gate above is forward only
+# for keys with NO reader, and tests/example_template_loads.rs is REVERSE only
+# — so a key that compiles, is read, and reaches no operator surface passed
+# every gate in the tree. This one fails a NEW key that misses the note, the
+# heal table, the template or the doctor's sweep, one row per missing surface,
+# and ratchets the keys that predate it (LEGACY, which can only shrink).
+#
+# The registry it reads is generated from the settings structs, so a stale
+# registry is itself a failure: regenerate before believing a green run.
+run_test "Config registry is current (scripts/gen-config-registry.py --check)" "python3 scripts/gen-config-registry.py --check 2>&1"
+run_test "Config key forward gate (scripts/audit-config-keys.py --check)" "python3 scripts/audit-config-keys.py --check 2>&1"
+
 # 4c-1. The audit ledger's index vs its own checkboxes (RG-016). The ledger
 # keeps each row's state in three places and closing a defect flips only the
 # checkbox, so the index table and the count prose go stale in BOTH

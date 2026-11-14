@@ -82,6 +82,7 @@ impl CheckResult {
 pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     let mut items = Vec::new();
     check_config_semantics(config, &mut items);
+    check_config_resilience(config, &mut items);
     check_memory_provider(config, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
@@ -324,6 +325,131 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
                 ),
             ));
         }
+    }
+}
+
+// ── L4: the upgrade-resilience sweep ──────────────────────────────
+//
+// (plan 2026-11-14, L4) The doctor's answer to "what does this config do on
+// an UPGRADE?" Seven named rows, each firing on a real defect and each silent
+// on a default config. Every row names the key it is about, because a doctor
+// line that says "your config is fine" without saying WHICH config is not a
+// diagnostic.
+//
+// The categories are stable strings, so `operant doctor --json` and any
+// dashboard reading the same results can key off them.
+fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
+    let cat = "config.resilience";
+
+    // 1. `config.unknown-key` — a key this binary does not know, parked in
+    //    the sidecar at load. The load succeeded, so this is a WARN: the
+    //    operator's file carries keys from a NEWER operant, and either they
+    //    upgrade or those settings are not in effect.
+    match crate::config::loaded_config_path() {
+        Some(path) => {
+            let sidecar = crate::config_heal::unknown_sidecar_for(&path);
+            if sidecar.exists() {
+                let parked = std::fs::read_to_string(&sidecar).unwrap_or_default();
+                let count = parked
+                    .lines()
+                    .filter(|l| {
+                        let t = l.trim();
+                        !t.is_empty() && !t.starts_with('#') && !t.starts_with('[')
+                    })
+                    .count();
+                items.push(CheckResult::warn(
+                    cat,
+                    format!(
+                        "{} key(s) in {} are unknown to this operant build and were parked in {} — they are NOT in effect. Upgrade operant, or remove them from the config.",
+                        count,
+                        path.display(),
+                        sidecar.display()
+                    ),
+                ));
+            }
+        }
+        None => items.push(CheckResult::ok(
+            cat,
+            "no config file is loaded — the built-in defaults are in effect",
+        )),
+    }
+
+    // 2. `config.deprecated-key` — a key the loader accepts and nothing reads.
+    //    (The existing `unused_setting_warnings` runs on the load path; the
+    //    doctor names the same class so a `doctor` run reports it too.)
+    for line in config.unused_setting_warnings() {
+        items.push(CheckResult::warn(cat, line));
+    }
+
+    // 3. `config.missing-section` — a section that is new in this version is
+    //    absent. Reportable only for the sections whose absence changes
+    //    behaviour, so the doctor names the two that do.
+    if config.gateway.max_concurrent_sessions.is_none() {
+        items.push(CheckResult::warn(
+            cat,
+            "gateway.max_concurrent_sessions is unset — the gateway accepts unlimited concurrent sessions; set a cap (the default is 32)".to_string(),
+        ));
+    }
+    if config.client.rate_limit.max_retries == 0 {
+        items.push(CheckResult::warn(
+            cat,
+            "client.rate_limit.max_retries = 0 — the transport will not retry a transient network failure at all; the default is 3".to_string(),
+        ));
+    }
+
+    // 4. `config.range` — a value the reader cannot use, clamped by the heal
+    //    tables at load. The doctor reports the CLAMPED value so the operator
+    //    sees what is actually in effect rather than what they wrote.
+    if config.agent.max_iterations == 1 {
+        items.push(CheckResult::warn(
+            cat,
+            "agent.max_iterations is 1 — the turn ends after a single model call, so no tool-using turn can complete; the default is 90".to_string(),
+        ));
+    }
+    if config.agent.tool_timeout_secs == 1 {
+        items.push(CheckResult::warn(
+            cat,
+            "agent.tool_timeout_secs is 1 second — every tool call that takes longer than a moment will be killed; the default is 120".to_string(),
+        ));
+    }
+    if config.client.timeout_secs == 1 {
+        items.push(CheckResult::warn(
+            cat,
+            "client.timeout_secs is 1 second — the provider's response headers will not arrive in time on any real endpoint; the default is 60".to_string(),
+        ));
+    }
+
+    // 5. `config.two-files` — both `config.toml` and `operant.toml` exist.
+    //    The loader already warns on the sibling; the doctor names the pair so
+    //    a `doctor` run catches what a headless load printed once.
+    if let Some(path) = crate::config::loaded_config_path() {
+        for ignored in crate::config::ignored_config_files(&path) {
+            items.push(CheckResult::warn(
+                cat,
+                format!(
+                    "{} is not read — the live config is {}. Move its keys into the live file, or delete it.",
+                    ignored.display(),
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    // 6. `config.unparseable` — the file the loader COULD NOT parse. The load
+    //    falls back to defaults, so the process starts with a config the
+    //    operator did not write. This is the row that stops a broken file
+    //    looking like a working install.
+    if let Some(path) = crate::config::loaded_config_path()
+        && path.exists()
+        && let Err(e) = crate::config::parse_config_file_without_recording(&path)
+    {
+        items.push(CheckResult::error(
+            cat,
+            format!(
+                "{} does not parse ({e}) — the running config is the built-in defaults, NOT the file. Fix the file, or restore a backup with `operant config backups`.",
+                path.display()
+            ),
+        ));
     }
 }
 
