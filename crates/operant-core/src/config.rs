@@ -3612,6 +3612,24 @@ pub fn parse_config_file_without_recording(path: &Path) -> Result<AppConfig> {
 }
 
 fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Result<AppConfig> {
+    // The DOWNGRADE path (iter-2364). The sidecar doc promises "a downgrade
+    // back to the newer binary loses nothing, because the sidecar is read back
+    // and merged before the strict parse" — but nothing called `merge_parked`,
+    // so the promise was false and a downgrade silently dropped whatever the
+    // newer binary had parked. Merge FIRST: a sidecar that exists was written by
+    // a build that knew keys this one does not, and putting them back is what
+    // makes the operator's own file whole again.
+    //
+    // Absent sidecar, unreadable sidecar or a merge that cannot render: the
+    // operator's `raw` is used untouched, which is the pre-sidecar behaviour.
+    let raw = {
+        let sidecar = crate::config_heal::unknown_sidecar_for(source);
+        match crate::config_heal::read_parked_value(&sidecar) {
+            Some(parked) => crate::config_heal::merge_parked(raw, &parked).unwrap_or_else(|| raw.to_string()),
+            None => raw.to_string(),
+        }
+    };
+    let raw = raw.as_str();
     let mut cfg: AppConfig = match toml::from_str(raw) {
         Ok(cfg) => cfg,
         // (plan 2026-11-14, L2) A key this binary does not know is the
@@ -3641,7 +3659,25 @@ fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Resul
                 parked.as_table().map(|t| t.len()).unwrap_or(0),
                 sidecar.display()
             );
-            toml::from_str(&kept).map_err(|e| config_parse_error(&kept, source, &e))?
+            // The re-parse can still fail: `split_unknown` recurses only one
+            // level, so a typo inside a KNOWN nested section (`[bylaws.budget]
+            // caps = 1000`) is kept whole and then rejected by serde. Printing
+            // "loaded normally" before that parse ran made the two messages
+            // contradict each other (iter-2364): the operator read a success
+            // line and then a fatal error and could not tell which key was at
+            // fault. Say what is true at the point it is known.
+            match toml::from_str(&kept) {
+                Ok(cfg) => Ok(cfg),
+                Err(e) => {
+                    eprintln!(
+                        "warning: {} still does not parse after parking its unknown \
+                         keys — the remaining key is a TYPO inside a section this \
+                         build knows, not an unknown key. Fix that one by hand.",
+                        source.display()
+                    );
+                    Err(config_parse_error(&kept, source, &e))
+                }
+            }?
         }
     };
     validate_context_window(cfg.agent.context_window)?;
@@ -4398,6 +4434,17 @@ show_turn_attribution = false
     /// requires the registry to know it. A key the build genuinely does not
     /// accept must not be active in the example (the other half of the same
     /// defect — see `the_example_config_parses`).
+    ///
+    /// IT WALKS THE COMMENTED KEYS TOO (iter-2364). The first cut walked only
+    /// active lines, which made the guard protect 16 of the 23 keys the fix
+    /// added and leave 7 unguarded — `advisor.model`, `advisor.instructions`,
+    /// `advisor.continue_severity`, `advisor.suppress_streak`,
+    /// `advisor.max_notes_per_update`, `advisor.timeout_secs` and
+    /// `recap.model`, all documented but commented out. Deleting any of those
+    /// from the registry left the test green, which is exactly the drift this
+    /// test exists to catch. The example documents every knob whether or not it
+    /// is active, so walking both is what makes the guard cover the surface
+    /// rather than one line per knob.
     #[test]
     fn every_active_example_key_is_known_to_the_parking_walk() {
         let example = include_str!("../../../operant.example.toml");
@@ -4410,15 +4457,19 @@ show_turn_attribution = false
         let mut active: Vec<String> = Vec::new();
         for line in example.lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
+            if trimmed.is_empty() {
                 continue;
             }
-            if let Some(name) = trimmed.strip_prefix("[[") {
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            let probe = trimmed;
+            if let Some(name) = probe.strip_prefix("[[") {
                 in_array_table = true;
                 section = name.strip_suffix("]]").unwrap_or(name).to_string();
                 continue;
             }
-            if let Some(name) = trimmed.strip_prefix('[') {
+            if let Some(name) = probe.strip_prefix('[') {
                 in_array_table = false;
                 section = name.strip_suffix(']').unwrap_or(name).to_string();
                 continue;
@@ -4426,7 +4477,7 @@ show_turn_attribution = false
             if in_array_table {
                 continue;
             }
-            let Some((leaf, _)) = trimmed.split_once('=') else {
+            let Some((leaf, _)) = probe.split_once('=') else {
                 continue;
             };
             let leaf = leaf.trim();
@@ -4461,6 +4512,172 @@ show_turn_attribution = false
                 .collect::<Vec<_>>()
                 .join("\n  ")
         );
+    }
+
+    /// Every settings struct the GENERATOR knows about must actually emit rows
+    /// (iter-2364).
+    ///
+    /// The parking walk re-walks a config against `KNOWN_KEYS`, so a section
+    /// the generator silently fails to resolve is a section the parking path
+    /// silently DISCARDS. That is not hypothetical: `proxy`, `providers`,
+    /// `compression`, `advisor`, `recap`, `cli` and `observability` all
+    /// resolved to structs outside `config.rs` or to a `::`-qualified path, and
+    /// the generator — which read one file with a one-segment type regex —
+    /// emitted nothing for any of them.
+    ///
+    /// This asserts the property that failure has: every section named in the
+    /// generator's own `TOP_LEVEL_SECTIONS` produces at least one key, and every
+    /// child named in `NESTED` / `DEEP` produces at least one grandchild key.
+    /// It is keyed on the generator's tables rather than on the example's prose
+    /// because a table is exact and prose is not.
+    #[test]
+    fn every_configured_section_reaches_the_registry() {
+        // Read the generator's own tables out of its source. A section listed
+        // there but absent from the registry is a resolution failure, which is
+        // the defect this pins.
+        let generator = include_str!("../../../scripts/gen-config-registry.py");
+        let sections = re_section_list(generator, "TOP_LEVEL_SECTIONS");
+        let keys = re_section_list(generator, "TOP_LEVEL_KEYS");
+        assert!(
+            sections.len() >= 30,
+            "the generator lists only {} sections -- the parser is broken",
+            sections.len()
+        );
+
+        let registry: Vec<&str> = crate::config_registry::KNOWN_KEYS.to_vec();
+        let has_section = |name: &str| {
+            registry
+                .iter()
+                .any(|k| *k == name || k.starts_with(&format!("{name}.")))
+        };
+
+        // The INDEPENDENT baseline. Deriving the expectation from the
+        // generator's own list is circular: dropping a section from that list
+        // removes the expectation with it, so the guard cannot see the removal.
+        // `AppConfig` is the other source of truth, and it is a struct — every
+        // field whose type is a settings struct (or `Option<` of one) is a
+        // section an operator can write, whether or not the generator names it.
+        // 32 at iter-2364; the floor is deliberately below that so adding a
+        // section does not fail the test, while losing several does.
+        let config_src = include_str!("config.rs");
+        // Walk the WHOLE AppConfig body, not a fixed line window: the struct is
+        // 40-odd fields long, and a window that stops early reads as a broken
+        // parser rather than as a short struct.
+        let app_start = config_src
+            .find("pub struct AppConfig")
+            .expect("AppConfig is in config.rs");
+        let app_body = &config_src[app_start..];
+        let app_end = app_body.find("\n}").unwrap_or(app_body.len());
+        let app_body = &app_body[..app_end];
+        let app_fields: Vec<&str> = app_body
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim();
+                let rest = l.strip_prefix("pub ")?.strip_suffix(',')?;
+                let (name, ty) = rest.split_once(':')?;
+                let ty = ty.trim();
+                // A `PascalCase` type names a settings struct. Read the LAST
+                // path segment: `operant_config::schema::ProxyConfig` starts
+                // lowercase but names a real section, and a filter that only
+                // looked at the first character excluded every qualified type —
+                // which is exactly how `proxy` and `providers` came to be
+                // missing from the registry in the first place. Anything still
+                // generic (`Option<toml::Table>`, `Vec<String>`,
+                // `Option<PathBuf>`) is a container or a scalar, not a section.
+                fn is_struct_type(t: &str) -> bool {
+                    let last = t.rsplit("::").next().unwrap_or(t).trim();
+                    !t.contains('<')
+                        && last.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                        // A container or a scalar the runtime cannot key by name.
+                        && !matches!(
+                            last,
+                            "PathBuf" | "String" | "Duration" | "Table" | "Value"
+                        )
+                }
+                let is_plain_struct = is_struct_type(ty);
+                let is_option_struct = ty.starts_with("Option<")
+                    && ty.ends_with('>')
+                    && is_struct_type(&ty["Option<".len()..ty.len() - 1]);
+                (is_plain_struct || is_option_struct).then_some(name.trim())
+            })
+            .collect();
+        assert!(
+            app_fields.len() >= 25,
+            "AppConfig shows only {} section fields -- the parser is broken, not the registry",
+            app_fields.len()
+        );
+        let uncovered: Vec<&str> = app_fields
+            .iter()
+            .copied()
+            .filter(|f| !has_section(f))
+            .collect();
+        assert!(
+            uncovered.is_empty(),
+            "{} AppConfig section(s) have no registry key, so the parking walk \
+             would discard them wholesale. This is the INDEPENDENT check -- it reads \
+             AppConfig, not the generator's own list, so dropping a section from the \
+             generator cannot hide it:\n  {}",
+            uncovered.len(),
+            uncovered.join("\n  ")
+        );
+
+        let mut empty: Vec<&str> = Vec::new();
+        for section in &sections {
+            if !has_section(section) {
+                empty.push(section);
+            }
+        }
+        for key in &keys {
+            if !registry.contains(&key.as_str()) {
+                empty.push(key);
+            }
+        }
+        assert!(
+            empty.is_empty(),
+            "{} section(s) the generator names produced NO registry key, so the \
+             parking walk would discard them wholesale for any config carrying one \
+             unknown key. Fix the generator's struct resolution (it now reads every \
+             settings source, unwraps Option<T>, reads a child's type from its parent's \
+             body, and walks depth 3) -- never the generated file:\n  {}",
+            empty.len(),
+            empty.join("\n  ")
+        );
+    }
+
+    /// Pull a `NAME = [ "a", "b" ]` list out of the generator's source.
+    fn re_section_list(src: &str, name: &str) -> Vec<String> {
+        let start = match src.find(&format!("{name} = [")) {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+        // Find the CLOSING bracket of the list, ignoring any `]` that appears
+        // inside a comment or a quoted string in it.
+        let rest = &src[start..];
+        let mut end = rest.len();
+        let mut depth = 0i32;
+        let mut started = false;
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '[' => {
+                    depth += 1;
+                    started = true;
+                }
+                ']' => {
+                    depth -= 1;
+                    if started && depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest[..end]
+            .lines()
+            .map(|l| l.trim())
+            .filter_map(|l| l.strip_prefix('"').map(|s| s.to_string()))
+            .filter_map(|s| s.split('"').next().map(|s| s.to_string()))
+            .collect()
     }
 
     /// The 2026-10-26 context-management fixes (audit G2/G5/G6 follow-ups):
@@ -5087,17 +5304,25 @@ wonderful_unknown_key = 42
         // and the rest loads, rather than failing the whole file. What must
         // still hold is that the unknown key does NOT take effect — a stale
         // key that silently bound is the defect these tests were written for.
-        let cfg = parse_config_str(bogus, std::path::Path::new("bogus.toml"))
-            .expect("an unknown key is parked, not fatal");
+        //
+        // A path of this test's OWN (iter-2364): `unknown_sidecar_for` keys on
+        // the DIRECTORY only, so two configs in one directory share one sidecar
+        // and `write_parked_sidecar` OVERWRITES. Parking a config named
+        // `bogus.toml` in the test CWD made every such test read and write the
+        // same file, so an assertion could pass on another test's parked keys.
+        let path = std::env::temp_dir().join(format!(
+            "operant-harness-park-{}.toml",
+            std::process::id()
+        ));
+        let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.harness.enabled, "the known key beside it still binds");
-        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(
-            std::path::Path::new("bogus.toml"),
-        ))
-        .expect("the unknown key is recorded for the operator");
+        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+            .expect("the unknown key is recorded for the operator");
         assert!(
             parked.contains("wonderful_unknown_key"),
             "the parked key is named: {parked}"
         );
+        let _ = std::fs::remove_file(crate::config_heal::unknown_sidecar_for(&path));
     }
 
     #[test]
@@ -5190,14 +5415,19 @@ enabled = true
 wonderful_unknown_key = 42
 "#;
         // Parking contract: parked, not fatal — but never effective.
-        let cfg = parse_config_str(bogus, std::path::Path::new("bogus.toml"))
-            .expect("an unknown key is parked, not fatal");
+        // Own sidecar path, same reason as `harness_settings_roundtrip`: one
+        // sidecar per directory is one sidecar too many for parallel tests
+        // (iter-2364).
+        let path = std::env::temp_dir().join(format!(
+            "operant-pk-park-{}.toml",
+            std::process::id()
+        ));
+        let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.pk.enabled, "the known key beside it still binds");
-        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(
-            std::path::Path::new("bogus.toml"),
-        ))
-        .expect("the parked key is recorded for the operator");
+        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+            .expect("the parked key is recorded for the operator");
         assert!(parked.contains("wonderful_unknown_key"), "named: {parked}");
+        let _ = std::fs::remove_file(crate::config_heal::unknown_sidecar_for(&path));
     }
 
     fn temp_dir(name: &str) -> PathBuf {

@@ -218,6 +218,17 @@ pub fn read_parked(sidecar: &Path) -> Option<String> {
     std::fs::read_to_string(sidecar).ok()
 }
 
+/// The parked keys as a TOML VALUE, for the downgrade merge.
+///
+/// Separate from [`read_parked`] because [`merge_parked`] needs the value, not
+/// its text: rendering the text and re-parsing it would be a second parser that
+/// can disagree with the first. `None` for the same three reasons the text
+/// reader returns `None` — absent, unreadable, or not valid TOML.
+pub fn read_parked_value(sidecar: &Path) -> Option<toml::Value> {
+    let text = std::fs::read_to_string(sidecar).ok()?;
+    toml::from_str(&text).ok()
+}
+
 /// Split a config document into (known-document, parked-unknown-document).
 ///
 /// The split is by SECTION against a set of known dotted keys: a table whose
