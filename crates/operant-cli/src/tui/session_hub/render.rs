@@ -996,16 +996,14 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // columns wide. `cwd` was never written before that audit, so
                 // this span was silent on every row for the hub's whole life;
                 // the write landed at turn_context.rs beside the seat stamp.
+                // (2026-11-14, plan iteration 2) The row carries IDENTITY, not
+                // WEIGHT. Message count, token count and cost moved to the
+                // preview header (audit: the two panes printed id, age, cost
+                // and message count in BOTH). They did not help identify a
+                // session, and they were what pushed the row past its budget.
                 let metrics_width = emp.chars().count()
-                    + format!("{} msg", row.message_count).chars().count()
-                    + tokens_suffix(row.tokens).chars().count()
                     + row.status.label().chars().count()
                     + relative_time(row.updated_at).chars().count()
-                    + if matches!(row.kind, RowKind::Subagent { .. }) {
-                        0
-                    } else {
-                        format!("${:.4}", row.cost_usd).chars().count()
-                    }
                     + 8;
                 // Drop the status column BEFORE shrinking the id: the header
                 // above already names it (Stage B), so it is the one field here
@@ -1068,18 +1066,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // Stage B moved the delegation status out of this inline spot
                 // and into the Status column, where a header row names it:
                 // printing it in both places would render `pending  pending`.
-                let usage_span = match &row.kind {
-                    RowKind::Subagent { .. } => {
-                        Span::styled("  usage —", Style::default().fg(theme_colors::muted()))
-                    }
-                    _ => {
-                        let token_span = tokens_suffix(row.tokens);
-                        Span::styled(
-                            format!("  {} msg{token_span}", row.message_count),
-                            Style::default().fg(theme_colors::muted()),
-                        )
-                    }
-                };
                 // The directory, the FIRST field the ladder drops (see the
                 // ladder above): recoverable in the preview's `Project` line and
                 // in the directory grouping's headings, which is the same
@@ -1100,7 +1086,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         if show_emp { emp.clone() } else { String::new() },
                         Style::default().fg(theme_colors::muted()),
                     ),
-                    usage_span,
                 ];
                 // Stage B also fills a real gap: a session row's status was
                 // carried ONLY by the title line's colour-coded glyph, so an
@@ -1137,12 +1122,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     format!("  {}", relative_time(row.updated_at)),
                     Style::default().fg(theme_colors::muted()),
                 ));
-                if !matches!(row.kind, RowKind::Subagent { .. }) {
-                    meta_spans.push(Span::styled(
-                        format!("  ${:.4}", row.cost_usd),
-                        Style::default().fg(theme_colors::muted()),
-                    ));
-                }
                 let meta_line = Line::from(meta_spans);
                 // ONE ListItem holding BOTH lines, not two items: the
                 // selection index must stay 1:1 with `visible_idx`, and a
