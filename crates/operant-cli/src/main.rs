@@ -1258,9 +1258,20 @@ pub(crate) fn agent_config(
     // process died read as running for the life of the next one. Opt-in by
     // design, so a test process never touches the operator's disk; recovery
     // runs inside the call and only for the process that won the path.
-    operant_core::tools::async_delegation::enable_persistence(
+    //
+    // Audit finding 4: the count this returns used to be discarded, so the rows
+    // each carried the reason but nothing said how many there were. Reported
+    // once, here, because this is the only place the process learns it.
+    let recovered_delegations = operant_core::tools::async_delegation::enable_persistence(
         operant_core::platform::operant_home().join("delegations.json"),
     );
+    if recovered_delegations > 0 {
+        tracing::warn!(
+            recovered = recovered_delegations,
+            "the previous process left {recovered_delegations} delegation(s) running; they are \
+             marked failed and their children died with it — re-dispatch any that are still wanted"
+        );
+    }
     // Progressive tool disclosure (hermes parity): thread the CLI's
     // `tools.tool_search` block into the agent loop so MCP tool schemas
     // can be deferred behind the tool_search bridge. `mcp.deferred_loading

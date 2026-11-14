@@ -100,14 +100,24 @@ fn registry() -> &'static Mutex<HashMap<String, AsyncDelegationRecord>> {
 static LEDGER_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// Opt in to a durable ledger at `path`, and recover whatever the previous
-/// process left there. Returns true only for the process that WON the path, so
-/// a second agent in the same process cannot re-run recovery over live records.
-pub fn enable_persistence(path: PathBuf) -> bool {
+/// process left there. Returns how many records were settled as interrupted.
+///
+/// MEASURED 2026-11-14 (audit finding 4): this returned `bool` and discarded the
+/// count, and `recover_interrupted` computed it only to throw it away. So the
+/// rows each said "the process restarted while this delegation was running", but
+/// nothing ever said HOW MANY — an operator who left six delegations running saw
+/// six unexplained failures and no statement of what happened. jcode appends an
+/// idempotent note and notifies the owner on the next attach. The count is the
+/// minimum: it exists, it is returned, and the caller reports it once.
+///
+/// `0` covers both "nothing to recover" and "this process did not win the path"
+/// — a process that did not win recovery must not report recovered work, so the
+/// caller's action is the same in both cases.
+pub fn enable_persistence(path: PathBuf) -> usize {
     if LEDGER_PATH.set(path).is_err() {
-        return false;
+        return 0;
     }
-    recover_interrupted();
-    true
+    recover_interrupted()
 }
 
 /// Rewrite the ledger from the in-memory registry. Best-effort: a failure must
@@ -734,7 +744,13 @@ mod tests {
         )
         .unwrap();
 
-        assert!(enable_persistence(path.clone()));
+        // Audit finding 4: the call returns HOW MANY it settled, not just
+        // whether it ran. One pending record in the ledger means one recovery.
+        assert_eq!(
+            enable_persistence(path.clone()),
+            1,
+            "exactly the one pending record must be reported as recovered"
+        );
 
         let recovered = get_record("dlg-old-1").expect("the pending record is recovered");
         assert_eq!(recovered.status, AsyncDelegationStatus::Failed);
