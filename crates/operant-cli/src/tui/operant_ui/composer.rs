@@ -154,10 +154,19 @@ pub(crate) fn textarea_rect(area: Rect) -> Rect {
     // same inset on both axes and the four sides here are asymmetric. The
     // `saturating_sub` calls keep a band narrower than the inset an empty rect
     // instead of wrapping to a huge width.
+    //
+    // There is NO extra `-1` on the width. The gutter is subtracted once: it is
+    // the `GUTTER_COLS` columns to the LEFT of this rect, which `glyph_rect`
+    // paints into, so the rect's first column IS the text origin. Subtracting one
+    // more column charged the gutter twice and clipped the last character of every
+    // full-width row — MEASURED on the 120x40 startup frame, where the placeholder
+    // "Ask operant to do anything" (26 chars) rendered as "Ask operant to do
+    // anythin" (25) against a 25-column rect. The `-1` is what the comment above
+    // `glyph_rect` already says was fixed; it survived here.
     Rect {
         x: area.x.saturating_add(GUTTER_COLS),
         y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(GUTTER_COLS).saturating_sub(1),
+        width: area.width.saturating_sub(GUTTER_COLS),
         height: area.height.saturating_sub(2),
     }
 }
@@ -286,6 +295,28 @@ mod tests {
         assert!(blend((0, 0, 0), (248, 248, 248), 0.04).0 < 248);
     }
 
+    /// THE REGRESSION GUARD for the clipped placeholder.
+    ///
+    /// The rect used to subtract the gutter AND one more column, so a band 28
+    /// columns wide gave the text 25 and the 26-character placeholder lost its
+    /// last character. MEASURED on the real binary at 28x20: "Ask operant to do
+    /// anything" rendered as "Ask operant to do anythin".
+    ///
+    /// The placeholder is the ONLY string painted at the rect's full width with
+    /// no wrap, which is why this was invisible at 120 columns and obvious at 28.
+    #[test]
+    fn the_placeholder_fits_a_band_exactly_as_wide_as_it_is() {
+        let text = PLACEHOLDER.chars().count() as u16;
+        // A band exactly wide enough: gutter + placeholder, nothing to spare.
+        let area = Rect::new(0, 0, GUTTER_COLS + text, 3);
+        let inner = textarea_rect(area);
+        assert_eq!(
+            inner.width, text,
+            "a band exactly as wide as the placeholder must hold all of it"
+        );
+        assert!(inner.width >= PLACEHOLDER.chars().count() as u16);
+    }
+
     #[test]
     fn textarea_insets_one_row_each_side_and_the_gutter() {
         let area = Rect::new(10, 20, 40, 6);
@@ -293,7 +324,11 @@ mod tests {
         assert_eq!(inner.x, area.x + GUTTER_COLS);
         assert_eq!(inner.y, area.y + 1);
         assert_eq!(inner.height, area.height - 2);
-        assert_eq!(inner.width, area.width - GUTTER_COLS - 1);
+        // The gutter is subtracted ONCE. There is no extra `-1`: the glyph is
+        // painted to the LEFT of this rect, so the rect's first column is the
+        // text origin and its full width belongs to the text. The `-1` that used
+        // to be here clipped the last character of every full-width row.
+        assert_eq!(inner.width, area.width - GUTTER_COLS);
     }
 
     #[test]
@@ -395,11 +430,16 @@ mod tests {
             area.x + GUTTER_COLS,
             "the text must start after the gutter"
         );
-        // One column of right padding too — see the module's `tlbr(1, GUTTER, 1, 1)`.
+        // The rect's width is the band's width minus the gutter, with NOTHING
+        // reserved on the right. codex's inset is `tlbr(1, GUTTER, 1, 1)`, but its
+        // trailing 1 clears the band's own right BORDER; `paint_band_fill` draws a
+        // bare `Block` with no borders (see its doc), so operant has no border to
+        // clear and the extra column was pure loss — it clipped the last character
+        // of every full-width row.
         assert_eq!(
             text.width,
-            area.width - GUTTER_COLS - 1,
-            "the text area must leave the gutter on the left and a column on the right"
+            area.width - GUTTER_COLS,
+            "the gutter is the only horizontal inset: the band has no right border"
         );
     }
 
@@ -692,7 +732,7 @@ mod tests {
             );
             assert_eq!(
                 padded.width,
-                40 - GUTTER_COLS - 1,
+                40 - GUTTER_COLS,
                 "width arithmetic is independent of the height"
             );
         }
