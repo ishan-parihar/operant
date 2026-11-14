@@ -584,6 +584,11 @@ pub(crate) fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Res
 
 /// Run the gateway in foreground.
 async fn cmd_run(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Result<()> {
+    // The session socket is part of the daemon, not an opt-in: an operator who
+    // runs `operant gateway run` (and every systemd unit that runs it) gets the
+    // port a terminal attaches to, at the path the client already knows. The
+    // flag stays for an operator who wants it somewhere else.
+    let socket = socket.unwrap_or_else(operant_core::session_client::default_socket_path);
     // Audit finding 1 (iter-1335): `start_gateway` returns a REFUSAL
     // message when another daemon owns the flock — and the plain
     // `Ok(message)` flow below used to fall straight into the signal wait,
@@ -591,7 +596,7 @@ async fn cmd_run(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Resu
     // itself. Ask the runner whether this process actually holds a
     // gateway: `is_running()` is false exactly in the refusal case (and in
     // the in-process already-running case, which prints the same way).
-    let msg = crate::gateway_runner::start_gateway(config, socket).await?;
+    let msg = crate::gateway_runner::start_gateway(config, Some(socket)).await?;
     let started = crate::gateway_runner::is_running().await;
     println!("{msg}");
     if !started {

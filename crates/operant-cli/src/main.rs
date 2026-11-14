@@ -235,6 +235,11 @@ enum Commands {
         cmd: cmd_tools::ToolsSubcommand,
     },
     Chat {
+        /// The prompt to send once, then exit. In `--attach` mode this is the
+        /// prompt the SERVER runs; without `--attach` it is the first message
+        /// of a local session.
+        #[arg(value_name = "PROMPT")]
+        prompt: Option<String>,
         #[arg(short, long)]
         system: Option<String>,
         /// Attach to a RUNNING server's session socket instead of building a
@@ -3577,7 +3582,11 @@ async fn run(
                 .await?;
             }
         }
-        Some(Commands::Chat { system, attach }) => {
+        Some(Commands::Chat {
+            prompt,
+            system,
+            attach,
+        }) => {
             // Long-lived session: a child that closes its pipe must be a
             // reportable error, not the death of the process (see
             // `ignore_sigpipe_disposition`).
@@ -3591,13 +3600,16 @@ async fn run(
             // takes the headless attach path.
             let attach_socket = attach.clone();
             if attach.is_some() && !(loaded.config.tui.rich_output && tui_available()) {
-                return cmd_chat_attach(&attach_socket.expect("checked above"), system.as_deref())
-                    .await;
+                return cmd_chat_attach(
+                    &attach_socket.expect("checked above"),
+                    prompt.as_deref().or(system.as_deref()),
+                )
+                .await;
             }
             if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
                     loaded.config.clone(),
-                    system.clone(),
+                    prompt.clone().or_else(|| system.clone()),
                     LaunchMode::Landing,
                     cli.no_mouse,
                     cli.dangerously_skip_permissions,
@@ -3608,6 +3620,9 @@ async fn run(
                 .await?;
             } else {
                 warn_tui_fallback(loaded.config.tui.rich_output);
+                // The second argument is the SYSTEM PROMPT on this path, not a
+                // first message — a positional prompt here would silently
+                // redefine the agent's instructions.
                 chat_non_tui(&loaded.config, system.as_deref()).await?;
             }
         }

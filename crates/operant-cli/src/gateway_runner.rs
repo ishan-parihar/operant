@@ -1791,9 +1791,9 @@ async fn handle_runtime_command(
                                 )
                             }
                         }
-                        other => format!(
-                            "Unknown ponytail level '{other}' — use lite|full|ultra|off"
-                        ),
+                        other => {
+                            format!("Unknown ponytail level '{other}' — use lite|full|ultra|off")
+                        }
                     }
                 })
                 .await;
@@ -2595,8 +2595,14 @@ impl SessionBus {
     }
 
     /// The sender for a session, created on first use.
+    ///
+    /// Senders with no receivers left are dropped first. The map is keyed by a
+    /// session id ANY client can name (a `LoadHistory` for a made-up id
+    /// subscribes to it), so without this the map grows without bound for as
+    /// long as the daemon lives, and each entry is a 256-slot ring.
     fn sender_for(&self, session_id: &str) -> broadcast::Sender<WireMessage> {
         let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
+        senders.retain(|_, sender| sender.receiver_count() > 0);
         senders
             .entry(session_id.to_string())
             .or_insert_with(|| broadcast::channel(256).0)
@@ -2635,6 +2641,44 @@ struct GatewaySessionHandler {
     running: std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
+/// Resolve a pending tool-permission ask by its tool-call id (the session
+/// socket's `/approve` and `/deny`).
+///
+/// The channel path keys its pending map by CHANNEL, and a socket client has no
+/// channel; the tool-call id is the identity the wire carries, so the map is
+/// scanned for it. Best-effort by design: a request that is not found (already
+/// answered, already timed out) reports false rather than inventing an approval.
+fn resolve_pending_permission(tool_call_id: &str, allow: bool) -> bool {
+    use operant_core::agent::ToolPermissionResponse;
+    let Some(store) = PENDING_PERMISSIONS.get() else {
+        return false;
+    };
+    let Ok(guard) = store.lock() else {
+        return false;
+    };
+    let Some(pending) = guard.as_ref() else {
+        return false;
+    };
+    let Ok(mut map) = pending.try_lock() else {
+        return false;
+    };
+    let found = map
+        .iter()
+        .find_map(|(channel, request)| (request.tool_id == tool_call_id).then(|| channel.clone()));
+    let Some(channel) = found else {
+        return false;
+    };
+    let Some(request) = map.remove(&channel) else {
+        return false;
+    };
+    let response = if allow {
+        ToolPermissionResponse::AllowSession
+    } else {
+        ToolPermissionResponse::Deny
+    };
+    request.response_tx.send(response).is_ok()
+}
+
 impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
     fn handle(
         &self,
@@ -2643,8 +2687,14 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
         use operant_core::session_protocol::WireMessage;
         match message {
             WireMessage::Hello => {
-                let sessions =
-                    operant_core::active_sessions::presence_session_ids_for_pid(std::process::id());
+                // The daemon's OWN record of what it can serve. The presence
+                // directory is written by the TUI alone, so reading it here
+                // always answered zero and the client made up an id.
+                let sessions = self
+                    .handler
+                    .as_ref()
+                    .map(|handler| handler.live_session_ids())
+                    .unwrap_or_default();
                 vec![WireMessage::HelloOk { sessions }]
             }
             // A prompt runs the turn in the SLOT that owns this session.
@@ -2659,24 +2709,58 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         message: "this server has no agent slots to run a turn in".to_string(),
                     }];
                 };
+                // A turn over the socket obeys the SAME gates a channel turn
+                // does. ESTOP is a pause, not a channel-only setting, and the
+                // session cap bounds the memory the daemon spends — a prompt
+                // path that skips both makes the pause button and the cap
+                // decorative.
+                if operant_core::estop::is_engaged() {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "operant is paused — send /unpause or run `operant resume`"
+                            .to_string(),
+                    }];
+                }
+                if let Some(max) = handler.max_concurrent_sessions
+                    && !operant_core::active_sessions::ActiveSessionTracker::new(
+                        operant_core::active_sessions::ActiveSessionTracker::default_dir(),
+                        Some(max),
+                    )
+                    .acquire(&session_id)
+                    .unwrap_or(true)
+                {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: format!(
+                            "too many concurrent sessions (limit {max}) — the turn was not started"
+                        ),
+                    }];
+                }
                 let bus = std::sync::Arc::clone(&self.bus);
-                let session_for_turn = session_id.clone();
+                let task_session = session_id.clone();
                 let task = tokio::spawn(async move {
-                    let index = handler.slots.index_for(&session_for_turn);
-                    let slot = handler.slots.slot_for(&session_for_turn);
+                    let slot = handler.slots.slot_for(&task_session);
                     // ONE turn at a time in this slot (the same lock every
                     // other gateway turn takes).
                     let _guard = slot.lock.lock().await;
-                    // The slot's session is what its forwarder publishes the
-                    // events under, so it is set before the turn runs.
-                    if let Some(cell) = slot.session_cell.as_ref() {
-                        if let Ok(mut held) = cell.lock() {
-                            *held = Some(session_for_turn.clone());
-                        }
-                    }
+                    // The slot's agent must be pointed at THIS session before
+                    // the turn runs — the same binding the channel path does,
+                    // or the transcript lands in the previous chat's history
+                    // (or in a throwaway `sess_<uuid>`).
+                    handler
+                        .bind_slot_to_session(slot, &task_session, "session-socket")
+                        .await;
                     let agent = std::sync::Arc::clone(&slot.agent);
-                    let _ = agent.run(text).await;
-                    let _ = index;
+                    if let Err(error) = agent.run(text).await {
+                        // A client must not sit in silence after a failed
+                        // turn: the events are its only channel back.
+                        bus.publish(
+                            &task_session,
+                            AgentEvent::Error {
+                                error: error.user_message(),
+                            },
+                        );
+                    }
                 });
                 if let Ok(mut running) = self.running.lock() {
                     running.insert(session_id, task);
@@ -2704,17 +2788,30 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     messages,
                 }]
             }
-            // RT-550: a cancel STOPS the turn. The abort drops the task at
-            // its next await point, the slot's lock is released by the guard,
-            // and no further events are published for that session.
+            // RT-550: a cancel STOPS the turn — with the INTERRUPT, not an
+            // abort.
+            //
+            // An abort drops the future at its next await point, which skips
+            // the turn's own tail: no interrupted marker, no clean commit, and
+            // an in-flight tool row left saying its side effects are UNKNOWN.
+            // The reload path then strips that row, so the model re-issues a
+            // write that already happened (the RT-510 defect). The interrupt
+            // flag is how `/stop` and the drain end a turn: the loop exits, the
+            // tail is committed, and the slot's lock is released by its guard.
             WireMessage::Cancel { session_id, .. } => {
-                let stopped = self
-                    .running
-                    .lock()
-                    .ok()
-                    .and_then(|mut running| running.remove(&session_id))
-                    .map(|task| task.abort())
-                    .is_some();
+                let handler = self.handler.as_ref().map(std::sync::Arc::clone);
+                let flagged = handler.is_some_and(|handler| {
+                    let slot = handler.slots.slot_for(&session_id);
+                    slot.agent.interrupt_flag().trigger();
+                    true
+                });
+                let stopped = flagged
+                    && self
+                        .running
+                        .lock()
+                        .ok()
+                        .and_then(|mut running| running.remove(&session_id))
+                        .is_some();
                 vec![WireMessage::Error {
                     session_id: Some(session_id),
                     message: if stopped {
@@ -2722,6 +2819,67 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     } else {
                         "there was no turn to cancel".to_string()
                     },
+                }]
+            }
+            // RT-550's siblings: an approval the client can actually give.
+            // The pending map is keyed by CHANNEL, and a socket client has no
+            // channel — so the request is matched by its tool-call id, which
+            // the wire already carries.
+            WireMessage::Approve {
+                session_id,
+                tool_call_id,
+            } => vec![WireMessage::Error {
+                session_id: Some(session_id),
+                message: match resolve_pending_permission(&tool_call_id, true) {
+                    true => "the tool call was approved".to_string(),
+                    false => format!("no pending tool call named {tool_call_id}"),
+                },
+            }],
+            WireMessage::Deny {
+                session_id,
+                tool_call_id,
+                reason,
+            } => {
+                // The response enum carries no reason, so it is reported back
+                // to the client that typed it rather than silently dropped.
+                if let Some(reason) = reason.as_deref().filter(|r| !r.trim().is_empty()) {
+                    tracing::info!(session = %session_id, tool_call_id = %tool_call_id, reason, "tool call denied over the session socket");
+                }
+                vec![WireMessage::Error {
+                    session_id: Some(session_id),
+                    message: match resolve_pending_permission(&tool_call_id, false) {
+                        true => "the tool call was denied".to_string(),
+                        false => format!("no pending tool call named {tool_call_id}"),
+                    },
+                }]
+            }
+            // A steer reaches the RUNNING turn between iterations — the same
+            // queue the channel path pushes into (`agent.steer_queue_handle`).
+            WireMessage::Steer { session_id, text } => {
+                let slot = self
+                    .handler
+                    .as_ref()
+                    .map(|handler| handler.slots.slot_for(&session_id));
+                let Some(slot) = slot else {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "this server has no agent slots".to_string(),
+                    }];
+                };
+                let queue = slot.agent.steer_queue_handle();
+                let message = match queue.try_lock() {
+                    Ok(mut queue) => {
+                        queue.push(text);
+                        "steered the running turn".to_string()
+                    }
+                    Err(_) => {
+                        "the agent is reading its steer queue right now — send it again in a moment"
+                            .to_string()
+                    }
+                };
+                vec![WireMessage::Error {
+                    session_id: Some(session_id),
+                    message,
                 }]
             }
             other => vec![WireMessage::Error {
@@ -2748,9 +2906,14 @@ const DEFAULT_AGENT_SLOT_COUNT: usize = 4;
 
 /// The ceiling on the slot count (RT-548).
 ///
-/// A slot is a full agent, so the count is a RAM decision as much as a
-/// concurrency one: 32 agents is ~2.9 GB on the box this was measured on.
-const MAX_AGENT_SLOT_COUNT: usize = 64;
+/// A slot is a full agent, so the count is a RAM decision. MEASURED on the
+/// operator's box with this build: one daemon at 1 / 4 / 16 / 64 slots is
+/// 37 / 43 / 69 / 173 MiB RSS — about **2.1 MiB per idle slot**, not the
+/// ~45 MiB an earlier note claimed. The ceiling is therefore set by the file
+/// descriptor and scheduler budget a thousand sessions imply, not by RAM, and
+/// the honest caveat is that an ACTIVE turn costs more than an idle slot
+/// (conversation, compressor and caches) — a number nobody has measured yet.
+const MAX_AGENT_SLOT_COUNT: usize = 256;
 
 /// How many slots the gateway runs for this config (RT-548).
 ///
@@ -2929,9 +3092,70 @@ struct GatewayMessageHandler {
     /// registry is built once at startup).
     #[cfg(feature = "plugins-wasm")]
     wasm_plugin_skill_roots: Vec<std::path::PathBuf>,
+    /// `gateway.max_concurrent_sessions`, captured at gateway start (the
+    /// handler has no config handle of its own). The session socket enforces
+    /// the SAME cap the channel path does — a prompt path that skips it makes
+    /// the cap decorative.
+    max_concurrent_sessions: Option<usize>,
+    /// The sessions this daemon has been asked to serve (RT-542's handshake).
+    ///
+    /// `Hello` used to answer from the PRESENCE directory, which only the TUI
+    /// writes, so the gateway always reported zero sessions and an attaching
+    /// client fell back to a made-up id. The slot bindings are the daemon's own
+    /// record of what it can serve.
+    live_sessions: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl GatewayMessageHandler {
+    /// Point a SLOT at a session before a turn runs in it — the ONE rule
+    /// every turn entry obeys.
+    ///
+    /// The channel path and the session socket each used to do this their own
+    /// way, and only the channel path did it: a prompt over the socket never
+    /// retargeted the slot's agent, so `run()` either rehydrated the PREVIOUS
+    /// chat's conversation into the turn or minted a fresh `sess_<uuid>` and
+    /// wrote the transcript there. MEASURED: a prompt sent to session
+    /// `attached` landed as `sess_9d985cd8-…`, so `LoadHistory` for the named
+    /// session was empty and a resumed session could not be found.
+    ///
+    /// Returns whether this CHANGED the slot's session, which is the reload
+    /// signal the channel path logs and reports.
+    async fn bind_slot_to_session(&self, slot: &AgentSlot, session_id: &str, source: &str) -> bool {
+        // The swap itself: the outgoing session's turns go back to the store
+        // and the incoming session's transcript is rehydrated in their place
+        // (`set_session_id`, agent/events.rs). Without it the agent keeps
+        // whatever conversation turned last.
+        slot.agent.set_session_id(session_id.to_string());
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = slot
+            .agent
+            .db()
+            .save_session(session_id, None, source, &now, &now);
+        // The slot's forwarder publishes the turn's events under this id, so
+        // it must be written on EVERY turn — a stale cell publishes one
+        // chat's events to another chat's subscribers.
+        if let Some(cell) = slot.session_cell.as_ref()
+            && let Ok(mut held) = cell.lock()
+        {
+            *held = Some(session_id.to_string());
+        }
+        let changed = {
+            let mut current = slot.loaded_session.lock().await;
+            let changed = *current != Some(session_id.to_string());
+            if changed {
+                *current = Some(session_id.to_string());
+            }
+            changed
+        };
+        if let Ok(mut live) = self.live_sessions.lock() {
+            live.insert(session_id.to_string());
+        }
+        if changed {
+            tracing::info!(session = %session_id, source, "the slot is bound to a session");
+        }
+        changed
+    }
+
     /// Write the daemon's state file (RT-523).
     ///
     /// Best-effort: a status file that cannot be written must never fail a
@@ -2976,6 +3200,17 @@ impl GatewayMessageHandler {
                 "the gateway status file could not be written"
             );
         }
+    }
+
+    /// The sessions this daemon can serve right now (the `Hello` answer).
+    fn live_session_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .live_sessions
+            .lock()
+            .map(|live| live.iter().cloned().collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids
     }
 
     /// RT-175 — execute a session-mutating runtime command against THIS
@@ -3511,58 +3746,23 @@ impl MessageHandler for GatewayMessageHandler {
             thread_id: message.thread_id.map(|t| t.to_string()),
         }));
 
-        // Point the agent at THIS session before it runs. Without it the agent
-        // minted a fresh `sess_<uuid>` per turn, so the tool trajectory was
-        // orphaned into an id the reload below never reads — which is why a bare
-        // `continue` after a restart came back to five prompts and no answers.
-        // `set_session_id` takes `&self` and works through `Arc<OperantAgent>`,
-        // the same shape as the `set_model` call further down.
-        agent.set_session_id(session_id.clone());
-
-        // Ensure session exists in DB
+        // Point the agent at THIS session before it runs — the ONE binding
+        // every turn entry makes, shared with the session socket's prompt path.
+        // Without it the agent keeps whatever conversation turned last and
+        // mints a fresh `sess_<uuid>`, so the tool trajectory is orphaned and
+        // a restart rehydrates a text-only skeleton.
+        //
+        // `set_session_id` performs the swap itself: the outgoing session's
+        // turns go back to the store and the incoming session's transcript
+        // is rehydrated in their place. `clear_history` here would be actively
+        // wrong — it discards the addressed session from the store.
+        let needs_reload = self
+            .bind_slot_to_session(self.slots.slot_for(&session_key), &session_id, "gateway")
+            .await;
+        // The timestamp a failed turn's explanation is written with. It was
+        // computed beside the session binding before that moved into the
+        // shared helper, so the stamp stays here where it is read.
         let now = chrono::Utc::now().to_rfc3339();
-        let _ = agent
-            .db()
-            .save_session(&session_id, None, "gateway", &now, &now);
-
-        // Load conversation history only when the session changes.
-        //
-        // This block used to call `clear_history()` and manually re-add the
-        // last 20 messages on EVERY gateway message. That broke Anthropic
-        // prompt prefix caching (the message array was rebuilt from scratch
-        // each turn, so the cache never hit) and, worse, it made two
-        // concurrent gateway chats wipe each other's turns: they share one
-        // agent, so switching sessions destroyed the other chat's context.
-        //
-        // `set_session_id` above now performs the swap itself — the outgoing
-        // session's turns go back to the session store and the incoming
-        // session's transcript is rehydrated in their place — so this block
-        // only tracks which session is active for bridge state. Calling
-        // `clear_history()` here would now be actively wrong: it discards the
-        // addressed session from the store, destroying the transcript
-        // `set_session_id` just rehydrated.
-        // (the red-team's finding 7) The cell is the SLOT's: each slot has
-        // one agent and one conversation, and a session key maps to one
-        // slot. One shared cell let a slot see the other slot's session id
-        // and decide to reload a conversation it already had.
-        let needs_reload = {
-            let current = self
-                .slots
-                .slot_for(&session_key)
-                .loaded_session
-                .lock()
-                .await;
-            *current != Some(session_id.clone())
-        };
-        if needs_reload {
-            let mut current = self
-                .slots
-                .slot_for(&session_key)
-                .loaded_session
-                .lock()
-                .await;
-            *current = Some(session_id.clone());
-        }
 
         // Long-term memory recall is injected by the agent itself inside
         // run() (build_messages → provider.prefetch under <memory_context>).
@@ -5111,6 +5311,8 @@ pub async fn start_gateway(
     let handler = Arc::new(GatewayMessageHandler {
         slots: AgentSlots { slots },
         admins: app_config.gateway.admins.clone(),
+        max_concurrent_sessions: app_config.gateway.max_concurrent_sessions,
+        live_sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
         gateway: tokio::sync::Mutex::new(None),
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
