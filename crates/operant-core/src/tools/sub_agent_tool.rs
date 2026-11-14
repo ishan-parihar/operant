@@ -351,12 +351,27 @@ struct WorkerSpec {
     id: String,
 }
 
+/// One child's finished turn: the text the parent reads, plus the session the
+/// child actually ran in.
+///
+/// MEASURED 2026-11-14 (audit finding 4): a child mints its own session id
+/// inside `agent::turn_context` (`sess_<uuid>`) and nothing carried it back, so
+/// the truncation notice's "the full text is in the session store" named a store
+/// with no key — the parent model could not ask for the tail and the operator
+/// could not join a child session to the delegation that produced it. The id is
+/// the join, so it travels with the answer instead of being re-derived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildAnswer {
+    text: String,
+    session_id: Option<String>,
+}
+
 /// How a single worker ended. Every exit path — success, agent error,
 /// timeout, panic, or spawn refusal — is one of these, so a worker can never
 /// take the parent down: the failure is reported as data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WorkerStatus {
-    Completed(String),
+    Completed(ChildAnswer),
     Failed(String),
     TimedOut {
         after_secs: u64,
@@ -381,7 +396,7 @@ struct WorkerOutcome {
 
 /// A worker's execution, boxed so one `run` closure can build each worker's
 /// distinct future without a second trait or a generic-per-call.
-type WorkerRun = Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send>>;
+type WorkerRun = Pin<Box<dyn Future<Output = crate::error::Result<ChildAnswer>> + Send>>;
 
 /// Fan out `workers` and collect every outcome, reusing the in-loop tool
 /// pool's shape: a semaphore bounds how many workers hold a model stream at
@@ -557,6 +572,7 @@ impl SubAgentTool {
             working_dir,
         })
         .await
+        .map(|answer| answer.text)
     }
 
     /// Run one worker whose slot was ALREADY reserved by the caller.
@@ -570,7 +586,7 @@ impl SubAgentTool {
     async fn call_unguarded(
         &self,
         worker: WorkerSpec,
-    ) -> std::result::Result<String, BoxedToolError> {
+    ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         self.ensure_supported_model()?;
 
         let goal = worker.goal.trim();
@@ -653,23 +669,30 @@ impl SubAgentTool {
             let Some(schema_ref) = schema.as_ref() else {
                 return Ok(answer);
             };
-            let (valid, errors, candidate) = validate_output(&answer, schema_ref);
+            let (valid, errors, candidate) = validate_output(&answer.text, schema_ref);
             if valid {
                 // Return the JSON the validator parsed, not the child's raw
                 // text: a child that wrapped its object in a fence or a sentence
                 // is contract-compliant, and the parent asked for the object.
-                return Ok(candidate.unwrap_or(answer));
+                return Ok(ChildAnswer {
+                    text: candidate.unwrap_or(answer.text),
+                    session_id: answer.session_id,
+                });
             }
             if attempts >= MAX_SCHEMA_RETRIES {
                 // Persistent failure: keep the answer (the parent needs the
                 // data) but flag the contract breach explicitly (hermes
                 // returns the final text with the errors noted).
-                return Ok(format!(
-                    "{answer}\n\n[SCHEMA VALIDATION FAILED after {MAX_SCHEMA_RETRIES} \
-                     retr{} — errors: {}]",
-                    if MAX_SCHEMA_RETRIES == 1 { "y" } else { "ies" },
-                    errors.join("; ")
-                ));
+                return Ok(ChildAnswer {
+                    text: format!(
+                        "{}\n\n[SCHEMA VALIDATION FAILED after {MAX_SCHEMA_RETRIES} \
+                         retr{} — errors: {}]",
+                        answer.text,
+                        if MAX_SCHEMA_RETRIES == 1 { "y" } else { "ies" },
+                        errors.join("; ")
+                    ),
+                    session_id: answer.session_id,
+                });
             }
             retry_errors = errors;
             attempts += 1;
@@ -688,9 +711,13 @@ impl SubAgentTool {
     /// Shared by the sync, batch, and background delegation paths so depth
     /// limits, tool inheritance, and result shaping stay in one place.
     ///
+    /// Returns the child's answer AND the session it ran in: the parent needs
+    /// the id to read a truncated tail back, and nothing else carries it.
+    ///
     /// Brackets the child run with `AgentEvent::SubagentStarted` /
     /// `SubagentStopped` so the TUI can show lifecycle for headless children
     /// (whose own events are deliberately not forwarded to the parent).
+    #[allow(clippy::too_many_arguments)]
     async fn run_child(
         &self,
         system_prompt: String,
@@ -699,7 +726,7 @@ impl SubAgentTool {
         max_iterations: Option<u32>,
         timeout_seconds: u64,
         toolsets: Option<Vec<String>>,
-    ) -> std::result::Result<String, BoxedToolError> {
+    ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         // Determine effective toolsets based on role, the parent's toolsets
         // and the subset the caller asked for.
         let child_toolsets = self.compute_child_toolsets(role, toolsets.as_deref());
@@ -777,7 +804,14 @@ impl SubAgentTool {
         // Same flag for the parent: the answer carries the banner, so a parent
         // that ignores the NOTE still cannot mistake a guess for a read.
         let answer = child_outcome(result, timeout_seconds)?;
-        Ok(flag_no_tools(zero_tools, answer))
+        // Read AFTER the turn: the prologue mints the id on the first turn, so
+        // before the run there is nothing to read. `run` takes `&self`, so the
+        // agent is still here and the id is the one the store wrote under.
+        let session_id = agent.session_id();
+        Ok(ChildAnswer {
+            text: flag_no_tools(zero_tools, answer),
+            session_id,
+        })
     }
 
     /// Fan out a **swarm**: run every task as a real worker session and
@@ -889,7 +923,7 @@ impl SubAgentTool {
         let mut errors: Vec<String> = Vec::new();
         for outcome in &outcomes {
             match &outcome.status {
-                WorkerStatus::Completed(answer) => results.push(answer.clone()),
+                WorkerStatus::Completed(answer) => results.push(answer.text.clone()),
                 WorkerStatus::Failed(error) => errors.push(error.clone()),
                 WorkerStatus::TimedOut { after_secs } => {
                     errors.push(format!("worker timed out after {after_secs}s"))
@@ -1312,14 +1346,29 @@ fn build_child_system_prompt(
 const MAX_WORKER_REPORT_CHARS: usize = 4000;
 
 /// Cap one worker's report on a character boundary, keeping its own text.
-fn cap_worker_report(answer: &str) -> String {
+///
+/// The notice names the session the tail is in. MEASURED 2026-11-14 (audit
+/// finding 4): it used to say only "the full text is in the session store",
+/// which is a pointer with no key — the child's session id was minted inside
+/// `turn_context` and never carried back, so neither the parent model nor the
+/// operator could ask for the tail. The id is the key.
+fn cap_worker_report(answer: &str, session_id: Option<&str>) -> String {
     if answer.chars().count() <= MAX_WORKER_REPORT_CHARS {
         return answer.to_string();
     }
     let mut out: String = answer.chars().take(MAX_WORKER_REPORT_CHARS).collect();
-    out.push_str(&format!(
-        "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is in the session store]"
-    ));
+    match session_id {
+        Some(id) => out.push_str(&format!(
+            "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is \
+             in session {id}]"
+        )),
+        // No id read back: say so rather than naming a store the parent cannot
+        // address. A child that never reached its prologue has no session.
+        None => out.push_str(&format!(
+            "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — this worker \
+             reported no session id, so the tail is not addressable]"
+        )),
+    }
     out
 }
 
@@ -1328,6 +1377,9 @@ fn cap_worker_report(answer: &str) -> String {
 /// Each section is headed by the worker's own goal so the parent can attribute
 /// a result to the request that produced it — a positional `Task 3` heading is
 /// useless once some workers were refused or failed and the survivors shift.
+/// The heading also carries the worker id and, for a completed worker, the
+/// session it ran in: those two are the only handles the parent gets (audit
+/// finding 4), so a section that omitted them could not be followed up.
 /// Non-completed statuses are rendered inline, labelled, rather than dropped
 /// into a separate error list that loses the goal association. Every worker is
 /// reported, including the ones that only failed: a section that silently
@@ -1339,10 +1391,23 @@ fn format_swarm_outcomes(outcomes: &[WorkerOutcome]) -> String {
 
     let mut output = String::from("## Swarm Results\n\n");
     for outcome in outcomes {
-        let heading = preview_of(&outcome.goal, 80);
+        let goal = preview_of(&outcome.goal, 80);
+        // The session id exists only on a completed worker; a failed or refused
+        // one never reached its prologue, so there is nothing to name.
+        let session = match &outcome.status {
+            WorkerStatus::Completed(answer) => answer.session_id.as_deref(),
+            _ => None,
+        };
+        let heading = match session {
+            Some(id) => format!("{} \u{00b7} {goal} (session {id})", outcome.id),
+            None => format!("{} \u{00b7} {goal}", outcome.id),
+        };
         match &outcome.status {
             WorkerStatus::Completed(answer) => {
-                output.push_str(&format!("### {heading}\n{}\n\n", cap_worker_report(answer)));
+                output.push_str(&format!(
+                    "### {heading}\n{}\n\n",
+                    cap_worker_report(&answer.text, answer.session_id.as_deref())
+                ));
             }
             WorkerStatus::Failed(error) => {
                 output.push_str(&format!("### {heading}\n[failed] {error}\n\n"));
@@ -2363,13 +2428,22 @@ mod tests {
         assert_eq!(failed.to_string(), "child error: no model");
     }
 
+    /// A completed worker carrying text and no session id — the common case in
+    /// tests that assert on rendering rather than on the session join.
+    fn completed(text: impl Into<String>) -> WorkerStatus {
+        WorkerStatus::Completed(ChildAnswer {
+            text: text.into(),
+            session_id: None,
+        })
+    }
+
     #[test]
     fn format_swarm_outcomes_labels_each_worker_by_its_goal() {
         let outcomes = vec![
             WorkerOutcome {
                 id: "sub-a".to_string(),
                 goal: "audit the parser".to_string(),
-                status: WorkerStatus::Completed("found two issues".to_string()),
+                status: completed("found two issues"),
             },
             WorkerOutcome {
                 id: "sub-b".to_string(),
@@ -2406,7 +2480,7 @@ mod tests {
             .map(|i| WorkerOutcome {
                 id: format!("sub-{i}"),
                 goal: format!("task {i}"),
-                status: WorkerStatus::Completed("x".repeat(6_000)),
+                status: completed("x".repeat(6_000)),
             })
             .collect();
         let result = format_swarm_outcomes(&outcomes);
@@ -2433,16 +2507,51 @@ mod tests {
     /// not a transformation.
     #[test]
     fn a_short_worker_report_is_not_marked_or_rewritten() {
-        assert_eq!(cap_worker_report("all good"), "all good");
+        assert_eq!(cap_worker_report("all good", None), "all good");
         let long = "y".repeat(MAX_WORKER_REPORT_CHARS + 1);
-        let capped = cap_worker_report(&long);
+        let capped = cap_worker_report(&long, None);
         assert_eq!(
             capped,
             format!(
-                "{}\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is in the session store]",
+                "{}\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — this worker \
+                 reported no session id, so the tail is not addressable]",
                 "y".repeat(MAX_WORKER_REPORT_CHARS)
             )
         );
+    }
+
+    /// Audit finding 4: the truncation notice must name the session the tail is
+    /// in. A pointer with no key is the defect — "the full text is in the
+    /// session store" told the parent nothing it could act on.
+    #[test]
+    fn a_truncated_report_names_the_session_that_holds_the_tail() {
+        let long = "z".repeat(MAX_WORKER_REPORT_CHARS + 1);
+        let capped = cap_worker_report(&long, Some("sess_abc123"));
+        assert!(
+            capped.contains("session sess_abc123"),
+            "the notice must carry the id: {capped}"
+        );
+        assert!(
+            !capped.contains("the full text is in the session store"),
+            "the keyless pointer must be gone: {capped}"
+        );
+    }
+
+    /// The worker id and its session are the parent's only handles on a section
+    /// (audit finding 4). A heading that drops either cannot be followed up.
+    #[test]
+    fn a_completed_section_carries_the_worker_id_and_its_session() {
+        let outcomes = vec![WorkerOutcome {
+            id: "sub-7".to_string(),
+            goal: "audit the pool".to_string(),
+            status: WorkerStatus::Completed(ChildAnswer {
+                text: "done".to_string(),
+                session_id: Some("sess_99".to_string()),
+            }),
+        }];
+        let result = format_swarm_outcomes(&outcomes);
+        assert!(result.contains("sub-7"), "{result}");
+        assert!(result.contains("session sess_99"), "{result}");
     }
 
     // ── Spawn guard + swarm ──────────────────────────────────────────────
@@ -2493,7 +2602,10 @@ mod tests {
                     tokio::task::yield_now().await;
                     let answer = format!("{} done", worker.goal);
                     in_flight_now.fetch_sub(1, Ordering::AcqRel);
-                    Ok(answer)
+                    Ok(ChildAnswer {
+                        text: answer,
+                        session_id: None,
+                    })
                 })
             }
         })
@@ -2506,10 +2618,7 @@ mod tests {
                 .iter()
                 .find(|outcome| outcome.goal == goal)
                 .unwrap_or_else(|| panic!("missing outcome for {goal}"));
-            assert_eq!(
-                outcome.status,
-                WorkerStatus::Completed(format!("{goal} done"))
-            );
+            assert_eq!(outcome.status, completed(format!("{goal} done")));
         }
         // The pool really was bounded: never more than `max_in_flight` model
         // streams at once, and the budget was actually exercised.
@@ -2619,7 +2728,10 @@ mod tests {
                     if worker.goal == "boom" {
                         return Err(crate::error::Error::Agent("provider exploded".to_string()));
                     }
-                    Ok(format!("{} done", worker.goal))
+                    Ok(ChildAnswer {
+                        text: format!("{} done", worker.goal),
+                        session_id: None,
+                    })
                 })
             },
         )
@@ -2641,10 +2753,7 @@ mod tests {
                 .iter()
                 .find(|outcome| outcome.goal == goal)
                 .unwrap_or_else(|| panic!("{goal} must survive its sibling's failure"));
-            assert_eq!(
-                survivor.status,
-                WorkerStatus::Completed(format!("{goal} done"))
-            );
+            assert_eq!(survivor.status, completed(format!("{goal} done")));
         }
     }
 
@@ -2658,7 +2767,10 @@ mod tests {
                     if worker.goal == "boom" {
                         panic!("worker blew up");
                     }
-                    Ok("ok done".to_string())
+                    Ok(ChildAnswer {
+                        text: "ok done".to_string(),
+                        session_id: None,
+                    })
                 })
             },
         )
@@ -2675,10 +2787,7 @@ mod tests {
             .iter()
             .find(|outcome| outcome.goal == "ok")
             .expect("sibling must still complete");
-        assert_eq!(
-            survivor.status,
-            WorkerStatus::Completed("ok done".to_string())
-        );
+        assert_eq!(survivor.status, completed("ok done"));
     }
 
     #[tokio::test]
@@ -2694,7 +2803,10 @@ mod tests {
                         // Never resolves on its own; only the deadline can end it.
                         std::future::pending::<()>().await;
                     }
-                    Ok("ok done".to_string())
+                    Ok(ChildAnswer {
+                        text: "ok done".to_string(),
+                        session_id: None,
+                    })
                 })
             },
         )
@@ -2709,10 +2821,7 @@ mod tests {
             .iter()
             .find(|outcome| outcome.goal == "ok")
             .expect("a wedged sibling must not stall the swarm");
-        assert_eq!(
-            survivor.status,
-            WorkerStatus::Completed("ok done".to_string())
-        );
+        assert_eq!(survivor.status, completed("ok done"));
     }
 
     #[tokio::test]
