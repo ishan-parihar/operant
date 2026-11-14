@@ -306,6 +306,54 @@ pub fn estimate_total_tokens(messages: &[Message]) -> usize {
     messages.iter().map(estimate_message_tokens).sum()
 }
 
+/// Trim `text` so it costs at most `budget_tokens` by the [`estimate_tokens`]
+/// heuristic, keeping the HEAD and stating what was withheld (audit iter-2345).
+///
+/// This is for injected context that rides the turn tail — the recalled-memory
+/// block, which is charged against the window but can never be evicted because
+/// the ladder only shrinks `messages`. An untrimmed injection does not degrade
+/// such a request, it FAILS it typed. A stated truncation beats a silent one:
+/// the model cannot tell it is reading a shortened block, so it is told.
+///
+/// `budget_tokens == 0` means the caller's own built-in default applies (the
+/// knob treats 0 as "unset", matching `advertised_skills_token_budget`).
+/// A text that already fits is returned unchanged, byte for byte.
+pub fn fit_to_token_budget(text: &str, budget_tokens: usize) -> String {
+    let budget = if budget_tokens == 0 {
+        MEMORY_INJECTION_TOKEN_BUDGET
+    } else {
+        budget_tokens
+    };
+    if estimate_tokens(text) <= budget {
+        return text.to_string();
+    }
+    // Reserve room for the marker, so the RESULT is within budget rather than
+    // the kept prefix alone. The marker is a fixed string, so this converges
+    // in one step: the reserve is computed from the marker, not from `text`.
+    // The marker itself has a cost. At an absurdly small budget it would not
+    // fit at all, and a truncation that exceeds the budget it was called to
+    // enforce is worse than no truncation: return nothing and let the caller
+    // see an empty block. No real operator sets this, but the function's
+    // contract is "the result is within budget", and that has to hold at every
+    // input rather than at the ones that were tested.
+    let marker = "\n[operant: recalled memory withheld — the injection is over its token budget]";
+    let reserve = estimate_tokens(marker);
+    if reserve >= budget {
+        return String::new();
+    }
+    let keep_tokens = budget - reserve;
+    // The estimator is chars/4, so the inverse is chars*4. Walk back to the
+    // last character boundary — `text` may be arbitrary recalled content.
+    let mut keep_chars = keep_tokens.saturating_mul(4);
+    if keep_chars >= text.chars().count() {
+        // The prefix fits but the whole did not: the marker still has to go
+        // on, so fall through to the truncating path with everything kept.
+        keep_chars = text.chars().count();
+    }
+    let kept: String = text.chars().take(keep_chars).collect();
+    format!("{kept}{marker}")
+}
+
 // ---------------------------------------------------------------------------
 // output-token fitting (omp `output-budget.ts` parity, iter-792)
 // ---------------------------------------------------------------------------
@@ -1690,6 +1738,23 @@ pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
 /// rest are dropped, and the drop is stated in the block itself.
 pub const ADVERTISED_SKILLS_TOKEN_BUDGET: usize = 4_000;
 
+/// The token ceiling on the recalled-memory block (`<memory_context>`) that
+/// the memory provider's prefetch injects into the turn tail each turn
+/// (audit iter-2345).
+///
+/// It rides the same tail as the kernel feed-forward block (built at 1,200
+/// chars) and the workspace context, and like the advertised-skills block it
+/// is part of what the model is TOLD rather than what it can retrieve — so it
+/// needs a ceiling of its own. Without one the recall is bounded by COUNT
+/// (5 hits, plus up to 8 queued queries at 3 each), and the session fold caps
+/// each message but not the message count, so one long session's folded
+/// transcript can be recalled whole into every remaining turn.
+///
+/// The tail is charged against the window but is never evictable — the ladder
+/// only shrinks `messages` — so an oversized tail does not degrade the
+/// request, it FAILS it typed. That is why this is a ceiling, not a warning.
+pub const MEMORY_INJECTION_TOKEN_BUDGET: usize = 4_000;
+
 /// The smallest ceiling one tool result may be trimmed to.
 ///
 /// Above the guard's own marker + reserve (~111 tokens), so a trimmed result
@@ -1873,6 +1938,65 @@ mod tests {
         let fitted = fit_output_tokens(Some(8192), 128_000, 126_912, true, None);
         assert_eq!(fitted, Some(1024));
         assert_eq!(MIN_FITTED_OUTPUT_TOKENS, 1024);
+    }
+
+    /// The recalled-memory ceiling (audit iter-2345): text under the budget is
+    /// returned unchanged — byte for byte, not "parsed and re-serialized".
+    #[test]
+    fn fit_to_token_budget_returns_a_fitting_block_unchanged() {
+        let text = "- the user prefers concise answers\n- the gateway runs on 3080";
+        assert_eq!(fit_to_token_budget(text, 4_000), text.to_string());
+        assert!(estimate_tokens(&fit_to_token_budget(text, 4_000)) <= 4_000);
+    }
+
+    /// The overhead of the marker is RESERVED, so the result really is inside
+    /// the budget — a truncation that lands on the line it was meant to land
+    /// under is not a truncation.
+    #[test]
+    fn fit_to_token_budget_accounts_for_the_marker_it_adds() {
+        // A block far over any small budget.
+        let text = "- ".to_string() + &"note ".repeat(2_000);
+        for budget in [1usize, 10, 40, 137, 1_000] {
+            let out = fit_to_token_budget(&text, budget);
+            assert!(
+                estimate_tokens(&out) <= budget,
+                "budget {budget} produced {} tokens",
+                estimate_tokens(&out)
+            );
+            // The marker only fits when the budget can hold it; below that the
+            // block is dropped entirely, which is the correct answer for a
+            // budget no real operator sets.
+            if estimate_tokens(
+                "\n[operant: recalled memory withheld — the injection is over its token budget]",
+            ) < budget
+            {
+                assert!(
+                    out.contains("withheld"),
+                    "budget {budget} did not say what it dropped"
+                );
+            } else {
+                assert!(out.is_empty(), "budget {budget} should drop the block");
+            }
+        }
+    }
+
+    /// The caller's 0 is the built-in default, matching the skills knob: an
+    /// operator leaving the knob unset gets the ceiling, not an unbounded tail.
+    #[test]
+    fn fit_to_token_budget_treats_zero_as_the_default() {
+        let text = "- ".to_string() + &"note ".repeat(2_000);
+        let out = fit_to_token_budget(&text, 0);
+        assert!(
+            estimate_tokens(&out) <= MEMORY_INJECTION_TOKEN_BUDGET,
+            "0 must not mean unbounded: {} tokens",
+            estimate_tokens(&out)
+        );
+    }
+
+    /// An empty recall stays empty — no marker, no wrapper, nothing.
+    #[test]
+    fn fit_to_token_budget_leaves_an_empty_block_empty() {
+        assert_eq!(fit_to_token_budget("", 10), "");
     }
 
     /// Local (heuristic) prompt counts get the 10% margin; provider-reported

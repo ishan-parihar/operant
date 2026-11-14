@@ -31,6 +31,21 @@ const RECAP_INSTRUCTION: &str = "User stepped away; returning. Recap: <40 words,
 sentences, no markdown. Lead: overall goal, current task; then one next action. Skip: \
 root-cause narrative, fix internals, secondary to-dos, em-dash tangents.";
 
+/// The recap prompt for one call: the built-in contract, plus whatever the
+/// operator named in `[recap] instructions`.
+///
+/// Kept as a function rather than an inline `format!` so the default path is
+/// byte-identical to the pre-knob behaviour — an empty instruction returns
+/// the constant unchanged, not the constant with a trailing separator.
+fn recap_instruction(instructions: &str) -> String {
+    let extra = instructions.trim();
+    if extra.is_empty() {
+        RECAP_INSTRUCTION.to_string()
+    } else {
+        format!("{RECAP_INSTRUCTION}\n\nAdditional instructions from the operator:\n{extra}")
+    }
+}
+
 /// One generated recap, ready for the host to render/journal.
 #[derive(Debug, Clone)]
 pub struct Recap {
@@ -96,6 +111,16 @@ pub struct RecapConfig {
     /// Empty model = the primary model (historical default).
     #[serde(default)]
     pub model: crate::config::AuxiliaryModelConfig,
+    /// Freeform instructions APPENDED to the recap prompt (audit iter-2345).
+    ///
+    /// The four background context engines are each supposed to be tunable on
+    /// three axes — on/off, the model, and the response shape. RECAP had the
+    /// first two and not the third: `RECAP_INSTRUCTION` was a `const`, so the
+    /// only way to change what a recap says was a rebuild. Empty (the
+    /// default) is byte-identical to before, which is the point — a session
+    /// that sets nothing must produce exactly the prompt it always did.
+    #[serde(default)]
+    pub instructions: String,
 }
 
 /// Spawn the idle-recap engine. Call once per agent session; only call when
@@ -114,6 +139,8 @@ pub struct RecapConfig {
 ///   fires, never on every turn.
 /// * `deliver` — host callback receiving the finished recap (TUI notice,
 ///   gateway send, journal).
+/// * `instructions` — the `[recap] instructions` text, appended to the
+///   built-in prompt. Empty keeps the historical prompt byte-for-byte.
 ///
 /// Returns the activity handle. Dropping it stops the engine; the task
 /// also exits when the bus subscription lags (agent dropped).
@@ -121,6 +148,7 @@ pub fn spawn_recap_engine(
     client: Arc<dyn ModelClient>,
     model: String,
     idle: Duration,
+    instructions: String,
     mut turn_ends: tokio::sync::broadcast::Receiver<crate::turn_end::TurnEnd>,
     snapshot: impl FnMut() -> Vec<Message> + Send + 'static,
     deliver: impl FnMut(Recap) + Send + 'static,
@@ -161,7 +189,7 @@ pub fn spawn_recap_engine(
                 continue;
             }
             let mut view = crate::moa::build_advisory_messages(&messages);
-            view.push(Message::user(RECAP_INSTRUCTION));
+            view.push(Message::user(recap_instruction(&instructions)));
             let request = ChatRequest::new(model.clone(), view).with_stream(false);
             let reply = match client.chat(request).await {
                 Ok(r) => r,
@@ -243,6 +271,7 @@ mod tests {
             )),
             "m".to_string(),
             Duration::from_millis(10),
+            String::new(),
             rx,
             || vec![Message::user("do the thing")],
             move |r| d2.lock().push(r),
@@ -273,6 +302,7 @@ mod tests {
             Arc::new(FixedClient("never delivered")),
             "m".to_string(),
             Duration::from_millis(200),
+            String::new(),
             rx,
             || vec![Message::user("x")],
             move |r| d2.lock().push(r),
@@ -305,6 +335,7 @@ mod tests {
             Arc::new(FixedClient("goal: g; task: t; next: n")),
             "m".to_string(),
             Duration::from_millis(100),
+            String::new(),
             rx,
             || vec![Message::user("x")],
             move |r| d2.lock().push(r),
@@ -335,6 +366,7 @@ mod tests {
             Arc::new(FixedClient("should not be called")),
             "m".to_string(),
             Duration::from_millis(10),
+            String::new(),
             rx,
             Vec::new, // empty conversation
             move |r| d2.lock().push(r),

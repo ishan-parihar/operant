@@ -2231,6 +2231,7 @@ mod rt466_tests {
                 system_prompt: None,
                 stream: true,
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 8000,
                 max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
                 max_tool_result_total_share:
@@ -2318,6 +2319,7 @@ mod turn_attribution_tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:

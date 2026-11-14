@@ -83,6 +83,7 @@ fn test_config(model: &str) -> AgentConfig {
     AgentConfig {
         retry: Default::default(),
         advertised_skills_token_budget: 0,
+        memory_injection_budget_tokens: 0,
         model: model.to_string(),
         max_iterations: 2,
         stream: false,

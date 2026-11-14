@@ -208,6 +208,16 @@ pub fn unknown_sidecar_for(config_path: &Path) -> PathBuf {
     parent.join(UNKNOWN_SIDECAR)
 }
 
+/// The parked keys recorded for a config file, as one readable string.
+///
+/// `None` when no sidecar exists (nothing was ever parked). A read or parse
+/// error degrades to `None` too: this exists so a test or an operator can
+/// CONFIRM what was dropped, and a missing sidecar is the honest answer when
+/// the file cannot be read, never a reason to fail the caller.
+pub fn read_parked(sidecar: &Path) -> Option<String> {
+    std::fs::read_to_string(sidecar).ok()
+}
+
 /// Split a config document into (known-document, parked-unknown-document).
 ///
 /// The split is by SECTION against a set of known dotted keys: a table whose
