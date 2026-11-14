@@ -422,7 +422,9 @@ enum WorkerStatus {
     /// NOT "still running": dropping the stream cancels the worker. Reporting
     /// it as running would be a lie, and detaching it to keep it alive would
     /// free the spawn reservation while a model stream was still live.
-    CutOff { after_secs: u64 },
+    CutOff {
+        after_secs: u64,
+    },
 }
 
 /// A worker's goal paired with its outcome, so the parent can attribute each
@@ -475,8 +477,10 @@ where
     // `collect::<Vec<_>>()` that only existed to hand `stream::iter` a Vec.
     // The roster, kept before the workers are consumed: after the deadline the
     // unreported workers have to be named, and their futures are gone.
-    let roster: Vec<(String, String)> =
-        workers.iter().map(|w| (w.id.clone(), w.goal.clone())).collect();
+    let roster: Vec<(String, String)> = workers
+        .iter()
+        .map(|w| (w.id.clone(), w.goal.clone()))
+        .collect();
 
     let futures = workers.into_iter().map(|worker| {
         let run = &run;
@@ -1070,12 +1074,12 @@ impl SubAgentTool {
                 max_in_flight,
                 Duration::from_secs(SWARM_RESULT_DEADLINE_SECS),
                 move |worker| -> WorkerRun {
-                let tool = tool.clone_for_task();
-                Box::pin(async move {
-                    tool.call_unguarded(worker)
-                        .await
-                        .map_err(|error| crate::error::Error::Agent(error.to_string()))
-                })
+                    let tool = tool.clone_for_task();
+                    Box::pin(async move {
+                        tool.call_unguarded(worker)
+                            .await
+                            .map_err(|error| crate::error::Error::Agent(error.to_string()))
+                    })
                 },
             )
             .await,
@@ -1148,6 +1152,20 @@ impl SubAgentTool {
         parent_session: Option<String>,
         request_key: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
+        // A REPLAY first, before any budget question. MEASURED 2026-11-15 (audit
+        // finding 1): the breadth peek used to run first, so a replay was refused
+        // whenever the process was full — and the caller, told to retry, then
+        // re-dispatched under a NEW key, which is the double-spend the key exists
+        // to prevent. A replay needs no slot, so it must not be gated on one.
+        // `try_create_record` still performs the dedup atomically under the
+        // registry lock; this read only decides which question to ask first.
+        if let Some(existing) = request_key
+            .as_deref()
+            .and_then(async_delegation::pending_for_request_key)
+        {
+            return Ok(replay_handle(&existing, &self.model, &goal));
+        }
+
         // Refuse BEFORE the handle exists when there is no breadth headroom at
         // all. MEASURED 2026-11-14: with the process-wide cap already full, this
         // returned {"status":"dispatched"} for a child that could not reserve a
@@ -1173,23 +1191,13 @@ impl SubAgentTool {
             request_key.as_deref(),
         ) {
             Ok(async_delegation::DelegationAdmission::Created(id)) => id,
-            // Audit finding 6: the same key is already in flight, so this
-            // dispatch is a REPLAY. Returning the existing handle is the whole
-            // point — but a child must NOT be started for it, or the replay
-            // costs exactly what the key exists to prevent.
+            // The same key is already in flight, so this dispatch is a REPLAY.
+            // Returning the existing handle is the whole point — but a child must
+            // NOT be started for it, or the replay costs exactly what the key
+            // exists to prevent. Reached when the key went pending between the
+            // read above and this atomic check.
             Ok(async_delegation::DelegationAdmission::Reused(id)) => {
-                return Ok(serde_json::json!({
-                    "delegation_id": id,
-                    "status": "already_dispatched",
-                    "reused": true,
-                    "model": self.model,
-                    "goal": preview_of(&goal, 80),
-                    "note": "a delegation with this request_key is already in \
-                             flight; this is the SAME work, not a new one. Poll it \
-                             with delegate_task query=\"{id}\".",
-                    "poll": format!("delegate_task query=\"{id}\""),
-                })
-                .to_string());
+                return Ok(replay_handle(&id, &self.model, &goal));
             }
             Err(async_delegation::TryCreateError::TooManyPending { max_pending }) => {
                 return Err(format!(
@@ -1990,6 +1998,33 @@ fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
 
 fn is_llama_model(model: &str) -> bool {
     model.to_ascii_lowercase().contains("llama")
+}
+
+/// The handle returned for a REPLAYED dispatch: the existing id, marked reused,
+/// with the poll call spelled out.
+///
+/// One builder for both replay paths (the read-first check and the atomic
+/// re-check inside `try_create_record`), so the two can never describe the same
+/// situation differently. The caller must NOT start a child for this.
+fn replay_handle(id: &str, model: &str, goal: &str) -> String {
+    // MEASURED 2026-11-15: the note used to be a plain `json!` string containing
+    // `query="{id}"`, and `json!` does not interpolate — so the note told the
+    // caller to poll a handle literally named `{id}`. Only the `poll` field was
+    // built with `format!` and was correct, which is why nothing caught it. The
+    // note is built with `format!` too, so both name the same real id.
+    serde_json::json!({
+        "delegation_id": id,
+        "status": "already_dispatched",
+        "reused": true,
+        "model": model,
+        "goal": preview_of(goal, 80),
+        "note": format!(
+            "a delegation with this request_key is already in flight; this is the SAME \
+             work, not a new one. Poll it with delegate_task query=\"{id}\"."
+        ),
+        "poll": format!("delegate_task query=\"{id}\""),
+    })
+    .to_string()
 }
 
 /// One-line preview with a hard character cap (for background handles and
@@ -2995,7 +3030,10 @@ mod tests {
         // Every worker still appears — the failure the old 4 KB read-back cap
         // caused was workers 3-6 vanishing, and a preview must not bring it back.
         for i in 0..6 {
-            assert!(result.contains(&format!("task {i}")), "worker {i} is missing");
+            assert!(
+                result.contains(&format!("task {i}")),
+                "worker {i} is missing"
+            );
         }
         // And the pushed text is bounded by the preview width, not the report.
         assert!(
@@ -3033,10 +3071,14 @@ mod tests {
     // `MAX_SPAWN_DEPTH`) is process-global, so every test that asserts on it
     // serialises. Tests 1 and 5 exercise `run_swarm` only and never touch the
     // ledger, so they stay parallel.
-
+    //
+    // Audit 2026-11-15: this used to own a private lock, which made it a
+    // DIFFERENT mutex from `async_delegation::test_lock`. A test that touches
+    // BOTH the guard ledger and the delegation registry therefore held one and
+    // raced the other, and the async suite's absolute row counts broke. One lock
+    // for both globals; there is no case where holding them separately is right.
     fn guard_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        async_delegation::test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -3274,11 +3316,7 @@ mod tests {
     #[tokio::test]
     async fn a_swarm_returns_its_finished_workers_at_its_own_deadline() {
         let outcomes = run_swarm(
-            vec![
-                spec("quick-1", 30),
-                spec("quick-2", 30),
-                spec("wedged", 30),
-            ],
+            vec![spec("quick-1", 30), spec("quick-2", 30), spec("wedged", 30)],
             3,
             // A deadline far shorter than the 30s per-worker budget, so the
             // wedged worker is cut off rather than waited for.
@@ -3429,6 +3467,126 @@ mod tests {
         let args = parse_args(serde_json::json!({ "goal": "x", "timeout_seconds": 0 }))
             .expect("a zero timeout is clamped, not rejected");
         assert_eq!(args.timeout_seconds, Some(MIN_WORKER_TIMEOUT_SECONDS));
+    }
+
+    /// Audit 2026-11-15 (third pass, finding 1): a REPLAYED dispatch must be
+    /// admitted even when the process has no worker headroom at all.
+    ///
+    /// The breadth peek used to run BEFORE the dedup, so a replay at a full cap
+    /// was refused with "retry" — and the caller, told to retry, re-dispatched
+    /// under a NEW key. That is the double-spend the key exists to prevent, and
+    /// it bit exactly under the load the swarm is built for.
+    ///
+    /// MUTATION PROVEN: restoring the breadth peek above the replay check makes
+    /// this test fail with `Spawn refused: 1/1 worker slots are already live`.
+    #[tokio::test]
+    async fn a_replayed_dispatch_is_admitted_even_with_no_worker_headroom() {
+        let _guard = guard_test_lock();
+        // The registry is a process singleton shared with the async suite's own
+        // tests, which count rows absolutely. Seeding here and clearing only at
+        // the start would race theirs, so hold the SAME lock they hold and drain
+        // on drop, exactly as they do.
+        let _drain = async_delegation::RegistryDrain::new();
+        async_delegation::__test_reset_registry();
+
+        // A cap of 1 with its single slot held: breadth_is_exhausted() is true.
+        let previous = max_global_workers();
+        set_max_global_workers(1);
+        let held = SpawnPermit::reserve(1, 1).expect("the one slot is free on entry");
+        assert!(
+            breadth_is_exhausted(),
+            "the ledger must read as full for this test to mean anything"
+        );
+
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &OpenAIClient::new(crate::client::ClientConfig::default()),
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(
+                Database::init(
+                    std::env::temp_dir().join(format!("test_replay_{}.db", std::process::id())),
+                )
+                .expect("a scratch database"),
+            ),
+            None,
+        );
+
+        // First dispatch: no key, so it is a normal (refused) create attempt.
+        // Use the registry directly to seed the in-flight record, because a real
+        // child would need a model stream and a slot.
+        let seeded = async_delegation::try_create_record(
+            "audit the pool",
+            "gpt-4.1",
+            async_delegation::DEFAULT_MAX_ASYNC_CHILDREN,
+            None,
+            Some("job-2366"),
+        )
+        .expect("the registry admits the first record");
+        let original = seeded.id().to_string();
+
+        // THE REPLAY: same key, no headroom. It must return the ORIGINAL handle
+        // as a reuse — not an error, and not a new record.
+        let replayed = tool
+            .dispatch_background(
+                "audit the pool".to_string(),
+                None,
+                SubAgentRole::Leaf,
+                None,
+                MIN_WORKER_TIMEOUT_SECONDS,
+                None,
+                None,
+                None,
+                None,
+                Some("job-2366".to_string()),
+            )
+            .await
+            .expect("a replay needs no slot, so it must not be refused");
+
+        assert!(
+            replayed.contains("\"reused\":true") || replayed.contains("\"reused\": true"),
+            "the handle must be marked as a reuse: {replayed}"
+        );
+        assert!(
+            replayed.contains(&original),
+            "the replay must return the ORIGINAL id: {replayed}"
+        );
+        assert_eq!(
+            async_delegation::list_records().len(),
+            1,
+            "a replay must not add a ledger row: {:?}",
+            async_delegation::list_records()
+        );
+
+        drop(held);
+        async_delegation::__test_reset_registry();
+        set_max_global_workers(previous);
+    }
+
+    /// The replay handle is one builder for both replay paths, so the read-first
+    /// check and the atomic re-check cannot describe the same thing differently.
+    #[test]
+    fn the_replay_handle_names_the_session_and_the_poll_call() {
+        let handle = replay_handle("dlg-9", "gpt-4.1", "audit the pool");
+        assert!(handle.contains("dlg-9"), "the id: {handle}");
+        assert!(
+            handle.contains("already_dispatched"),
+            "the status: {handle}"
+        );
+        assert!(
+            handle.contains("delegate_task query=") && handle.contains("dlg-9"),
+            "the poll call must be spelled out with the real id: {handle}"
+        );
+        assert!(
+            !handle.contains("{id}"),
+            "no uninterpolated placeholder may survive into the note: {handle}"
+        );
+        assert!(
+            handle.contains("gpt-4.1"),
+            "the model that is already running it: {handle}"
+        );
     }
 }
 

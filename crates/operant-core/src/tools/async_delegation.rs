@@ -277,6 +277,18 @@ impl Drop for RegistryDrain {
     }
 }
 
+/// Serialize tests that touch the process-global registry.
+///
+/// Audit 2026-11-15 (third pass): this was private to the `tests` module, so a
+/// test in ANOTHER module that seeds the registry had nothing to hold and raced
+/// these — seeding rows there silently broke `prune_keeps_the_newest_by_
+/// completion_order` and `records_list_is_sorted_newest_first`, which both count
+/// rows absolutely. This lock is the join point; `RegistryDrain` is the cleanup.
+pub fn test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// Empty the process-global registry. TEST-ONLY on purpose.
 ///
 /// The registry is `OnceLock<Mutex<HashMap>>` with no clear in production, and
@@ -365,7 +377,9 @@ pub fn try_create_record(
     parent_session_id: Option<&str>,
     request_key: Option<&str>,
 ) -> Result<DelegationAdmission, TryCreateError> {
-    let mut map = registry().lock().map_err(|_| TryCreateError::RegistryPoisoned)?;
+    let mut map = registry()
+        .lock()
+        .map_err(|_| TryCreateError::RegistryPoisoned)?;
 
     // Audit finding 6: a replayed dispatch returns the existing handle. Matched
     // on PENDING only — a completed record with the same key is finished work,
@@ -373,9 +387,9 @@ pub fn try_create_record(
     // Checked under the same lock as the insert, so two concurrent dispatches
     // with one key cannot both miss and both create.
     if let Some(key) = request_key {
-        let live = map
-            .values()
-            .find(|r| r.status == AsyncDelegationStatus::Pending && r.request_key.as_deref() == Some(key));
+        let live = map.values().find(|r| {
+            r.status == AsyncDelegationStatus::Pending && r.request_key.as_deref() == Some(key)
+        });
         if let Some(existing) = live {
             return Ok(DelegationAdmission::Reused(existing.delegation_id.clone()));
         }
@@ -444,6 +458,28 @@ pub fn mark_failed(id: &str, error: &str) {
     }
     prune();
     persist();
+}
+
+/// The handle of the pending delegation already carrying `request_key`.
+///
+/// Audit 2026-11-15 (third pass, finding 1): `dispatch_background` peeked at the
+/// breadth budget BEFORE it asked the registry about the key, so a replay was
+/// refused whenever the process was full — and the caller, told to "retry", then
+/// re-dispatched under a NEW key, which is the double-spend the key exists to
+/// prevent. A replay needs no slot, so it must not be gated on one. This is the
+/// read half of the dedup `try_create_record` performs atomically; the caller
+/// consults it first, and `try_create_record` remains the authority (two
+/// concurrent dispatches with one key still cannot both create).
+pub fn pending_for_request_key(request_key: &str) -> Option<String> {
+    registry()
+        .lock()
+        .ok()?
+        .values()
+        .find(|r| {
+            r.status == AsyncDelegationStatus::Pending
+                && r.request_key.as_deref() == Some(request_key)
+        })
+        .map(|r| r.delegation_id.clone())
 }
 
 /// Fetch a record clone (for `delegate_task(query="<id>")` polls).
@@ -604,10 +640,11 @@ mod tests {
 
     /// Tests share the process-global registry and run in parallel — any
     /// absolute-count assertion would race. Serialize them with a lock.
-    fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    ///
+    /// One lock for the whole crate, not one per module: a test in another
+    /// module that seeds the registry must hold the SAME lock or the two race
+    /// (audit 2026-11-15). `super::test_lock` is that lock.
+    use super::test_lock;
 
     #[test]
     fn create_then_complete_round_trip() {
@@ -751,8 +788,8 @@ mod tests {
         let _guard = test_lock().lock().unwrap();
         __test_reset_registry();
 
-        let first = try_create_record("audit the pool", "m", 3, None, Some("job-42"))
-            .expect("a free slot");
+        let first =
+            try_create_record("audit the pool", "m", 3, None, Some("job-42")).expect("a free slot");
         assert_eq!(
             first,
             DelegationAdmission::Created(first.id().to_string()),
@@ -776,8 +813,8 @@ mod tests {
         );
 
         // A different key is different work.
-        let other = try_create_record("audit the pool", "m", 3, None, Some("job-43"))
-            .expect("a free slot");
+        let other =
+            try_create_record("audit the pool", "m", 3, None, Some("job-43")).expect("a free slot");
         assert!(matches!(other, DelegationAdmission::Created(_)));
         assert_ne!(other.id(), first.id());
         assert_eq!(list_records().len(), 2);
