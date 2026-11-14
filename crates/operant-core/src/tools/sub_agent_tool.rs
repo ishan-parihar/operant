@@ -20,6 +20,7 @@
 use std::error::Error as StdError;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -135,6 +136,17 @@ struct SubAgentArgs {
     /// delegation_output_schema.py parity).
     #[serde(default)]
     output_schema: Option<Value>,
+    /// Where the child should work. Defaults to the parent's working directory.
+    ///
+    /// MEASURED 2026-11-14: a child's working directory IS the process working
+    /// directory — `agent::turn_context` reads `std::env::current_dir()` per turn
+    /// and every file tool resolves relative paths through the process — so N swarm
+    /// workers share one directory and a caller that passed a different path got
+    /// silence: the child ran wherever the process happened to be. A path that
+    /// differs from the process one is now refused with the reason, instead of
+    /// being accepted and ignored.
+    #[serde(default)]
+    working_dir: Option<String>,
     /// Run the delegated task in the background and return a handle
     /// immediately (hermes async_delegation.py parity). Poll the result
     /// with `query`.
@@ -332,6 +344,9 @@ struct WorkerSpec {
     /// The toolsets the caller asked for (NARROW-ONLY: the child's set is
     /// intersected with the parent's, never widened).
     toolsets: Option<Vec<String>>,
+    /// Where the child should work, if the caller asked for somewhere other than
+    /// the parent's working directory (refused — see `resolve_child_cwd`).
+    working_dir: Option<String>,
 }
 
 /// How a single worker ended. Every exit path — success, agent error,
@@ -514,6 +529,7 @@ impl SubAgentTool {
         timeout_seconds: u64,
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
+        working_dir: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         // Depth AND process-wide breadth, both decided here — before
@@ -532,6 +548,7 @@ impl SubAgentTool {
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
             output_schema,
             toolsets,
+            working_dir,
         })
         .await
     }
@@ -565,6 +582,11 @@ impl SubAgentTool {
         // decides the effective role: an orchestrator that is already at the
         // depth floor cannot itself spawn, so it is demoted to a leaf rather
         // than handed a tool that would only be refused.
+        // Where this child will actually run. Refused up front when the caller
+        // asked for somewhere else, so a swarm cannot silently pile N workers into
+        // one directory under the belief that each got its own.
+        let cwd = resolve_child_cwd(worker.working_dir.as_deref())?;
+
         let child_depth = self.parent_depth + 1;
         let max_depth = MAX_SPAWN_DEPTH.load(Ordering::Relaxed);
 
@@ -597,6 +619,7 @@ impl SubAgentTool {
                 effective_role,
                 child_depth,
                 max_depth,
+                &cwd,
             );
             // Append the full OUTPUT CONTRACT only on the first attempt — the
             // retry message explicitly tells the child NOT to re-read the
@@ -872,6 +895,7 @@ impl SubAgentTool {
         timeout_seconds: u64,
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
+        working_dir: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         // Refuse BEFORE the handle exists when there is no breadth headroom at
         // all. MEASURED 2026-11-14: with the process-wide cap already full, this
@@ -925,6 +949,7 @@ impl SubAgentTool {
                 timeout_seconds,
                 output_schema,
                 toolsets,
+                working_dir,
             ))
             .await;
             match outcome {
@@ -1173,10 +1198,20 @@ fn build_child_system_prompt(
     role: SubAgentRole,
     child_depth: u32,
     max_spawn_depth: u32,
+    working_dir: &Path,
 ) -> String {
     let mut parts = vec![
         "You are a focused subagent working on a specific delegated task.".to_string(),
         format!("\nYOUR TASK:\n{}", goal),
+        // The child used to be told nothing about where it runs, so a relative path
+        // in its answer was a guess about the process cwd — and in a swarm every
+        // sibling shares it.
+        format!(
+            "\nWORKING DIRECTORY:\n{}\nEvery relative path you use resolves there. \
+             If your task needs a different directory, say so in your answer rather than \
+             assuming one.",
+            working_dir.display()
+        ),
     ];
 
     if let Some(ctx) = context
@@ -1387,6 +1422,7 @@ impl OperantTool for SubAgentTool {
                     timeout,
                     parsed.output_schema,
                     parsed.toolsets.clone(),
+                    parsed.working_dir.clone(),
                 )
                 .await
             {
@@ -1414,6 +1450,7 @@ impl OperantTool for SubAgentTool {
                         output_schema: task.output_schema,
                         // A task's own request wins over the top-level one.
                         toolsets: task.toolsets.or_else(|| parsed.toolsets.clone()),
+                        working_dir: parsed.working_dir.clone(),
                     })
                     .collect();
 
@@ -1457,6 +1494,7 @@ impl OperantTool for SubAgentTool {
                     timeout,
                     parsed.output_schema,
                     parsed.toolsets.clone(),
+                    parsed.working_dir.clone(),
                 )
                 .await
             {
@@ -1517,6 +1555,46 @@ fn preview_of(text: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// Resolve the working directory a child will actually run in.
+///
+/// A child's cwd IS the process cwd (see `SubAgentArgs::working_dir`), so the only
+/// honest answers are "the process one" or a refusal. Accepting a different path
+/// and silently ignoring it is the failure this closes: the parent believes it
+/// isolated the child and the child edits the shared tree.
+fn resolve_child_cwd(requested: Option<&str>) -> std::result::Result<PathBuf, BoxedToolError> {
+    let process_cwd =
+        std::env::current_dir().map_err(|e| format!("cannot read the working directory: {e}"))?;
+    let Some(raw) = requested.map(str::trim).filter(|r| !r.is_empty()) else {
+        return Ok(process_cwd);
+    };
+    let wanted = std::path::Path::new(raw);
+    let wanted_abs = if wanted.is_absolute() {
+        wanted.to_path_buf()
+    } else {
+        process_cwd.join(wanted)
+    };
+    // Compare canonicalised where possible: a symlinked path to the same directory
+    // is the same directory, and a typo'd one is a typo.
+    let same = match (wanted_abs.canonicalize(), process_cwd.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => wanted_abs == process_cwd,
+    };
+    if same {
+        return Ok(process_cwd);
+    }
+    let shown = wanted_abs.display();
+    Err(format!(
+        "a delegated child cannot change the working directory: every child of a parent \
+         shares that parent's process working directory ({path}), because turn_context reads \
+         std::env::current_dir() per turn and the file tools resolve relative paths through the \
+         process. Requested: {shown}. Put the directory in the goal (e.g. \"cd <dir> && ...\") \
+         or run the child in its own process; N swarm workers editing one tree is the exact \
+         hazard this refuses.",
+        path = process_cwd.display()
+    )
+    .into())
 }
 
 /// Prepend the "no tools were granted" banner to a child's answer.
@@ -1794,8 +1872,14 @@ mod tests {
 
     #[test]
     fn build_leaf_system_prompt_contains_goal() {
-        let prompt =
-            build_child_system_prompt("Analyze this", Some("context"), SubAgentRole::Leaf, 1, 2);
+        let prompt = build_child_system_prompt(
+            "Analyze this",
+            Some("context"),
+            SubAgentRole::Leaf,
+            1,
+            2,
+            Path::new("/tmp"),
+        );
         assert!(prompt.contains("Analyze this"));
         assert!(prompt.contains("context"));
         assert!(!prompt.contains("Orchestrator Role"));
@@ -1803,8 +1887,14 @@ mod tests {
 
     #[test]
     fn build_orchestrator_system_prompt_contains_delegation_info() {
-        let prompt =
-            build_child_system_prompt("Analyze this", None, SubAgentRole::Orchestrator, 1, 2);
+        let prompt = build_child_system_prompt(
+            "Analyze this",
+            None,
+            SubAgentRole::Orchestrator,
+            1,
+            2,
+            Path::new("/tmp"),
+        );
         assert!(prompt.contains("Orchestrator Role"));
         assert!(prompt.contains("delegate_task"));
     }
@@ -2101,6 +2191,56 @@ mod tests {
         set_default_child_max_iterations(before);
     }
 
+    /// A child runs where the process runs, and a request for somewhere else is
+    /// refused with the reason rather than accepted and ignored.
+    #[test]
+    fn a_child_cwd_is_the_process_one_or_a_refusal() {
+        let cwd = std::env::current_dir().expect("the test has a working directory");
+
+        // Absent: the process directory, which is what every child got before.
+        assert_eq!(resolve_child_cwd(None).expect("no request resolves"), cwd);
+
+        // The same directory, spelled absolutely or relatively, is not a change.
+        assert_eq!(
+            resolve_child_cwd(Some(cwd.to_str().expect("utf-8"))).expect("same dir is fine"),
+            cwd
+        );
+        assert_eq!(
+            resolve_child_cwd(Some(".")).expect("dot is the process dir"),
+            cwd
+        );
+
+        // Somewhere else: refused, and the refusal names both directories.
+        let error = resolve_child_cwd(Some("/definitely/not/a/real/place"))
+            .expect_err("a different directory must be refused");
+        let text = error.to_string();
+        assert!(
+            text.contains("cannot change the working directory"),
+            "{text}"
+        );
+        assert!(text.contains("/definitely/not/a/real/place"), "{text}");
+        assert!(
+            text.contains("shares that parent's process working directory"),
+            "{text}"
+        );
+    }
+
+    /// The prompt tells the child where it is, so a relative path in its answer is
+    /// not a guess.
+    #[test]
+    fn the_child_prompt_states_the_working_directory() {
+        let prompt = build_child_system_prompt(
+            "Analyze this",
+            None,
+            SubAgentRole::Leaf,
+            1,
+            2,
+            Path::new("/srv/work/thing"),
+        );
+        assert!(prompt.contains("WORKING DIRECTORY"), "{prompt}");
+        assert!(prompt.contains("/srv/work/thing"), "{prompt}");
+    }
+
     /// The breadth peek is the decision a dispatch makes BEFORE it creates a
     /// record. Tested as a pure function: driving the process-global counters
     /// here would race the other tests in this module, which hold permits and set
@@ -2259,6 +2399,7 @@ mod tests {
 
     fn spec(goal: &str, timeout_secs: u64) -> WorkerSpec {
         WorkerSpec {
+            working_dir: None,
             goal: goal.to_string(),
             context: None,
             role: SubAgentRole::Leaf,
