@@ -3307,9 +3307,12 @@ impl OperantAgent {
                             .await;
                         // The absolute cap trims whatever the guard let
                         // through -- after the guard, so the guard saw the
-                        // result at its REAL size.
+                        // result at its REAL size. The budget is per tool: a
+                        // delegation result carries MANY workers' answers, and
+                        // the default budget cut most of a swarm off entirely
+                        // (see MAX_DELEGATE_RESULT_LEN).
                         let body = if result.success {
-                            truncate_tool_result(&body)
+                            truncate_tool_result_capped(&body, tool_result_cap(&result.name))
                         } else {
                             body
                         };

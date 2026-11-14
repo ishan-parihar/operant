@@ -1261,8 +1261,33 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 /// Keeps a JSON summary with metadata but strips the bulk data.
 const MAX_TOOL_RESULT_LEN: usize = 4096;
 
-fn truncate_tool_result(content: &str) -> String {
-    if content.len() <= MAX_TOOL_RESULT_LEN {
+/// Budget for a delegation result, which is MANY workers' answers in one tool
+/// result rather than one tool's output.
+///
+/// The default budget cut the concatenation so early that most of a swarm never
+/// reached the parent: MEASURED 2026-11-14, a 6-worker swarm with ~1.5 KB
+/// answers kept worker 1 and part of worker 2, then head-truncated the rest, so
+/// workers 3-6 were paid for and never read. This budget fits the default swarm
+/// breadth (6 workers capped at `MAX_WORKER_REPORT_CHARS = 4000` each, plus
+/// headings) so every admitted worker survives the read-back; the per-worker cap
+/// is what keeps one answer from eating it.
+const MAX_DELEGATE_RESULT_LEN: usize = 32 * 1024;
+
+/// The read-back budget for one tool's result.
+fn tool_result_cap(name: &str) -> usize {
+    match name {
+        "delegate_task" => MAX_DELEGATE_RESULT_LEN,
+        _ => MAX_TOOL_RESULT_LEN,
+    }
+}
+
+/// Truncate a tool result to `cap` bytes, with the budget named by the caller.
+///
+/// Every caller states its budget through [`tool_result_cap`], so the one tool
+/// whose result is many answers (`delegate_task`) is not cut to one answer's
+/// size.
+fn truncate_tool_result_capped(content: &str, cap: usize) -> String {
+    if content.len() <= cap {
         return content.to_string();
     }
     // Try to parse as JSON and strip large fields
@@ -1285,7 +1310,7 @@ fn truncate_tool_result(content: &str) -> String {
             );
         }
         let mut serialized = serde_json::to_string(&*obj).unwrap_or_default();
-        if serialized.len() <= MAX_TOOL_RESULT_LEN {
+        if serialized.len() <= cap {
             return serialized;
         }
         // Still too long — truncate the largest string fields in place so the
@@ -1300,7 +1325,7 @@ fn truncate_tool_result(content: &str) -> String {
             .collect();
         string_fields.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
         for (key, _len) in string_fields {
-            if serialized.len() <= MAX_TOOL_RESULT_LEN {
+            if serialized.len() <= cap {
                 break;
             }
             let Some(current) = obj.get(&key).and_then(|v| v.as_str()) else {
@@ -1309,7 +1334,7 @@ fn truncate_tool_result(content: &str) -> String {
             // Budget for this field = the whole serialized JSON minus the
             // other fields, minus room for the truncation marker.
             let other_len = serialized.len() - current.len();
-            let budget = MAX_TOOL_RESULT_LEN.saturating_sub(other_len);
+            let budget = cap.saturating_sub(other_len);
             if budget <= 48 {
                 // Can't even fit a stub — drop the field entirely.
                 obj.remove(&key);
@@ -1322,7 +1347,7 @@ fn truncate_tool_result(content: &str) -> String {
             }
             serialized = serde_json::to_string(&*obj).unwrap_or_default();
         }
-        if serialized.len() <= MAX_TOOL_RESULT_LEN {
+        if serialized.len() <= cap {
             return serialized;
         }
         // Final fallback: hard head-truncate (char-boundary-safe).
@@ -1333,14 +1358,14 @@ fn truncate_tool_result(content: &str) -> String {
         // leaves the model guessing whether the rest is gone or
         // recoverable, and it IS recoverable.
         return format!(
-            "{}... [truncated {MAX_TOOL_RESULT_LEN} chars — full output in the session store]",
-            safe_truncate_str(&serialized, MAX_TOOL_RESULT_LEN)
+            "{}... [truncated {cap} bytes — full output in the session store]",
+            safe_truncate_str(&serialized, cap)
         );
     }
     // Fallback: hard truncate (char-boundary-safe to avoid panic on CJK/emoji)
     format!(
-        "{}... [truncated {MAX_TOOL_RESULT_LEN} chars — full output in the session store]",
-        safe_truncate_str(content, MAX_TOOL_RESULT_LEN)
+        "{}... [truncated {cap} bytes — full output in the session store]",
+        safe_truncate_str(content, cap)
     )
 }
 
@@ -2097,7 +2122,7 @@ mod tests {
             "supporting_files": ["scripts/search.sh"],
             "path": "/tmp/skills/skills/arxiv/SKILL.md"
         });
-        let truncated = truncate_tool_result(&result.to_string());
+        let truncated = truncate_tool_result_capped(&result.to_string(), MAX_TOOL_RESULT_LEN);
         assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 128);
         // Metadata survives and remains machine-readable.
         assert!(truncated.contains("\"name\":\"arxiv\""));
@@ -2112,16 +2137,47 @@ mod tests {
     #[test]
     fn truncate_tool_result_keeps_small_results_untouched() {
         let small = serde_json::json!({"name": "arxiv", "content": "short"}).to_string();
-        assert_eq!(truncate_tool_result(&small), small);
+        assert_eq!(
+            truncate_tool_result_capped(&small, MAX_TOOL_RESULT_LEN),
+            small
+        );
+    }
+
+    /// A delegation result carries MANY workers' answers, so it gets its own
+    /// read-back budget. MEASURED defect (2026-11-14): at the default 4096 B the
+    /// parent kept worker 1 of 6 and the marker misreported bytes as chars.
+    #[test]
+    fn a_delegation_result_gets_the_swarm_budget_and_states_its_unit() {
+        assert_eq!(tool_result_cap("delegate_task"), MAX_DELEGATE_RESULT_LEN);
+        assert_eq!(tool_result_cap("file_read"), MAX_TOOL_RESULT_LEN);
+        assert!(
+            MAX_DELEGATE_RESULT_LEN > MAX_TOOL_RESULT_LEN,
+            "the swarm budget must be the wider one"
+        );
+
+        // A 24 KiB swarm result survives whole under the delegation budget.
+        let swarm = "z".repeat(24 * 1024);
+        assert_eq!(
+            truncate_tool_result_capped(&swarm, MAX_DELEGATE_RESULT_LEN),
+            swarm
+        );
+        // The same text under the default budget is cut, and says BYTES.
+        let cut = truncate_tool_result_capped(&swarm, MAX_TOOL_RESULT_LEN);
+        assert!(
+            cut.contains(&format!(
+                "[truncated {MAX_TOOL_RESULT_LEN} bytes — full output in the session store]"
+            )),
+            "the marker must name the cap AND its unit: {cut}"
+        );
     }
 
     #[test]
     fn truncate_tool_result_falls_back_for_non_json() {
         let big = "y".repeat(10_000);
-        let truncated = truncate_tool_result(&big);
+        let truncated = truncate_tool_result_capped(&big, MAX_TOOL_RESULT_LEN);
         assert!(truncated.len() <= MAX_TOOL_RESULT_LEN + 64);
         assert!(
-            truncated.contains("[truncated 4096 chars — full output in the session store]"),
+            truncated.contains("[truncated 4096 bytes — full output in the session store]"),
             "the marker must name the cap AND point at the store: {truncated}"
         );
         assert!(

@@ -1169,13 +1169,38 @@ fn build_child_system_prompt(
     parts.join("\n")
 }
 
+/// One worker's report budget, in characters.
+///
+/// A worker can end its turn with a very long answer (a whole file, a long
+/// transcript). One worker's answer must not consume the entire swarm budget
+/// and starve the others: the parent reads the CONCATENATION, so an uncapped
+/// worker pushed its siblings past the read-back cap and they never reached the
+/// model (MEASURED 2026-11-14: a 6-worker swarm with ~1.5 KB answers kept
+/// worker 1 and part of worker 2). jcode parity: a completion report is capped
+/// and summarised before it is injected into the parent.
+const MAX_WORKER_REPORT_CHARS: usize = 4000;
+
+/// Cap one worker's report on a character boundary, keeping its own text.
+fn cap_worker_report(answer: &str) -> String {
+    if answer.chars().count() <= MAX_WORKER_REPORT_CHARS {
+        return answer.to_string();
+    }
+    let mut out: String = answer.chars().take(MAX_WORKER_REPORT_CHARS).collect();
+    out.push_str(&format!(
+        "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is in the session store]"
+    ));
+    out
+}
+
 /// Render swarm outcomes for the parent, one section per worker.
 ///
 /// Each section is headed by the worker's own goal so the parent can attribute
 /// a result to the request that produced it — a positional `Task 3` heading is
 /// useless once some workers were refused or failed and the survivors shift.
 /// Non-completed statuses are rendered inline, labelled, rather than dropped
-/// into a separate error list that loses the goal association.
+/// into a separate error list that loses the goal association. Every worker is
+/// reported, including the ones that only failed: a section that silently
+/// disappears reads as a worker that never ran.
 fn format_swarm_outcomes(outcomes: &[WorkerOutcome]) -> String {
     if outcomes.is_empty() {
         return "No results".to_string();
@@ -1186,7 +1211,7 @@ fn format_swarm_outcomes(outcomes: &[WorkerOutcome]) -> String {
         let heading = preview_of(&outcome.goal, 80);
         match &outcome.status {
             WorkerStatus::Completed(answer) => {
-                output.push_str(&format!("### {heading}\n{answer}\n\n"));
+                output.push_str(&format!("### {heading}\n{}\n\n", cap_worker_report(answer)));
             }
             WorkerStatus::Failed(error) => {
                 output.push_str(&format!("### {heading}\n[failed] {error}\n\n"));
@@ -1896,6 +1921,55 @@ mod tests {
         }];
         let result = format_swarm_outcomes(&outcomes);
         assert!(result.contains("[not spawned]"), "{result}");
+    }
+
+    /// A six-worker swarm of long answers must still report SIX workers.
+    ///
+    /// MEASURED defect (2026-11-14): the parent's read-back cap (4096 BYTES) cut
+    /// the whole concatenation, so a swarm of six ~1.5 KB answers kept worker 1
+    /// and part of worker 2 and workers 3-6 were paid for and never read.
+    #[test]
+    fn every_worker_in_a_long_swarm_is_reported_within_the_budget() {
+        let outcomes: Vec<WorkerOutcome> = (0..6)
+            .map(|i| WorkerOutcome {
+                goal: format!("task {i}"),
+                status: WorkerStatus::Completed("x".repeat(6_000)),
+            })
+            .collect();
+        let result = format_swarm_outcomes(&outcomes);
+        for i in 0..6 {
+            assert!(
+                result.contains(&format!("task {i}")),
+                "worker {i} is missing"
+            );
+        }
+        assert!(
+            result.contains("worker report truncated"),
+            "the per-worker cap must be marked, not silent"
+        );
+        // 6 capped reports plus headings must fit the delegation read-back
+        // budget (agent::MAX_DELEGATE_RESULT_LEN = 32 KiB).
+        assert!(
+            result.len() <= 32 * 1024,
+            "swarm result is {} bytes, over the 32 KiB delegation budget",
+            result.len()
+        );
+    }
+
+    /// A short answer is passed through byte for byte — the cap is a ceiling,
+    /// not a transformation.
+    #[test]
+    fn a_short_worker_report_is_not_marked_or_rewritten() {
+        assert_eq!(cap_worker_report("all good"), "all good");
+        let long = "y".repeat(MAX_WORKER_REPORT_CHARS + 1);
+        let capped = cap_worker_report(&long);
+        assert_eq!(
+            capped,
+            format!(
+                "{}\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is in the session store]",
+                "y".repeat(MAX_WORKER_REPORT_CHARS)
+            )
+        );
     }
 
     // ── Spawn guard + swarm ──────────────────────────────────────────────
