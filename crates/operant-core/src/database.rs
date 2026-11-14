@@ -178,6 +178,39 @@ UPDATE sessions SET first_prompt = (
 WHERE first_prompt IS NULL;
 ";
 
+/// The status axis of a session row, as the store holds it.
+///
+/// `Live` is deliberately absent: the row that is being streamed right now is
+/// marked live by the PROCESS, not by the database, so the store can only say
+/// what a row is when nothing is streaming into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStatusFilter {
+    /// `end_reason = 'interrupted'` — cut off mid-turn.
+    Interrupted,
+    /// Not interrupted and not archived.
+    Idle,
+    /// `archived = 1`.
+    Archived,
+}
+
+/// The filter a session-row page is read under (F4).
+///
+/// The hub used to filter in Rust over the rows it had LOADED — the newest
+/// 500 — so a tab reading 0 meant "0 of 500" and a filter whose matches sat
+/// past the page showed nothing while the tab counted them. The filter now
+/// rides the SQL, so the page and the count read the SAME population.
+#[derive(Debug, Clone, Default)]
+pub struct SessionRowFilter {
+    /// Only sessions in this working directory (`CurrentDir`).
+    pub cwd: Option<String>,
+    /// Only sessions tagged with this employee (the employee axis).
+    pub employee_id: Option<String>,
+    /// Only this session and its forks (`CurrentBranch`).
+    pub branch_root: Option<String>,
+    /// The status axis. None = every status.
+    pub status: Option<SessionStatusFilter>,
+}
+
 /// Database manager for persistent storage.
 /// Thread-safe via `Arc<Mutex<Connection>>` pattern.
 #[derive(Clone)]
@@ -1724,9 +1757,39 @@ impl Database {
         limit: usize,
         before: Option<&str>,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
+        self.list_sessions_rich_filtered_page(limit, before, &SessionRowFilter::default())
+    }
+
+    /// One page of the unified row, FILTERED IN SQL and older than `before`.
+    ///
+    /// (F4's filter push-down, the half that was still open.) The hub used to
+    /// load the newest 500 and then filter THOSE in Rust, so a tab reading
+    /// "Needs you: 25" (store-wide, iter-2231) could show an empty list: the
+    /// 25 were real, and all older than the page. The filter now rides the
+    /// page read, so the page and the count describe the same population.
+    ///
+    /// `Working` is deliberately NOT here: it is a process fact (the live row
+    /// plus the registry's pending delegations) that no column can express, so
+    /// that one axis stays a predicate over the page. One definition per axis:
+    /// six in SQL, one in the process.
+    pub fn list_sessions_rich_filtered_page(
+        &self,
+        limit: usize,
+        before: Option<&str>,
+        filter: &SessionRowFilter,
+    ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
         let conn = self.lock_conn()?;
-        let mut stmt = conn
-            .prepare(
+        // The status axis is a fixed literal per mode, not a bind: one
+        // definition of what each tab means, in SQL, and no injection surface.
+        let status_sql = match filter.status {
+            Some(SessionStatusFilter::Interrupted) => " AND s.end_reason = 'interrupted'",
+            Some(SessionStatusFilter::Idle) => {
+                " AND s.archived = 0 AND (s.end_reason IS NULL OR s.end_reason != 'interrupted')"
+            }
+            Some(SessionStatusFilter::Archived) => " AND s.archived = 1",
+            None => "",
+        };
+        let sql = format!(
                 "SELECT s.id, s.title, s.parent_session_id, s.employee_id, s.source,
                         COALESCE(s.ended_at, s.started_at) AS updated_at,
                         s.cwd, s.archived,
@@ -1737,13 +1800,16 @@ impl Database {
                   FROM sessions s
                   LEFT JOIN messages m ON s.id = m.session_id
                   WHERE COALESCE(s.ended_at, s.started_at) < ?2
+                    AND (?3 IS NULL OR s.cwd = ?3)
+                    AND (?4 IS NULL OR s.employee_id = ?4)
+                    AND (?5 IS NULL OR s.id = ?5 OR s.parent_session_id = ?5){status_sql}
                   GROUP BY s.id
                   ORDER BY updated_at DESC
-                  LIMIT ?1",
-            )
-            .map_err(|e| {
-                Error::Agent(format!("Failed to prepare list_sessions_rich_page: {}", e))
-            })?;
+                  LIMIT ?1"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| {
+            Error::Agent(format!("Failed to prepare list_sessions_rich_page: {}", e))
+        })?;
 
         // The no-cursor sentinel: an RFC3339 instant no row can reach, so the
         // comparison is trivially true and the page is the first `limit` rows.
@@ -1753,22 +1819,31 @@ impl Database {
         let cursor = before.unwrap_or(NO_CURSOR);
 
         let rows = stmt
-            .query_map(params![limit, cursor], |row| {
-                Ok(RichSessionRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    parent_id: row.get(2)?,
-                    employee_id: row.get(3)?,
-                    source: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    cwd: row.get(6)?,
-                    archived: row.get::<_, i64>(7)? != 0,
-                    tokens: row.get::<_, i64>(8)?.max(0) as u64,
-                    cost_usd: row.get(9)?,
-                    message_count: row.get::<_, i64>(10)?.max(0) as usize,
-                    interrupted: row.get::<_, i64>(11)?.max(0) != 0,
-                })
-            })
+            .query_map(
+                params![
+                    limit,
+                    cursor,
+                    filter.cwd,
+                    filter.employee_id,
+                    filter.branch_root
+                ],
+                |row| {
+                    Ok(RichSessionRow {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        parent_id: row.get(2)?,
+                        employee_id: row.get(3)?,
+                        source: row.get(4)?,
+                        updated_at: row.get(5)?,
+                        cwd: row.get(6)?,
+                        archived: row.get::<_, i64>(7)? != 0,
+                        tokens: row.get::<_, i64>(8)?.max(0) as u64,
+                        cost_usd: row.get(9)?,
+                        message_count: row.get::<_, i64>(10)?.max(0) as usize,
+                        interrupted: row.get::<_, i64>(11)?.max(0) != 0,
+                    })
+                },
+            )
             .map_err(|e| Error::Agent(format!("list_sessions_rich query error: {}", e)))?;
 
         let mut out = Vec::new();
@@ -6034,6 +6109,113 @@ mod tests {
         assert_eq!(
             by_branch.current_branch, 1,
             "the branch mode counts the anchor and its forks"
+        );
+    }
+
+    /// (F4's filter push-down) The PAGE is filtered in SQL, so a filter whose
+    /// matches sit past the newest page still shows them — and paging stays
+    /// inside the filter. The hub used to load the newest 500 and filter THOSE,
+    /// which is how a tab reading "Needs you: 25" showed an empty list.
+    #[test]
+    fn the_page_is_filtered_in_sql_and_pages_within_the_filter() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        // 12 sessions, alternating directory and employee, one interrupted.
+        // The timestamps are DISTINCT on purpose: the page cursor is a
+        // timestamp comparison, and a tie at the boundary is excluded by
+        // design (see `list_sessions_rich_page`), so a same-instant fixture
+        // would page into nothing.
+        for i in 0..12 {
+            let started = (chrono::Utc::now() - chrono::Duration::seconds(i)).to_rfc3339();
+            db.save_session(&format!("fp2-{i}"), None, "agent", &started, &started)
+                .expect("session");
+            db.set_session_cwd(
+                &format!("fp2-{i}"),
+                if i % 2 == 0 { "/srv/a" } else { "/srv/b" },
+            )
+            .expect("cwd");
+            db.set_session_employee(&format!("fp2-{i}"), if i % 3 == 0 { "ann" } else { "bo" })
+                .expect("employee");
+        }
+        db.mark_session_interrupted("fp2-0").expect("interrupted");
+
+        let only_a = db
+            .list_sessions_rich_filtered_page(
+                50,
+                None,
+                &SessionRowFilter {
+                    cwd: Some("/srv/a".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("page");
+        assert_eq!(only_a.len(), 6, "only the /srv/a sessions, from the store");
+
+        let interrupted = db
+            .list_sessions_rich_filtered_page(
+                50,
+                None,
+                &SessionRowFilter {
+                    status: Some(SessionStatusFilter::Interrupted),
+                    ..Default::default()
+                },
+            )
+            .expect("page");
+        assert_eq!(interrupted.len(), 1, "one interrupted session");
+        assert_eq!(interrupted[0].id, "fp2-0");
+
+        let ann_and_a = db
+            .list_sessions_rich_filtered_page(
+                50,
+                None,
+                &SessionRowFilter {
+                    cwd: Some("/srv/a".to_string()),
+                    employee_id: Some("ann".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("page");
+        assert!(
+            ann_and_a
+                .iter()
+                .all(|r| r.employee_id.as_deref() == Some("ann")),
+            "the two axes compose, the way the tab bar's counts do"
+        );
+        assert!(!ann_and_a.is_empty(), "and the composition is not vacuous");
+
+        // A page inside the filter: the cursor and the filter compose.
+        let first = db
+            .list_sessions_rich_filtered_page(
+                3,
+                None,
+                &SessionRowFilter {
+                    cwd: Some("/srv/a".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("page");
+        assert_eq!(first.len(), 3, "a full page of the filter");
+        let next = db
+            .list_sessions_rich_filtered_page(
+                3,
+                Some(
+                    first
+                        .last()
+                        .expect("a row")
+                        .updated_at
+                        .to_rfc3339()
+                        .as_str(),
+                ),
+                &SessionRowFilter {
+                    cwd: Some("/srv/a".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("page");
+        assert_eq!(next.len(), 3, "the next page continues INSIDE the filter");
+        assert!(
+            next.iter().all(|r| r.cwd.as_deref() == Some("/srv/a")),
+            "and never leaves it"
         );
     }
 

@@ -2076,6 +2076,23 @@ impl App {
                     .core_session_switch
                     .as_ref()
                     .and_then(|s| s.session_id());
+                // F4: the PAGE is read through the same filter the tabs count,
+                // so a `Show more` page continues INSIDE the filter instead of
+                // paging through unfiltered rows and filtering them after. The
+                // status axis maps one-to-one; `Working` is a process fact and
+                // stays out of SQL (the rows still carry it).
+                let row_status = match self.session_hub.filter_mode {
+                    crate::tui::session_hub::HubFilterMode::NeedsYou => {
+                        Some(operant_core::database::SessionStatusFilter::Interrupted)
+                    }
+                    crate::tui::session_hub::HubFilterMode::Ready => {
+                        Some(operant_core::database::SessionStatusFilter::Idle)
+                    }
+                    crate::tui::session_hub::HubFilterMode::Inactive => {
+                        Some(operant_core::database::SessionStatusFilter::Archived)
+                    }
+                    _ => None,
+                };
                 tokio::spawn(async move {
                     let loaded = tokio::task::spawn_blocking(move || {
                         let db = operant_core::database::Database::init(db_path).ok();
@@ -2089,13 +2106,21 @@ impl App {
                             .as_ref()
                             .and_then(|d| d.list_session_employees().ok())
                             .unwrap_or_default();
+                        let row_filter = operant_core::database::SessionRowFilter {
+                            cwd: counts_cwd.clone(),
+                            employee_id: counts_employee.clone(),
+                            branch_root: counts_branch.clone(),
+                            status: row_status,
+                        };
                         let mut rows = db
                             .as_ref()
-                            .and_then(|d| match page_cursor.as_deref() {
-                                Some(cursor) => {
-                                    d.list_sessions_rich_page(HUB_PAGE, Some(cursor)).ok()
-                                }
-                                None => d.list_sessions_rich(HUB_PAGE).ok(),
+                            .and_then(|d| {
+                                d.list_sessions_rich_filtered_page(
+                                    HUB_PAGE,
+                                    page_cursor.as_deref(),
+                                    &row_filter,
+                                )
+                                .ok()
                             })
                             .unwrap_or_default();
                         let counts = db.as_ref().and_then(|d| {
