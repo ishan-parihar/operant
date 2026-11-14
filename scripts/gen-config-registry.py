@@ -313,6 +313,11 @@ def load_sources() -> dict[str, str]:
     return loaded
 
 
+def _normalise(text: str) -> str:
+    """Collapse whitespace so a `cargo fmt` reflow is not read as drift."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def main() -> int:
     if not CONFIG.exists():
         print(f"missing {CONFIG}", file=sys.stderr)
@@ -463,7 +468,16 @@ def main() -> int:
             print("DRIFT the registry does not exist: run scripts/gen-config-registry.py")
             return 1
         current = OUT.read_text(encoding="utf-8")
-        if current != rendered:
+        # Compare CONTENT, not bytes. `cargo fmt --all` reflows this file — a
+        # one-line tuple becomes a four-line one — and the generated output is
+        # not rustfmt-shaped, so a plain byte comparison reads a formatting
+        # pass as drift and leaves the gate red for every writer until someone
+        # regenerates. That happened on `main` after iter-2381/2382: 382 keys,
+        # identical defaults and notes, and `--check` failed on the tuple
+        # layout alone. Whitespace-normalising both sides keeps the gate
+        # honest about CONTENT (a changed key, default or note still fails)
+        # while tolerating the formatter this repo runs on every change.
+        if _normalise(current) != _normalise(rendered):
             print(
                 "DRIFT the config key registry is stale: the settings structs "
                 "changed and the registry was not regenerated.\n"
