@@ -299,7 +299,7 @@ calls decoration the operator cannot find.
 last 400 messages with one indexed SQL read; the first prompt is a column on
 the session row, written once at turn start and backfilled for the 3,314 rows
 that predate it), F4's count half as **iter-2231** (the tabs read the store, not
-the loaded page), and J2 as **iter-2233**: the list pane has one slot past the
+the loaded page), and J2 as **iter-2235**: the list pane has one slot past the
 last row, Enter on it pages forward over the cursor (`list_sessions_rich_page`
 with the last row's timestamp, appended rather than replaced), and a full page
 is what draws the row — so "500 of 3,314" now has a way forward instead of
