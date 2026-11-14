@@ -57,8 +57,16 @@ const DEFAULT_CHILD_TIMEOUT_SECONDS: u64 = 600;
 const MIN_SPAWN_DEPTH: u32 = 1;
 /// Maximum spawn depth cap
 const MAX_SPAWN_DEPTH_CAP: u32 = 3;
-/// Default max spawn depth (flat: parent -> child, no grandchildren)
-const DEFAULT_MAX_SPAWN_DEPTH: u32 = 1;
+/// Default max spawn depth.
+///
+/// MEASURED 2026-11-14 (audit finding 12): this literal was 1 with a comment
+/// claiming "flat: parent -> child, no grandchildren", while the shipped config
+/// default was 2 — so anyone reasoning from this constant was wrong about the
+/// runtime, and a grandchild spawn was allowed by default nobody documented.
+/// The constant now states the value the operator actually gets. It is only a
+/// FALLBACK: `[delegation] max_spawn_depth` (default 2) always wins, and
+/// `set_max_spawn_depth` is the one choke point the CLI sets.
+const DEFAULT_MAX_SPAWN_DEPTH: u32 = 2;
 /// Floor for a worker timeout, so a caller cannot pass `timeout_seconds: 0`
 /// and get a worker that is born already-expired.
 const MIN_WORKER_TIMEOUT_SECONDS: u64 = 30;
@@ -1878,9 +1886,34 @@ fn child_outcome(
 /// Set the maximum spawn depth (for testing/config)
 pub fn set_max_spawn_depth(depth: u32) {
     let clamped = depth.clamp(MIN_SPAWN_DEPTH, MAX_SPAWN_DEPTH_CAP);
+    report_clamp(
+        "delegation.max_spawn_depth",
+        depth as i64,
+        clamped as i64,
+        MIN_SPAWN_DEPTH as i64,
+        MAX_SPAWN_DEPTH_CAP as i64,
+    );
     MAX_SPAWN_DEPTH.store(clamped, Ordering::Relaxed);
 }
 
+/// Report a clamped operator setting instead of swallowing it.
+///
+/// MEASURED 2026-11-14 (audit finding 11): all three delegation setters clamped
+/// silently, so `max_global_workers = 64` read as accepted and ran as 32 — the
+/// operator tuned a number the process never used and nothing said so. A clamp
+/// is the right behaviour (the ceiling bounds spend); a QUIET one is not.
+fn report_clamp(key: &str, requested: i64, applied: i64, min: i64, max: i64) {
+    if requested != applied {
+        tracing::warn!(
+            key,
+            requested,
+            applied,
+            min,
+            max,
+            "setting is outside the supported range and was clamped"
+        );
+    }
+}
 
 /// Set whether orchestrator role is enabled
 pub fn set_orchestrator_enabled(enabled: bool) {
@@ -1907,7 +1940,15 @@ pub fn set_default_child_max_iterations(iterations: u32) {
 
 /// Set maximum concurrent children
 pub fn set_max_concurrent_children(count: usize) {
-    MAX_CONCURRENT_CHILDREN.store(count.clamp(1, 10) as u32, Ordering::Relaxed);
+    let clamped = count.clamp(1, 10);
+    report_clamp(
+        "delegation.max_concurrent_children",
+        count as i64,
+        clamped as i64,
+        1,
+        10,
+    );
+    MAX_CONCURRENT_CHILDREN.store(clamped as u32, Ordering::Relaxed);
 }
 
 /// Set the PROCESS-WIDE cap on live sub-agent workers.
@@ -1916,10 +1957,15 @@ pub fn set_max_concurrent_children(count: usize) {
 /// only bounds a single batch, so on its own N parents fanning out M workers
 /// each reach N*M live workers; this cap is what stops that.
 pub fn set_max_global_workers(count: usize) {
-    MAX_GLOBAL_WORKERS.store(
-        count.clamp(MIN_GLOBAL_WORKERS, MAX_GLOBAL_WORKERS_CAP),
-        Ordering::Relaxed,
+    let clamped = count.clamp(MIN_GLOBAL_WORKERS, MAX_GLOBAL_WORKERS_CAP);
+    report_clamp(
+        "delegation.max_global_workers",
+        count as i64,
+        clamped as i64,
+        MIN_GLOBAL_WORKERS as i64,
+        MAX_GLOBAL_WORKERS_CAP as i64,
     );
+    MAX_GLOBAL_WORKERS.store(clamped, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -3004,5 +3050,20 @@ mod approval_inheritance_tests {
         );
         assert!(tool.parent_approval_allowlist.is_empty());
         assert!(tool.parent_approval_allowlist_path.is_none());
+    }
+
+    /// Audit finding 11: a clamp must be visible. The setters are the only place
+    /// the ceiling is applied, so a silent one is an operator who tuned a number
+    /// the process never used.
+    #[test]
+    fn an_out_of_range_setting_is_clamped_to_the_documented_ceiling() {
+        let before = max_global_workers();
+        set_max_global_workers(9_999);
+        assert_eq!(
+            max_global_workers(),
+            MAX_GLOBAL_WORKERS_CAP,
+            "the documented ceiling is {MAX_GLOBAL_WORKERS_CAP}"
+        );
+        set_max_global_workers(before);
     }
 }

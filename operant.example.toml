@@ -47,18 +47,26 @@ model_request_timeouts = {}
 
 # Delegated children (delegate_task). Every key here is read at startup; a key
 # that is not listed here does not exist.
+#
+# THREE OF THESE ARE SILENTLY CLAMPED (measured 2026-11-14). The setters refuse
+# to store a value outside a hard range and log nothing, so a number above the
+# ceiling reads as accepted and is not. The ceilings are:
+#   max_concurrent_children  1..=10
+#   max_spawn_depth          1..=3
+#   max_global_workers       1..=32
 [delegation]
-# Iteration budget for a child when the caller sets none.
+# Iteration budget for a child when the caller does not set one. Floor 1.
 max_iterations = 50
-# One batch's in-flight children.
+# One batch's in-flight children. Clamped to 1..=10.
 max_concurrent_children = 3
-# How deep a child may itself delegate (1 = parent -> child only).
+# How deep a child may itself delegate (1 = parent -> child only). Clamped to
+# 1..=3, so 3 is the deepest tree this binary can build.
 max_spawn_depth = 2
 # Whether the orchestrator role may spawn children of its own.
 orchestrator_enabled = true
 # Process-wide ceiling on live child workers. This is the number that bounds
 # spend: max_concurrent_children bounds ONE batch, so without this, N parents
-# each fanning out M children reach N*M live model streams.
+# each fanning out M children reach N*M live model streams. Clamped to 1..=32.
 max_global_workers = 6
 
 [client.rate_limit]
