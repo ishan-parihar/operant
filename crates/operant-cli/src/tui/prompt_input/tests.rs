@@ -159,63 +159,58 @@ fn is_empty_trims_whitespace() {
     assert!(!s.is_empty());
 }
 
-// ---- handle_paste ---------------------------------------------------
+// ---- paste collapse / expand ----------------------------------------
+
+/// The label a paste of `content` collapses to in an empty store.
+fn placeholder_for(content: &str) -> String {
+    match paste::PasteOutcome::of(content, &[]) {
+        paste::PasteOutcome::Collapsed { placeholder, .. } => placeholder,
+        paste::PasteOutcome::Inline => panic!("expected {content:?} to collapse"),
+    }
+}
 
 #[test]
 fn paste_small_content_inline() {
-    let mut counter = 0u32;
-    let (result, stored) = handle_paste("short text", &mut counter);
-    assert_eq!(result, "short text");
-    assert!(stored.is_none());
-    assert_eq!(counter, 0);
+    assert_eq!(
+        paste::PasteOutcome::of("short text", &[]),
+        paste::PasteOutcome::Inline
+    );
 }
 
 #[test]
 fn paste_large_content_placeholder() {
-    let mut counter = 0u32;
-    // >150 chars → triggers placeholder
+    // >150 chars -> triggers a placeholder
     let big = "x".repeat(200);
-    let (result, stored) = handle_paste(&big, &mut counter);
-    assert!(
-        result.starts_with("[Pasted ~"),
-        "expected placeholder, got: {result}"
-    );
-    assert!(
-        result.contains("#1"),
-        "expected counter in placeholder, got: {result}"
-    );
-    assert!(stored.is_some());
-    assert_eq!(counter, 1);
+    let placeholder = placeholder_for(&big);
+    assert_eq!(placeholder, "[Pasted ~1 lines]");
 }
 
 #[test]
 fn paste_large_multiline_placeholder() {
-    let mut counter = 0u32;
-    // ≥3 lines → triggers placeholder regardless of length
+    // >=3 lines -> triggers a placeholder regardless of length
     let big = "line\n".repeat(300);
-    let (result, stored) = handle_paste(&big, &mut counter);
+    let placeholder = placeholder_for(&big);
     assert!(
-        result.starts_with("[Pasted ~"),
-        "expected placeholder, got: {result}"
+        placeholder.starts_with("[Pasted ~") && placeholder.contains("lines"),
+        "expected a line-count placeholder, got: {placeholder}"
     );
-    assert!(
-        result.contains("lines"),
-        "expected line count in placeholder, got: {result}"
-    );
-    assert!(stored.is_some());
 }
 
 #[test]
 fn paste_three_lines_triggers_placeholder() {
-    let mut counter = 0u32;
     // Exactly 3 lines (the threshold) should use a placeholder.
     let three_lines = "a\nb\nc";
-    let (result, stored) = handle_paste(three_lines, &mut counter);
-    assert!(
-        result.starts_with("[Pasted ~"),
-        "3-line paste should be placeholder, got: {result}"
+    assert_eq!(placeholder_for(three_lines), "[Pasted ~3 lines]");
+}
+
+#[test]
+fn paste_two_lines_inline() {
+    // 2 lines, <=150 chars -> inserted verbatim
+    let two_lines = "hello\nworld";
+    assert_eq!(
+        paste::PasteOutcome::of(two_lines, &[]),
+        paste::PasteOutcome::Inline
     );
-    assert!(stored.is_some());
 }
 
 #[test]
@@ -238,28 +233,136 @@ fn submitting_a_large_paste_sends_the_pasted_text_not_the_placeholder() {
         format!("Look at this: {big} and this {}", "x".repeat(200))
     );
     assert!(
-        state.paste_contents.is_empty(),
+        state.pending_pastes.is_empty(),
         "the store clears with the composer"
     );
 }
 
+// ---- RT-559: a deleted placeholder takes its payload with it ---------
+
 #[test]
-fn paste_two_lines_inline() {
-    let mut counter = 0u32;
-    // 2 lines, ≤150 chars → inserted verbatim
-    let two_lines = "hello\nworld";
-    let (result, stored) = handle_paste(two_lines, &mut counter);
-    assert_eq!(result, two_lines);
-    assert!(stored.is_none());
+fn deleting_a_placeholder_drops_its_payload() {
+    // The payload used to outlive the placeholder in the composer: `take()`
+    // expanded it back into the model's prompt from text the operator had
+    // already deleted, and undo restored a text with no expandable payload.
+    let mut state = PromptInputState::new();
+    let big = "a\nb\nc\nd\ne\n";
+    state.paste(big);
+    let placeholder = placeholder_for(big);
+    assert!(state.text.contains(&placeholder));
+    state.text.clear();
+    state.drop_missing_paste_placeholders();
+    assert!(
+        state.pending_pastes.is_empty(),
+        "a placeholder that left the composer takes its clipboard content with it"
+    );
+    assert_eq!(state.take(), "", "and it can no longer reach the model");
 }
 
 #[test]
-fn paste_counter_increments() {
-    let mut counter = 0u32;
-    let big = "x".repeat(2000);
-    handle_paste(&big, &mut counter);
-    handle_paste(&big, &mut counter);
-    assert_eq!(counter, 2);
+fn a_numbered_placeholder_does_not_keep_the_bare_one_alive() {
+    // The bare label is a PREFIX of the numbered one, so a plain `contains`
+    // would keep the bare payload alive as long as the numbered one existed.
+    let mut state = PromptInputState::new();
+    let a = "a\nb\nc\n";
+    let b = "x\ny\nz\nw\n";
+    state.paste(a);
+    state.paste(b);
+    let bare = placeholder_for(a);
+    let numbered = placeholder_for(b);
+    assert_eq!(bare, "[Pasted ~3 lines]");
+    assert_eq!(numbered, "[Pasted ~4 lines]");
+    state.text = numbered.clone();
+    state.drop_missing_paste_placeholders();
+    assert_eq!(
+        state.pending_pastes.len(),
+        1,
+        "the bare payload drops even though its label is a prefix of the numbered one"
+    );
+}
+
+#[test]
+fn keeping_a_placeholder_keeps_its_payload() {
+    let mut state = PromptInputState::new();
+    let big = "a\nb\nc\n";
+    state.paste(big);
+    state.text.insert_str(0, "look: ");
+    state.drop_missing_paste_placeholders();
+    assert_eq!(
+        state.pending_pastes.len(),
+        1,
+        "an edit that leaves the placeholder alone must not drop the payload"
+    );
+    assert_eq!(
+        state.take(),
+        format!("look: {}", placeholder_for(big)).replace(&placeholder_for(big), big)
+    );
+}
+
+// ---- RT-562: collapse is reversible ---------------------------------
+
+#[test]
+fn repasting_the_same_content_expands_the_placeholder() {
+    // The collapse is no longer one-way: the payload is still in the store,
+    // so pasting the same content again brings it back.
+    let mut state = PromptInputState::new();
+    let big = "a\nb\nc\nd\ne\n";
+    state.paste(big);
+    let placeholder = placeholder_for(big);
+    assert!(state.text.contains(&placeholder), "collapsed first");
+    state.paste(big);
+    assert!(
+        state.text.contains("a\nb\nc\nd\ne\n"),
+        "the second paste of the same content expanded it"
+    );
+    assert!(
+        !state.text.contains(&placeholder),
+        "and the placeholder went with it"
+    );
+    assert!(state.pending_pastes.is_empty());
+}
+
+#[test]
+fn expanding_reports_the_size_of_what_it_unwrapped() {
+    let mut state = PromptInputState::new();
+    let big = "a\nb\nc\nd\ne\n";
+    state.paste(big);
+    state.paste(big);
+    let notice = state.paste_expanded.take().expect("expand reports");
+    assert!(notice.contains("5 lines"), "got: {notice}");
+}
+
+#[test]
+fn two_pastes_of_the_same_shape_are_not_confused() {
+    // Same shape, different content: the numbers disambiguate, and a re-paste
+    // of the first expands the FIRST placeholder.
+    let mut state = PromptInputState::new();
+    let one = "1\n2\n3\n";
+    let two = "a\nb\nc\n";
+    state.paste(one);
+    state.paste(two);
+    let labels: Vec<String> = state
+        .pending_pastes
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect();
+    assert_ne!(
+        labels[0], labels[1],
+        "the two same-shape pastes get distinct labels"
+    );
+    state.paste(one);
+    assert!(
+        state.text.contains("1\n2\n3\n"),
+        "the first paste's payload came back"
+    );
+    assert!(
+        !state.text.contains("a\nb\nc\n"),
+        "the second paste's payload stayed collapsed"
+    );
+    assert!(
+        state.text.contains(labels[1].as_str()),
+        "the second placeholder is still live"
+    );
 }
 
 // ---- compute_typeahead ---------------------------------------------
@@ -2716,4 +2819,121 @@ fn the_name_tiers_offer_the_vendor_roots_too() {
 
     drop(guard);
     std::fs::remove_dir_all(&root).ok();
+}
+
+// ---- RT-560: the ladder answers only while the composer holds the recall ----
+
+/// (RT-560) An edit after a recall used to keep `history_pos` set, so the
+/// NEXT Up/Down replaced the edit with the next history entry instead of
+/// editing or moving the caret. Codex gates browsing on the recalled text
+/// (`should_handle_navigation`); this is that rule.
+#[test]
+fn editing_a_recalled_entry_ends_browsing() {
+    let mut s = PromptInputState::new();
+    s.history = vec!["first prompt".to_string(), "second prompt".to_string()];
+
+    s.history_up();
+    assert_eq!(s.text, "second prompt");
+    assert!(s.history_is_live(), "the recall is live");
+
+    // The operator edits what they recalled: they are no longer browsing.
+    s.text.push_str(" and a fix");
+    s.cursor = s.text.len();
+    assert!(
+        !s.history_is_live(),
+        "an edited recall is not browsing — the ladder must not own the next key"
+    );
+
+    // The edited recall is the draft the operator gets back when they walk
+    // back out of history: the ladder's next call starts fresh from it.
+    s.history_up();
+    assert_eq!(
+        s.text, "second prompt",
+        "a dead ladder restarts from the newest entry"
+    );
+    assert_eq!(
+        s.history_draft, "second prompt and a fix",
+        "the edit is captured as the draft"
+    );
+    s.history_down();
+    assert_eq!(
+        s.text, "second prompt and a fix",
+        "Down past the newest entry restores the edit"
+    );
+}
+
+/// (RT-560) The mutation that matters: with the edit in the buffer, `Down` must
+/// not silently swallow it.
+#[test]
+fn an_edited_recall_is_not_replaced_by_the_ladder() {
+    let mut s = PromptInputState::new();
+    s.history = vec!["one".to_string(), "two".to_string()];
+    s.history_up();
+    assert_eq!(s.text, "two");
+    s.text = "two but different".to_string();
+    s.cursor = s.text.len();
+    assert!(!s.history_is_live());
+    // Down past the end of the ladder restores the draft, and with no live
+    // browse there is nothing to restore — the edit stays exactly as typed.
+    s.history_down();
+    assert_eq!(
+        s.text, "two but different",
+        "an edit after a recall is not swallowed by the history ladder"
+    );
+}
+
+// ---- RT-561: the vertical move remembers its column ----
+
+/// (RT-561) Walking up over a SHORT row used to clamp the caret to that row's
+/// end and then keep it there: the column was recomputed from the caret every
+/// move, so the memory of "I was at column 20" never survived the first
+/// short row.
+#[test]
+fn a_vertical_walk_keeps_the_column_it_started_from() {
+    // 3 rows of width 10: row 1 is short, so a recomputed column would drift.
+    let text = "aaaaaaaaaa\nbb\ncccccccccc";
+    let mut s = PromptInputState::new();
+    s.text = text.to_string();
+    // Put the caret at column 8 on the LAST row (index 2).
+    let width = 10;
+    s.cursor = "aaaaaaaaaa\nbb\n".len() + 8;
+    let (_, col) = s.cursor_visual_pos(width);
+    assert_eq!(col, 8, "the caret starts at display column 8");
+
+    s.move_visual_up(width);
+    let (_, middle_col) = s.cursor_visual_pos(width);
+    assert_eq!(
+        middle_col, 2,
+        "the short row clamps to its own end (2 cells), it cannot invent columns"
+    );
+
+    s.move_visual_up(width);
+    let (_, top_col) = s.cursor_visual_pos(width);
+    assert_eq!(
+        top_col, 8,
+        "but the run remembers the column it started from and returns to it"
+    );
+}
+
+/// (RT-561) A horizontal move, an insert, or Home/End ends the run, so the next
+/// vertical move starts from the caret's NEW column.
+#[test]
+fn a_horizontal_change_restarts_the_saved_column() {
+    let text = "aaaaaaaaaa\nbb\ncccccccccc";
+    let mut s = PromptInputState::new();
+    s.text = text.to_string();
+    s.cursor = "aaaaaaaaaa\nbb\n".len() + 8;
+    let width = 10;
+
+    s.move_visual_up(width);
+    s.move_visual_up(width);
+    let (_, col) = s.cursor_visual_pos(width);
+    assert_eq!(col, 8, "the run holds the column");
+
+    // Any horizontal change drops it: the next vertical move starts fresh.
+    s.move_to_start();
+    assert_eq!(s.preferred_col, None, "Home ends the preferred-column run");
+    s.move_visual_down(width);
+    let (_, col) = s.cursor_visual_pos(width);
+    assert_eq!(col, 0, "the next move starts from the caret's own column");
 }

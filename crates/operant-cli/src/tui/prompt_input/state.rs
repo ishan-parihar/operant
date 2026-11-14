@@ -19,8 +19,11 @@ impl PromptInputState {
             history_pos: None,
             history_draft: String::new(),
             suppress_suggestions_once: false,
-            paste_counter: 0,
-            paste_contents: std::collections::HashMap::new(),
+            pending_pastes: Vec::new(),
+            suppress_paste_expand: false,
+            paste_expanded: None,
+            history_recall: None,
+            preferred_col: None,
             yank_buf: String::new(),
             token_estimate: 0,
             vim_pending: VimPendingState::None,
@@ -108,6 +111,9 @@ impl PromptInputState {
         self.suggestions.clear();
         self.suggestion_index = None;
         self.history_pos = None;
+        self.history_recall = None;
+        self.preferred_col = None;
+        self.pending_pastes.clear();
         self.token_estimate = 0;
         self.vim_pending = VimPendingState::None;
         self.visual_anchor = None;
@@ -120,10 +126,53 @@ impl PromptInputState {
     /// real content (2026-10-13: the store was never read, so the model got
     /// "[Pasted ~N lines #K]").
     pub fn take(&mut self) -> String {
-        let text = expand_paste_placeholders(&self.text, &self.paste_contents);
-        self.paste_contents.clear();
+        let text = expand_paste_placeholders(&self.text, &self.pending_pastes);
         self.clear();
         text
+    }
+
+    /// Drop the payloads whose placeholders are no longer in the text, and
+    /// do nothing else.
+    ///
+    /// Codex's placeholder is an atomic `TextElement` and
+    /// `reconcile_deleted_elements` does this the moment the element leaves
+    /// the buffer. This store has no ranges, so the invariant is enforced
+    /// here instead — called from the composer's refresh choke point, which
+    /// every mutation already converges on. A placeholder removed by an edit
+    /// takes its clipboard content with it: nothing can resurrect it, and the
+    /// number is reclaimed by the next paste of the same shape (RT-559).
+    pub fn drop_missing_paste_placeholders(&mut self) {
+        if self.pending_pastes.is_empty() {
+            return;
+        }
+        self.pending_pastes
+            .retain(|(placeholder, _)| placeholder_is_live(placeholder, &self.text));
+    }
+
+    /// Is the history ladder LIVE right now?
+    ///
+    /// Browsing is owned by the recalled text, not by "we are somewhere in the
+    /// ladder": the ladder answers Up/Down only while the composer still holds
+    /// what was recalled. An edit after a recall (which does not clear
+    /// `history_pos`) used to keep the ladder walking and swallow the edit —
+    /// codex's `should_handle_navigation` rule (RT-560).
+    pub fn history_is_live(&self) -> bool {
+        // A position with no recall recorded is still browsing: the recall is
+        // written by every ladder step, and a caller that sets `history_pos`
+        // directly (a test, a restore path) is asserting a live browse.
+        self.history_pos.is_some()
+            && self
+                .history_recall
+                .as_deref()
+                .is_none_or(|recalled| recalled == self.text)
+    }
+
+    /// Drop stale browsing state. Called by the ladder when
+    /// [`Self::history_is_live`] says the recall was edited away, so the next
+    /// navigation starts from the edited text instead of the ladder.
+    pub fn end_history_browse(&mut self) {
+        self.history_pos = None;
+        self.history_recall = None;
     }
 
     /// Normalize cursor and metadata after external field updates.
@@ -241,4 +290,23 @@ impl PromptInputState {
         self.burst_anchor = (self.text.clone(), self.cursor);
         self.burst_edits = 0;
     }
+}
+
+/// Is `placeholder` present in `text` on a boundary its own `#N` suffix cannot
+/// span?
+///
+/// The bare label (`[Pasted ~3 lines]`) is a PREFIX of the numbered one
+/// (`[Pasted ~3 lines] #2`), so a plain `contains` keeps the bare payload alive
+/// for as long as the numbered placeholder exists. The character that follows
+/// the candidate decides which one it is.
+fn placeholder_is_live(placeholder: &str, text: &str) -> bool {
+    text.match_indices(placeholder).any(|(at, _)| {
+        match text[at + placeholder.len()..].chars().next() {
+            // ` #2` (or a digit with no separator) belongs to the numbered
+            // placeholder, which is a longer label than this one.
+            Some('#') => false,
+            Some(c) if c.is_ascii_digit() => false,
+            _ => true,
+        }
+    })
 }

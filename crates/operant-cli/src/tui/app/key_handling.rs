@@ -2404,7 +2404,7 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_up(width);
-                } else if self.prompt_input.history_pos.is_some() {
+                } else if self.prompt_input.history_is_live() {
                     // (2026-10-25) Browsing wins over the popup (OMP
                     // precedence: #historyIndex > -1 first): Up steps to the
                     // older entry even if a stale popup lingers.
@@ -2415,6 +2415,10 @@ impl App {
                     // so browsing never advanced past the first recall —
                     // the operator's "up/dn must scroll the prompt history
                     // rather than being blocked by the cursor position".
+                    //
+                    // (RT-560) Browsing is LIVE only while the composer still
+                    // holds the recalled entry. An edit after a recall used to
+                    // keep the ladder walking and swallow the edit.
                     self.prompt_input.history_up();
                 } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.has_slash_command_token()
@@ -2477,12 +2481,15 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_down(width);
-                } else if self.prompt_input.history_pos.is_some() {
+                } else if self.prompt_input.history_is_live() {
                     // (2026-10-25) Browsing wins over the popup (OMP
                     // precedence): Down steps to the newer entry.
                     //
                     // (2026-11-12) The multi-line gate is gone — a recalled
                     // multi-line entry must keep stepping the ladder.
+                    //
+                    // (RT-560) ...but only while the composer still holds what
+                    // was recalled; an edited recall is not browsing.
                     self.prompt_input.history_down();
                 } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.has_slash_command_token()

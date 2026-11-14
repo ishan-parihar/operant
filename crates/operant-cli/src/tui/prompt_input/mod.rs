@@ -14,6 +14,7 @@ mod editing;
 mod ghost;
 mod history;
 mod kill_ring;
+mod paste;
 mod prediction;
 mod state;
 mod suggestions;
@@ -29,6 +30,7 @@ mod tests;
 
 pub use ghost::GhostText;
 pub use kill_ring::KillRing;
+pub use paste::{detect_pasted_path, expand_paste_placeholders};
 pub use prediction::{EngineHandle, EngineReply, spawn as spawn_word_predictor};
 pub use typeahead::{
     AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
@@ -46,79 +48,8 @@ pub use visual::{VisualRow, wrap_input_rows};
 // `render.rs` — the accessors are runtime `fn`s, so a `const` would pin every
 // theme to the default theme's amber.
 
-pub fn handle_paste(content: &str, paste_counter: &mut u32) -> (String, Option<String>) {
-    let line_count = content.lines().count();
-    let is_large = line_count >= 3 || content.len() > 150;
-    if !is_large {
-        return (content.to_string(), None);
-    }
-    *paste_counter += 1;
-    (
-        paste_placeholder(content, *paste_counter),
-        Some(content.to_string()),
-    )
-}
-
-/// The composer token standing in for paste `id` (its line count is derived
-/// from the content, so the token can always be rebuilt from the store).
-fn paste_placeholder(content: &str, id: u32) -> String {
-    format!("[Pasted ~{} lines #{}]", content.lines().count(), id)
-}
-
-/// Swap every paste placeholder in `text` back for its stored content. The
-/// placeholder keeps the composer readable; the model must get the paste.
-pub fn expand_paste_placeholders(
-    text: &str,
-    contents: &std::collections::HashMap<u32, String>,
-) -> String {
-    let mut out = text.to_string();
-    for (id, content) in contents {
-        out = out.replace(&paste_placeholder(content, *id), content);
-    }
-    out
-}
-
-/// Normalize a pasted string into a filesystem path if it looks like one.
-///
-/// Handles:
-/// - `file:///path/to/file` — URL-encoded paths
-/// - `"C:\path"` / `'/path'` — quoted paths (strips quotes)
-/// - Bare absolute paths (`/home/...`, `C:\...`)
-///
-/// Returns `None` if the text is multiline, not path-shaped, or the resolved
-/// path does not exist on the filesystem.  Callers can use the returned
-/// `PathBuf` to decide whether to treat the paste as a file attachment.
-pub fn detect_pasted_path(text: &str) -> Option<std::path::PathBuf> {
-    let trimmed = text.trim();
-    // Multiline content is never a bare path.
-    if trimmed.contains('\n') {
-        return None;
-    }
-    // Strip outer matching quotes.
-    let unquoted = trimmed
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| {
-            trimmed
-                .strip_prefix('\'')
-                .and_then(|s| s.strip_suffix('\''))
-        })
-        .unwrap_or(trimmed);
-
-    // file:// URL — strip the scheme (skip the leading //).
-    let candidate = if let Some(rest) = unquoted.strip_prefix("file://") {
-        rest
-    } else {
-        unquoted
-    };
-
-    let path = std::path::Path::new(candidate);
-    if path.is_absolute() && path.exists() {
-        Some(path.to_path_buf())
-    } else {
-        None
-    }
-}
+// The large-paste collapse/expand store lives in `paste.rs`: one owner for the
+// placeholder label, the payload and the drop-on-delete rule (RT-559 / RT-562).
 
 // ---------------------------------------------------------------------------
 // Kill ring (Emacs-style kill/yank system)
@@ -167,10 +98,29 @@ pub struct PromptInputState {
     /// popup stays shut while browsing, and the first genuinely typed
     /// character after a recall re-arms normal behaviour.
     pub suppress_suggestions_once: bool,
-    /// Paste counter for placeholder numbering.
-    pub paste_counter: u32,
-    /// Stored paste contents: counter → content.
-    pub paste_contents: std::collections::HashMap<u32, String>,
+    /// Stored pastes: `(placeholder, content)` in the order they were held.
+    /// The label is derived from THIS set (not from a counter) so a deleted
+    /// placeholder's number is reclaimed and its payload goes with it
+    /// (RT-559 / RT-562).
+    pub pending_pastes: Vec<(String, String)>,
+    /// One-shot: the text change that just came from a paste-EXPAND must not
+    /// touch the store, so expanding a paste cannot delete what it just
+    /// inserted.
+    pub suppress_paste_expand: bool,
+    /// Set by the expand hand and drained by the app, which owns the one
+    /// status line. Codex's `FooterFlash` rides the composer itself; here the
+    /// notice is the app's, so the composer reports "I expanded something" and
+    /// the app decides how it reads (RT-562: the collapse used to be silent).
+    pub paste_expanded: Option<String>,
+    /// The text of the history entry the operator last recalled AND has not
+    /// edited since. `None` means "not browsing, or edited" — the Up/Down
+    /// arms navigate the ladder only while the text still equals this
+    /// (codex's `last_history_text` rule, RT-560).
+    pub history_recall: Option<String>,
+    /// The display column Up/Down remember while walking rows of unequal
+    /// length (codex's `preferred_col`, RT-561). `None` means "use the caret's
+    /// column"; the first vertical move saves it, a non-vertical edit drops it.
+    pub preferred_col: Option<usize>,
     /// Yank buffer for vim operations.
     pub yank_buf: String,
     /// Estimated token count for current text.

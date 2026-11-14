@@ -132,7 +132,12 @@ impl PromptInputState {
         if row == 0 {
             return false;
         }
-        self.set_cursor_at_visual(row - 1, col, width);
+        // The FIRST move of a run remembers the column it started from; the
+        // later ones reuse it, so walking over a row that is short — or a
+        // wide-character row — no longer slides the caret sideways (codex's
+        // `preferred_col`, RT-561).
+        let target = self.remember_preferred_col(col);
+        self.set_cursor_at_visual(row - 1, target, width);
         true
     }
 
@@ -147,8 +152,19 @@ impl PromptInputState {
         if row + 1 >= total_rows {
             return false;
         }
-        self.set_cursor_at_visual(row + 1, col, width);
+        let target = self.remember_preferred_col(col);
+        self.set_cursor_at_visual(row + 1, target, width);
         true
+    }
+
+    /// The column a vertical move should land on: the one saved by the first
+    /// move of this run, or the caret's own column when no run is in progress.
+    fn remember_preferred_col(&mut self, col: usize) -> usize {
+        let target = self.preferred_col.unwrap_or(col);
+        // A column the caret can no longer reach (the rows got narrower) still
+        // has to clamp to the row's end, not reach for an earlier row.
+        self.preferred_col = Some(target);
+        target
     }
 
     fn visual_row_count(&self, width: usize) -> usize {

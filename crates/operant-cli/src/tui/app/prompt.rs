@@ -254,6 +254,19 @@ impl App {
         // counter — not this call — decides when a snapshot is taken, so a
         // run of typing still collapses into a single undo step.
         self.prompt_input.record_edit();
+        // ...and the one choke point for the paste store. Two guarantees hold
+        // here so no other mutation site has to remember them (RT-559):
+        // a payload whose placeholder left the composer is dropped, and a
+        // paste that just expanded its own payload does not immediately
+        // re-collapse it (RT-562).
+        if std::mem::take(&mut self.prompt_input.suppress_paste_expand) {
+            self.prompt_input.pending_pastes.clear();
+        } else {
+            self.prompt_input.drop_missing_paste_placeholders();
+        }
+        if let Some(notice) = self.prompt_input.paste_expanded.take() {
+            self.set_status_notice(notice);
+        }
         // Skip suggestion updates when a modal dialog is open (Phase 1.4).
         if !self.should_block_suggestions() {
             // 0 means "unset" — the serde-derived default and the value every

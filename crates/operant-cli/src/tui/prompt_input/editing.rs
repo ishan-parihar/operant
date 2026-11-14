@@ -9,6 +9,8 @@ use super::*;
 impl PromptInputState {
     /// Insert a character at cursor position.
     pub fn insert_char(&mut self, c: char) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly {
             return;
         }
@@ -19,6 +21,8 @@ impl PromptInputState {
 
     /// Insert a newline (Shift+Enter).
     pub fn insert_newline(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly {
             return;
         }
@@ -27,6 +31,8 @@ impl PromptInputState {
 
     /// Delete the character before cursor.
     pub fn backspace(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor == 0 || self.mode == InputMode::Readonly {
             return;
         }
@@ -42,6 +48,8 @@ impl PromptInputState {
 
     /// Delete the character at cursor.
     pub fn delete(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor >= self.text.len() || self.mode == InputMode::Readonly {
             return;
         }
@@ -51,6 +59,8 @@ impl PromptInputState {
 
     /// Move cursor left.
     pub fn move_left(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor > 0 {
             let prev = self.text[..self.cursor]
                 .char_indices()
@@ -63,6 +73,8 @@ impl PromptInputState {
 
     /// Move cursor right.
     pub fn move_right(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor < self.text.len() {
             let next = self.text[self.cursor..]
                 .char_indices()
@@ -75,6 +87,8 @@ impl PromptInputState {
 
     /// Ctrl+U: Cut from line start to cursor and save to kill ring.
     pub fn kill_line_backward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly {
             return;
         }
@@ -98,6 +112,8 @@ impl PromptInputState {
     /// is line-scoped, so collapsing the whole buffer onto one line would make
     /// a multi-line draft unnavigable.
     pub fn move_to_end(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         let line_end = self.text[self.cursor..]
             .find('\n')
             .map(|p| self.cursor + p)
@@ -111,6 +127,8 @@ impl PromptInputState {
     /// Ctrl+A stays the model picker, so this has no chord of its own —
     /// the Home key dispatches it directly.
     pub fn move_to_start(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         let line_start = self.text[..self.cursor]
             .rfind('\n')
             .map(|p| p + 1)
@@ -123,6 +141,8 @@ impl PromptInputState {
     /// Word boundaries are the OMP classes (`word_nav`): punctuation runs
     /// are one kill, and joiners stay inside words (`don't` kills whole).
     pub fn kill_word_backward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly || self.cursor == 0 {
             return;
         }
@@ -140,6 +160,8 @@ impl PromptInputState {
 
     /// Alt+Backspace: Delete word backward.
     pub fn delete_word_backward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly || self.cursor == 0 {
             return;
         }
@@ -157,6 +179,8 @@ impl PromptInputState {
 
     /// Alt+Delete: Delete word forward.
     pub fn delete_word_forward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly || self.cursor >= self.text.len() {
             return;
         }
@@ -173,6 +197,8 @@ impl PromptInputState {
 
     /// Alt+B / Ctrl+Left: Jump to previous word.
     pub fn move_word_backward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor == 0 {
             return;
         }
@@ -186,6 +212,8 @@ impl PromptInputState {
     /// word run AND the whitespace after it are consumed, so the cursor
     /// lands on the first character of the next word).
     pub fn move_word_forward(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.cursor >= self.text.len() {
             return;
         }
@@ -200,6 +228,8 @@ impl PromptInputState {
 
     /// Alt+D: Delete word after cursor.
     pub fn delete_word_at_cursor(&mut self) {
+        // A non-vertical change ends the preferred-column run (RT-561).
+        self.preferred_col = None;
         if self.mode == InputMode::Readonly || self.cursor >= self.text.len() {
             return;
         }
