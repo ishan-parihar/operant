@@ -1601,8 +1601,17 @@ fn render_preview(
         }
     };
 
+    // (2026-11-14, operator request) The preview shows the END of the session
+    // by default. The bound is only known once the lines are wrapped, so the
+    // clamp happens here rather than in `apply_preview`.
+    let max_scroll = ctx.preview_max_scroll.unwrap_or(0);
+    let scroll = if state.preview_follow_bottom {
+        max_scroll
+    } else {
+        state.preview_scroll.min(max_scroll)
+    };
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((state.preview_scroll, 0));
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, inner);
 }

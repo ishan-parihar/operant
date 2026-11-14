@@ -406,6 +406,16 @@ pub struct SessionHubState {
     pub loading: bool,
     /// Preview scroll offset (rows), clamped by render.
     pub preview_scroll: u16,
+    /// Follow the BOTTOM of the transcript.
+    ///
+    /// (2026-11-14, operator request) A session picker exists to answer "how
+    /// did this end", not "how did it start", so a freshly loaded preview opens
+    /// at the last thing that happened. The render clamps the scroll to the
+    /// measured bound while this is set, because the bound is only known after
+    /// the lines are wrapped — `apply_preview` runs before the first render.
+    /// Any deliberate scroll clears it, so the operator keeps control the
+    /// moment they take it.
+    pub preview_follow_bottom: bool,
     /// Which pane the keyboard is acting on (jcode's PaneFocus).
     pub focus: PaneFocus,
     /// Last rendered maximum preview scroll offset (total wrapped lines minus
@@ -557,6 +567,7 @@ impl SessionHubState {
             search_active: false,
             loading: true,
             preview_scroll: 0,
+            preview_follow_bottom: true,
             focus: PaneFocus::Sessions,
             preview_max_scroll: 0,
             preview: None,
@@ -1451,6 +1462,10 @@ impl SessionHubState {
         self.preview = Some((session_id.to_string(), messages, hidden_prompts));
         self.preview_loading = false;
         self.preview_scroll = 0;
+        // A newly loaded transcript opens at its END (operator request,
+        // 2026-11-14): the question a session picker answers is "how did this
+        // end". The render clamps to the measured bound while this is set.
+        self.preview_follow_bottom = true;
         self.preview_failures.retain(|id| id != session_id);
         true
     }
@@ -1535,6 +1550,8 @@ impl SessionHubState {
     }
 
     pub fn scroll_preview(&mut self, delta: i16) {
+        // The operator took the wheel: stop following the bottom.
+        self.preview_follow_bottom = false;
         let next = self.preview_scroll.saturating_add_signed(delta);
         // Clamp at the scroll bound the LAST frame measured. Without it a
         // preview shorter than the pane scrolls into blank space and Home /
