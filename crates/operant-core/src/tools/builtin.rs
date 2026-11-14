@@ -254,6 +254,11 @@ pub async fn register_builtin_tools_with_sub_agent(
     event_tx: Option<tokio::sync::mpsc::Sender<crate::agent::AgentEvent>>,
     parent_disabled_tools: std::collections::HashSet<String>,
     parent_disabled_toolsets: std::collections::HashSet<String>,
+    // The parent's tool-approval allowlist and the file it persists to.
+    // Threaded in so a delegated child honours the same "allow always"
+    // decisions the operator made for the parent (audit finding 2).
+    parent_approval_allowlist: std::collections::HashSet<String>,
+    parent_approval_allowlist_path: Option<std::path::PathBuf>,
 ) -> Result<()> {
     register_builtin_tools(
         registry,
@@ -267,16 +272,19 @@ pub async fn register_builtin_tools_with_sub_agent(
     )
     .await?;
     registry
-        .register(SubAgentTool::with_parent_tool_policy(
-            parent_client,
-            model.into(),
-            0,
-            vec![],
-            parent_disabled_tools,
-            parent_disabled_toolsets,
-            database,
-            event_tx,
-        ))
+        .register(
+            SubAgentTool::with_parent_tool_policy(
+                parent_client,
+                model.into(),
+                0,
+                vec![],
+                parent_disabled_tools,
+                parent_disabled_toolsets,
+                database,
+                event_tx,
+            )
+            .with_parent_approval(parent_approval_allowlist, parent_approval_allowlist_path),
+        )
         .await?;
     Ok(())
 }
@@ -445,6 +453,8 @@ mod tests {
             None,
             std::collections::HashSet::new(),
             std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            None,
         )
         .await
         .unwrap();

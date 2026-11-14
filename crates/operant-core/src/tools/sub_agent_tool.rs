@@ -473,6 +473,16 @@ pub struct SubAgentTool {
     parent_disabled_tools: std::collections::HashSet<String>,
     /// Parent's explicitly disabled toolsets — inherited for the same reason.
     parent_disabled_toolsets: std::collections::HashSet<String>,
+    /// The parent's tool-approval allowlist, inherited so a headless child can
+    /// run what the operator has already approved. MEASURED 2026-11-14 (audit
+    /// finding 2): a child is built from `AgentConfig::default()`, whose
+    /// allowlist is an empty literal, while the PARENT gets one assigned after
+    /// construction — so an operator's "allow always" reached the parent and not
+    /// the child, and the child's gated call was refused with advice a headless
+    /// agent cannot follow ("run interactively to approve it once").
+    parent_approval_allowlist: std::collections::HashSet<String>,
+    /// Where the parent persists "allow always" choices.
+    parent_approval_allowlist_path: Option<std::path::PathBuf>,
     database: Arc<Database>,
     /// Optional event channel to forward child progress events to parent
     event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
@@ -524,9 +534,29 @@ impl SubAgentTool {
             parent_toolsets,
             parent_disabled_tools,
             parent_disabled_toolsets,
+            // Empty until `with_parent_approval` is called. A child that
+            // inherits nothing keeps the pre-fix behaviour, not a widening: the
+            // headless deny path still refuses anything not on this list.
+            parent_approval_allowlist: std::collections::HashSet::new(),
+            parent_approval_allowlist_path: None,
             database,
             event_tx,
         }
+    }
+
+    /// Inherit the parent's tool-approval allowlist and the file it persists to.
+    ///
+    /// A builder rather than two more constructor arguments: the policy is
+    /// optional (a parent that never approved anything has an empty set), and
+    /// every existing call site keeps compiling unchanged.
+    pub fn with_parent_approval(
+        mut self,
+        allowlist: std::collections::HashSet<String>,
+        path: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.parent_approval_allowlist = allowlist;
+        self.parent_approval_allowlist_path = path;
+        self
     }
 
     /// Run a focused delegated task in an isolated child agent.
@@ -761,6 +791,13 @@ impl SubAgentTool {
             stream: false,
             system_prompt: Some(system_prompt),
             max_iterations: max_iters,
+            // A child is HEADLESS: `permission_tx` is None, so the only way a
+            // gated call can run is the allowlist. Inheriting the parent's is
+            // what makes "allow always" mean the same thing for a delegation as
+            // it does for the operator (audit finding 2). A child can never be
+            // prompted, so it can never widen the set by persisting to it.
+            approval_allowlist: self.parent_approval_allowlist.iter().cloned().collect(),
+            approval_allowlist_path: self.parent_approval_allowlist_path.clone(),
             ..AgentConfig::default()
         };
 
@@ -1062,6 +1099,8 @@ impl SubAgentTool {
             parent_toolsets: self.parent_toolsets.clone(),
             parent_disabled_tools: self.parent_disabled_tools.clone(),
             parent_disabled_toolsets: self.parent_disabled_toolsets.clone(),
+            parent_approval_allowlist: self.parent_approval_allowlist.clone(),
+            parent_approval_allowlist_path: self.parent_approval_allowlist_path.clone(),
             database: self.database.clone(),
             event_tx: self.event_tx.clone(),
         }
@@ -1218,6 +1257,12 @@ impl SubAgentTool {
                 self.parent_disabled_toolsets.clone(),
                 self.database.clone(),
                 self.event_tx.clone(),
+            )
+            // A grandchild is as headless as its parent: the allowlist has to
+            // survive every hop or depth 2 loses what depth 1 had.
+            .with_parent_approval(
+                self.parent_approval_allowlist.clone(),
+                self.parent_approval_allowlist_path.clone(),
             );
             let _ = registry.register(child).await;
         }
@@ -1835,6 +1880,7 @@ pub fn set_max_spawn_depth(depth: u32) {
     let clamped = depth.clamp(MIN_SPAWN_DEPTH, MAX_SPAWN_DEPTH_CAP);
     MAX_SPAWN_DEPTH.store(clamped, Ordering::Relaxed);
 }
+
 
 /// Set whether orchestrator role is enabled
 pub fn set_orchestrator_enabled(enabled: bool) {
@@ -2888,5 +2934,75 @@ mod tests {
         let args = parse_args(serde_json::json!({ "goal": "x", "timeout_seconds": 0 }))
             .expect("a zero timeout is clamped, not rejected");
         assert_eq!(args.timeout_seconds, Some(MIN_WORKER_TIMEOUT_SECONDS));
+    }
+}
+
+#[cfg(test)]
+mod approval_inheritance_tests {
+    use super::*;
+
+    fn tool_with_approval() -> SubAgentTool {
+        let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let db = Arc::new(
+            Database::init(std::env::temp_dir().join("test_approval_inherit.db")).unwrap(),
+        );
+        SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            db,
+            None,
+        )
+        .with_parent_approval(
+            std::collections::HashSet::from(["terminal".to_string()]),
+            Some(std::path::PathBuf::from("/tmp/approval_allowlist.json")),
+        )
+    }
+
+    /// Audit finding 2: the allowlist must reach the child. A delegation that
+    /// drops it re-derives the approval decision from nothing and has gated
+    /// calls refused with advice a headless child cannot follow.
+    #[test]
+    fn a_swarm_worker_inherits_the_parents_approval_allowlist() {
+        let parent = tool_with_approval();
+        // The swarm path clones the tool per worker (`call_batch` ->
+        // `clone_for_task`); a clone that dropped the set would lose the
+        // allowlist for every worker while the single path kept it.
+        let worker = parent.clone_for_task();
+        assert_eq!(
+            worker.parent_approval_allowlist,
+            parent.parent_approval_allowlist,
+            "a swarm worker must inherit the parent's allowlist"
+        );
+        assert_eq!(
+            worker.parent_approval_allowlist_path,
+            parent.parent_approval_allowlist_path,
+            "and the file it persists to"
+        );
+    }
+
+    /// A parent that approved nothing must not silently gain a set: the default
+    /// is empty, which is the pre-fix behaviour rather than a widening.
+    #[test]
+    fn a_parent_with_no_allowlist_passes_an_empty_one() {
+        let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let db = Arc::new(
+            Database::init(std::env::temp_dir().join("test_approval_empty.db")).unwrap(),
+        );
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            db,
+            None,
+        );
+        assert!(tool.parent_approval_allowlist.is_empty());
+        assert!(tool.parent_approval_allowlist_path.is_none());
     }
 }

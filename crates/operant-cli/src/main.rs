@@ -1332,6 +1332,12 @@ pub(crate) async fn build_registry(
         event_tx,
         sub_agent_disabled_tools,
         sub_agent_disabled_toolsets,
+        // The same allowlist the parent agent is given above. A delegated child
+        // is headless, so without this it re-derived the approval decision from
+        // an empty set and had gated calls refused with advice it cannot follow
+        // (audit finding 2).
+        config.command_allowlist.clone(),
+        Some(operant_core::platform::operant_home().join("approval_allowlist.json")),
     )
     .await?;
     // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
