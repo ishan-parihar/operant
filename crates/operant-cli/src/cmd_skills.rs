@@ -3,7 +3,9 @@ use clap::Subcommand;
 use console::style;
 use dialoguer::Confirm;
 use operant_core::config::AppConfig;
-use operant_core::skills::SkillManager;
+use operant_core::skills::{
+    SKILL_ROOT_WALK_LIMIT, SkillManager, is_skipped_walk_name, walk_skill_dirs,
+};
 use operant_core::tools::{SkillMeta, collect_skill_children, validate_skill_tree};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -321,21 +323,21 @@ pub fn seed_bundled_skills(config: &AppConfig, source: Option<&str>, force: bool
 }
 
 /// Recursively collect directories under `dir` that contain a SKILL.md.
-/// A directory that itself carries SKILL.md is a skill root and is not
-/// descended into further.
+///
+/// ONE bounded walk now — the seeder used to carry its own unscoped recursion,
+/// which could walk a symlink cycle forever and applied a skip rule that the
+/// loader did not share (so a bundled install could seed a `.git` directory the
+/// live loader would refuse). The shared walk returns the same skill directories,
+/// plus the dead symlinks and the truncation flag that were previously swallowed.
 fn collect_skill_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
-    if dir.join("SKILL.md").is_file() {
-        out.push(dir.to_path_buf());
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            collect_skill_dirs(&p, out);
-        }
+    let (dirs, _issues, truncated) = walk_skill_dirs(dir, SKILL_ROOT_WALK_LIMIT);
+    out.extend(dirs);
+    if truncated {
+        println!(
+            "{} stopped after {} directory entries; the tree is deeper than one walk can read",
+            style("!").yellow(),
+            SKILL_ROOT_WALK_LIMIT
+        );
     }
 }
 
@@ -1052,8 +1054,9 @@ fn browse_skills(config: &AppConfig) -> Result<()> {
 
         let dir_name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip hidden directories
-        if dir_name.starts_with('.') {
+        // Skip hidden directories (the ONE shared rule: hidden, `_`-prefixed,
+        // and the build/vendor trees a skill never lives in).
+        if is_skipped_walk_name(&dir_name) {
             continue;
         }
 
@@ -1196,7 +1199,7 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
         }
 
         let dir_name = entry.file_name().to_string_lossy().to_string();
-        if dir_name.starts_with('.') {
+        if is_skipped_walk_name(&dir_name) {
             continue;
         }
 
@@ -1290,7 +1293,7 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if dir_name.starts_with('.') {
+            if is_skipped_walk_name(&dir_name) {
                 continue;
             }
             // Tree-capable: has its own SKILL.md AND at least one reference
