@@ -43,18 +43,24 @@ pub struct SessionResult {
 }
 
 /// Arguments for session search
+///
+/// Both spellings are accepted. The dispatch seam (`tools::normalize_arg_keys`)
+/// ADDS a snake_case twin for every camelCase key the model sends, so by the time
+/// this parses, `execute` sees BOTH `sessionId` and `session_id`. A plain
+/// `rename_all = "camelCase"` would therefore reject the snake_case half — which
+/// is why this struct needs `alias` on every multi-word field: it is the only tool
+/// in the family whose fields are more than one word, so the sibling structs never
+/// met the case.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[expect(
-    dead_code,
-    reason = "serde-argument struct: fields deserialized from tool-call JSON; optional fields kept for schema parity"
-)]
 struct SessionSearchArgs {
     /// Search query - keywords, phrases, or boolean expressions. Omit for recent sessions mode.
     query: Option<String>,
     /// Optional: only search messages from specific roles (comma-separated). E.g. 'user,assistant'
+    #[serde(alias = "role_filter")]
     role_filter: Option<String>,
     /// Max sessions to return (default: 3, max: 5)
+    #[serde(alias = "limit")]
     limit: Option<usize>,
     /// Scroll mode: the session id to page through. With `aroundMessageId` the
     /// result is a window around that anchor; WITHOUT it the result is the
@@ -63,10 +69,13 @@ struct SessionSearchArgs {
     /// full text, and this was the only tool that reads a session's messages,
     /// but it required an anchor id the caller had no way to know — so the
     /// pointer named a store with no key-operated door.
+    #[serde(alias = "session_id")]
     session_id: Option<String>,
     /// Scroll mode: anchor message rowid; a window of messages around it is returned.
+    #[serde(alias = "around_message_id")]
     around_message_id: Option<i64>,
     /// Scroll mode: how many messages before/after the anchor (default: 3, max: 20).
+    #[serde(alias = "window")]
     window: Option<usize>,
 }
 
@@ -350,43 +359,45 @@ impl OperantTool for SessionSearchTool {
         )
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "query is Some here: None and empty queries returned early above"
-    )]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string());
+        // MEASURED 2026-11-15 (third-pass audit, finding 5): this re-read the
+        // same JSON the struct describes, through five hand-rolled
+        // `args.get(..).and_then(as_str/as_u64)` chains, while `SessionSearchArgs`
+        // carried `#[expect(dead_code)]` on its own fields because nothing ever
+        // deserialized into it — it existed only to feed `ToolSchema::from_type`.
+        // Every sibling tool parses through its struct (file_state, evidence_recall,
+        // sub_agent_tool); this one did not. One parse replaces both the chains
+        // and the suppression.
+        //
+        // One deliberate behaviour change: `as_u64` accepted a numeric STRING for
+        // `limit`/`window`; serde does not, so `{"limit": "5"}` is now an argument
+        // error instead of silently taking the default. That is the stricter, and
+        // correct, reading of the declared schema.
+        let SessionSearchArgs {
+            query,
+            role_filter,
+            limit,
+            session_id,
+            around_message_id,
+            window,
+        } = match serde_json::from_value::<SessionSearchArgs>(args) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return ToolResult::error("session_search", format!("Invalid arguments: {e}"))
+            }
+        };
 
-        let role_filter = args
-            .get("role_filter")
-            .and_then(|v| v.as_str())
+        let query = query.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let role_filter = role_filter
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(3)
-            .clamp(1, 5);
+        let limit = limit.unwrap_or(3).clamp(1, 5);
+        let session_id = session_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let window = window.unwrap_or(3).clamp(1, 20);
 
         // Scroll mode takes precedence when both session + anchor are given.
-        let session_id = args
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let around_message_id = args.get("around_message_id").and_then(|v| v.as_i64());
-
-        let window = args
-            .get("window")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(3)
-            .clamp(1, 20);
         if let (Some(sid), Some(anchor)) = (session_id.as_deref(), around_message_id) {
             return self.scroll(sid, anchor, window);
         }
@@ -402,15 +413,9 @@ impl OperantTool for SessionSearchTool {
         }
 
         // Recent sessions mode (empty query)
-        if query.as_ref().map(|q| q.is_empty()).unwrap_or(true) {
+        let Some(query_str) = query else {
             return self.list_recent(limit);
-        }
-
-        // Search mode
-        let query_str = query
-            .as_ref()
-            .expect("query is Some (empty/None handled above)")
-            .clone();
+        };
         info!(
             "Searching sessions for: {} (role: {:?})",
             query_str, role_filter
@@ -603,6 +608,84 @@ mod tests {
         assert!(empty.success, "an unknown session is an empty tail: {:?}", empty);
         let empty: serde_json::Value = serde_json::from_str(&empty.content).unwrap();
         assert_eq!(empty["count"], 0);
+    }
+
+    /// Both key spellings parse.
+    ///
+    /// The dispatch seam (`tools::normalize_arg_keys`) adds a snake_case twin for
+    /// every camelCase key the model sends, so a real call arrives with BOTH.
+    /// `#[serde(rename_all = "camelCase")]` on its own accepts only the camelCase
+    /// half, which is why the multi-word fields carry `alias`.
+    ///
+    /// MEASURED while proving this: serde does NOT reject an unknown key — it
+    /// SILENTLY DROPS it, so without `alias` the field becomes `None` and the call
+    /// falls through to `list_recent`. That is precisely the defect finding 3a
+    /// fixed ("a pointer to a store with no key-operated door"), so the aliases
+    /// are load-bearing rather than defensive.
+    ///
+    /// MUTATION PROVEN: removing the `alias` attributes makes `sessionId` parse but
+    /// `session_id` vanish, and this test fails with `mode: recent` where `tail`
+    /// was expected.
+    #[tokio::test]
+    async fn both_key_spellings_parse() {
+        let db = create_test_db();
+        db.save_session("spell_sess", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("spell_sess", "user", "hello", "t1")
+            .unwrap();
+
+        let tool = SessionSearchTool::new(db.clone());
+
+        // snake_case, as the seam leaves it and as the tests above use it.
+        let snake = tool
+            .execute(
+                serde_json::json!({ "session_id": "spell_sess", "window": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        let snake: serde_json::Value = serde_json::from_str(&snake.content).unwrap();
+        // Not merely "it succeeded": a silently-dropped id also succeeds, by
+        // falling through to `list_recent`. Assert it reached the TAIL.
+        assert_eq!(
+            snake["mode"], "tail",
+            "a snake_case session_id must reach the tail read, not fall back to recent: {snake}"
+        );
+
+        // camelCase, as a model following the advertised schema sends it.
+        let camel = tool
+            .execute(
+                serde_json::json!({ "sessionId": "spell_sess", "window": 2 }),
+                ToolContext::default(),
+            )
+            .await;
+        let camel: serde_json::Value = serde_json::from_str(&camel.content).unwrap();
+        assert_eq!(
+            camel["mode"], "tail",
+            "camelCase must reach the same tail read: {camel}"
+        );
+        assert_eq!(camel["session_id"], "spell_sess");
+
+        // The multi-word anchor key, both ways.
+        let anchor = db
+            .get_session_message_window("spell_sess", i64::MAX, 1)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id)
+            .next()
+            .unwrap();
+        for key in ["around_message_id", "aroundMessageId"] {
+            let scrolled = tool
+                .execute(
+                    serde_json::json!({ "session_id": "spell_sess", key: anchor }),
+                    ToolContext::default(),
+                )
+                .await;
+            assert!(
+                scrolled.success,
+                "{key} must parse: {:?}",
+                scrolled
+            );
+        }
     }
 
     #[tokio::test]
