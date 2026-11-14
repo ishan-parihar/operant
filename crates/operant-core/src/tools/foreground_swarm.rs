@@ -122,18 +122,25 @@ fn prune() {
     }
 }
 
-/// Only the workers still running, newest last.
+/// Foreground workers, newest last, filtered before the clone.
 ///
-/// The per-frame path (`App::inline_swarm_members`) asks for live rows and used
-/// to get every row this process had ever seen, cloned with its label and
-/// detail — five times per prepare pass (audit finding 13). Filtering before the
-/// clone is the whole fix: the caller throws the finished rows away anyway.
-pub fn list_live() -> Vec<ForegroundMember> {
+/// `live_only` is the whole point of this function. MEASURED 2026-11-15
+/// (third-pass audit, finding 3): `App::swarm_gallery_members(live_only)` had two
+/// sources — the async registry, which honoured the flag, and this one, which did
+/// not. `inline_swarm_members` asks for live rows to draw the "what is running
+/// now" strip, and got every finished foreground worker back too, up to
+/// `MAX_RETAINED_TERMINAL` of them, mixed in with the running ones. The separate
+/// `list_live` written for that call had zero production callers, and its doc
+/// claimed `inline_swarm_members` used it — it never did.
+///
+/// Filtering before the clone also keeps the per-frame cost proportional to what
+/// is actually running, rather than to everything the process has ever spawned.
+pub fn list_filtered(live_only: bool) -> Vec<ForegroundMember> {
     let now = now_secs();
     match live().lock() {
         Ok(rows) => rows
             .iter()
-            .filter(|r| r.status == "running")
+            .filter(|r| !live_only || r.status == "running")
             .map(|r| ForegroundMember {
                 id: r.id.clone(),
                 label: r.label.clone(),
@@ -152,20 +159,12 @@ pub fn list_live() -> Vec<ForegroundMember> {
 /// can say what the last swarm did, and dropping them at completion would make the
 /// pane blank exactly when the operator looks.
 pub fn list() -> Vec<ForegroundMember> {
-    let now = now_secs();
-    match live().lock() {
-        Ok(rows) => rows
-            .iter()
-            .map(|r| ForegroundMember {
-                id: r.id.clone(),
-                label: r.label.clone(),
-                status: r.status.clone(),
-                detail: r.detail.clone(),
-                age_secs: now.saturating_sub(r.started_at),
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    list_filtered(false)
+}
+
+/// Only the workers still running, newest last.
+pub fn list_live() -> Vec<ForegroundMember> {
+    list_filtered(true)
 }
 
 /// Drop every row. For tests, which share the process with the rest of the suite.
@@ -179,10 +178,20 @@ pub fn clear() {
 mod tests {
     use super::*;
 
-    // One test, not three: the registry is a process singleton, so parallel tests
-    // would clear each other's rows (the same trap the async registry's tests hit).
+    // The registry is a process singleton, so tests that seed it race each other
+    // (the same trap the async registry's tests hit). One lock for the whole
+    // module; `clear()` on entry and on exit keeps a failed test from poisoning
+    // the next one's row counts.
+    fn fg_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn the_registry_follows_a_worker_from_start_to_finish() {
+        let _guard = fg_test_lock();
         clear();
         assert!(list().is_empty(), "the registry starts empty");
 
@@ -267,5 +276,52 @@ mod tests {
 
         clear();
         assert!(list().is_empty());
+    }
+
+    /// `list_filtered(live_only)` is the one call both callers use, and the flag
+    /// has to actually change the answer.
+    ///
+    /// MEASURED 2026-11-15 (third-pass audit, finding 3): the CLI's
+    /// `swarm_gallery_members(live_only)` consulted the async registry with the
+    /// flag but this one without it, so the live strip drew finished foreground
+    /// workers. Both sources now agree on what "live" means.
+    ///
+    /// MUTATION PROVEN: replacing the filter with `!live_only || true` (i.e.
+    /// ignoring the flag, the pre-fix behaviour) fails the `live_only` assertion
+    /// below with `left: 2, right: 1`.
+    #[test]
+    fn the_live_filter_actually_excludes_finished_workers() {
+        let _guard = fg_test_lock();
+        clear();
+
+        begin("sub-a", "running one");
+        begin("sub-b", "running two");
+        finish("sub-b", "completed", None);
+        begin("sub-c", "running three");
+
+        // Live-only: the two still running, not the finished one.
+        let live = list_filtered(true);
+        assert_eq!(live.len(), 2, "only the running rows: {live:?}");
+        assert!(
+            live.iter().all(|r| r.status == "running"),
+            "a live-only read must not contain a finished row: {live:?}"
+        );
+        assert!(live.iter().any(|r| r.id == "sub-a"));
+        assert!(live.iter().any(|r| r.id == "sub-c"));
+        assert!(
+            !live.iter().any(|r| r.id == "sub-b"),
+            "the finished worker must not appear in a live-only read"
+        );
+
+        // Unfiltered: all three, which is what the transcript path wants.
+        let all = list_filtered(false);
+        assert_eq!(all.len(), 3, "the transcript needs every row: {all:?}");
+        assert_eq!(
+            all.iter().filter(|r| r.status != "running").count(),
+            1,
+            "exactly one finished row survives the unfiltered read"
+        );
+
+        clear();
     }
 }

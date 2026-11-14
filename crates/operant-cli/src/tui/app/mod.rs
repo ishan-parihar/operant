@@ -1402,8 +1402,14 @@ impl App {
             // and a running swarm was invisible in the one pane an operator reads
             // (audit finding 4, 2026-11-14). Process-lifetime only — the durable
             // account is the transcript's swarm card.
+            //
+            // MEASURED 2026-11-15 (third-pass audit, finding 3): this side ignored
+            // `live_only`, so the "what is running now" strip also drew every
+            // finished foreground worker — up to MAX_RETAINED_TERMINAL of them.
+            // The flag is threaded through now, so both sources agree on what
+            // "live" means.
             .chain(
-                operant_core::tools::foreground_swarm::list()
+                operant_core::tools::foreground_swarm::list_filtered(live_only)
                     .into_iter()
                     .map(|m| SwarmMemberStatus {
                         session_id: m.id,
