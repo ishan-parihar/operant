@@ -1,93 +1,89 @@
 # Plan — close the session-hub gaps the operator reported
 
-**Date:** 2026-11-14
-**Base:** `origin/main` @ `1906b4db`
-**Status:** outline — nothing here is executed yet.
+**Date:** 2026-11-14 (revision 2 — supersedes the first outline)
+**Base:** `origin/main` @ `6c59b3b0`
+**Status:** outline. Nothing here is executed by writing this file.
 
-## Why this plan exists
+## Status against the operator's seven items
 
-The operator reported seven gaps after the codex command-center port landed.
-Two are closed (`iter-2317` readable filter tags, `iter-1906b4db` preview opens
-at the bottom). Five remain. This plan orders them, names the seam each one
-touches, and states how each is pinned — because two of the five are layout
-changes, and layout is where this campaign has already shipped two regressions
-(`iter-2207` collapsed the tab bar; `iter-2252` fitted the fix to the wrong
-width).
-
-## The rule this plan runs under
-
-From `rust-tui-debugging`, the three clauses that have already bitten this
-campaign:
-
-1. **Take the width budget from the layout call, not from a constant.** The list
-   pane is `SPLIT.0` = `Percentage(40)`, so inner cells = `terminal * 0.4 - 2`.
-   Every strip that lives in that pane is measured at that number.
-2. **A second report of the same visual defect means the first fix was fitted to
-   the wrong quantity.** Restart from the cell budget and the reported width.
-3. **Reproduce constrained geometry explicitly** — the smallest realistic
-   terminal, including borders and the sibling pane's share. A test at 160
-   columns passes over a defect that fires at 100.
-
-## Measured facts this plan stands on
-
-| Fact | Value | How measured |
+| # | Item | State |
 |---|---|---|
-| List pane split | `Percentage(40)` of the frame | `render.rs:24` |
-| Inner cells at 120 cols | 46 | `120*0.4-2` |
-| Inner cells at 100 cols | 38 | `100*0.4-2` |
-| Group modes that exist | `Auto, Directory, Employee, Status` | `mod.rs` enum |
-| Preview filter state that exists | **none** | grep, 0 hits |
-| Row meta fields | `#{id}  🪪 emp  N msg • Nk  status  age  $cost` | `render.rs:1068-1090` |
-| Preview header fields | `id: … · age · $cost · N msg` | `render.rs:1376` |
+| — | Filter tags garbled (`n 30 w 0 r 3292`) | **closed** — `iter-2317` (three-way counts, no-counts rung) |
+| 1 | Preview filters: full / user-only / user+end-turn (default) | **closed** — `iter-2328` + `iter-2338` |
+| 2 | Panes must be non-redundant; list shows only what identifies a session | open |
+| 3 | Date and runtime in the data | open |
+| 4 | Left list segregated by path/project, codex-style | open |
+| 5 | Preview always shows the BOTTOM of the session | **closed** — `iter-1906b4db` |
+| 6 | Left/right layout rebalance | open |
+| **new** | Preview needs a fixed, non-scrolling header strip | **open — found while executing item 1** |
 
-The last two rows are the duplication the operator is complaining about: **id,
-age, cost and message count are printed in both panes**, and the preview repeats
-the row's identity rather than adding anything.
+The new row is not scope creep. It is a defect the closed items exposed, and two
+open items depend on it. See iteration 1 below.
 
----
+## The fact that reorders this plan
 
-## Iteration 1 — preview filters (the largest gap)
+Measured at `render.rs:1314-1641`: **the preview renders one `Paragraph` that
+holds the header AND the transcript, and `.scroll((scroll, 0))` moves the whole
+thing.**
 
-**Operator's words:** "the right session preview must also have the filters for
-`[full-session (shows all tool calls), user-messages, user-messages+end-turn-messages
-(set this as default)]`"
+    let lines: Vec<Line> = match (...) { ... };     // header lines + transcript
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    frame.render_widget(paragraph, inner);
 
-**What exists:** nothing. `preview_filter` has zero occurrences in
-`session_hub/mod.rs`.
+So there is no fixed region in the preview pane. Every line the pane shows —
+id, employee, project path, cost, and the `first:` prompt line — scrolls away
+with the transcript.
 
-**Shape:**
+That single fact explains a bug I shipped and had to record as open in
+`iter-2338`: the `first:` line was the first line of the scrolling transcript,
+and once the pane began following the BOTTOM (item 5), that line became
+unreachable on any transcript longer than the viewport. Its purpose is to
+surface a prompt that scrolled off the head; it was scrolled off with
+everything else.
 
-- Add `PreviewFilter { Full, UserOnly, UserAndTurnEnd }` to `session_hub/mod.rs`,
-  defaulting to `UserAndTurnEnd`.
-- `Full` is today's behaviour and is also what `hide_tool_calls = false` means —
-  so the existing `hide_tool_calls` flag becomes a *derived* consequence of
-  `Full` rather than a second axis. Two axes for one question is how the pane
-  started contradicting itself (`iter-2230`); do not repeat that.
-- "end of turn" is the existing turn-boundary concept, not a new one — the
-  preview already renders an end-of-turn marker, so reuse that predicate rather
-  than inventing a second definition of where a turn ends.
-- The filter is per-session, not global: the operator filters one transcript
-  they are reading, and a global filter would silently re-scope the next session
-  they open.
-- Bind a key in the preview pane's focus context only, and paint the active
-  filter in the preview header so it is visible rather than remembered.
+It also means **item 3 cannot be done as specified.** A runtime that must
+advance while a session is live has to live in a region that is always on
+screen. Put it in the scrolling transcript and it is a fact the operator sees
+only by scrolling to it.
 
-**Pin:** render a transcript containing tool calls, tool results, assistant
-turns and end-of-turn markers; assert for each of the three filters which lines
-appear. Assert the default is `UserAndTurnEnd` on a freshly loaded preview, and
-that switching sessions resets to the default.
+## Iterations, in execution order
 
-**Risk:** the filter must not change the scroll anchor. The preview now follows
-the bottom (`iter-1906b4db`); a filter that changes the line count while
-`preview_follow_bottom` is set must re-clamp, or the operator lands mid-transcript.
+### Iteration 1 — a fixed header strip in the preview pane
 
----
+**Why first:** it is the defect the closed items exposed, and it is the
+substrate item 3 needs. It is small, and it is the only item that makes two
+others possible.
 
-## Iteration 2 — deduplicate the two panes
+**Shape:** split the preview's inner area vertically before rendering —
+`Layout::default().direction(Vertical).constraints([Length(header), Min(1)])` —
+render the header as its own `Paragraph` into the first chunk, and the
+transcript as a scrolling `Paragraph` into the second. The header must NOT
+scroll.
+
+**What moves into it:** the header lines the pane already builds (title, id,
+employee, `project:`, cost, message count), plus the `first:` prompt line and
+the active `PreviewFilter` label. Nothing new is invented; the lines already
+exist, they are just rendered into the wrong region.
+
+**Measured constraint:** the header currently occupies roughly 7-8 lines of a
+pane that is `Min(8)` tall in the body plus chrome. At the smallest realistic
+terminal the body must keep at least 3-4 transcript lines or the pane stops
+being a transcript. Measure the header height at 100 columns before fixing the
+`Length`, and cap the header — a session with a long `project:` path must not
+consume the transcript.
+
+**Pin:** a 400-message transcript renders with the header still visible at
+scroll = max (this is the exact case `iter-2338` could not express); the header
+line count is identical at scroll 0 and at max scroll; and at 100 columns the
+body retains at least 3 lines.
+
+### Iteration 2 — deduplicate the two panes
 
 **Operator's words:** "the data on the right and the left panes must be
 non-redundant. Currently, there are several duplicates. The list must only show
-those items that must help the session to be identified"
+those items that must help the session to be identified."
 
 **The duplication, measured:**
 
@@ -98,148 +94,130 @@ those items that must help the session to be identified"
 | cost | `$12.3400` | `${:.4}` |
 | messages | `120 msg` | `{} msg` |
 
-**The decision the operator has to make, and my recommendation:** the list row
-answers *which session is this*, the preview answers *what happened in it*.
-Identity belongs to the list; detail belongs to the preview.
+**The decision the operator still has to make.** My recommendation, unchanged:
 
-- **Keep in the list:** title, directory qualifier, id, employee, status, age.
-  Those are what let the operator pick a row out of 3,000.
-- **Drop from the list:** message count, token count and cost — they do not help
-  identify a session, and they are what push the row past its width budget (the
-  `metrics_width` ladder at `render.rs:998` exists only to make room for them).
-- **Keep in the preview header:** cost, message count, tokens — the session's
-  weight, which is what you read once you have picked it.
-- **Add to the preview header:** nothing that the list already says. The preview
-  should stop repeating the id and instead show what the list cannot.
+- **List keeps:** title, directory qualifier, id, employee, status, age — what
+  lets you pick a row out of 3,000.
+- **List drops:** message count, token count, cost. They do not identify a
+  session, and they are what push the row past its budget — the `metrics_width`
+  ladder at `render.rs:996` exists solely to make room for them.
+- **Preview keeps:** cost, messages, tokens — the session's weight, read after
+  picking.
+- **Preview stops repeating:** the id. The list already carries it.
 
-**Pin:** assert the list row's meta line does not contain `$` or `msg`; assert the
-preview header does. Assert the row still fits 46 cells with the longest field
-combination, using the ladder's own measurement.
+**Sequence:** after iteration 1. Dropping three fields is what pays for the
+header strip's height at narrow widths, so doing this first makes iteration 1
+cheaper; but iteration 1 is the smaller, more certain change and should not wait
+on a product decision.
 
-**Note:** this is the only item that needs a product decision before code. If the
-operator wants cost in the list, the ladder has to drop something else — say
-which.
+**Pin:** the list row's meta line contains no `$` and no `msg`; the preview
+header contains both; and the row still fits 46 cells with the longest field
+combination, measured by the ladder's own arithmetic.
 
----
-
-## Iteration 3 — date and runtime
+### Iteration 3 — date and runtime
 
 **Operator's words:** "no date, runtime (the time the session has spent
-executing) in the data"
+executing) in the data."
 
-**What exists:** `sessions.started_at` and `sessions.ended_at` are both columns;
-the row shows only a relative age (`just now`), which answers "when" so vaguely
-that a session from three weeks ago and one from three days ago read alike.
+**What exists:** `sessions.started_at` and `sessions.ended_at` are both columns.
+The row shows only a relative age, so a session from three weeks ago and one
+from three days ago read alike.
 
 **Shape:**
 
-- List row: keep the relative age (it is scannable) and put the **absolute date**
-  where it cannot be confused — the row's title line already carries the
-  directory qualifier, so the date belongs on the meta line only if iteration 2
-  frees the width. **Sequence this after iteration 2**, or it will not fit.
-- Preview header: **runtime** — `ended_at - started_at`, or `now - started_at`
-  while the session is live. Format as `1h 12m` / `45s` / `3d 4h`, the same
-  shape `tokens_suffix` uses for its magnitudes.
-- A live session's runtime must advance. That means deriving it at the read site
-  from the clock, not storing a formatted string — the `rust-tui-debugging`
-  pitfall "a stored animation frame is a producer you have to keep alive" applies
-  exactly: a runtime written once at load is frozen at its first value.
+- **List row:** the absolute date, once iteration 2 frees the width. Format as a
+  date, not an instant — the row is scanned, not read.
+- **Preview header:** the runtime — `ended_at - started_at`, or `now -
+  started_at` while live. Same magnitude shape as `tokens_suffix`
+  (`1h 12m`, `45s`, `3d 4h`).
+- **A live runtime must be derived at the read site from the clock.** A duration
+  written once at load is frozen at its first value; that is the stored-animation
+  pitfall, and it is why this item needs the fixed header from iteration 1
+  rather than a line in the transcript.
 
-**Pin:** a session with a known `started_at`/`ended_at` pair renders the exact
-duration; a live session (no `ended_at`) renders a duration that advances across
-two frames; a session with a NULL `started_at` (legacy rows — 3,308 of 3,314 are
-in that state today) renders nothing rather than a wrong number.
+**Data caveat, measured earlier this campaign:** 3,308 of 3,314 live rows have
+no `started_at`. The honest rendering for those rows is an absent field, not a
+zero and not a guessed duration. Say so in the header rather than printing
+`0s`.
 
-**Data caveat:** only rows with `started_at` set can show a runtime. Measure how
-many live rows have it before promising the field; the preview's own
-`first_prompt` column shows the same legacy problem, and the honest answer for
-old rows is an absent field, not a zero.
+**Pin:** a known `started_at`/`ended_at` pair renders the exact duration; a live
+session's duration differs between two frames; a NULL `started_at` renders
+nothing.
 
----
-
-## Iteration 4 — project sections in the left list
+### Iteration 4 — project sections in the left list
 
 **Operator's words:** "the left-list must also be segregated based on
-path/project just like codex"
+path/project just like codex."
 
-**What exists:** `HubGroupMode::Directory` groups by directory, and codex's own
-picker goes further — it **sections** the list, with a heading per project and
-the project name on each row, so the operator reads a small number of projects
-rather than a flat run of 3,000 sessions.
+**What exists:** `HubGroupMode { Auto, Directory, Employee, Status }` already
+computes a directory grouping. Codex's picker goes further: it **sections** —
+a heading per project with a count, and the rows beneath it do not repeat the
+project name.
 
 **Shape:**
 
-- `Directory` already computes the grouping; the gap is that it renders as a
-  flat list with a heading row rather than as a sectioned list.
-- The section heading needs the project **name** (the basename) and its count,
-  and the rows under it should not repeat the basename — that is the same
-  redundancy the operator flagged in item 2, one level up.
-- `Auto` should pick project sections when the loaded rows span more than one
-  directory, which is the codex behaviour and the answer to "the aggregate of
-  all sessions is confusing to navigate".
-- Collapsing a section is the obvious next affordance, but it is not requested —
-  leave it out until asked (YAGNI).
-
-**Pin:** rows spanning three directories render three headings in order; a row
-under a heading does not repeat the heading's basename; the count on each heading
-equals the rows beneath it; and at 100 columns the heading plus the longest row
-still fits the pane.
+- `Directory` renders as a sectioned list rather than a flat run with a heading
+  row.
+- The heading carries the project **basename** and its count; rows beneath do not
+  repeat the basename — the same redundancy as iteration 2, one level up.
+- `Auto` selects project sections when the loaded rows span more than one
+  directory. That is the codex behaviour and the answer to "the aggregate of all
+  sessions is confusing to navigate".
 
 **Risk:** this is the change most likely to overflow the 46-cell pane, because it
-adds a level of indentation. Measure the indent cost before writing the render.
+adds an indent level. Measure the indent cost before writing the render.
 
----
+**Not included:** collapse/expand per section. Not requested; leave it out until
+asked.
 
-## Iteration 5 — rebalance the panes
+**Pin:** three directories produce three headings in order; a row under a
+heading does not repeat the basename; each heading's count equals the rows
+beneath it; the heading plus the longest row fits 100 columns.
 
-**Operator's words:** "left/right side needs rebalancing of layout"
+### Iteration 5 — rebalance the panes
 
-**What exists:** `SPLIT = (Percentage(40), Percentage(60))`.
+**Operator's words:** "left/right side needs rebalancing of layout."
 
-**Shape:** the right split is a judgement about what the operator reads most, so
-it should be measured rather than guessed. Two facts decide it:
+**What exists:** `SPLIT = (Percentage(40), Percentage(60))` at `render.rs:24`.
 
-- After iteration 4 the left pane carries sections, so it needs *width* for the
-  indent and the project name.
-- After iteration 1 the right pane carries a filter strip and a bottom-anchored
-  transcript, which reads better narrow (transcripts wrap).
+**Why last:** the split follows the content, so it cannot be chosen until the
+other four land. Iteration 4 adds width pressure to the left (indent,
+headings); iteration 1 adds a header strip to the right; iteration 2 removes
+three fields from the left row.
 
-**Recommendation:** `Percentage(45)` / `Percentage(55)`, then verify at 100, 120
-and 160 columns that (a) the tab bar still finds a readable rung — the budget
-changes with the split, so the whole ladder must be re-measured, not assumed —
-and (b) the section headings do not truncate.
+**Recommendation:** 45/55, then verify.
 
-**Pin:** re-run the iteration-2317 narrow-terminal test at the new split. The
-ladder is derived from the width, so it should adapt, but that is exactly the
-assumption that produced two regressions — prove it.
+**Mandatory check:** the tab-bar ladder derives its rungs from the width, so
+changing the split changes which rung is chosen at every terminal width. Re-run
+the `iter-2317` narrow-terminal test at 100, 110 and 120 columns after the
+change. Do not assume the ladder adapts — that assumption is what produced both
+layout regressions this campaign (`iter-2207` collapsed the bar to one pill,
+`iter-2252` fitted the fix to the wrong quantity).
 
-**Do this last.** Every other iteration changes what is in each pane, so the
-right split cannot be chosen until they land.
+## Standing rules for every iteration
 
----
+From `rust-tui-debugging`, the clauses that have already bitten this campaign:
 
-## Order and why
-
-1. **Preview filters** — independent of layout, largest operator value.
-2. **Pane deduplication** — frees the width that items 3 and 4 need.
-3. **Date and runtime** — depends on 2 for room.
-4. **Project sections** — depends on 2 (no repeated basename) and 3 (the date has
-   to live somewhere).
-5. **Rebalance** — depends on all four, because the split follows the content.
-
-## Cross-cutting: the gate is currently red
-
-Every iteration above needs the bin test target, and it does not compile: a
-peer's uncommitted `cmd_continue.rs` (a `warn!` with no import) and
-`gateway_runner/tests.rs` (a field removed from `GatewaySessionHandler`) break it.
-Per `rust-tui-debugging` item 10, **repair the red gate first, as its own
-iteration**, or every behavioural item below is verified against a suite that
-cannot run.
+1. **Take the width budget from the layout call, not a constant.** The list pane
+   is `SPLIT.0` = 40%, so inner cells = `terminal * 0.4 - 2`: 46 at 120 columns,
+   **38 at 100**.
+2. **A second report of the same visual defect means the first fix was fitted to
+   the wrong quantity.** Restart from the cell budget and the reported width.
+   This is exactly what happened between `iter-2252` and `iter-2317`.
+3. **Reproduce constrained geometry explicitly** — the smallest realistic
+   terminal, including borders and the sibling pane's share. A test at 160
+   columns passes over a defect that fires at 100.
+4. **Repair a red gate as its own iteration.** The bin test target currently
+   compiles for the hub suite but not whole: a peer's uncommitted
+   `gateway_runner/tests.rs` (initializers missing `live_sessions` and
+   `running`) breaks it. Any item verified only by `rustfmt` is not verified.
 
 ## What this plan deliberately does not do
 
-- No change to the page cursor's RFC3339 text comparison (latent; every writer
-  is UTC, all 3,314 live rows are `+00:00`).
-- No change to the cwd stamp's last-turn-wins semantics (a deliberate trade-off
-  recorded in `iter-2273`; the one-line change is documented there).
-- No section collapse/expand (not requested).
+- No change to the page cursor's RFC3339 text comparison (latent: every
+  session-timestamp writer uses `to_rfc3339()` over `Utc::now()`; all 3,314 live
+  rows are `+00:00`, zero `Z`-suffixed, zero space-separated).
+- No change to the cwd stamp's last-turn-wins semantics — a deliberate
+  trade-off recorded in `iter-2273`, with the one-line alternative documented
+  there.
+- No section collapse/expand.
