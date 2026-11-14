@@ -1581,8 +1581,16 @@ fn reopening_the_hub_resets_the_scope() {
 fn the_tool_call_toggle_survives_a_reopen() {
     let mut hub = SessionHubState::new();
     hub.cycle_preview_filter();
+    // Capture what the operator chose, then assert the reopen left it alone.
+    // This test predates the axis becoming an enum: it asserted the field was
+    // truthy, which no longer compiles (and would not have said what it meant
+    // once there were three shapes to choose between).
+    let chosen = hub.preview_filter;
     hub.open(None);
-    assert!(hub.preview_filter, "a stated preference is not a scope");
+    assert_eq!(
+        hub.preview_filter, chosen,
+        "a stated preference is not a scope: the reopen must not reset it"
+    );
 }
 
 // ---- (2026-11-14, audit findings 7, 8, 9) the preview pane ----
