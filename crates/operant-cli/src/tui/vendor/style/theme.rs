@@ -81,6 +81,30 @@ pub fn code_color() -> Color {
 pub fn link_color() -> Color {
     super::palette::role_color(super::palette::Role::MdLink)
 }
+
+/// Foreground for one syntax category (plan 2026-11-14 U5).
+///
+/// Every `syntax_*` role resolves through here so the highlighter has a single
+/// place to read from; the categories are the nine the markdown highlighter
+/// distinguishes.
+pub fn syntax_color(role: super::palette::Role) -> Color {
+    debug_assert!(
+        matches!(
+            role,
+            super::palette::Role::SyntaxComment
+                | super::palette::Role::SyntaxKeyword
+                | super::palette::Role::SyntaxFunction
+                | super::palette::Role::SyntaxVariable
+                | super::palette::Role::SyntaxString
+                | super::palette::Role::SyntaxNumber
+                | super::palette::Role::SyntaxType
+                | super::palette::Role::SyntaxOperator
+                | super::palette::Role::SyntaxPunctuation
+        ),
+        "syntax_color takes a syntax_* role"
+    );
+    super::palette::role_color(role)
+}
 /// Warning accent.
 pub fn warning_color() -> Color {
     super::palette::role_color(super::palette::Role::Warning)

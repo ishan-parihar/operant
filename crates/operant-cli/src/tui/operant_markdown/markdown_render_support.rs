@@ -3,6 +3,9 @@
 // no changes. See operant_markdown/mod.rs for scope.
 
 use super::*;
+use crate::tui::vendor::style::palette::Role;
+use std::str::FromStr;
+use syntect::parsing::Scope;
 
 pub(super) fn line_plain_text(line: &Line<'_>) -> String {
     line.spans
@@ -464,39 +467,173 @@ pub(super) fn highlight_code(code: &str, lang: Option<&str>) -> Vec<Line<'static
         .and_then(|l| SYNTAX_SET.find_syntax_by_token(l))
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
+    // syntect still decides the SCOPES; the theme it is handed only supplies
+    // the fallback colour for a token whose scope maps to no `syntax_*` role
+    // (U5). A `ParseState` is kept alongside so the scope stack can be walked.
     let theme = &THEME_SET.themes["base16-ocean.dark"];
     let mut highlighter = HighlightLines::new(syntax, theme);
+    let mut parse_state = syntect::parsing::ParseState::new(syntax);
 
     for line in code.lines() {
-        let highlighted = highlighter.highlight_line(line, &SYNTAX_SET);
-
-        match highlighted {
-            Ok(ranges) => {
-                let spans: Vec<Span<'static>> = ranges
-                    .into_iter()
-                    .map(|(style, text)| {
-                        Span::styled(text.to_string(), syntect_to_ratatui_style(style))
-                    })
-                    .collect();
-                lines.push(Line::from(spans));
-            }
-            Err(_) => {
-                // Fallback to plain text
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(code_fg()),
-                )));
-            }
+        let spans =
+            highlight_line_with_roles(&mut highlighter, &mut parse_state, line, &SYNTAX_SET);
+        if spans.is_empty() {
+            // Fallback to plain text
+            lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(code_fg()),
+            )));
+        } else {
+            lines.push(Line::from(spans));
         }
     }
 
     lines
 }
 
-/// Convert syntect style to ratatui style
+/// The nine syntax categories, each with the scope selector that identifies it.
+///
+/// (plan 2026-11-14 U5) Ordered most-specific first: `ScopeStack::does_match`
+/// scores a match by how many atoms it consumed, so the table is consulted in
+/// order and the first selector that matches wins. That mirrors OMP's
+/// `compute_scope_color` (`crates/pi-natives/src/highlight.rs:262-332`), which
+/// maps syntect scopes onto theme tokens the same way.
+const SYNTAX_SELECTORS: &[(Role, &str)] = &[
+    (Role::SyntaxComment, "comment"),
+    (Role::SyntaxString, "string"),
+    (Role::SyntaxNumber, "constant.numeric"),
+    // `storage.type` covers `fn`/`let`/`u32` in Rust; `entity.name.function`
+    // is the declared name. `keyword.control` must be tried before the bare
+    // `keyword` fallback so `fn` classifies as a type, not a keyword.
+    (
+        Role::SyntaxFunction,
+        "entity.name.function, support.function, meta.function-call",
+    ),
+    (
+        Role::SyntaxType,
+        "storage.type, entity.name.type, support.type",
+    ),
+    (Role::SyntaxKeyword, "keyword"),
+    (
+        Role::SyntaxVariable,
+        "variable, support.variable, variable.parameter",
+    ),
+    (
+        Role::SyntaxOperator,
+        "keyword.operator, punctuation.separator",
+    ),
+    (Role::SyntaxPunctuation, "punctuation"),
+];
+
+/// The `syntax_*` role a scope stack resolves to, if any.
+///
+/// Selectors are compiled once per process; `does_match` is a pure lookup over
+/// the stack, so this is cheap enough to run per token.
+fn role_for_scope_stack(scopes: &[Scope]) -> Option<Role> {
+    use std::sync::LazyLock;
+    use syntect::parsing::ScopeStack;
+    static SELECTORS: LazyLock<Vec<(Role, ScopeStack)>> = LazyLock::new(|| {
+        SYNTAX_SELECTORS
+            .iter()
+            .filter_map(|(role, selector)| {
+                ScopeStack::from_str(selector)
+                    .ok()
+                    .map(|stack| (*role, stack))
+            })
+            .collect()
+    });
+    SELECTORS
+        .iter()
+        .find(|(_, selector)| selector.does_match(scopes).is_some())
+        .map(|(role, _)| *role)
+}
+
+/// Convert syntect style to ratatui style.
+///
+/// (plan 2026-11-14 U5) The foreground comes from the active THEME rather than
+/// from syntect's own palette. `highlight_code` and `highlight_line` still ask
+/// syntect to PARSE — grammars and scope resolution are syntect's — but the
+/// colour is looked up from the `syntax_*` roles, so `/theme` and
+/// `[tui.colors]` reach code blocks. Previously every block was painted from
+/// `base16-ocean.dark` whatever operant theme was active, so the `light` theme
+/// rendered dark-theme syntax colours on a light background.
+///
+/// `syntect::easy::HighlightLines` yields only `(Style, &str)`, with no scope,
+/// so the category is recovered by re-parsing the line and tracking the scope
+/// stack through the same ops — see [`highlight_line_with_roles`], which is the
+/// scope-aware path both call sites now use.
 fn syntect_to_ratatui_style(style: SynStyle) -> Style {
     let fg = rgb(style.foreground.r, style.foreground.g, style.foreground.b);
     Style::default().fg(fg)
+}
+
+/// Highlight one line into ratatui spans whose FOREGROUNDS come from the theme.
+///
+/// `syntect::easy::HighlightLines` yields `(Style, &str)` and keeps its scope
+/// stack private, so the category cannot be read off its output. This walks the
+/// same `ScopeStackOp` stream syntect's own iterator walks (see
+/// `RangedHighlightIterator::next`): ops are sorted by byte offset, each op
+/// boundary ends a token, and the stack in effect BEFORE that op is the scope
+/// that styled the token just emitted.
+///
+/// Tokens whose scope matches no `syntax_*` selector keep syntect's colour, so
+/// an unrecognised construct stays highlighted rather than going flat.
+fn highlight_line_with_roles(
+    highlighter: &mut syntect::easy::HighlightLines<'_>,
+    parse_state: &mut syntect::parsing::ParseState,
+    line: &str,
+    syntax_set: &syntect::parsing::SyntaxSet,
+) -> Vec<Span<'static>> {
+    use syntect::parsing::{ScopeStack, ScopeStackOp};
+
+    let owned_ops: Vec<(usize, ScopeStackOp)> = match parse_state.parse_line(line, syntax_set) {
+        Ok(ops) => ops.into_iter().map(|(at, op)| (at, op.clone())).collect(),
+        Err(_) => {
+            return vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(code_fg()),
+            )];
+        }
+    };
+    let styled = match highlighter.highlight_line(line, syntax_set) {
+        Ok(spans) => spans,
+        Err(_) => {
+            return vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(code_fg()),
+            )];
+        }
+    };
+
+    let mut scopes = ScopeStack::new();
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(styled.len());
+    let mut next_op = 0usize;
+    let mut consumed = 0usize;
+
+    for (style, text) in styled {
+        // The stack BEFORE this token's closing op is the scope that styled it.
+        let fg = role_for_scope_stack(scopes.as_slice())
+            .map(crate::tui::vendor::style::theme::syntax_color)
+            .or_else(|| syntect_to_ratatui_style(style).fg)
+            .unwrap_or(Color::Reset);
+        spans.push(Span::styled(text.to_string(), Style::default().fg(fg)));
+
+        // Consume this token, then apply every op whose boundary it reached.
+        consumed += text.len();
+        while next_op < owned_ops.len() && owned_ops[next_op].0 <= consumed {
+            match owned_ops[next_op].1 {
+                ScopeStackOp::Push(scope) => scopes.push(scope),
+                ScopeStackOp::Pop(count) => {
+                    for _ in 0..count {
+                        scopes.pop();
+                    }
+                }
+                _ => {}
+            }
+            next_op += 1;
+        }
+    }
+    spans
 }
 
 /// Highlight a single line of code (for diff display)
@@ -538,4 +675,97 @@ pub(super) fn placeholder_code_block(code: &str, lang: Option<&str>) -> Vec<Line
 /// Check if two ranges overlap
 pub(super) fn ranges_overlap(a: std::ops::Range<usize>, b: std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
+}
+
+#[cfg(test)]
+mod syntax_theme_tests {
+    use super::*;
+    use syntect::parsing::ScopeStack;
+
+    /// The defect U5 closes, stated as a check: code highlighting must FOLLOW
+    /// the active palette. Before this, every block was painted from syntect's
+    /// pinned `base16-ocean.dark` whatever operant theme was active, so the
+    /// `light` theme drew dark-theme syntax colours on a light background.
+    #[test]
+    fn code_highlighting_follows_the_active_palette() {
+        let guard = crate::tui::vendor::style::STYLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let snippet = "fn main() {\n    // comment\n    let x = 1;\n}\n";
+        let render = |theme: &str| {
+            crate::tui::theme_colors::set_active_theme(theme);
+            let lines = highlight_code(snippet, Some("rs"));
+            let mut colours: Vec<Color> = Vec::new();
+            for line in &lines {
+                for span in &line.spans {
+                    if let Some(fg) = span.style.fg {
+                        colours.push(fg);
+                    }
+                }
+            }
+            colours
+        };
+
+        // The emitted colour must be the ROLE'S value, not syntect's. The
+        // accessor deliberately returns the role's frozen default (substitution
+        // happens in the per-frame buffer pass, and doing it in both places
+        // would remap a cell twice), so the assertion is that the output equals
+        // the role default -- which is what distinguishes a mapped token from an
+        // unmapped one that kept syntect's own colour.
+        let dark = render("dark");
+        let keyword = crate::tui::vendor::style::palette::Role::SyntaxKeyword.default_rgb();
+        assert!(
+            dark.contains(&Color::Rgb(keyword.0, keyword.1, keyword.2)),
+            "a Rust control keyword must be painted from Role::SyntaxKeyword \
+             {keyword:?}, not from syntect's pinned palette; saw {dark:?}"
+        );
+        let comment = crate::tui::vendor::style::palette::Role::SyntaxComment.default_rgb();
+        assert!(
+            dark.contains(&Color::Rgb(comment.0, comment.1, comment.2)),
+            "a comment must be painted from Role::SyntaxComment {comment:?}; saw {dark:?}"
+        );
+
+        // And the palette the buffer pass reads must carry the configured value
+        // for that role, so the substitution can apply it.
+        let mut pairs = std::collections::BTreeMap::new();
+        pairs.insert("syntax_keyword".to_string(), "#010203".to_string());
+        crate::tui::theme_colors::set_role_overrides(&pairs);
+        let live = crate::tui::vendor::style::palette::configured_palette()
+            .expect("a configured role must install a palette");
+        assert_eq!(
+            live.rgb(crate::tui::vendor::style::palette::Role::SyntaxKeyword),
+            (1, 2, 3),
+            "syntax_keyword must be configurable, or U5 wired a lookup nobody can change"
+        );
+
+        crate::tui::theme_colors::set_role_overrides(&std::collections::BTreeMap::new());
+
+        crate::tui::theme_colors::set_active_theme("default");
+        drop(guard);
+    }
+
+    /// The scope table must actually match real Rust scopes, or U5 wired a
+    /// lookup that always misses and every token silently keeps syntect's
+    /// colour — the exact failure the first draft of this unit had.
+    #[test]
+    fn the_scope_selectors_match_real_rust_tokens() {
+        let matched = role_for_scope_stack(
+            &ScopeStack::from_str("source.rust meta.function.rust keyword.control.rust")
+                .expect("valid stack")
+                .as_slice(),
+        );
+        assert_eq!(
+            matched,
+            Some(Role::SyntaxKeyword),
+            "a Rust control keyword must resolve to SyntaxKeyword"
+        );
+
+        let comment = role_for_scope_stack(
+            &ScopeStack::from_str("source.rust comment.line.double-slash.rust")
+                .expect("valid stack")
+                .as_slice(),
+        );
+        assert_eq!(comment, Some(Role::SyntaxComment));
+    }
 }
