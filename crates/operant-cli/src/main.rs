@@ -3575,8 +3575,13 @@ async fn run(
             // server's socket, sends what the operator typed and renders the
             // events the server sends back — no tool registry, no database
             // handles, no MCP child servers, no AFT bridge.
-            if let Some(socket) = attach {
-                return cmd_chat_attach(&socket, system.as_deref()).await;
+            // The socket is kept for the TUI: a rich terminal attaches and
+            // RENDERS the server's stream (RT-542's render half); a plain one
+            // takes the headless attach path.
+            let attach_socket = attach.clone();
+            if attach.is_some() && !(loaded.config.tui.rich_output && tui_available()) {
+                return cmd_chat_attach(&attach_socket.expect("checked above"), system.as_deref())
+                    .await;
             }
             if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
@@ -3587,6 +3592,7 @@ async fn run(
                     cli.dangerously_skip_permissions,
                 )
                 .await?
+                .attaching(attach_socket.unwrap_or_default())
                 .run()
                 .await?;
             } else {

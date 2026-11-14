@@ -24,6 +24,11 @@ pub struct TuiApp {
     /// and a second attach on the same field would rewind the session the
     /// operator switched to afterwards.
     resume_session_id: Option<String>,
+    /// The server to attach to instead of building a runtime (RT-542).
+    ///
+    /// `None` is the ordinary TUI: this process builds the agent and the
+    /// events come from it.
+    attach_socket: Option<std::path::PathBuf>,
 }
 
 impl TuiApp {
@@ -108,7 +113,19 @@ impl TuiApp {
             no_mouse,
             metrics,
             resume_session_id,
+            attach_socket: None,
         })
+    }
+
+    /// Attach this TUI to a running server's session socket (RT-542).
+    ///
+    /// The render layer is unchanged: the events arrive on the same receiver
+    /// the local agent feeds, so the terminal draws exactly what it always
+    /// drew — while this process builds no runtime of its own.
+    #[must_use]
+    pub fn attaching(mut self, socket: std::path::PathBuf) -> Self {
+        self.attach_socket = Some(socket);
+        self
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -118,6 +135,51 @@ impl TuiApp {
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
+        // RT-542, the render half: when this process is a CLIENT of a running
+        // server, the events come off the socket instead of out of a local
+        // agent. The receiver the render layer reads is the SAME one either
+        // way, so nothing downstream knows the difference — and the client
+        // builds no registry, no database handles, no MCP children and no AFT
+        // bridge.
+        if let Some(socket) = self.attach_socket.clone() {
+            let tx = agent_tx.clone();
+            tokio::spawn(async move {
+                match operant_core::session_client::SessionClient::connect(&socket).await {
+                    Ok(mut client) => {
+                        while let Ok(Some(message)) = client.recv().await {
+                            match message {
+                                operant_core::session_protocol::WireMessage::Event {
+                                    event,
+                                    ..
+                                } => {
+                                    if tx.send(event).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                operant_core::session_protocol::WireMessage::Error {
+                                    message,
+                                    ..
+                                } => {
+                                    let _ = tx
+                                        .send(operant_core::agent::AgentEvent::Error {
+                                            error: message,
+                                        })
+                                        .await;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx
+                            .send(operant_core::agent::AgentEvent::Error {
+                                error: format!("cannot attach to the session server: {error}"),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
 
         // Tell a Herdr pane, if this is one, that Operant owns it — an open
         // TUI waiting for input is an `idle` agent. Outside Herdr this is a
@@ -2435,5 +2497,117 @@ mod rebuild_replay_tests {
             "the rebuild must schedule the scrollback replay"
         );
         assert_eq!(app.messages.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod attach_tests {
+    use super::*;
+    use operant_core::agent::AgentEvent;
+    use operant_core::session_protocol::{PROTOCOL_VERSION, WireMessage, encode};
+
+    /// RT-542, the render half: events off the socket reach the SAME receiver
+    /// the render layer drains.
+    ///
+    /// This is the wiring the attaching TUI uses; the render layer is unchanged
+    /// by design, so what is pinned here is that the socket becomes an
+    /// `AgentEvent` stream on that channel — and that a server error becomes an
+    /// `Error` event rather than silence.
+    #[tokio::test]
+    async fn socket_events_reach_the_channel_the_render_layer_drains() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let socket = dir.path().join("session.sock");
+
+        // A server that sends two events and then an error.
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (mut reader, mut writer) = stream.into_split();
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            let mut lines = BufReader::new(&mut reader).lines();
+            let _ = lines.next_line().await; // the hello
+            let hello = encode(&WireMessage::HelloOk { sessions: vec![] }, PROTOCOL_VERSION)
+                .expect("encodes");
+            let _ = writer.write_all(hello.as_bytes()).await;
+            let _ = writer.write_all(b"\n").await;
+            for text in ["first", "second"] {
+                let event = encode(
+                    &WireMessage::Event {
+                        session_id: "s1".to_string(),
+                        event: AgentEvent::Content {
+                            text: text.to_string(),
+                        },
+                    },
+                    PROTOCOL_VERSION,
+                )
+                .expect("encodes");
+                let _ = writer.write_all(event.as_bytes()).await;
+                let _ = writer.write_all(b"\n").await;
+            }
+            let error = encode(
+                &WireMessage::Error {
+                    session_id: None,
+                    message: "the server is going away".to_string(),
+                },
+                PROTOCOL_VERSION,
+            )
+            .expect("encodes");
+            let _ = writer.write_all(error.as_bytes()).await;
+            let _ = writer.write_all(b"\n").await;
+        });
+
+        // The same receiver the TUI hands to its render layer.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let client = tokio::spawn(async move {
+            let mut client = operant_core::session_client::SessionClient::connect(&socket)
+                .await
+                .expect("the client must connect");
+            while let Ok(Some(message)) = client.recv().await {
+                match message {
+                    WireMessage::Event { event, .. } => {
+                        if tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    WireMessage::Error { message, .. } => {
+                        let _ = tx.send(AgentEvent::Error { error: message }).await;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the first event must arrive")
+            .expect("the channel must stay open");
+        match first {
+            AgentEvent::Content { text } => assert_eq!(text, "first"),
+            other => panic!("the wrong event arrived first: {other:?}"),
+        }
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the second event must arrive")
+            .expect("the channel must stay open");
+        match second {
+            AgentEvent::Content { text } => assert_eq!(text, "second"),
+            other => panic!("the wrong event arrived second: {other:?}"),
+        }
+
+        // A server error is surfaced as an event, not swallowed.
+        let error = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the error must arrive")
+            .expect("the channel must stay open");
+        match error {
+            AgentEvent::Error { error } => {
+                assert_eq!(error, "the server is going away");
+            }
+            other => panic!("a server error must surface as an Error event, got {other:?}"),
+        }
+
+        server.abort();
+        client.abort();
     }
 }
