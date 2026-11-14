@@ -2686,12 +2686,17 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     app.handle_tui_command("session", "");
     assert!(app.session_hub.visible, "the hub opens on /session");
     app.session_list_pending = false;
-    let (tx, rx) = tokio::sync::mpsc::channel::<(Vec<_>, Option<usize>, Vec<(String, String)>)>(1);
+    let (tx, rx) = tokio::sync::mpsc::channel::<(
+        Vec<operant_core::session::listing::SessionEntryV2>,
+        Option<usize>,
+        Vec<(String, String)>,
+        Option<operant_core::database::SessionFilterCounts>,
+    )>(1);
     app.session_list_rx = Some(rx);
     // Deliver the rows a few frames late, exactly like the real blocking load.
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let _ = tx.send((hub_rows(3), None, Vec::new())).await;
+        let _ = tx.send((hub_rows(3), None, Vec::new(), None)).await;
     });
 
     app.simulated_keys = vec![press_key(KeyCode::Down, KeyModifiers::NONE)];
@@ -2749,11 +2754,21 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     app.handle_tui_command("session", "");
     assert!(app.session_hub.visible, "the hub opens on /session");
     app.session_list_pending = false;
-    let (tx, rx) = tokio::sync::mpsc::channel::<(Vec<_>, Option<usize>, Vec<(String, String)>)>(1);
+    let (tx, rx) = tokio::sync::mpsc::channel::<(
+        Vec<operant_core::session::listing::SessionEntryV2>,
+        Option<usize>,
+        Vec<(String, String)>,
+        Option<operant_core::database::SessionFilterCounts>,
+    )>(1);
     app.session_list_rx = Some(rx);
-    tx.send((crate::tui::session_hub::probe_rows(2), None, Vec::new()))
-        .await
-        .expect("the seeded rows survive the channel");
+    tx.send((
+        crate::tui::session_hub::probe_rows(2),
+        None,
+        Vec::new(),
+        None,
+    ))
+    .await
+    .expect("the seeded rows survive the channel");
 
     // No switch handle: the frame loop must report the reason for the
     // failed switch, never leave the operator with a blank screen.
@@ -10559,6 +10574,7 @@ mod rename_on_load_tests {
             Vec::<operant_core::session::listing::SessionEntryV2>::new(),
             None,
             Vec::new(),
+            None,
         ))
         .unwrap();
 
@@ -15728,7 +15744,6 @@ fn a_switch_to_a_session_another_window_owns_is_refused() {
     );
 }
 
-
 // ---- (2026-11-14) the session's human-readable label ----
 
 /// A session the operator renamed is labelled by the name they gave it.
@@ -15736,7 +15751,10 @@ fn a_switch_to_a_session_another_window_owns_is_refused() {
 fn the_session_label_prefers_the_title_the_operator_set() {
     let mut app = make_app();
     app.session_title = Some("Fix the export dialog".to_string());
-    assert_eq!(app.session_label().as_deref(), Some("Fix the export dialog"));
+    assert_eq!(
+        app.session_label().as_deref(),
+        Some("Fix the export dialog")
+    );
 }
 
 /// A session the operator never renamed is labelled by its FIRST prompt — the
@@ -15752,8 +15770,8 @@ fn the_session_label_falls_back_to_the_first_prompt() {
     let mut app = make_app();
     app.messages
         .push(crate::tui::adapter_types::types::Message::user(
-        "Reply with the single word OK.".to_string(),
-    ));
+            "Reply with the single word OK.".to_string(),
+        ));
     assert_eq!(
         app.session_label().as_deref(),
         Some("Reply with the single word OK.")
@@ -15767,10 +15785,13 @@ fn the_session_label_cuts_a_long_prompt_the_way_the_store_does() {
     let mut app = make_app();
     app.messages
         .push(crate::tui::adapter_types::types::Message::user(
-        "x".repeat(400),
-    ));
+            "x".repeat(400),
+        ));
     let label = app.session_label().expect("a label from the prompt");
-    assert!(label.chars().count() <= 61, "60 chars plus the ellipsis: {label}");
+    assert!(
+        label.chars().count() <= 61,
+        "60 chars plus the ellipsis: {label}"
+    );
     assert!(label.ends_with('…'), "a cut label marks the cut: {label:?}");
 }
 

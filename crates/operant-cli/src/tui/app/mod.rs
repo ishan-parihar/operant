@@ -771,6 +771,9 @@ pub struct App {
             // The EMPLOYEE ROSTER: every employee the store knows about, by
             // id and by label (audit finding 3).
             Vec<(String, String)>,
+            // The store-wide per-mode counts (plan F4): the tabs say how many
+            // rows a filter would show in the STORE, not in the page.
+            Option<operant_core::database::SessionFilterCounts>,
         )>,
     >,
     /// Receiver for the hub's per-session PREVIEW load (the right pane's
@@ -1678,9 +1681,7 @@ impl App {
             .iter()
             .find(|m| m.role == Role::User)
             .and_then(|m| match &m.content {
-                crate::tui::adapter_types::types::MessageContent::Text(text) => {
-                    Some(text.as_str())
-                }
+                crate::tui::adapter_types::types::MessageContent::Text(text) => Some(text.as_str()),
                 crate::tui::adapter_types::types::MessageContent::Blocks(_) => None,
             })
             .map(str::trim)
@@ -2039,6 +2040,19 @@ impl App {
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 self.session_list_rx = Some(rx);
                 let db_path = self.config.database_path.clone();
+                // The store-wide counts need the same axes the hub filters
+                // by, so they are read here and carried with the rows (F4):
+                // a count that ignored the employee axis would promise rows
+                // the list does not show.
+                let counts_cwd = std::env::current_dir()
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string());
+                let counts_employee = self.session_hub.employee_filter().map(str::to_string);
+                let counts_branch = self.session_hub.branch_root.clone();
+                let counts_live = self
+                    .core_session_switch
+                    .as_ref()
+                    .and_then(|s| s.session_id());
                 tokio::spawn(async move {
                     let loaded = tokio::task::spawn_blocking(move || {
                         let db = operant_core::database::Database::init(db_path).ok();
@@ -2056,13 +2070,22 @@ impl App {
                             .as_ref()
                             .and_then(|d| d.list_sessions_rich(500).ok())
                             .unwrap_or_default();
+                        let counts = db.as_ref().and_then(|d| {
+                            d.count_sessions_by_filter(
+                                counts_cwd.as_deref(),
+                                counts_employee.as_deref(),
+                                counts_branch.as_deref(),
+                                counts_live.as_deref(),
+                            )
+                            .ok()
+                        });
                         // iter-C: subagent rows are process-local registry
                         // state, appended (not joined) to the DB rows.
                         rows.extend(operant_core::tools::async_delegation::records_snapshot());
-                        (rows, total, roster)
+                        (rows, total, roster, counts)
                     })
                     .await
-                    .unwrap_or_else(|_| (Vec::new(), None, Vec::new()));
+                    .unwrap_or_else(|_| (Vec::new(), None, Vec::new(), None));
                     let _ = tx.send(loaded).await;
                 });
             }

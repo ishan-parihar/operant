@@ -157,7 +157,7 @@ impl App {
             return false;
         };
         match rx.try_recv() {
-            Ok((rows, total, roster)) => {
+            Ok((rows, total, roster, counts)) => {
                 self.debug_hub
                     .publish(crate::tui::debug::TuiEvent::SessionList {
                         count: rows.len(),
@@ -184,6 +184,10 @@ impl App {
                 // store knows about — not only the ones with a session inside
                 // the loaded page (audit finding 3).
                 self.session_hub.set_employee_roster(roster);
+                // The counts land BEFORE `replace_rows` for the same reason
+                // the live id does: that call recomputes the count cache from
+                // whatever the hub holds (F4 — the cache now prefers these).
+                self.session_hub.set_store_counts(counts);
                 self.session_hub.replace_rows(rows);
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {

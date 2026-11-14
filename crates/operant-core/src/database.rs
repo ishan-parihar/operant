@@ -185,6 +185,35 @@ pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// The store-wide count of sessions per hub filter mode.
+///
+/// These are counts over the STORE, not over the rows the hub has loaded.
+/// Measured on the operator's database at the time of writing: 3,314
+/// sessions, of which 25 were interrupted — while the hub counted the newest
+/// 500, so a tab reading 0 meant "0 of 500" and could not tell a broken
+/// filter from an empty store.
+///
+/// `Live` has no column: the session being streamed right now is marked live
+/// by the PROCESS, so it is passed in and excluded from `ready` — the store
+/// would otherwise count the one live row as idle. `Working` has no column
+/// either (it is the live row plus the registry's pending delegations), so it
+/// is not in this struct: the hub counts it from process state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionFilterCounts {
+    /// Every session.
+    pub all: usize,
+    /// Interrupted: a session cut off mid-turn.
+    pub needs_you: usize,
+    /// Idle: neither interrupted nor archived, and not the live one.
+    pub ready: usize,
+    /// Archived.
+    pub inactive: usize,
+    /// In the given working directory (0 when none was asked for).
+    pub current_dir: usize,
+    /// The given branch root and its forks (0 when none was asked for).
+    pub current_branch: usize,
+}
+
 impl Database {
     const DATABASE_MIGRATIONS: &[&str] = &[
         DESIRED_SCHEMA_SQL,
@@ -2021,6 +2050,62 @@ impl Database {
             )
             .map_err(|e| Error::Agent(format!("Failed to count session user prompts: {}", e)))?;
         Ok(count.max(0) as usize)
+    }
+
+    /// Count the store's sessions per filter mode, in ONE query.
+    ///
+    /// The employee axis narrows every mode at once, the way the hub's
+    /// predicate does: a count that ignored the axis would promise rows the
+    /// list does not show. The current-directory and branch-root modes are
+    /// parameters rather than columns because they are facts about the
+    /// CALLER (where the operator is standing, which session is the anchor),
+    /// not about the rows.
+    ///
+    /// `live_session_id` is excluded from `ready`: the row being streamed
+    /// into is `Live` in the hub, and the store would otherwise count it as
+    /// idle — the one row where the two disagree.
+    pub fn count_sessions_by_filter(
+        &self,
+        cwd: Option<&str>,
+        employee_id: Option<&str>,
+        branch_root: Option<&str>,
+        live_session_id: Option<&str>,
+    ) -> Result<SessionFilterCounts> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                     COUNT(*),
+                     COALESCE(SUM(CASE WHEN s.end_reason = 'interrupted' THEN 1 ELSE 0 END), 0),
+                     COALESCE(SUM(CASE WHEN s.archived = 0
+                                        AND (s.end_reason IS NULL OR s.end_reason != 'interrupted')
+                                        AND s.id IS NOT ?4 THEN 1 ELSE 0 END), 0),
+                     COALESCE(SUM(CASE WHEN s.archived = 1 THEN 1 ELSE 0 END), 0),
+                     COALESCE(SUM(CASE WHEN ?1 IS NOT NULL AND s.cwd = ?1 THEN 1 ELSE 0 END), 0),
+                     COALESCE(SUM(CASE WHEN ?2 IS NOT NULL
+                                        AND (s.id = ?2 OR s.parent_session_id = ?2)
+                                   THEN 1 ELSE 0 END), 0)
+                 FROM sessions s
+                 WHERE (?3 IS NULL OR s.employee_id = ?3)",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare session filter counts: {}", e)))?;
+
+        let counts = stmt
+            .query_row(
+                params![cwd, branch_root, employee_id, live_session_id],
+                |row| {
+                    Ok(SessionFilterCounts {
+                        all: row.get::<_, i64>(0)?.max(0) as usize,
+                        needs_you: row.get::<_, i64>(1)?.max(0) as usize,
+                        ready: row.get::<_, i64>(2)?.max(0) as usize,
+                        inactive: row.get::<_, i64>(3)?.max(0) as usize,
+                        current_dir: row.get::<_, i64>(4)?.max(0) as usize,
+                        current_branch: row.get::<_, i64>(5)?.max(0) as usize,
+                    })
+                },
+            )
+            .map_err(|e| Error::Agent(format!("Failed to read session filter counts: {}", e)))?;
+        Ok(counts)
     }
 
     /// FTS5 session search with an optional role filter (`user`/`assistant`/
@@ -5898,6 +5983,57 @@ mod tests {
             db.count_session_user_prompts("pc-1").expect("count"),
             30,
             "the store knows about all 30 — that is what the hidden count needs"
+        );
+    }
+
+    /// The tab counts must read the STORE, not the window the hub loaded.
+    ///
+    /// They used to be computed over the newest 500 rows, so a filter's
+    /// number meant "how many of the newest 500" and the operator could not
+    /// tell a broken filter from an empty one.
+    #[test]
+    fn the_filter_counts_read_the_store() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..40 {
+            db.save_session(&format!("fc-{i}"), None, "agent", &now, &now)
+                .expect("session");
+        }
+        db.mark_session_interrupted("fc-0").expect("interrupted");
+        db.mark_session_interrupted("fc-1").expect("interrupted");
+        db.archive_session("fc-2").expect("archived");
+        db.set_session_cwd("fc-3", "/srv/one").expect("cwd");
+        db.set_session_employee("fc-3", "analyst")
+            .expect("employee");
+        db.set_session_employee("fc-4", "analyst")
+            .expect("employee");
+
+        let counts = db
+            .count_sessions_by_filter(Some("/srv/one"), None, None, None)
+            .expect("counts");
+        assert_eq!(counts.all, 41, "the seeded session plus the 40");
+        assert_eq!(counts.needs_you, 2, "the two interrupted sessions");
+        assert_eq!(counts.inactive, 1, "the one archived session");
+        assert_eq!(counts.current_dir, 1, "the one session in that directory");
+        assert_eq!(
+            counts.ready, 38,
+            "not interrupted, not archived: 41 minus 2 minus 1"
+        );
+
+        let by_employee = db
+            .count_sessions_by_filter(None, Some("analyst"), None, None)
+            .expect("counts");
+        assert_eq!(
+            by_employee.all, 2,
+            "the employee axis narrows every mode at once, the way the hub's predicate does"
+        );
+
+        let by_branch = db
+            .count_sessions_by_filter(None, None, Some("fc-0"), None)
+            .expect("counts");
+        assert_eq!(
+            by_branch.current_branch, 1,
+            "the branch mode counts the anchor and its forks"
         );
     }
 

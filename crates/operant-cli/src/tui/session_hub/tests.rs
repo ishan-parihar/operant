@@ -1090,6 +1090,52 @@ fn the_tab_counts_follow_the_rows_and_the_filters() {
     );
 }
 
+/// (plan F4) When the store's counts have landed, the tabs show the STORE's
+/// numbers, not the page's. The page holds 500 of 3,314: a tab reading "2"
+/// because two loaded rows matched would be a lie about the store.
+#[test]
+fn the_tab_counts_come_from_the_store_when_it_has_them() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
+    // Before the load: the rows are the only source, so they still count.
+    let before = hub
+        .filter_counts()
+        .iter()
+        .find(|(m, _)| *m == HubFilterMode::All)
+        .map(|(_, n)| *n)
+        .expect("all is in the ladder");
+    assert_eq!(before, 1, "with no store counts the loaded rows answer");
+
+    hub.set_store_counts(Some(operant_core::database::SessionFilterCounts {
+        all: 3_314,
+        needs_you: 25,
+        ready: 3_288,
+        inactive: 1,
+        current_dir: 6,
+        current_branch: 2,
+    }));
+    let count_of = |hub: &SessionHubState, mode: HubFilterMode| {
+        hub.filter_counts()
+            .iter()
+            .find(|(m, _)| *m == mode)
+            .map(|(_, n)| *n)
+            .expect("the mode is in the ladder")
+    };
+    assert_eq!(count_of(&hub, HubFilterMode::All), 3_314);
+    assert_eq!(count_of(&hub, HubFilterMode::NeedsYou), 25);
+    assert_eq!(count_of(&hub, HubFilterMode::Ready), 3_288);
+    assert_eq!(count_of(&hub, HubFilterMode::Inactive), 1);
+    assert_eq!(count_of(&hub, HubFilterMode::CurrentDir), 6);
+    assert_eq!(count_of(&hub, HubFilterMode::CurrentBranch), 2);
+    // `Working` is a process fact (the live row plus the registry's pending
+    // delegations): the store cannot answer it, so the loaded rows still do.
+    let working = count_of(&hub, HubFilterMode::Working);
+    assert_eq!(
+        working, 0,
+        "the loaded page has no pending delegation rows, so Working is 0"
+    );
+}
+
 // ---- (2026-11-13) the FIRST prompt, beside the last ----
 //
 // (2026-11-14, plan I2) The first prompt is now a COLUMN on the session row,

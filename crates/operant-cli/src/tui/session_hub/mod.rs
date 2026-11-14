@@ -503,6 +503,14 @@ pub struct SessionHubState {
     /// "N of M" (audit finding 3: the hub's own count read as the whole
     /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
     store_total: Option<usize>,
+    /// The store-wide per-mode counts, when the app has loaded them.
+    ///
+    /// (plan F4) The tab counts used to be computed over the rows this pane
+    /// holds — the newest 500 — so a tab reading 0 meant "0 of 500". The
+    /// counts come from the store now; `Working` still comes from process
+    /// state (the live row plus the registry's pending delegations), because
+    /// no column can express it.
+    store_counts: Option<operant_core::database::SessionFilterCounts>,
     /// The cached per-mode counts (see `filter_counts`).
     filter_counts_cache: Vec<(HubFilterMode, usize)>,
     /// The session's FIRST user prompt, kept beside the tail window.
@@ -555,6 +563,7 @@ impl SessionHubState {
             employee_roster: Vec::new(),
             preview_first_prompt: None,
             store_total: None,
+            store_counts: None,
             filter_counts_cache: Vec::new(),
         }
     }
@@ -983,6 +992,24 @@ impl SessionHubState {
         &self.filter_counts_cache
     }
 
+    /// The store-wide count for one mode, or None when the store cannot answer
+    /// it (`Working`: the live row plus the registry's pending delegations — the
+    /// rows stay the source of truth for that one tab, exactly as before).
+    fn store_count_for(
+        store: &operant_core::database::SessionFilterCounts,
+        mode: HubFilterMode,
+    ) -> Option<usize> {
+        match mode {
+            HubFilterMode::All => Some(store.all),
+            HubFilterMode::NeedsYou => Some(store.needs_you),
+            HubFilterMode::Ready => Some(store.ready),
+            HubFilterMode::Inactive => Some(store.inactive),
+            HubFilterMode::CurrentDir => Some(store.current_dir),
+            HubFilterMode::CurrentBranch => Some(store.current_branch),
+            HubFilterMode::Working => None,
+        }
+    }
+
     fn compute_filter_counts(&self) -> Vec<(HubFilterMode, usize)> {
         // The order comes from `next()` walking its own cycle, so the tab bar
         // can never disagree with the order `s` cycles in.
@@ -1001,6 +1028,15 @@ impl SessionHubState {
         modes
             .into_iter()
             .map(|mode| {
+                // From the STORE when the load delivered it; from the loaded
+                // rows otherwise (tests, and the frame before the first load).
+                // `Working` is absent from the store on purpose: it is a
+                // process fact, so it counts the rows it always counted.
+                if let Some(store) = &self.store_counts {
+                    if let Some(n) = Self::store_count_for(store, mode) {
+                        return (mode, n);
+                    }
+                }
                 let n = self
                     .rows
                     .iter()
@@ -1315,6 +1351,17 @@ impl SessionHubState {
 
     pub fn set_store_total(&mut self, total: Option<usize>) {
         self.store_total = total;
+    }
+
+    /// Hand the store-wide counts to the counts cache. Called with the same
+    /// load that delivers the rows, so the header, the tabs and the visible
+    /// set all describe the same store.
+    pub fn set_store_counts(
+        &mut self,
+        counts: Option<operant_core::database::SessionFilterCounts>,
+    ) {
+        self.store_counts = counts;
+        self.rebuild_visible();
     }
 
     /// Record the session's FIRST user prompt, so the preview can show it
