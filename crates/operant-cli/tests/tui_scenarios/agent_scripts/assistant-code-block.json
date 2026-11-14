@@ -1,0 +1,1 @@
+[{"type":"content","text":"Here is the function:\n\n```rust\npub fn serve(port: u16) -> Result<(), Error> {\n    let n = 42;\n    if n > 0 { return Ok(()); }\n}\n```\n\nThat is the whole function."},{"type":"done","text":"That is the whole function."}]

@@ -1,0 +1,19 @@
+{
+  "name": "assistant-code-block",
+  "surface": "crates/operant-cli/src/tui/operant_markdown/markdown_render_support.rs::highlight_code",
+  "opens_with": "(agent script only — no keystroke opens it)",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "assistant-code-block.json",
+  "assert": [
+    "messages == 1",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:pub fn serve",
+    "contains:port: u16"
+  ],
+  "baseline": "assistant-code-block.txt",
+  "style_baseline": "assistant-code-block.style.txt",
+  "notes": "The ONLY scenario that renders a fenced code block, so it is the falsifier for the syntax path. MEASURED 2026-11-14: without it, 26 of 49 tokens in a realistic Rust function kept syntect's pinned base16-ocean.dark colour instead of taking an operant role, and the whole 67-scenario corpus stayed green because no other scenario ever called highlight_code. The needle tokens are chosen so a regression names itself: `pub`, `fn`, `let` and `u16` are the four that a comma-joined selector fails to match (they resolve to storage.type / storage.modifier scopes), while `if`, `return` and the numbers already matched via keyword.control and constant.numeric. If this golden drifts, check SYNTAX_SELECTORS in markdown_render_support.rs first: ScopeStack::from_str parses \"a, b, c\" as ONE three-atom sequence containing a literal comma, so every comma-joined entry matches nothing unless it is split."
+}

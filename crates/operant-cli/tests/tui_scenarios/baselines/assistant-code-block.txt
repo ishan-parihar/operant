@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.3.0
+ /login to add provider
+ ● anthropic(key)
+ ~ (main)
+
+ Here is the function:
+
+ ┌─ rust [Alt] [⇧] [S]
+ │ pub fn serve(port: u16) -> Result<(), Error> {
+ │     let n = 42;
+ │     if n > 0 { return Ok(()); }
+ │ }
+ └─
+
+ That is the whole function.
+
+
+› Ask operant to do anything
+
+                                                                         ~ 40/128k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
