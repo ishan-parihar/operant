@@ -1588,3 +1588,28 @@ uncommitted WIP (CHANGELOG, BUGS.md, prompt_input, gateway, TUI). It was NOT
 dropped. Most of it is superseded by origin's iter-2266/2267. Local `main`
 was rebased by a peer mid-session; all my work was pushed from clean
 worktrees off `origin/main`.
+
+### Correction to the 2026-11-14 note above (iter-2307)
+
+The "zero regressions" claim was true for the test FAILURE SET but it hid a
+compile break. iter-2295's tui_app.rs / main.rs / init.rs edits were copied from
+a dirty tree carrying a peer's pre-iter-2281 state, so the commit reverted three
+pieces of iter-2281:
+
+- `App.pending_delegation_continuation: None` in the init.rs literal — the field
+  is declared in mod.rs:349, so the CLI TEST TARGET DID NOT COMPILE (E0063);
+- the delegation turn-boundary block in tui_app.rs;
+- the `delegation.max_iterations` / `max_global_workers` wiring in main.rs.
+
+All three are restored in iter-2307 (1e94cb1c), which is also the commit that
+makes `cargo test -p operant-cli --bin operant` able to run at all.
+
+The earlier "CLI failure set identical to base" reading was taken against a
+tree that could not compile, so it proved nothing. Re-measured on the FIXED
+tree: 2539 pass, and the 7 failures are the SAME 7 as a clean origin/main
+worktree built from the same commit — so zero regressions is now true, but it
+is true for a different reason than the note claimed.
+
+Lesson worth carrying: when a slice is copied out of a shared tree, diff the
+copied files against the base and read EVERY deleted line. A test run that
+cannot compile reports "no failures" only if you never look at the exit code.
