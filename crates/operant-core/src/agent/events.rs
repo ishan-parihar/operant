@@ -1114,6 +1114,27 @@ impl OperantAgent {
         self.sessions.peek(&key)
     }
 
+    /// What a session already holds, as plain lines (RT-544).
+    ///
+    /// A client that attaches to a live session is joining a conversation that
+    /// is already under way: the session lives in the SLOT, which is the
+    /// daemon's, so it outlives every client, and a client that attaches later
+    /// reads it back here.
+    pub fn transcript_lines(&self, session_id: &str) -> Vec<String> {
+        self.transcript_for(session_id)
+            .into_iter()
+            .map(|message| {
+                let role = match message.role {
+                    crate::client::Role::System => "system",
+                    crate::client::Role::User => "user",
+                    crate::client::Role::Assistant => "assistant",
+                    crate::client::Role::Tool => "tool",
+                };
+                format!("{role}: {}", message.content)
+            })
+            .collect()
+    }
+
     /// The durable per-session store backing this agent's transcripts.
     pub fn session_store(&self) -> &std::sync::Arc<crate::session::SessionStore> {
         &self.sessions

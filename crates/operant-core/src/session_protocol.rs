@@ -71,6 +71,14 @@ pub enum WireMessage {
         session_id: String,
         event: AgentEvent,
     },
+    /// The messages a session already holds (RT-544).
+    ///
+    /// A client that attaches to a live session is joining a conversation that
+    /// is already under way, so the server sends what it has.
+    History {
+        session_id: String,
+        messages: Vec<String>,
+    },
     /// Something failed. The server names it; the client shows it.
     Error {
         session_id: Option<String>,
@@ -94,7 +102,8 @@ impl WireMessage {
             | Self::Deny { session_id, .. }
             | Self::Switch { session_id }
             | Self::LoadHistory { session_id }
-            | Self::Event { session_id, .. } => Some(session_id),
+            | Self::Event { session_id, .. }
+            | Self::History { session_id, .. } => Some(session_id),
             Self::Error { session_id, .. } => session_id.as_deref(),
         }
     }

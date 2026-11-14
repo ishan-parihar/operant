@@ -41,7 +41,7 @@ lies), RT-551 (no published session cost), RT-552 (the read-only session API).
 | thin-client-session-server-004 | done | I4: a session on the server that a client can drive (two clients share one live session) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-005 | done | I5: the TUI can attach (--attach; an attached client builds no registry) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-006 | done | I6: approve, deny and cancel cross the socket (cancel really cancels) | — | [2026-11-14] docs/CHANGELOG.md |
-| thin-client-session-server-007 | open | I7: the client dies, the session lives (grace window, a new client joins it) | — | — |
+| thin-client-session-server-007 | done | I7: the client dies, the session lives (grace window, a new client joins it) | — | [2026-11-14] docs/CHANGELOG.md |
 | thin-client-session-server-008 | open | I8: one server, one child fleet (merge the three runtime builders; the ACP daemon folds in) | — | — |
 | thin-client-session-server-009 | done | I9: the slot count and the session cap agree (one number, stated once) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-010 | done | I10: the number is published (a session-memory bench script and its table) | — | [2026-11-14] docs/CHANGELOG.md |

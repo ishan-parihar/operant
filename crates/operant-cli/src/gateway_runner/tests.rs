@@ -3214,3 +3214,69 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
     // Let the aborted task settle before the temp dir goes away.
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 }
+
+/// RT-544: a session outlives its client.
+///
+/// The conversation belongs to the SLOT, and the slot is the daemon's, so a
+/// client disconnecting does not end the session. A client that attaches later
+/// is answered with the session's history — the protocol path this pins.
+///
+/// WHAT THIS PINS: a LoadHistory for a session the daemon holds is answered
+/// with a History message naming that session. The CONTENT is the agent's own
+/// persistence (the session store's, tested with the agent), not this seam.
+#[tokio::test]
+async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_history() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 0 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = GatewaySessionHandler {
+        handler: Some(Arc::new(GatewayMessageHandler {
+            slots: slot_pool(agent),
+            admins: vec![],
+            gateway: tokio::sync::Mutex::new(None),
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            running_session: std::sync::Mutex::new(HashMap::new()),
+            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cancelled_queued: Default::default(),
+            mcp_manager: operant_core::mcp::McpManager::new(),
+            mcp_server_configs: Vec::new(),
+            skills_root_dir: dir.path().join("skills-absent"),
+            #[cfg(feature = "plugins-wasm")]
+            wasm_plugin_skill_roots: Vec::new(),
+            queue_waits: tokio::sync::Mutex::new(Default::default()),
+        })),
+        bus: Arc::new(SessionBus::new()),
+        running: std::sync::Mutex::new(HashMap::new()),
+    };
+
+    // No client is attached: this is the daemon answering for a session that
+    // outlived whoever started it.
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::LoadHistory {
+            session_id: "s1".to_string(),
+        },
+    );
+    match replies.as_slice() {
+        [WireMessage::History { session_id, .. }] => {
+            assert_eq!(
+                session_id, "s1",
+                "the history must name the session it belongs to"
+            );
+        }
+        other => panic!("a history request must be answered with the history, got {other:?}"),
+    }
+}

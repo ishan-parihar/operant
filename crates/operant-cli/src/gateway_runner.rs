@@ -2606,6 +2606,27 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                 }
                 vec![]
             }
+            // RT-544: a client joining a live session is told what it has.
+            //
+            // The conversation is the SLOT's, and the slot is the daemon's, so
+            // it outlives every client: the session never died with the client
+            // that started it, and a client that attaches later reads it back.
+            WireMessage::LoadHistory { session_id } => {
+                let Some(handler) = self.handler.as_ref().map(std::sync::Arc::clone) else {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "this server has no agent slots to read a session from"
+                            .to_string(),
+                    }];
+                };
+                let slot = handler.slots.slot_for(&session_id);
+                let agent = std::sync::Arc::clone(&slot.agent);
+                let messages = agent.transcript_lines(&session_id);
+                vec![WireMessage::History {
+                    session_id,
+                    messages,
+                }]
+            }
             // RT-550: a cancel STOPS the turn. The abort drops the task at
             // its next await point, the slot's lock is released by the guard,
             // and no further events are published for that session.
