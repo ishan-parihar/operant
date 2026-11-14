@@ -395,3 +395,94 @@ fn an_explicit_id_beats_the_marker() {
         "the operator's own id must win: {text}"
     );
 }
+
+/// An explicit id must not let a DIFFERENT session's marker ride along.
+///
+/// `resolve_target_session` takes the id first (correct), and the CALLER hands
+/// that id to the TUI — but the marker is read, never consumed, on this path.
+/// The TUI's boot consume therefore still sees a marker for a DIFFERENT session
+/// and announces an interruption for it: the operator asked for A and the
+/// transcript says "Last session was interrupted: <B>". The exit leftover the
+/// operator copies is then B's id, not the session they asked for.
+#[test]
+fn an_explicit_id_does_not_silence_the_marker_for_a_different_session() {
+    let fixt = Fixture::new("explicit-vs-other-marker");
+    fixt.seed_sessions(
+        ("sess_asked", "What I asked for"),
+        ("sess_other", "Something else entirely"),
+    )
+    .write_marker("sess_other", "Interrupted work");
+    let out = continue_cmd(fixt.path())
+        .arg("sess_asked")
+        .output()
+        .expect("run operant continue sess_asked");
+    let text = stdout(&out);
+    assert!(out.status.success(), "the explicit path must work: {text}");
+    assert!(
+        text.contains("operant continue sess_asked"),
+        "the operator's own id must win: {text}"
+    );
+    assert!(
+        !text.contains("sess_other"),
+        "an explicit id must not also announce a DIFFERENT session's interruption: {text}"
+    );
+}
+
+/// A marker naming a session that is NOT in the store must not be printed as
+/// the way back.
+///
+/// This is the operator's live state on 2026-11-14: `~/.operant/sessions` held
+/// `interrupted-session.json` naming `socket-session`, and `operant sessions
+/// list` did not contain it (a socket session is minted without a store row).
+/// `resolve_target_session` trusts the marker's id and prints a command, and
+/// that command then fails with "Session not found: socket-session" — an
+/// offer that cannot be accepted, repeated on every launch until something
+/// else consumes the marker.
+#[test]
+fn a_marker_for_a_session_absent_from_the_store_offers_a_command_that_cannot_work() {
+    let fixt = Fixture::new("phantom-marker");
+    fixt.seed_sessions(
+        ("sess_real", "A real session"),
+        ("sess_other", "Another real one"),
+    )
+    .write_marker("socket-session", "hello");
+    let out = continue_cmd(fixt.path())
+        .output()
+        .expect("run operant continue");
+    let text = stdout(&out);
+    assert!(
+        out.status.success(),
+        "the command must not hard-fail: {text}"
+    );
+    // The command it prints must be one the operator can actually run.
+    let printed = text
+        .lines()
+        .find(|l| l.contains("operant continue "))
+        .map(str::trim)
+        .expect("a way back must be printed");
+    let named = printed
+        .strip_prefix("operant continue ")
+        .unwrap_or_default()
+        .trim();
+    assert!(
+        !named.is_empty(),
+        "the printed command must name an id: {printed}"
+    );
+    let accepted = continue_cmd(fixt.path()).arg(named).output();
+    let accepted_text = format!(
+        "{}{}",
+        accepted
+            .as_ref()
+            .map(|o| stdout(o))
+            .unwrap_or_else(|e| e.to_string()),
+        accepted
+            .as_ref()
+            .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+            .unwrap_or_else(|e| e.to_string())
+    );
+    assert!(
+        !accepted_text.contains("Session not found"),
+        "the command `continue` prints must be one `continue` accepts: \
+         printed {printed:?}, which answered {accepted_text:?}"
+    );
+}

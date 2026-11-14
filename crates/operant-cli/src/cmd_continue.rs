@@ -23,6 +23,7 @@ use anyhow::{Context, Result};
 use operant_core::config::AppConfig;
 use operant_core::database::Database;
 use operant_core::session_interrupted::SessionInterrupted;
+use tracing::warn;
 
 /// The session `operant continue` resolved to.
 #[derive(Debug)]
@@ -54,14 +55,31 @@ pub fn continue_command_line(session_id: &str) -> String {
 /// The label falls back to the session id, never to nothing: an id the
 /// operator cannot see is an id they cannot type.
 pub fn format_continue_hint(state: &str, session_id: &str, title: Option<&str>) -> String {
-    let label = title
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .unwrap_or(session_id);
+    let label = session_label(session_id, title);
     format!(
         "{state} — {label}\nTo continue this session, run:\n  {}",
         continue_command_line(session_id)
     )
+}
+
+/// The words that identify a session to a human: its title, or the id when it
+/// has none.
+///
+/// ONE rule, because TWO surfaces print a label for the same session at the
+/// same moment — the boot status line and the transcript annotation right under
+/// it. The status line used to truncate the id to 8 characters while the
+/// annotation printed the whole thing, so one screen named one session two
+/// different ways ("sess_177" and "sess_177efb5f-…"), and an operator
+/// comparing the line they were reading to the command they were about to copy
+/// had no way to tell whether those were the same session.
+///
+/// The full id is the right fallback: truncation exists for a NARROW status
+/// bar, and this label also feeds a sentence the operator reads in full.
+pub fn session_label<'a>(session_id: &'a str, title: Option<&'a str>) -> &'a str {
+    title
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(session_id)
 }
 
 /// The headline for a leftover that was printed WITHOUT a teardown deciding
@@ -212,10 +230,32 @@ fn resolve_target_session(
         });
     }
     if let Some(marker) = marker {
-        return Ok(TargetSession {
-            id: marker.session_id.clone(),
-            title: Some(marker.title.clone()).filter(|t| !t.trim().is_empty()),
-        });
+        // A marker is a promise that the session can be reopened. The file is a
+        // single slot that outlives the row it names: `sessions delete`,
+        // `sessions prune`, a merge (`merge_sessions` deletes the source row)
+        // and a gateway socket session that never got a row at all all leave a
+        // marker pointing at nothing. Offering it printed
+        // `operant continue <id>`, and running that answered
+        // `Error: Session not found: <id>` — an offer that cannot be accepted,
+        // repeated on every launch until something else consumed the file.
+        //
+        // So the marker is a HINT, not an authority: it wins only when the
+        // store can actually honour it, and otherwise the answer degrades to
+        // recency (the same fallback the no-marker case uses).
+        let sessions = db
+            .list_sessions(10_000)
+            .context("Failed to list sessions")?;
+        if sessions.iter().any(|s| s.id == marker.session_id) {
+            return Ok(TargetSession {
+                id: marker.session_id.clone(),
+                title: Some(marker.title.clone()).filter(|t| !t.trim().is_empty()),
+            });
+        }
+        warn!(
+            marker_session = %marker.session_id,
+            "Interrupted-session marker names a session the store does not have; \
+             falling back to the most recent session"
+        );
     }
     // By the last MESSAGE, not by started/ended: a session that never ended
     // (a crash, a SIGKILL, a closed terminal) must answer "what was I working
@@ -536,6 +576,43 @@ mod tests {
             offer_branch.contains("boot_notice_done = true"),
             "the boot notice must be marked done when it is offered, or the gate \
              never closes and the notice repeats"
+        );
+    }
+
+    /// ONE label rule for a session with no title: the whole id, not a prefix.
+    ///
+    /// The boot status line used to truncate to 8 characters while the
+    /// transcript annotation right under it printed the whole id, so one screen
+    /// named one session two ways ("sess_177" and "sess_177efb5f-…"). The
+    /// operator comparing the line they read to the command they copied had no
+    /// way to tell whether those were the same session.
+    ///
+    /// This is the LABEL rule, and it is the same function both surfaces call —
+    /// so the assertion is about the rule, not about either call site.
+    #[test]
+    fn a_session_with_no_title_is_labelled_by_its_whole_id() {
+        let id = "sess_177efb5f-1713-46d5-904b-168ab793052a";
+        assert_eq!(
+            session_label(id, None),
+            id,
+            "no title: the label is the id the operator can type"
+        );
+        assert_eq!(
+            session_label(id, Some("   ")),
+            id,
+            "a whitespace title is no title — it must not print a blank label"
+        );
+        assert_eq!(
+            session_label(id, Some(" Fix it ")),
+            "Fix it",
+            "a title is trimmed and wins"
+        );
+        // And the two surfaces must not disagree: the hint the teardown prints
+        // and the label the boot status line shows come from ONE function.
+        assert!(
+            format_continue_hint("Session saved", id, None)
+                .starts_with(&format!("Session saved — {id}")),
+            "the leftover must carry the same whole-id label"
         );
     }
 }

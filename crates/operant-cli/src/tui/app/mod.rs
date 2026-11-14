@@ -1782,11 +1782,10 @@ impl App {
         // interrupted session in words; this makes the first `/session` land
         // ON it.
         self.pending_hub_preselect = Some(marker.session_id.clone());
-        let label = if marker.title.trim().is_empty() {
-            marker.session_id.chars().take(8).collect::<String>()
-        } else {
-            marker.title.clone()
-        };
+        // ONE label rule with the transcript annotation below
+        // (`cmd_continue::session_label`): the two print at the same moment, so
+        // a truncated id here and a full id there named one session two ways.
+        let label = crate::cmd_continue::session_label(&marker.session_id, Some(&marker.title));
         // The liveness check is what the presence registry exists for
         // (plan 2026-11-02, P0). A session still streaming in another terminal
         // must not be offered for continuation: attaching would fork a second
