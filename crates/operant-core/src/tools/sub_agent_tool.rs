@@ -842,17 +842,25 @@ impl SubAgentTool {
         let spawn_goal = goal.clone();
         let spawn_id = delegation_id.clone();
         tokio::spawn(async move {
-            let outcome = tool
-                .call(
-                    spawn_goal,
-                    context,
-                    role,
-                    max_iterations,
-                    timeout_seconds,
-                    output_schema,
-                    toolsets,
-                )
-                .await;
+            // `catch_unwind` is what makes a panic DATA here, exactly as it is
+            // for a swarm worker (`run_swarm`, :392). Without it a panic
+            // anywhere in the child — a bad unwrap in a tool, an arithmetic
+            // overflow — dies before either mark_completed or mark_failed, so
+            // the record stays Pending for the life of the process, the
+            // pending count never drops, and after three of them every session
+            // in the process is refused with "Too many background delegations
+            // in flight" and no error naming the cause. The join handle is
+            // dropped, so nobody else observes the panic either.
+            let outcome = await_child(tool.call(
+                spawn_goal,
+                context,
+                role,
+                max_iterations,
+                timeout_seconds,
+                output_schema,
+                toolsets,
+            ))
+            .await;
             match outcome {
                 Ok(content) => {
                     // Persist the record FIRST — the event send below is
@@ -1412,6 +1420,23 @@ fn preview_of(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Await a child turn, turning a panic into an ordinary failure.
+///
+/// The swarm path has contained panics since iter-1612 (`run_swarm`, :392);
+/// the background path did not, so a panicking child skipped both
+/// `mark_completed` and `mark_failed` and left its record `Pending` for the
+/// life of the process (measured 2026-11-14: three of them exhaust
+/// `DEFAULT_MAX_ASYNC_CHILDREN` for every session in the process, with no
+/// error naming the cause). This is the one wrapper both paths can share.
+async fn await_child(
+    child: impl std::future::Future<Output = std::result::Result<String, BoxedToolError>>,
+) -> std::result::Result<String, BoxedToolError> {
+    match AssertUnwindSafe(child).catch_unwind().await {
+        Ok(inner) => inner,
+        Err(_) => Err("the background child panicked before it produced an answer".into()),
+    }
+}
+
 /// Shape a finished child turn into what the parent receives, for every
 /// delegation path (sync, swarm worker, background).
 ///
@@ -1815,6 +1840,33 @@ mod tests {
     fn format_swarm_outcomes_handles_empty() {
         let result = format_swarm_outcomes(&[]);
         assert_eq!(result, "No results");
+    }
+
+    /// A background child that panics must end as a FAILED record, not as a
+    /// Pending one that holds a slot until the process exits.
+    #[tokio::test]
+    async fn a_panicking_background_child_becomes_an_ordinary_failure() {
+        let panicked = await_child(async {
+            panic!("child blew up mid-turn");
+        })
+        .await;
+        let error = panicked.expect_err("a panic must not read as success");
+        assert!(
+            error.to_string().contains("panicked"),
+            "the failure must name the panic, got: {error}"
+        );
+
+        // The success path is unchanged.
+        let ok = await_child(async { Ok("the answer".to_string()) })
+            .await
+            .expect("a normal child still succeeds");
+        assert_eq!(ok, "the answer");
+
+        // An ordinary error is passed through verbatim, not rewritten.
+        let failed = await_child(async { Err("child error: no model".into()) })
+            .await
+            .expect_err("an error stays an error");
+        assert_eq!(failed.to_string(), "child error: no model");
     }
 
     #[test]
