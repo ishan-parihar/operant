@@ -1637,3 +1637,15 @@ produced 26 findings. All 26 are now shipped as six iterations.
 - `cargo fmt --all` reflows 15-16 unrelated files on this tip (52 files are
   pre-existing unformatted on `origin/main`). Each iteration reverted them; none
   was committed.
+
+## iter-2383 — the registry gate read a formatter pass as drift
+
+`gen-config-registry.py --check` compared the generated file byte for byte
+against the generator's output, but the generator does not emit rustfmt-shaped
+tuples and `cargo fmt --all` runs on every change here. A formatting pass
+therefore turned a one-line tuple into four lines and the gate went red for
+every writer with nothing actually stale — the live state on `main` after
+iter-2381/2382 (382 keys, identical defaults and notes). `--check` now
+whitespace-normalises both sides, so CONTENT still fails the gate (mutation-
+proven on a one-word note change) while the formatter is tolerated. The
+generated file is untouched.
