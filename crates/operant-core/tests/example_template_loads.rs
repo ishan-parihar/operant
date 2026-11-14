@@ -188,6 +188,35 @@ fn load(text: &str) -> String {
     }
 }
 
+/// The keys the loader PARKS for a candidate (empty when it rejects nothing).
+///
+/// Since iter-2254 (the config-resilience plan, L2) an unknown key is the
+/// UPGRADE case, not a defect: the load succeeds and the unknown pairs are
+/// written to a sidecar rather than failing the whole file. A gate that only
+/// looks for a parse ERROR therefore cannot see them, which is exactly the
+/// gap that made `the_template_gate_catches_an_unknown_key_and_an_unknown_table`
+/// pass vacuously after the parking landed. This reads the sidecar instead.
+fn parked_keys(text: &str) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("operant.toml");
+    // Parse without recording: a fixture must never become the process's
+    // writer target (the RT-488 incident).
+    let _ = operant_core::config::parse_config_str_without_recording(text, &source);
+    let sidecar = operant_core::config_heal::unknown_sidecar_for(&source);
+    let Ok(raw) = std::fs::read_to_string(&sidecar) else {
+        return Vec::new();
+    };
+    let Ok(value) = raw.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = value
+        .as_table()
+        .map(|t| t.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
 /// Every commented example the loader rejects, in both placements.
 fn unknown_fields_in(lines: &[&str]) -> Vec<String> {
     let mut findings = Vec::new();
@@ -251,6 +280,11 @@ fn the_template_gate_catches_an_unknown_key_and_an_unknown_table() {
     let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
 
     // `fallbacks` under `[agent]` — the key the README once advertised.
+    // The anchor is the `[agent]` table itself, NOT its first subtable: a
+    // subtable header (`[agent.retry]`, `[agent.ponytail]`) also matches a
+    // `trim() == "[agent]"` test when the header is a prefix of it, and
+    // injecting the key there would test the subtable's unknown-field rule
+    // instead of `[agent]`'s.
     let agent = lines
         .iter()
         .position(|l| l.trim() == "[agent]")
@@ -260,14 +294,30 @@ fn the_template_gate_catches_an_unknown_key_and_an_unknown_table() {
     lines.push("# [channels.telegram]".to_string());
 
     let borrowed: Vec<&str> = lines.iter().map(|l| l.as_str()).collect();
-    let findings = unknown_fields_in(&borrowed);
+    // The `fallbacks` key is now PARKED, not rejected (iter-2254): the load
+    // succeeds and the pair lands in the sidecar. Asserting on a parse error
+    // here would pass vacuously, so the assertion reads what the loader
+    // actually does with the key.
+    let parked = parked_keys(&candidate_text(&borrowed, &[agent + 1]));
     assert!(
-        findings.iter().any(|f| f.contains("fallbacks")),
-        "the gate did not catch the retired `fallbacks` key: {findings:?}"
+        parked.iter().any(|k| k.contains("fallbacks")),
+        "the gate did not catch the retired `fallbacks` key (parked: {parked:?})"
     );
+    // The deleted table parks for the same reason: an unknown TABLE is the
+    // same upgrade case as an unknown key.
+    let channels_idx = borrowed.len() - 1;
+    let channels_parked = parked_keys(&candidate_text(&borrowed, &[channels_idx]));
     assert!(
-        findings.iter().any(|f| f.contains("channels")),
-        "the gate did not catch the deleted `[channels.telegram]` table: {findings:?}"
+        channels_parked.iter().any(|k| k.contains("channels")),
+        "the gate did not catch the deleted `[channels.telegram]` table (parked: {channels_parked:?})"
+    );
+    // And the parse-error gate still has teeth for a REAL defect: a malformed
+    // value (not an unknown key) must still fail the load, or parking would
+    // have swallowed every typo in the file.
+    let broken = "[agent]\nmax_iterations = \"not a number\"\n";
+    assert!(
+        !load(broken).is_empty(),
+        "a malformed value must still fail the load, not be parked"
     );
 }
 

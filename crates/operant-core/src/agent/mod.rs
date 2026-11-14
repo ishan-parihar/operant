@@ -16,6 +16,7 @@ pub mod learning_graph;
 pub mod llm_compressor;
 pub mod message_safety;
 pub mod provider_registry;
+pub mod retry_policy;
 pub mod rewind;
 pub mod runtime_key;
 pub mod skill_bundle;
@@ -190,6 +191,11 @@ pub struct AgentConfig {
     /// Maximum LLM retries per turn before giving up.
     /// Matches hermes-agent's `api_max_retries` (default 3).
     pub max_retries: usize,
+    /// The two-span agentic retry policy (`[agent.retry]`): immediate
+    /// re-issues for the small span, then one request per `large_span_secs`
+    /// until the opt-in ceiling. Threaded from `BehaviorSettings::retry`;
+    /// see `agent::retry_policy` for the semantics.
+    pub retry: crate::config::RetrySettings,
     /// Progressive tool disclosure settings (hermes `tools.tool_search`
     /// parity). When active, MCP tool schemas are replaced in the
     /// model-visible tools array by the `tool_search`/`tool_describe`/
@@ -267,6 +273,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             skill_nudge_interval: settings.creation_nudge_interval,
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
+            retry: settings.retry.clone(),
             tool_search: crate::config::ToolSearchSettings::default(),
             // (plan 03) reasoning effort: value + wire shape.
             reasoning_effort: settings.reasoning_effort.clone(),
@@ -4384,6 +4391,7 @@ mod tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            retry: crate::config::RetrySettings::default(),
             tool_search: Default::default(),
             ponytail: Default::default(),
         };
@@ -4442,6 +4450,7 @@ mod tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            retry: crate::config::RetrySettings::default(),
             tool_search: Default::default(),
             ponytail: Default::default(),
         };
@@ -4566,6 +4575,7 @@ mod tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            retry: crate::config::RetrySettings::default(),
             tool_search: Default::default(),
             ponytail: Default::default(),
         };

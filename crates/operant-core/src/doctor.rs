@@ -518,6 +518,62 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
         ));
     }
 
+    // The two-span retry policy's own values (`[agent.retry]`). A large span of
+    // 1 s is a busy loop against a dead provider (the heal clamps it, but a
+    // config that reaches the doctor with it is worth naming); a ceiling below
+    // the span stops the ladder before its first large-span retry, which is a
+    // config that silently does nothing — the one shape an operator cannot
+    // diagnose from the outside.
+    if config.agent.retry.large_span_secs <= 1 {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{} is {} — that is a busy loop against a dead provider, not a retry span; the default is 300",
+                "agent.retry.large_span_secs",
+                config.agent.retry.large_span_secs
+            ),
+        ));
+    }
+    // The policy as configured. Reported as its own row because the three
+    // knobs above are DEFECTS and this is the shape: an operator reading
+    // `[config.resilience]` on a healthy host should see what the retry policy
+    // is doing, not only what is wrong with it. `small_span_retries` of 0 is
+    // legal and deliberate (every retry waits the large span), so without this
+    // row a deliberate config is indistinguishable from an unset one.
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{}: {} immediate re-issue(s), then every {}s{}; ceiling {}",
+            "agent.retry",
+            config.agent.retry.small_span_retries,
+            config.agent.retry.large_span_secs,
+            if config.agent.retry.announce_large_span {
+                " (announced)"
+            } else {
+                " (unannounced)"
+            },
+            if config.agent.retry.max_span_secs == 0 {
+                "infinite".to_string()
+            } else {
+                format!("{}s", config.agent.retry.max_span_secs)
+            },
+        ),
+    ));
+    if config.agent.retry.max_span_secs > 0
+        && config.agent.retry.max_span_secs < config.agent.retry.large_span_secs
+    {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{} ({}) is below {} ({}) — the ladder stops before its first large-span retry, so the retry policy is inert",
+                "agent.retry.max_span_secs",
+                config.agent.retry.max_span_secs,
+                "agent.retry.large_span_secs",
+                config.agent.retry.large_span_secs
+            ),
+        ));
+    }
+
     // 4. `config.range` — a value the reader cannot use, clamped by the heal
     //    tables at load. The doctor reports the CLAMPED value so the operator
     //    sees what is actually in effect rather than what they wrote.

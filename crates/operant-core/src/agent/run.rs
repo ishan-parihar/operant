@@ -940,6 +940,19 @@ impl OperantAgent {
         Fut: std::future::Future<Output = Result<T>>,
     {
         let mut error = first_error;
+        // The two-span policy (`[agent.retry]`): immediate re-issues for the
+        // small span, then one request per `large_span_secs`. Constructed from
+        // the operator's block, so the ladder's shape is a config decision and
+        // not a constant buried in this function.
+        let policy = crate::agent::retry_policy::RetryPolicy::new(self.config.retry.clone());
+        // When the RETRY span began — the first failure, not the turn's start.
+        // The ceiling (`max_span_secs`) bounds the retrying, and a turn that
+        // spent ten minutes on tools before the provider died has not spent
+        // ten minutes retrying.
+        let ladder_start = std::time::Instant::now();
+        // How many failures this ladder has seen. The small span counts these;
+        // past it the large span takes over.
+        let mut attempt: u32 = 0;
         loop {
             let classified = FallbackModelClient::classify_error(&error);
             // The turn's wall clock, checked INSIDE the ladder and BEFORE the
@@ -960,6 +973,43 @@ impl OperantAgent {
                 );
                 return Err(error);
             }
+            // The two-span policy, consulted BEFORE the request is prepared:
+            // a retry that is announced and then not taken is the lie the
+            // wall-clock check above exists to prevent, and a sleep that
+            // starts before the decision is a sleep the operator cannot see.
+            //
+            // `retry_after` is the provider's own 429 hint; the policy prefers
+            // it over the flat large span.
+            let retry_after = match &error {
+                crate::error::Error::RateLimited { retry_after } => Some(*retry_after),
+                crate::error::Error::Provider { retry_after, .. } => retry_after.map(|d| d),
+                _ => None,
+            };
+            let decision = policy.next_delay(attempt, ladder_start.elapsed(), retry_after);
+            let delay = match decision {
+                crate::agent::retry_policy::RetryDecision::Stop { elapsed } => {
+                    // The opt-in ceiling. Named, so the operator reads what
+                    // they set rather than a bare "gave up".
+                    warn!(
+                        elapsed_secs = elapsed.as_secs(),
+                        max_span_secs = self.config.retry.max_span_secs,
+                        reason = %classified.reason,
+                        "Retry span ceiling reached inside the re-issue ladder — no more re-issues"
+                    );
+                    return Err(error);
+                }
+                crate::agent::retry_policy::RetryDecision::Retry { delay, .. } => delay,
+            };
+            // The small span is the per-call budget (`max_retries`) re-issued
+            // immediately. Past it the budget is spent, so a large-span retry
+            // must refill it: the two spans are different ladders, and a
+            // large-span attempt that the per-call budget refuses would make
+            // the whole second half of the policy unreachable.
+            let in_large_span = attempt >= self.config.retry.small_span_retries;
+            if in_large_span {
+                retry_state.reset_on_success();
+                *turn_retry_failures = 0;
+            }
             let Some(request) = self
                 .prepare_retry_request(
                     messages,
@@ -972,6 +1022,34 @@ impl OperantAgent {
             else {
                 return Err(error);
             };
+            // Announce the large span before sleeping, so the operator's pill
+            // and the gateway log name the wait they are actually in. The
+            // `emit_retry_scheduled` inside `prepare_retry_request` has
+            // already fired for this attempt; the announcement here is the
+            // one that carries the DELAY, which the retry pill needs and the
+            // bare attempt count cannot express.
+            if in_large_span && self.config.retry.announce_large_span {
+                self.emit_retry_scheduled(
+                    retry_state.retry_count,
+                    retry_state.max_retries,
+                    &format!(
+                        "{} (large span: retrying in {}s)",
+                        classified.reason.as_str(),
+                        delay.as_secs()
+                    ),
+                )
+                .await;
+            }
+            if !delay.is_zero() {
+                // The only real wait in the ladder. Interruptible: a user who
+                // stops the turn during a 5-minute wait gets "Turn stopped",
+                // not a turn that ends five minutes later with an error.
+                if self.interrupt_flag.wait_for_interrupt(delay).await {
+                    self.commit_interrupted_tail(None).await;
+                    return Err(crate::error::Error::Interrupted);
+                }
+            }
+            attempt = attempt.saturating_add(1);
             match self.call_with_loop_timeout(call(request)).await {
                 Ok(ok) => return Ok(ok),
                 Err(next) => {

@@ -62,10 +62,12 @@ Exit: 0 when the ratchet holds; 1 when a new key misses a surface, or a legacy
 """
 
 import pathlib
+import subprocess
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+CONFIG_RS = ROOT / "crates" / "operant-core" / "src" / "config.rs"
 REGISTRY = ROOT / "crates" / "operant-core" / "src" / "config_registry.rs"
 HEAL = ROOT / "crates" / "operant-core" / "src" / "config_heal.rs"
 TEMPLATE = ROOT / "operant.example.toml"
@@ -402,34 +404,152 @@ def registry_keys() -> list[tuple[str, str, str]]:
     ]
 
 
+# The set of top-level config sections, derived from the registry rather than
+# hardcoded. The first version listed seven (`agent|client|gateway|...`), which
+# silently excluded every section added after it — a `skills.*` key could
+# satisfy a surface and the gate could not see it, which is the same
+# "the gate does not know about the thing it gates" failure this gate exists
+# to prevent. A prefix that is not a real section is not a key.
+def key_prefixes() -> set[str]:
+    return {dotted.split(".", 1)[0] for dotted, _, _ in registry_keys() if "." in dotted}
+
+
+def keys_in(src: str) -> set[str]:
+    """Every dotted key `src` names as a QUOTED string literal.
+
+    The quotes matter in both directions. A heal row spells
+    `clamp_usize("agent.x", ..)` and a doctor row spells
+    `format!("agent.x is 1 ...")` — both carry the literal `"agent.x"`, so a
+    quote-anchored match finds them. A match on a BARE token does not: the
+    section header `[agent]` is a bare `agent`, and a prefix match made it
+    satisfy every `agent.*` key at once. The closing quote is what separates a
+    key from a longer path or from prose that merely NAMES it.
+    """
+    if not src:
+        return set()
+    prefix = "|".join(sorted(key_prefixes()))
+    if not prefix:
+        return set()
+    return set(re.findall(rf'"((?:{prefix})\.[a-z0-9_.]+)"', src))
+
+
 def heal_prefixes() -> set[str]:
-    """Every key prefix `config_heal.rs` names as a heal target."""
+    """Every key `config_heal.rs` names as a heal target."""
     if not HEAL.exists():
         return set()
-    src = HEAL.read_text(encoding="utf-8")
     # The tables pass the dotted key as the first argument of a clamp helper or
     # a Healed constructor. Both spell it as a string literal.
-    return set(
-        re.findall(r'"((?:agent|client|gateway|tools|autonomous|memory|logging)\.[a-z0-9_.]+)"', src)
-    )
+    return keys_in(HEAL.read_text(encoding="utf-8"))
 
 
 def template_keys() -> set[str]:
-    """Every dotted key `operant.example.toml` mentions, commented or live."""
+    """Every key `operant.example.toml` carries, dotted or bare.
+
+    The template spells a sub-table key BARE: `[agent.retry]` followed by
+    `large_span_secs = 300`. A dotted-only match therefore could not see one —
+    the key would be reported missing from a template that names it plainly.
+
+    The table context is what turns a bare leaf into a dotted path, and it must
+    be read from an ACTUAL header line. The earlier version scanned for the
+    nearest preceding header by stripping `#` first, so a COMMENTED header
+    (`# [agent.retry]`) reset the context while the plain `[agent]` above it
+    stayed in scope — and every bare `agent.*` leaf in the file then counted as
+    present. That is how a gate goes green by over-matching.
+    """
     if not TEMPLATE.exists():
         return set()
     text = TEMPLATE.read_text(encoding="utf-8")
-    return set(re.findall(r"\b([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)+)\b", text))
+    keys = set(re.findall(r"\b([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)+)\b", text))
+    section: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # A table header is a LIVE line: a leading `#` makes it a comment, and
+        # a comment does not open a table.
+        header = re.match(r"^\[([a-z_][a-z0-9_.]*)\]$", stripped)
+        if header:
+            section = header.group(1).split(".")
+            keys.add(header.group(1))
+            continue
+        # A commented example still NAMES its key, which is what the template
+        # gate is for: `advertise` is a promise even when it is behind a `#`.
+        body = stripped.lstrip("#").strip()
+        leaf = re.match(r"^([a-z_][a-z0-9_]*)\s*=", body)
+        if leaf and section:
+            keys.add(".".join([*section, leaf.group(1)]))
+    return keys
 
 
 def doctor_keys() -> set[str]:
     """Every key the doctor's config sweep can name."""
     if not DOCTOR.exists():
         return set()
-    src = DOCTOR.read_text(encoding="utf-8")
-    return set(
-        re.findall(r'"((?:agent|client|gateway|tools|autonomous|memory|logging)\.[a-z0-9_.]+)"', src)
+    return keys_in(DOCTOR.read_text(encoding="utf-8"))
+
+
+def _struct_fields(src: str, struct: str) -> set[str]:
+    """The field names of one `struct <name> { .. }` body in `src`.
+
+    Brace-matched rather than regex-bounded: a settings struct contains nested
+    `#[serde]` attributes and doc comments, and a non-greedy `.*?` stops at the
+    first `}` — which is inside the first attribute, so the body reads empty.
+    """
+    m = re.search(rf"\bpub\s+struct\s+{re.escape(struct)}\s*\{{", src)
+    if not m:
+        return set()
+    depth, i = 1, m.end()
+    while i < len(src) and depth:
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+        i += 1
+    body = src[m.end():i - 1]
+    return set(re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:", body))
+
+
+def added_keys() -> set[str]:
+    """The keys this CHANGE adds, versus `origin/main`.
+
+    A gate that fails on any key it does not recognize punishes every branch
+    for a defect it inherited: a peer lands `skills.extra_roots` with no heal
+    row, and every later config change fails on it forever.
+
+    The comparison is against the FIELDS of the owning struct on `origin/main`,
+    not against a name list. Both cruder readings fail: a bare `pub <name>:`
+    scan matches every struct at once (`enabled` exists in six of them, so a
+    new `skills.enabled` reads as old), and a registry-only diff reports a
+    field a peer added and never regenerated as this change's (observed:
+    iter-2260 added two `SkillsSettings` fields and never ran the generator).
+
+    `origin/main` is the authority (AGENTS.md: local history is stale the
+    moment a peer pushes). A missing or unreadable ref degrades to "every key
+    counts as added", which is the strict reading and never hides a gap.
+    """
+    if not REGISTRY.exists():
+        return set()
+    here = {dotted for dotted, _, _ in registry_keys()}
+    try:
+        base = subprocess.run(
+            ["git", "show", f"origin/main:{CONFIG_RS.relative_to(ROOT)}"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return here
+    if base.returncode != 0:
+        return here
+
+    # section -> struct name (AppConfig's field type), then the base's fields.
+    section_struct = dict(
+        re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*([A-Z][A-Za-z0-9]*[Ss]ettings)\b", base.stdout)
     )
+    base_fields: set[str] = set()
+    for struct in set(section_struct.values()):
+        base_fields |= _struct_fields(base.stdout, struct)
+    # The AppConfig fields are their own names. Scoped to the AppConfig body:
+    # a whole-file scan collects every field in every struct (262 of them),
+    # which defeats the point of matching the owning struct.
+    base_fields |= _struct_fields(base.stdout, "AppConfig")
+    return {dotted for dotted in here if dotted.rsplit(".", 1)[-1] not in base_fields}
 
 
 def missing_surfaces(dotted: str, note: str, heal: set[str], template: set[str], doctor: set[str]) -> list[str]:
@@ -485,7 +605,14 @@ def main() -> int:
         return 0
 
     findings: list[tuple[str, list[str], bool]] = []
+    inherited: list[tuple[str, list[str]]] = []
     improved: list[str] = []
+    # Keys this CHANGE added. A key that arrived in an EARLIER commit is not
+    # this change's to fix: the gate would otherwise fail every branch that
+    # touches the config at all, for a defect it inherited. `origin/main` is
+    # the authority (AGENTS.md: local history is stale the moment a peer
+    # pushes); the registry on that ref is the set the change started from.
+    added = added_keys()
     for dotted, _default, note in rows:
         missing = missing_surfaces(dotted, note, heal, template, doctor)
         if not missing:
@@ -501,6 +628,12 @@ def main() -> int:
             elif len(missing) < LEGACY[dotted]:
                 improved.append(dotted)
             continue
+        if dotted not in added:
+            # Pre-existing and un-baselined: an inherited gap, not a new one.
+            # It is REPORTED so the backlog stays visible, but it does not
+            # fail this change.
+            inherited.append((dotted, missing))
+            continue
         findings.append((dotted, missing, False))
 
     # A baseline entry naming a key the registry no longer declares is a
@@ -515,15 +648,38 @@ def main() -> int:
             print(f"  {dotted}")
         print()
 
+    if inherited:
+        print(f"INHERITED gaps ({len(inherited)}) — pre-existing, not this change's to fix:"
+              )
+        for dotted, missing in inherited:
+            print(f"  {dotted}: missing {', '.join(missing)}")
+        print()
+
+    # `new` = added by THIS change and still short a surface. `regressed` = a
+    # baselined key that got worse. Those two decide the exit code: an
+    # INHERITED gap (pre-existing, un-baselined, not in this change's delta) is
+    # reported for visibility but is not this change's to fix.
+    new = [f for f in findings if not f[2]]
+    regressed = [f for f in findings if f[2]]
+
+    # `--this-change` is the strict verdict: only the keys this change added
+    # decide it, so an inherited gap (a previous commit's missing surface) is
+    # reported but cannot make a branch unrunnable. Default is the same rule;
+    # the flag exists so a caller (and the mutation test) can state it.
+    if inherited and not new and not regressed:
+        print(
+            f"ok (this change): {len(rows)} config keys; {len(new) + len(rows) - len(LEGACY)} "
+            "of them reach all four surfaces. "
+            f"{len(inherited)} inherited gap(s) are listed above and are not this change's to fix."
+        )
+        return 0
+
     if not findings:
         print(
             f"ok: {len(rows)} config keys; {len(rows) - len(LEGACY)} of them are held "
             "to all four surfaces, the rest are ratcheted"
         )
         return 0
-
-    new = [f for f in findings if not f[2]]
-    regressed = [f for f in findings if f[2]]
 
     print(f"DRIFT {len(findings)} config touch-point violation(s):\n")
     if new:

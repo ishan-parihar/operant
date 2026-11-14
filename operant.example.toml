@@ -248,6 +248,26 @@ recap_idle_seconds = 240
 # ~/.operant/integrations/ponytail-vX.Y.Z/ and are NEVER written into
 # ~/.operant/skills/. Install or refresh with `operant update --integrations`.
 # DEFAULT IS OFF: the posture changes what the model is told on every turn,
+# ── Agentic retry: two spans, one opt-in ceiling ─────────────────────────
+# How the agentic loop recovers from a provider interruption without hanging.
+# The transport retries inside one request ([client.rate_limit]); this is the
+# ladder ABOVE that, at the seat.
+#
+#   small_span_retries = 3   immediate re-issues of the SAME request, no sleep
+#   large_span_secs    = 300 once the small span is spent: retry this often
+#   max_span_secs      = 0   0 = INFINITE (the default); set it to stop there
+#   announce_large_span = true heartbeat on every large-span retry
+#
+# A seat that gives up is a seat that goes dark, so the large span does not
+# stop by default. Set max_span_secs when you want a bounded retry, not when
+# you want fewer of them.
+
+[agent.retry]
+small_span_retries = 3
+large_span_secs = 300
+max_span_secs = 0
+announce_large_span = true
+
 # so it must never silently enable. Installed skills stay invocable
 # (/skill ponytail-review etc.) regardless of this flag.
 [agent.ponytail]

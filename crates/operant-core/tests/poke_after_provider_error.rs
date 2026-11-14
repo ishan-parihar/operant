@@ -269,6 +269,7 @@ fn test_config() -> AgentConfig {
         skill_nudge_interval: 0,
         memory_review_interval: 0,
         max_retries: 3,
+        retry: crate::config::RetrySettings::default(),
         approval_mode: "off".to_string(),
         ..AgentConfig::default()
     }

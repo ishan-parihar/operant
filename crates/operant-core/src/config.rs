@@ -993,6 +993,12 @@ pub struct BehaviorSettings {
     /// byte-for-byte stable. Empty (default) allows all sessions to write.
     #[serde(default)]
     pub context_lcm_readonly_sessions: Vec<String>,
+
+    /// The two-span agentic retry policy (`[agent.retry]`). See
+    /// `RetrySettings` for the semantics; `agent::retry_policy` for the
+    /// policy itself.
+    #[serde(default)]
+    pub retry: RetrySettings,
 }
 
 fn default_fallback_on_errors() -> bool {
@@ -1070,6 +1076,50 @@ fn default_summary_max_chars() -> u32 {
     u32::MAX
 }
 
+/// The two-span agentic retry policy (`[agent.retry]`).
+///
+/// One policy, two spans, one opt-in ceiling. The small span is a handful of
+/// immediate re-issues of the SAME request, with no sleep: a provider that
+/// failed once and is fine now costs one round trip. Once that span is spent,
+/// the large span takes over: one request per `large_span_secs`, forever by
+/// default. The ceiling (`max_span_secs`) is opt-in; `0` (the default) means
+/// infinite, because a seat that stops retrying is a seat that goes dark and
+/// nothing tells the operator why.
+///
+/// Every large-span retry is ANNOUNCED. A silent infinite retry is the hang
+/// this policy exists to kill, not a quieter version of it.
+///
+/// See `crates/operant-core/src/agent/retry_policy.rs` for the policy itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetrySettings {
+    /// Immediate re-issues of the same request before the large span starts.
+    /// No sleep between them. `0` disables the small span entirely (the first
+    /// retry waits `large_span_secs`).
+    pub small_span_retries: u32,
+    /// The large span, in seconds: once the small span is spent, retry this
+    /// often. Must be > 0.
+    pub large_span_secs: u64,
+    /// The opt-in ceiling on the TOTAL elapsed retry span, in seconds.
+    /// `0` (the default) means INFINITE — the policy retries the large span
+    /// forever. Set it to stop and surface the typed error.
+    pub max_span_secs: u64,
+    /// Announce every large-span retry (heartbeat event + log line). On by
+    /// default: an unannounced infinite retry looks exactly like a hang.
+    pub announce_large_span: bool,
+}
+
+impl Default for RetrySettings {
+    fn default() -> Self {
+        Self {
+            small_span_retries: 3,
+            large_span_secs: 300,
+            max_span_secs: 0,
+            announce_large_span: true,
+        }
+    }
+}
+
 impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
@@ -1122,6 +1172,7 @@ impl Default for BehaviorSettings {
             context_lcm_assertion_extraction: false,
             context_lcm_ignore_session_patterns: Vec::new(),
             context_lcm_readonly_sessions: Vec::new(),
+            retry: RetrySettings::default(),
             ponytail: PonytailSettings::default(),
         }
     }

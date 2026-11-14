@@ -445,6 +445,42 @@ fn heal_agent(agent: &mut crate::config::BehaviorSettings, out: &mut Vec<Healed>
         why::RANGE,
         out,
     );
+    heal_retry(&mut agent.retry, out);
+}
+
+/// `[agent.retry]` — the two-span agentic retry policy.
+///
+/// `large_span_secs` of 0 is NOT healed to a positive number the way other
+/// seconds-valued keys are: a zero-length large span is a busy loop against a
+/// dead provider (worse than the hang the policy exists to remove), so the
+/// policy clamps it to 1 s at the point of use and the heal names it. A
+/// `small_span_retries` of 0 is legal and means "no small span", so it is left
+/// alone. `max_span_secs` of 0 is the documented INFINITE, not a defect.
+fn heal_retry(retry: &mut crate::config::RetrySettings, out: &mut Vec<Healed>) {
+    if retry.large_span_secs == 0 {
+        out.push(Healed::clamped(
+            "agent.retry.large_span_secs",
+            "0".to_string(),
+            "1".to_string(),
+            "a zero-length large span is a busy loop against a dead provider; \
+             the smallest usable span is 1 second",
+        ));
+        retry.large_span_secs = 1;
+    }
+    // The ceiling is opt-in and `0` means infinite. The only value worth
+    // naming is one the operator cannot have meant: a ceiling SHORTER than
+    // the span it bounds, which stops the ladder before its first large-span
+    // retry ever fires — a config that silently does nothing.
+    if retry.max_span_secs > 0 && retry.max_span_secs < retry.large_span_secs {
+        out.push(Healed::clamped(
+            "agent.retry.max_span_secs",
+            retry.max_span_secs.to_string(),
+            retry.large_span_secs.to_string(),
+            "a ceiling shorter than the large span stops the ladder before its \
+             first large-span retry; the ceiling is raised to one span",
+        ));
+        retry.max_span_secs = retry.large_span_secs;
+    }
 }
 
 /// `[gateway]` — session bounds and retention.
@@ -625,6 +661,84 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|r| r.key == "gateway.max_concurrent_sessions")
+        );
+    }
+
+    /// A zero-length large span is a busy loop against a dead provider, which
+    /// is strictly worse than the hang the policy exists to remove.
+    #[test]
+    fn a_zero_large_span_is_healed_to_one_second() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.retry.large_span_secs = 0;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.agent.retry.large_span_secs, 1);
+        assert!(
+            rows.iter().any(|r| r.key == "agent.retry.large_span_secs"),
+            "the busy-loop clamp must be named: {rows:?}"
+        );
+    }
+
+    /// `max_span_secs = 0` is the documented INFINITE, not a defect: healing
+    /// it to a number would silently give the operator a ceiling they never
+    /// set and stop a retry they expected to run forever.
+    #[test]
+    fn an_infinite_ceiling_is_left_alone() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.retry.max_span_secs = 0;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.agent.retry.max_span_secs, 0);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.key.starts_with("agent.retry.max_span_secs")),
+            "an infinite ceiling must not be healed: {rows:?}"
+        );
+    }
+
+    /// A ceiling shorter than the span it bounds stops the ladder before its
+    /// first large-span retry ever fires — a config that silently does
+    /// nothing, which is the one shape an operator cannot diagnose.
+    #[test]
+    fn a_ceiling_below_the_span_is_raised_to_one_span() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.retry.large_span_secs = 300;
+        config.agent.retry.max_span_secs = 60;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.agent.retry.max_span_secs, 300);
+        assert!(
+            rows.iter()
+                .any(|r| r.key == "agent.retry.max_span_secs" && r.old == "60" && r.new == "300"),
+            "the conflict row must name both values: {rows:?}"
+        );
+    }
+
+    /// `small_span_retries = 0` is legal (no small span: every retry waits the
+    /// large span). Healing it would delete a deliberate choice.
+    #[test]
+    fn a_zero_small_span_is_left_alone() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.retry.small_span_retries = 0;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.agent.retry.small_span_retries, 0);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.key.starts_with("agent.retry.small_span_retries")),
+            "a zero small span must not be healed: {rows:?}"
+        );
+    }
+
+    /// The heal is idempotent over the retry block too: the second pass moves
+    /// nothing (the contract's own rule 1, applied to the new keys).
+    #[test]
+    fn the_retry_block_heals_idempotently() {
+        let mut config = crate::config::AppConfig::default();
+        config.agent.retry.large_span_secs = 0;
+        let _ = heal_config(&mut config);
+        let second = heal_config(&mut config);
+        assert!(
+            !second.iter().any(|r| r.key.starts_with("agent.retry")),
+            "second heal moved a retry row: {second:?}"
         );
     }
 }

@@ -27,7 +27,13 @@ bad()  { printf 'FAIL: %s\n' "$*"; fail=1; }
 [ -f "$REGISTRY" ] || { note "FAIL: $REGISTRY is missing (run gen-config-registry.py)"; exit 1; }
 
 # ── 1. the gate is green on the tree as it stands ──────────────────
-if ! python3 "$GATE" --check >/dev/null 2>&1; then
+# The precondition is "the gate is GREEN for the keys THIS change added", not
+# "the whole tree is green": the gate deliberately reports INHERITED gaps (keys
+# a previous commit added without their surfaces) without failing on them, so a
+# bare --check can be red for a defect this change did not introduce. Gating on
+# the whole tree would make the test unrunnable on any branch that touches the
+# config while a peer's gap is outstanding.
+if ! python3 "$GATE" --check --this-change >/dev/null 2>&1; then
     bad "the gate is red on the current tree — fix the findings before trusting this test"
 fi
 

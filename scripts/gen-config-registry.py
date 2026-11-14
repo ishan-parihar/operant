@@ -91,6 +91,7 @@ TOP_LEVEL_SECTIONS = [
 # recognises, so the nesting is expressed rather than flattened.
 NESTED = {
     "client": ["rate_limit"],
+    "agent": ["retry"],
     "tools": ["web", "http", "terminal", "code_execution", "kernel", "stt", "tool_search"],
 }
 

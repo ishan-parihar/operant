@@ -60,6 +60,16 @@ pub struct CronScheduler {
     /// loop can never arm more than [`MAX_TRANSIENT_RETRIES`] per success,
     /// and a restart is itself a fresh cadence.
     transient_retries: Arc<std::sync::Mutex<std::collections::HashMap<String, u8>>>,
+    /// The two-span retry policy (`[agent.retry]`) as the CRON seat sees it.
+    ///
+    /// The cron seam used to hard-code `TRANSIENT_RETRY_BACKOFFS_SECS` =
+    /// `[30, 120]` — two attempts, then the job went dark until its next
+    /// cadence tick (a lost hour at hourly cadence for one 503). The large
+    /// span is the same policy the interactive ladder uses, so a job whose
+    /// provider is down retries at `large_span_secs` instead of waiting out
+    /// the cadence, and the ceiling (`max_span_secs`) is the one named knob
+    /// that stops it.
+    retry: crate::config::RetrySettings,
     /// iter-678 (gap 1, metering): the accumulator fed by the cron agent's
     /// OWN event channel (the gateway's receiver never sees cron usage —
     /// that was the misattribution root). `None` = no metering, runs stay
@@ -99,6 +109,7 @@ impl CronScheduler {
             delivery_tx: None,
             seat_memory_root: None,
             transient_retries: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            retry: crate::config::RetrySettings::default(),
             usage_meter: None,
             usage_store: None,
             seat_budgets: None,
@@ -184,9 +195,18 @@ impl CronScheduler {
     /// failure (5xx / stream death — `Error::is_transient`) misses its
     /// cycle today and waits the full cadence tick; at hourly cadence that
     /// is a lost hour for one 503. Instead the job is re-armed
-    /// [`TRANSIENT_RETRY_BACKOFFS_SECS`] after now (bounded attempts, the
-    /// serial 60s tick loop is never blocked — the retry rides the next
-    /// normal tick) and the budget resets on success.
+    /// after the two-span policy's delay (the serial 60s tick loop is never
+    /// blocked — the retry rides the next normal tick) and the budget resets
+    /// on success.
+    ///
+    /// The small span is `small_span_retries` immediate re-arms (a 60s tick
+    /// is the finest resolution the loop has, so "immediate" is the next
+    /// tick). Past it the LARGE span applies: `large_span_secs` between
+    /// attempts, and by default it does not stop — a job whose provider is
+    /// down keeps retrying at 5-minute intervals instead of going dark until
+    /// its next cadence. The opt-in ceiling (`max_span_secs`) is the only
+    /// thing that ends it, and `None` from this function means "no further
+    /// retry armed", which the caller turns into the normal cadence.
     ///
     /// Returns the backoff to arm, or None when the budget is spent (the
     /// caller then falls back to the normal cadence).
@@ -198,12 +218,30 @@ impl CronScheduler {
             return None;
         };
         let used = budget.get(job_id).copied().unwrap_or(0);
+        // The hard stop stays: a crashing loop can never arm more than
+        // `MAX_TRANSIENT_RETRIES` per success. The policy decides the SPACING
+        // within that bound; the bound is what stops an infinite retry from
+        // pinning a job that can never succeed.
         if used >= MAX_TRANSIENT_RETRIES {
             return None;
         }
-        let backoff = TRANSIENT_RETRY_BACKOFFS_SECS[used as usize];
+        // The policy is over ATTEMPTS here, not elapsed time: the scheduler
+        // has no single "retry ladder start" to measure against (a job runs
+        // once per tick), so `elapsed` is reported as zero and the ceiling is
+        // only reachable through the attempt count, which is exactly the bound
+        // `MAX_TRANSIENT_RETRIES` already enforces.
+        let policy = crate::agent::retry_policy::RetryPolicy::new(self.retry.clone());
+        let decision = policy.next_delay(u32::from(used), std::time::Duration::ZERO, None);
+        let backoff = match decision {
+            crate::agent::retry_policy::RetryDecision::Retry { delay, .. } => delay.as_secs(),
+            // The ceiling: the caller falls back to the normal cadence.
+            crate::agent::retry_policy::RetryDecision::Stop { .. } => return None,
+        };
         budget.insert(job_id.to_string(), used + 1);
-        Some(backoff)
+        // A large-span delay is what the operator asked for; a small-span
+        // "immediate" arm rides the next 60s tick, which is the finest
+        // resolution this loop has.
+        Some(backoff.max(1))
     }
 
     /// Reset a job's retry budget after a successful run.
@@ -1578,15 +1616,20 @@ mod tests {
             Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
         let scheduler = super::CronScheduler::new(Arc::clone(&cron_db), agent);
 
+        // The default policy's small span is 3, but the cron budget stops at
+        // MAX_TRANSIENT_RETRIES (2): the bound is the hard stop and the policy
+        // decides only the SPACING within it. So the first two arms are the
+        // small span (the next 60s tick, clamped to >= 1s) and the third is
+        // refused by the bound.
         assert_eq!(
             scheduler.transient_retry_backoff("job_a"),
-            Some(30),
-            "first retry arms 30s"
+            Some(1),
+            "first retry is the small span — the next tick"
         );
         assert_eq!(
             scheduler.transient_retry_backoff("job_a"),
-            Some(120),
-            "second arms 120s"
+            Some(1),
+            "second retry is still the small span"
         );
         assert_eq!(
             scheduler.transient_retry_backoff("job_a"),
@@ -1595,14 +1638,44 @@ mod tests {
         );
         assert_eq!(
             scheduler.transient_retry_backoff("job_b"),
-            Some(30),
+            Some(1),
             "budgets are per job"
         );
         scheduler.transient_retry_reset("job_a");
         assert_eq!(
             scheduler.transient_retry_backoff("job_a"),
-            Some(30),
+            Some(1),
             "success resets the budget"
+        );
+    }
+
+    /// Past the small span the job waits the LARGE span, not the old flat
+    /// 120 s. This is the case the policy was written for: a provider down
+    /// for five minutes used to cost the job its whole cadence tick.
+    #[test]
+    fn a_job_past_the_small_span_waits_the_large_span() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db =
+            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db =
+            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+        let mut scheduler = super::CronScheduler::new(Arc::clone(&cron_db), agent);
+        // A zero small span makes the FIRST arm the large span, so the test
+        // does not have to walk past the bound to reach it.
+        scheduler.retry.small_span_retries = 0;
+        scheduler.retry.large_span_secs = 300;
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_c"),
+            Some(300),
+            "the large span is what a job waits between retries"
         );
     }
 
