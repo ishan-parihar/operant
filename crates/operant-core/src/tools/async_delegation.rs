@@ -16,6 +16,7 @@
 //! delegate_tool._run_single_child").
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,6 +63,109 @@ pub struct AsyncDelegationRecord {
 fn registry() -> &'static Mutex<HashMap<String, AsyncDelegationRecord>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, AsyncDelegationRecord>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Where the ledger persists. `None` until a process opts in.
+///
+/// MEASURED 2026-11-14 (audit finding 3): the registry is a process-local
+/// `OnceLock<Mutex<HashMap>>` and a restart forgot every delegation. A record
+/// that was `Pending` when the process died then stayed `Pending` for the life
+/// of the new one — the hub's `Working` count and the background-task widget
+/// kept counting work whose child had died with the old process, and no surface
+/// could tell the difference. Persistence is opt-in so a test process (and any
+/// embedding that does not want a sidecar) never touches the operator's disk.
+static LEDGER_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Opt in to a durable ledger at `path`, and recover whatever the previous
+/// process left there. Returns true only for the process that WON the path, so
+/// a second agent in the same process cannot re-run recovery over live records.
+pub fn enable_persistence(path: PathBuf) -> bool {
+    if LEDGER_PATH.set(path).is_err() {
+        return false;
+    }
+    recover_interrupted();
+    true
+}
+
+/// Rewrite the ledger from the in-memory registry. Best-effort: a failure must
+/// never block a delegation, the same rule the approval allowlist follows.
+fn persist() {
+    let Some(path) = LEDGER_PATH.get() else {
+        return;
+    };
+    let Ok(json) = serde_json::to_string_pretty(&list_records()) else {
+        return;
+    };
+    let _ = crate::fs_secrets::write_secret_file(path, json.as_bytes());
+}
+
+/// Adopt the previous process's ledger and settle whatever it left running.
+///
+/// A record that was `Pending` is a record whose child was a tokio task in a
+/// process that no longer exists. Keeping it `Pending` is the lie; the honest
+/// transition is `Failed` with the reason, so the row stops claiming work is in
+/// progress and the parent can re-dispatch if it still wants the work.
+///
+/// Returns how many records were settled, so a caller can say so once.
+pub fn recover_interrupted() -> usize {
+    let Some(path) = LEDGER_PATH.get() else {
+        return 0;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0; // no ledger, or unreadable: nothing to recover
+    };
+    let Ok(records) = serde_json::from_str::<Vec<AsyncDelegationRecord>>(&text) else {
+        return 0; // a corrupt ledger must not stop a process from starting
+    };
+    let mut recovered: Vec<AsyncDelegationRecord> = records
+        .into_iter()
+        .map(|mut rec| {
+            if rec.status == AsyncDelegationStatus::Pending {
+                rec.status = AsyncDelegationStatus::Failed;
+                rec.completed_time = Some(now_secs());
+                rec.error = Some(
+                    "the process restarted while this delegation was running; its child died \
+                     with that process, so the work must be re-dispatched if it is still wanted"
+                        .to_string(),
+                );
+            }
+            rec
+        })
+        .collect();
+    // Retention still applies across a restart: a ledger that only grows is the
+    // same unbounded-map defect persistence would otherwise introduce.
+    if recovered.len() > MAX_RETAINED_TERMINAL {
+        recovered.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
+        recovered.truncate(MAX_RETAINED_TERMINAL);
+    }
+    if let Ok(mut map) = registry().lock() {
+        *map = recovered
+            .into_iter()
+            .map(|rec| (rec.delegation_id.clone(), rec))
+            .collect();
+    }
+    persist();
+    LEDGER_PATH.get().map_or(0, |_| count_recovered())
+}
+
+/// How many recovered records this process settled as interrupted.
+///
+/// Read back out of the registry rather than counted during the map, because the
+/// status is what the caller asked about and the registry is the only truth.
+fn count_recovered() -> usize {
+    registry()
+        .lock()
+        .map(|map| {
+            map.values()
+                .filter(|r| {
+                    r.status == AsyncDelegationStatus::Failed
+                        && r.error
+                            .as_deref()
+                            .is_some_and(|e| e.starts_with("the process restarted"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn now_secs() -> u64 {
@@ -192,6 +296,7 @@ pub fn mark_completed(id: &str, result: &str) {
         rec.result = Some(result.to_string());
     }
     prune();
+    persist();
 }
 
 /// Transition a record to failed and stash the error text.
@@ -204,6 +309,7 @@ pub fn mark_failed(id: &str, error: &str) {
         rec.error = Some(error.to_string());
     }
     prune();
+    persist();
 }
 
 /// Fetch a record clone (for `delegate_task(query="<id>")` polls).
@@ -420,5 +526,77 @@ mod tests {
         // cleanup so other tests' count assertions stay isolated
         mark_completed(&first, "done");
         mark_completed(&second, "done");
+    }
+
+    /// Audit finding 3: a restart used to forget every delegation, and a record
+    /// that was `Pending` when the process died then read as running forever.
+    #[test]
+    fn a_ledger_left_by_a_dead_process_settles_its_pending_records() {
+        let _guard = test_lock().lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("deleg-ledger-{}", std::process::id()));
+        let path = dir.join("delegations.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pending = AsyncDelegationRecord {
+            delegation_id: "dlg-old-1".to_string(),
+            status: AsyncDelegationStatus::Pending,
+            goal: "work that died with the process".to_string(),
+            model: "m".to_string(),
+            dispatch_time: 100,
+            completed_time: None,
+            result: None,
+            error: None,
+        };
+        let done = AsyncDelegationRecord {
+            delegation_id: "dlg-old-2".to_string(),
+            status: AsyncDelegationStatus::Completed,
+            goal: "work that finished".to_string(),
+            model: "m".to_string(),
+            dispatch_time: 100,
+            completed_time: Some(110),
+            result: Some("ok".to_string()),
+            error: None,
+        };
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&[pending, done]).unwrap(),
+        )
+        .unwrap();
+
+        assert!(enable_persistence(path.clone()));
+
+        let recovered = get_record("dlg-old-1").expect("the pending record is recovered");
+        assert_eq!(recovered.status, AsyncDelegationStatus::Failed);
+        assert!(
+            recovered
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("the process restarted")),
+            "the reason must name the restart: {:?}",
+            recovered.error
+        );
+        assert!(
+            recovered.completed_time.is_some(),
+            "a settled row must stop claiming it is still running"
+        );
+        // A finished record is history, not a casualty: it survives untouched.
+        assert_eq!(
+            get_record("dlg-old-2").unwrap().status,
+            AsyncDelegationStatus::Completed
+        );
+
+        // Durable, not just in memory: the ledger on disk now says Failed, so a
+        // THIRD process would not resurrect the pending row.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("dlg-old-1"),
+            "ledger was not rewritten: {text}"
+        );
+        assert!(
+            !text.contains("\"status\": \"pending\""),
+            "the settled ledger must not still claim pending"
+        );
+        // The process-global path stays set for the rest of the test binary;
+        // deleting the directory under it would only make later best-effort
+        // writes fail, so the per-pid temp dir is left for the OS to reap.
     }
 }

@@ -1253,6 +1253,14 @@ pub(crate) fn agent_config(
     agent.approval_allowlist = config.command_allowlist.clone();
     agent.approval_allowlist_path =
         Some(operant_core::platform::operant_home().join("approval_allowlist.json"));
+    // The delegation ledger (audit finding 3): without it a restart forgot
+    // every background delegation, and a record that was `Pending` when the
+    // process died read as running for the life of the next one. Opt-in by
+    // design, so a test process never touches the operator's disk; recovery
+    // runs inside the call and only for the process that won the path.
+    operant_core::tools::async_delegation::enable_persistence(
+        operant_core::platform::operant_home().join("delegations.json"),
+    );
     // Progressive tool disclosure (hermes parity): thread the CLI's
     // `tools.tool_search` block into the agent loop so MCP tool schemas
     // can be deferred behind the tool_search bridge. `mcp.deferred_loading
