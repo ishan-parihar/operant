@@ -71,12 +71,46 @@ echo "[clippy-gate] collecting warnings..."
 # cargo rejects `lints` manifest keys), so the denies are applied explicitly;
 # justified sites carry `#[expect(clippy::unwrap_used/expect_used)]` with a
 # reason, and test targets are exempted via cfg_attr(test) allows / headers.
-# `|| true`: under the -D denies, cargo exits 101 whenever an unannotated
+# Which cargo this gate measures with (2026-11-14, MEASURED). The line below
+# used to be a bare `cargo clippy ...`, so on this host the gate ran NOTHING and
+# still printed "pass": PATH's cargo is a systemd-run wrapper that exits 1 with
+# "Failed to connect to user scope bus via local transport", the `|| true`
+# swallowed it, the JSON file was empty, and the gate reported
+#   [clippy-gate] seen=0 allowlist=0 new=0 stale=0
+#   [clippy-gate] pass
+# A gate that passes on zero diagnostics buys confidence the code cannot earn —
+# the worst kind of green. One resolver, shared with check.sh.
+. "${ROOT_DIR}/scripts/cargo-bin.sh"
+if ! resolve_cargo_bin; then
+    echo "[clippy-gate] ERROR: no working cargo binary (tried PATH and /usr/bin/cargo)" >&2
+    exit 1
+fi
+echo "[clippy-gate] cargo: $CARGO_BIN"
+
+# `set +e`: under the -D denies cargo exits 101 whenever an unannotated
 # unwrap/expect fires — that's the gate's DATA, not a script failure. Without
 # this, `set -e` kills the script at the cargo line, the trap deletes
 # ${tmp_json}, and the gate exits 101 with zero diagnostics (BUGS.md R39-6).
-cargo clippy --workspace --all-targets --all-features --message-format=json \
-  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}" || true
+set +e
+"${CARGO_BIN}" clippy --workspace --all-targets --all-features --message-format=json \
+  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}"
+cargo_status=$?
+set -e
+
+# A finished, successful build is the ONLY state in which "zero diagnostics"
+# means "no warnings". Any other state — a build script that failed (espeak's
+# cmake hitting the path-length limit in a long worktree path is the usual
+# one), a compile error outside the denied lints, a cancellation — leaves the
+# JSON without a `build-finished success=true` record, and the old `|| true`
+# turned every one of them into a pass. MEASURED 2026-11-14: a gate run in a
+# 72-character worktree printed "seen=0 ... pass" while espeak-rs-sys's cmake
+# was failing with "make Error 2". A gate that passes without measuring is
+# worse than no gate.
+if ! jq -e 'select(.reason == "build-finished" and .success == true)' "${tmp_json}" >/dev/null 2>&1; then
+    echo "[clippy-gate] ERROR: the clippy build did not finish successfully (cargo status ${cargo_status}), so zero diagnostics proves nothing was measured." >&2
+    echo "[clippy-gate] If the failure is espeak-rs-sys's cmake 'data' target, the absolute build path is too long: build from a SHORT CARGO_TARGET_DIR (e.g. /dev/shm/ot) — see AGENTS.md parallel-agent rule 6." >&2
+    exit 1
+fi
 
 jq -r '
   select(.reason == "compiler-message")
