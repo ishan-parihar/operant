@@ -56,7 +56,13 @@ struct SessionSearchArgs {
     role_filter: Option<String>,
     /// Max sessions to return (default: 3, max: 5)
     limit: Option<usize>,
-    /// Scroll mode: the session id to page through.
+    /// Scroll mode: the session id to page through. With `aroundMessageId` the
+    /// result is a window around that anchor; WITHOUT it the result is the
+    /// session's TAIL — the last `window` messages. MEASURED 2026-11-14 (audit
+    /// finding 3): a truncated worker report names the session that holds its
+    /// full text, and this was the only tool that reads a session's messages,
+    /// but it required an anchor id the caller had no way to know — so the
+    /// pointer named a store with no key-operated door.
     session_id: Option<String>,
     /// Scroll mode: anchor message rowid; a window of messages around it is returned.
     around_message_id: Option<i64>,
@@ -143,6 +149,48 @@ impl SessionSearchTool {
             Err(e) => ToolResult::error(
                 "session_search",
                 format!("Failed to fetch message window: {}", e),
+            ),
+        }
+    }
+
+    /// The tail of one session, oldest first — enough to read a worker's
+    /// report back after the swarm result truncated it.
+    ///
+    /// Audit finding 3: the truncation notice names the session that holds the
+    /// full text, but this tool required an `aroundMessageId` anchor to read
+    /// anything, and a caller holding only the session id has no anchor. An
+    /// empty tail is a real answer (the session has no messages yet), not an
+    /// error: a caller that just minted a session and is polling it should not
+    /// have to distinguish "not yet" from "never".
+    fn tail(&self, session_id: &str, window: usize) -> ToolResult {
+        match self.database.get_session_messages_capped(session_id, window) {
+            Ok(messages) => {
+                let rendered: Vec<Value> = messages
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "role": m.role,
+                            "content": m.content,
+                            "timestamp": m.timestamp,
+                        })
+                    })
+                    .collect();
+                ToolResult::success(
+                    "session_search",
+                    serde_json::json!({
+                        "success": true,
+                        "mode": "tail",
+                        "session_id": session_id,
+                        "window": window,
+                        "messages": rendered,
+                        "count": rendered.len(),
+                        "hint": "The last messages of this session. Pass aroundMessageId with a message id above to read a window around it."
+                    }),
+                )
+            }
+            Err(e) => ToolResult::error(
+                "session_search",
+                format!("Failed to read the tail of session: {e}"),
             ),
         }
     }
@@ -290,6 +338,8 @@ impl OperantTool for SessionSearchTool {
          Keyword search (query) - FTS5 search with per-session dedupe, match window, and first/last bookends; \
          optional roleFilter (user/assistant/tool, comma-separated). \
          Scroll (session_id + aroundMessageId + window) - raw messages around an anchor to page a transcript. \
+         Tail (session_id without aroundMessageId) - the session's last `window` messages, which is how you read back a \
+         result that a delegation or swarm truncated: the notice names the session that holds the full text. \
          Use proactively when the user references past work, says 'remember when', or asks about topics discussed before."
     }
 
@@ -331,14 +381,24 @@ impl OperantTool for SessionSearchTool {
             .filter(|s| !s.is_empty());
         let around_message_id = args.get("around_message_id").and_then(|v| v.as_i64());
 
+        let window = args
+            .get("window")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(3)
+            .clamp(1, 20);
         if let (Some(sid), Some(anchor)) = (session_id.as_deref(), around_message_id) {
-            let window = args
-                .get("window")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize)
-                .unwrap_or(3)
-                .clamp(1, 20);
             return self.scroll(sid, anchor, window);
+        }
+
+        // A session id with no anchor means "show me the end of this session".
+        // It used to fall through to `list_recent`, which ignores the id
+        // entirely — so `session_search(session_id="sess_x")` silently listed
+        // unrelated recent sessions. That made the truncation notice's "the full
+        // text is in session sess_x" a pointer to a store with no door: the id
+        // was the only handle the parent had and nothing would open it.
+        if let Some(sid) = session_id.as_deref() {
+            return self.tail(sid, window);
         }
 
         // Recent sessions mode (empty query)
@@ -476,6 +536,73 @@ mod tests {
             )
             .await;
         assert!(result.success);
+    }
+
+    /// MEASURED 2026-11-14 (audit finding 3): a truncated worker report names
+    /// the session that holds its full text, and this was the only tool that
+    /// reads a session's messages — but it required an `aroundMessageId` anchor
+    /// the caller had no way to know. `session_search(session_id="sess_x")`
+    /// with no anchor fell through to `list_recent` and returned UNRELATED
+    /// recent sessions, so the pointer named a store with no key-operated door.
+    /// This pins that the id alone reads the session's tail, and that the result
+    /// is about THAT session.
+    #[tokio::test]
+    async fn a_session_id_without_an_anchor_reads_that_session_tail() {
+        let db = create_test_db();
+        db.save_session("worker_sess", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("worker_sess", "user", "audit the parser", "t1")
+            .unwrap();
+        db.save_message("worker_sess", "assistant", "found two issues", "t2")
+            .unwrap();
+        // A decoy that a `list_recent` fallback would surface.
+        db.save_session("other_sess", None, "local", "t1", "t1")
+            .unwrap();
+        db.save_message("other_sess", "user", "unrelated work", "t1")
+            .unwrap();
+
+        let tool = SessionSearchTool::new(db.clone());
+        let result = tool
+            .execute(
+                serde_json::json!({ "session_id": "worker_sess", "window": 5 }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "tail read must succeed: {:?}", result);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(content["mode"], "tail", "the id alone must read a tail");
+        assert_eq!(content["session_id"], "worker_sess");
+        let msgs = content["messages"].as_array().expect("messages array");
+        assert_eq!(msgs.len(), 2, "both of the session's messages: {msgs:?}");
+        assert_eq!(msgs[0]["content"], "audit the parser");
+        assert_eq!(msgs[1]["content"], "found two issues");
+        assert!(
+            !content.to_string().contains("unrelated work"),
+            "the tail must be the named session's, not a recent-session list: {content}"
+        );
+
+        // The window bounds it, and a session with nothing in it is an empty
+        // tail rather than an error — a caller polling a fresh session must not
+        // have to tell "not yet" from "never".
+        let narrow = tool
+            .execute(
+                serde_json::json!({ "session_id": "worker_sess", "window": 1 }),
+                ToolContext::default(),
+            )
+            .await;
+        let narrow: serde_json::Value =
+            serde_json::from_str(&narrow.content).unwrap();
+        assert_eq!(narrow["messages"].as_array().unwrap().len(), 1);
+
+        let empty = tool
+            .execute(
+                serde_json::json!({ "session_id": "no_such_session" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(empty.success, "an unknown session is an empty tail: {:?}", empty);
+        let empty: serde_json::Value = serde_json::from_str(&empty.content).unwrap();
+        assert_eq!(empty["count"], 0);
     }
 
     #[tokio::test]
