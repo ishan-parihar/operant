@@ -27,6 +27,45 @@
 > sessions. iter-2356 built the path; iter-2357 shrank the push. Both are
 > recorded so nobody re-derives the wrong order.
 >
+> **THIRD PASS (2026-11-15, against `main @ 59bab8e0`).** The second pass fixed
+> seven things; this pass asked whether any of those fixes was keyed on a proxy
+> that a neighbouring input shape walks past, and audited the swarm against both
+> references again (jcode `@ f9604362`, codex `@ 38cdc4d6`). It found eight. All
+> eight have landed, each as its own iteration, each mutation-proven.
+>
+> | # | finding | landed as |
+> |---|---|---|
+> | 1 | the replay dedup ran AFTER the breadth peek, so a replay was refused exactly when the process was full — the double-spend the key exists to prevent | iter-2366 |
+> | 2 | the restart warning counted rows an EARLIER restart had settled (error-text prefix match over a reloaded ledger): 1, then 2, then 3 for one dead delegation | iter-2368 |
+> | 3 | `live_only` was honoured by the async registry and ignored by the foreground one, so the "running now" strip drew up to 50 finished workers; `list_live` had zero callers and a doc claiming otherwise | iter-2369 |
+> | 4 | `execute_tools` was 1,108 lines owning ten concerns; the pre-flight pass moved out, verbatim (816 lines, 0 mismatches) | iter-2371 |
+> | 5 | `session_search` re-parsed the JSON its own struct describes, and the struct carried `#[expect(dead_code)]` on its own fields | iter-2376 |
+> | 6 | `SubAgentTool::new` had 9 references, all in two audit docs describing a signature that never existed; zero code callers | iter-2377 |
+> | 7 | three compiler-flagged dead hub functions, and `list_pane_width` duplicating the `SPLIT` it was written to derive | iter-2377 |
+> | 8 | `SwarmMemberStatus::report_back_to_session_id` — written 3x, read never; operant's parent edge is `SessionEntryV2::parent_id` | iter-2377 |
+>
+> Plus three dedup cuts (a third `now_secs`, `list_records`/`live_records`
+> byte-identical but for one filter, and a bare `30` restating
+> `MIN_WORKER_TIMEOUT_SECONDS`) — iter-2378.
+>
+> **The third pass corrected its own report twice, both worth recording.**
+> (a) It first claimed the gallery "ignored the parent edge" by hardcoding
+> `report_back_to_session_id: None`. Nothing reads that field at all, so the
+> finding was dead surface, not a wiring gap — the fix changed accordingly.
+> (b) It first claimed removing `#[serde(alias)]` would make serde REJECT a
+> snake_case key. Serde silently DROPS unknown fields: the session id became
+> `None` and the call fell through to `list_recent`. That is a worse failure
+> than the one claimed, and it is the same "pointer to a store with no door"
+> shape iter-2356 closed — so the aliases are load-bearing, not defensive.
+>
+> **Two invariants the third pass established that are easy to lose.** A test
+> that seeds the delegation registry must hold `async_delegation::test_lock()`
+> AND drain on drop — there is one registry and one lock for the whole crate, and
+> `guard_test_lock` now delegates to it rather than owning a second mutex.
+> Second, `LEDGER_PATH` is a `OnceLock`, so only one test per process can ever
+> exercise the recovery path; the settle step is split out (`settle_interrupted`)
+> precisely so the count is testable without it.
+>
 > **Where operant is ahead of both references** (do not "harmonise" these):
 > tool scoping is computed per child and narrow-only (jcode's production spawns
 > get the full default registry; codex has no intersection function at all);
