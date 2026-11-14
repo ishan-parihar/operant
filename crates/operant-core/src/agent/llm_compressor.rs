@@ -407,11 +407,26 @@ impl LlmCompressor {
     }
 
     /// Check whether compression should be triggered based on token estimates.
-    pub fn should_compress(&self, estimated_tokens: usize) -> bool {
+    ///
+    /// `window` is the EFFECTIVE context window, resolved per request by the
+    /// caller. It is a parameter rather than `self.config.context_window`
+    /// because that value is captured at PROCESS START: with
+    /// `agent.context_window = 0` (AUTOMATIC) it is the 128,000 fallback, so
+    /// on a 32k model the trigger never fired although the operator armed it —
+    /// the threshold was permanently 64,000 and `should_compress` always
+    /// declined. The caller already resolves the window for the fallback it
+    /// runs two lines later, so this costs nothing and removes the stale
+    /// denominator instead of refreshing a copy of it.
+    pub fn should_compress(&self, estimated_tokens: usize, window: usize) -> bool {
         if !self.config.enabled {
             return false;
         }
-        let threshold = self.config.context_window as f64 * self.config.threshold_percent;
+        let window = if window == 0 {
+            self.config.context_window
+        } else {
+            window
+        };
+        let threshold = window as f64 * self.config.threshold_percent;
         estimated_tokens > threshold as usize
     }
 
@@ -1274,10 +1289,35 @@ mod tests {
             ..Default::default()
         };
         let compressor = LlmCompressor::new(config);
-        assert!(!compressor.should_compress(50_000));
-        assert!(!compressor.should_compress(100_000));
-        assert!(compressor.should_compress(110_000));
-        assert!(compressor.should_compress(128_000));
+        assert!(!compressor.should_compress(50_000, 128_000));
+        assert!(!compressor.should_compress(100_000, 128_000));
+        assert!(compressor.should_compress(110_000, 128_000));
+        assert!(compressor.should_compress(128_000, 128_000));
+    }
+
+    /// The threshold follows the EFFECTIVE window the caller passes, not the
+    /// one captured at construction.
+    ///
+    /// With `agent.context_window = 0` (AUTOMATIC) the constructed value is
+    /// the 128,000 fallback. On a 32k model the runtime learns 32,000, and the
+    /// trigger must follow THAT: at 60,000 estimated tokens the old code needed
+    /// 102,400 (80% of 128,000) and always declined, so LLM compaction never
+    /// ran although the operator armed it.
+    #[test]
+    fn the_threshold_follows_the_effective_window() {
+        let config = LlmCompressorConfig {
+            context_window: 128_000,
+            threshold_percent: 0.80,
+            ..Default::default()
+        };
+        let compressor = LlmCompressor::new(config);
+        // 60,000 is over 80% of 32,000 but far under 80% of the start-time
+        // 128,000. The stale denominator declined it; the live one fires.
+        assert!(compressor.should_compress(60_000, 32_000));
+        assert!(!compressor.should_compress(60_000, 128_000));
+        // A zero window falls back to the configured value rather than
+        // collapsing the threshold to nothing.
+        assert!(!compressor.should_compress(60_000, 0));
     }
 
     #[test]
@@ -1287,7 +1327,7 @@ mod tests {
             ..Default::default()
         };
         let compressor = LlmCompressor::new(config);
-        assert!(!compressor.should_compress(200_000));
+        assert!(!compressor.should_compress(200_000, 128_000));
     }
 
     #[test]

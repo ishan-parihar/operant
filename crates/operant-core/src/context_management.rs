@@ -1162,6 +1162,21 @@ pub const MICRO_COMPACTION_HEAD_KEEP: usize = 4;
 pub const MICRO_COMPACTION_TAIL_KEEP: usize = 8;
 /// Character ceiling for the folded gist a marker message carries.
 pub const MICRO_COMPACTION_FOLD_MAX_CHARS: usize = 240;
+
+/// How far below the soft threshold a fold must land, as a share of the
+/// THRESHOLD.
+///
+/// Folding to exactly the threshold guarantees the next turn crosses it again:
+/// the store lands at 19,949 on a 20,000 threshold, the turn appends one
+/// answer, and the build folds AGAIN — a rewrite on every turn, which is the
+/// "a rewrite must not be sticky" invariant the force-line test guards.
+///
+/// A quarter of the threshold leaves room for many turns of growth before the
+/// next fold, so a crossing costs ONE rewrite rather than one per turn. It is
+/// a share of the threshold, not of the window: the fold's own target moves
+/// with the threshold, and a fixed percentage of a larger window would demand
+/// a fold far below anything the feature intends.
+pub const MICRO_COMPACTION_FOLD_HEADROOM_PERCENT: usize = 25;
 /// Opening of every marker message a fold writes. Lets a later fold recognise
 /// an already-folded exchange.
 const MICRO_MARKER_PREFIX: &str = "[compacted exchange — earlier conversation folded]";

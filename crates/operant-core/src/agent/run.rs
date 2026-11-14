@@ -4337,21 +4337,46 @@ impl OperantAgent {
         // head/tail folds into one marker message — small continuous bills
         // instead of the batch ladder's large ones. The fold mutates the
         // STORE, not this built list, so every subsequent build benefits.
-        // Runs only under a bust, and folds until under the soft threshold
-        // (or nothing folds), so a crossing is one rewrite, not one per turn.
+        // Folds until under the soft threshold (or nothing folds), so a
+        // crossing is one rewrite, not one per turn.
+        //
+        // NOT gated on `may_rewrite` (audit: the gate made this unreachable).
+        // The doc says micro-compaction runs AHEAD of the batch ladder, and
+        // the constant is 40% precisely because it is meant to fire below the
+        // ladder's 80% soft cap. Gating on bust permission — which requires
+        // the request at ~80%, or ~85% force — meant the 40% branch could
+        // never be taken: a conversation at 500,000 tokens on a 1M window is
+        // past 40% and still far under 80%, and nothing folded. The threshold
+        // IS the trigger; the fold's own `bump_conv_epoch` handles the cache
+        // invalidation a mid-session rewrite causes.
+        //
         // Strictly below-prefix by construction: the PromptCacheGuard below
         // fires by design on any violation.
-        if self.micro_compaction && may_rewrite {
+        if self.micro_compaction {
+            // The fold's own denominator is the CONVERSATION, measured the
+            // same way the fold measures it. The gate above charges the
+            // request (conversation + frozen prefix + tail + schemas), which
+            // is the right denominator for bust permission and the wrong one
+            // here: a 30,000-token prefix shifted the effective trigger by
+            // 30,000 in one direction and not the other.
             let estimated = {
                 let conv = self.conversation.read().await;
                 crate::context_management::estimate_total_tokens(&conv)
             };
             let soft = window * crate::context_management::MICRO_COMPACTION_THRESHOLD_PERCENT / 100;
+            // Fold to a TARGET below the threshold, not to the threshold
+            // itself. Landing exactly on it re-triggers on the very next
+            // turn's append, which makes a rewrite sticky — see the constant.
+            // The target is the threshold less a margin, so a turn's growth
+            // does not immediately re-cross it.
+            let headroom =
+                soft * crate::context_management::MICRO_COMPACTION_FOLD_HEADROOM_PERCENT / 100;
+            let target = soft.saturating_sub(headroom).max(1);
             if estimated > soft {
                 self.bump_conv_epoch(); // (plan 05) non-append mutation
                 let mut conv = self.conversation.write().await;
                 let mut folds = 0usize;
-                while crate::context_management::estimate_total_tokens(&conv) > soft {
+                while crate::context_management::estimate_total_tokens(&conv) > target {
                     let len = conv.len();
                     if crate::context_management::micro_compact(
                         &mut conv,

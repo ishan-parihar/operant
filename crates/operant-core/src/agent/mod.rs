@@ -2782,16 +2782,38 @@ mod tests {
         .with_micro_compaction(true);
         let before = seed_exchanges(&agent, 32).await; // 64 messages, ~24k tokens: over the 20k soft threshold, under the 85% force line
 
-        // Plan 06 P1: no bust below the force line, so the store is not folded.
+        // The fold is AHEAD of the batch ladder, not behind it: at ~24k
+        // tokens on a 50k window the conversation is past the 40% soft
+        // threshold (20k) and far under the ladder's 80% line, and the fold
+        // fires on its OWN threshold without any bust.
+        //
+        // (This assertion used to read "no bust = no fold" and required an
+        // explicit `/compact` before anything folded. That was the gate's
+        // behaviour, not the documented contract: the constant is 40% precisely
+        // because the fold is meant to run below the ladder, and gating it on
+        // bust permission — which needs ~80% — made the branch unreachable at
+        // the operating point it exists for. A conversation could sit at 500k
+        // on a 1M window and never fold.)
         let _ = agent.build_messages("mc-test-none").await.unwrap();
-        assert_eq!(
-            agent.conversation.read().await.len(),
-            before,
-            "no bust = no fold"
-        );
+        {
+            let conv = agent.conversation.read().await;
+            assert!(
+                conv.len() < before,
+                "past the 40% soft threshold the fold must fire without a bust"
+            );
+            assert!(
+                crate::context_management::estimate_total_tokens(&conv) <= 20_000,
+                "folded below the 40% soft threshold"
+            );
+            assert!(
+                conv.iter()
+                    .any(|m| m.content.contains("[compacted exchange")),
+                "the folded marker rides in the stored conversation"
+            );
+        }
 
-        // An armed `/compact` permits the pass. It folds until under the 40%
-        // soft threshold (20k), not just one exchange.
+        // A later build still folds nothing NEW once it is under the
+        // threshold, and an explicit `/compact` remains a permitted pass.
         agent
             .explicit_bust
             .store(true, std::sync::atomic::Ordering::Release);

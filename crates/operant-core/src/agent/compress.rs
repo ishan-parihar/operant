@@ -405,7 +405,8 @@ impl OperantAgent {
             // Check whether LLM compression is warranted (cheap, no await)
             {
                 let guard = compressor.lock().await;
-                if !guard.should_compress(self.estimate_current_tokens(&messages)) {
+                let window = self.effective_context_window();
+                if !guard.should_compress(self.estimate_current_tokens(&messages), window) {
                     // Under threshold — deterministic fallback
                     let budget = self.effective_context_window();
                     return crate::context_management::manage_context(messages, budget, 4096);
@@ -462,7 +463,7 @@ impl OperantAgent {
         }
         let estimated = self.estimate_current_tokens(&messages);
         let mut guard = compressor.lock().await;
-        if !guard.should_compress(estimated) {
+        if !guard.should_compress(estimated, self.effective_context_window()) {
             return messages;
         }
         if guard.is_in_cooldown() {
