@@ -961,6 +961,26 @@ pub struct BehaviorSettings {
     /// per compaction, and recency already protects the tail.
     #[serde(default)]
     pub context_semantic_compaction: bool,
+    /// Share of the context window above which `@file:`/`@folder:` injection
+    /// is REFUSED, and the share above which it is WARNED about (defaults
+    /// 0.50 / 0.25). They were compile-time literals with no control, so an
+    /// operator whose attachments are large could not raise the bound and had
+    /// to split the message by hand. 0 keeps each built-in share.
+    #[serde(default)]
+    pub context_reference_hard_share: f64,
+    /// The WARN share, below [`Self::context_reference_hard_share`]. 0 keeps
+    /// the built-in 0.25.
+    #[serde(default)]
+    pub context_reference_soft_share: f64,
+    /// Most tool-exchange groups the semantic rung will embed (default 64).
+    ///
+    /// The cap is the difference between the rung working and silently
+    /// degrading: an agentic session of 70 tool exchanges has ~70 groups, and
+    /// above the cap the rung returns the recency cut with only a `debug!` —
+    /// exactly the drifted-conversation failure it exists to fix. It was a
+    /// module constant, so no operator could raise it. 0 = the built-in 64.
+    #[serde(default = "default_context_semantic_max_groups")]
+    pub context_semantic_max_groups: usize,
     /// SQLite path for the LCM lossless DAG (default `~/.operant/lcm.db`).
     #[serde(default)]
     pub context_lcm_db: Option<PathBuf>,
@@ -1062,6 +1082,10 @@ fn default_lcm_auto_recall_limit() -> usize {
 
 fn default_lcm_auto_recall_max_chars() -> usize {
     4_000
+}
+
+fn default_context_semantic_max_groups() -> usize {
+    crate::context_management::SEMANTIC_MAX_GROUPS
 }
 
 fn default_lcm_rollup_interval_minutes() -> u64 {
@@ -1197,6 +1221,9 @@ impl Default for BehaviorSettings {
             recap_idle_seconds: 240,
             context_engine: "compact".to_string(),
             context_semantic_compaction: false,
+            context_semantic_max_groups: default_context_semantic_max_groups(),
+            context_reference_hard_share: 0.0,
+            context_reference_soft_share: 0.0,
             context_lcm_db: None,
             context_lcm_tail_tokens: 12_000,
             context_lcm_auto_recall: true,

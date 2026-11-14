@@ -586,7 +586,7 @@ const SEMANTIC_GROUP_CHARS: usize = 512;
 /// Groups embedded per pass. Bounds one pass to a single batch-sized embedding
 /// call. Groups past the cap fall back to the recency default — they are the
 /// most recent ones, which is what recency already protects.
-const SEMANTIC_MAX_GROUPS: usize = 64;
+pub const SEMANTIC_MAX_GROUPS: usize = 64;
 
 /// The conversation goal a compaction cut is chosen against.
 ///
@@ -710,7 +710,13 @@ pub async fn semantic_compaction_cutoff(
     messages: &[Message],
     budget_tokens: usize,
     embedder: Option<&dyn crate::context::Embedder>,
+    max_groups: usize,
 ) -> SemanticCut {
+    let max_groups = if max_groups == 0 {
+        SEMANTIC_MAX_GROUPS
+    } else {
+        max_groups
+    };
     // Computed once, and the sole answer the degraded path may give.
     let cap = safe_compaction_cutoff(messages, budget_tokens);
     let recency = move || SemanticCut {
@@ -746,7 +752,11 @@ pub async fn semantic_compaction_cutoff(
     }
     // More groups than we are willing to embed: recency already protects the
     // tail, so degrading is the honest answer rather than a partial embed.
-    if groups.len() > SEMANTIC_MAX_GROUPS {
+    // The cap is a PARAMETER, not a constant: an agentic session of 70 tool
+    // exchanges has ~70 groups and silently got the recency fallback with only
+    // a `debug!` line, so arming the flag did nothing on exactly the sessions
+    // it exists for, and no operator could raise it.
+    if groups.len() > max_groups {
         return recency();
     }
 
@@ -1150,6 +1160,17 @@ pub fn bust_permission(
 // Micro-compaction (hermes micro-compaction parity; opt-in via
 // `OPERANT_MICRO_COMPACTION`, off by default)
 // ---------------------------------------------------------------------------
+
+/// Decay half-life (messages) for the REACTIVE overflow path
+/// (`manage_context_reporting`, which every hard-cap compaction goes through).
+///
+/// Deliberately gentler than the preflight ladder's
+/// (`agent::turn_finalizer::PREFLIGHT_DECAY_H50` = 100), which is documented
+/// there as the more aggressive curve. Two rungs, two intents — but both are
+/// named now, so neither reads as the other's stray literal.
+pub const REACTIVE_DECAY_H50: usize = 200;
+/// See [`REACTIVE_DECAY_H50`].
+pub const REACTIVE_DECAY_CONSTANT: f64 = 30.0;
 
 /// Soft threshold: once the estimated conversation crosses this share of
 /// the context window, the oldest foldable exchange folds. Below the 80%
@@ -1920,7 +1941,13 @@ pub fn manage_context_reporting(
     let effective_budget = budget_tokens.saturating_sub(reserve_for_response);
 
     // Step 1: decay-render older messages to compress them.
-    let decayed = decay_render(messages, 200, 30.0);
+    // The reactive path's decay is DELIBERATELY gentler than the preflight
+    // ladder's (`agent::turn_finalizer::PREFLIGHT_DECAY_H50` = 100,
+    // `PREFLIGHT_DECAY_CONSTANT` = 20.0, documented there as "more aggressive
+    // compression"). This is the standard curve, kept as named constants so
+    // the two intents are visible side by side rather than one being a bare
+    // literal a reader mistakes for the other's twin.
+    let decayed = decay_render(messages, REACTIVE_DECAY_H50, REACTIVE_DECAY_CONSTANT);
 
     // Step 2: evict if still over budget.
     evict_to_budget_reporting(decayed, effective_budget)
@@ -2876,7 +2903,7 @@ mod tests {
         assert_eq!(cap, 5, "the recency cut must end before the tool group");
 
         let mock = crate::context::MockEmbedder::default();
-        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock)).await;
+        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock), 0).await;
         assert!(cut.semantic, "an embedder was available, so the pass ran");
 
         // (1) The result the net certifies, rebuilt from the selection.
@@ -2943,7 +2970,7 @@ mod tests {
         let msgs = drifted_conversation();
 
         // (a) No embedder at all.
-        let none = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, None).await;
+        let none = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, None, 0).await;
         assert!(!none.semantic, "must report the degraded path");
         assert_eq!(none.goal_similarity, 0.0, "no fabricated score");
         let cap = safe_compaction_cutoff(&msgs, DRIFT_BUDGET);
@@ -2972,7 +2999,8 @@ mod tests {
                 Err(crate::error::Error::Agent("embedder is down".to_string()))
             }
         }
-        let failed = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&FailingEmbedder)).await;
+        let failed =
+            semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&FailingEmbedder), 0).await;
         assert!(!failed.semantic, "an embedder error must degrade, not fail");
         assert_eq!(failed.kept, (0..cap).collect::<Vec<_>>());
 
@@ -2982,7 +3010,7 @@ mod tests {
             .filter(|m| m.role != Role::User)
             .cloned()
             .collect();
-        let goal_less = semantic_compaction_cutoff(&no_user, DRIFT_BUDGET, Some(&mock())).await;
+        let goal_less = semantic_compaction_cutoff(&no_user, DRIFT_BUDGET, Some(&mock()), 0).await;
         assert!(!goal_less.semantic);
         assert_eq!(compaction_goal(&no_user), None);
     }
@@ -3025,7 +3053,7 @@ mod tests {
         let baseline = msgs[..cap]
             .iter()
             .any(|m| m.content.contains("release.sh --dry-run"));
-        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock())).await;
+        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock()), 0).await;
         let head_cut = cut.head_cut;
         let similarity = cut.goal_similarity;
         let semantic = cut
@@ -3054,7 +3082,7 @@ mod tests {
                 msgs.insert(1, make_msg(Role::User, format!("filler {i}")));
             }
             for budget in [0usize, 8, 32, DRIFT_BUDGET, 120, 400, 100_000] {
-                let cut = semantic_compaction_cutoff(&msgs, budget, Some(&mock)).await;
+                let cut = semantic_compaction_cutoff(&msgs, budget, Some(&mock), 0).await;
                 let kept: Vec<Message> = cut
                     .kept
                     .iter()

@@ -4592,6 +4592,7 @@ impl OperantAgent {
                     &messages,
                     budget_tokens,
                     embedder.as_deref(),
+                    self.config.context_semantic_max_groups,
                 )
                 .await;
                 if cut.semantic {

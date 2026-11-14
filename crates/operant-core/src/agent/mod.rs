@@ -218,6 +218,11 @@ pub struct AgentConfig {
     /// construction; the rung still needs an attached embedder
     /// (`with_semantic_embedder`) or it degrades to recency.
     pub context_semantic_compaction: bool,
+    /// Most groups the semantic rung will embed; 0 = the built-in cap.
+    pub context_semantic_max_groups: usize,
+    /// `@file:` injection hard/soft shares; 0 = the built-in 50%/25%.
+    pub context_reference_hard_share: f64,
+    pub context_reference_soft_share: f64,
     /// Ponytail posture settings (phase 4): the frozen-prefix `<ponytail>`
     /// block injects when `enabled && inject == always_on` (or the runtime
     /// override forces it), never on Holon runs. Threaded from
@@ -290,6 +295,9 @@ impl From<&BehaviorSettings> for AgentConfig {
             // surface ever fed it.
             guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
             context_semantic_compaction: settings.context_semantic_compaction,
+            context_semantic_max_groups: settings.context_semantic_max_groups,
+            context_reference_hard_share: settings.context_reference_hard_share,
+            context_reference_soft_share: settings.context_reference_soft_share,
             ponytail: settings.ponytail.clone(),
         }
     }
@@ -4444,6 +4452,9 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
+            context_semantic_max_groups: 0,
+            context_reference_hard_share: 0.0,
+            context_reference_soft_share: 0.0,
             model: "demo".to_string(),
             max_trajectories: 0,
             show_turn_attribution: true,
@@ -4504,6 +4515,9 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
+            context_semantic_max_groups: 0,
+            context_reference_hard_share: 0.0,
+            context_reference_soft_share: 0.0,
             model: "demo".to_string(),
             max_trajectories: 0,
             show_turn_attribution: true,
@@ -4630,6 +4644,9 @@ mod tests {
             reasoning_effort: String::new(),
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
+            context_semantic_max_groups: 0,
+            context_reference_hard_share: 0.0,
+            context_reference_soft_share: 0.0,
             model: "demo".to_string(),
             max_trajectories: 0,
             show_turn_attribution: true,

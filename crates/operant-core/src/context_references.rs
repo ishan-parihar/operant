@@ -725,11 +725,15 @@ async fn expand_reference_async(
 ///
 /// `cwd` is the workspace root references resolve against; references cannot
 /// escape it. `context_length` is the model's context window used for the
-/// 50%/25% injection budget. Mirrors hermes `preprocess_context_references`.
+/// injection budget. `hard_share` / `soft_share` are the fractions of the
+/// window above which injection is refused / warned (0 = the built-in 50%/25%).
+/// Mirrors hermes `preprocess_context_references`.
 pub async fn preprocess_context_references(
     message: &str,
     cwd: &Path,
     context_length: usize,
+    hard_share: f64,
+    soft_share: f64,
 ) -> ContextReferenceResult {
     let original = message.to_string();
     let refs = parse_context_references(message);
@@ -760,8 +764,13 @@ pub async fn preprocess_context_references(
         }
     }
 
-    let hard_limit = (context_length as f64 * 0.50).max(1.0) as usize;
-    let soft_limit = (context_length as f64 * 0.25).max(1.0) as usize;
+    // The shares were compile-time literals (0.50 / 0.25) with no control, so
+    // an operator whose attachments are large could not raise the bound and
+    // had to split the message by hand. 0 keeps each built-in share.
+    let hard_share = if hard_share > 0.0 { hard_share } else { 0.50 };
+    let soft_share = if soft_share > 0.0 { soft_share } else { 0.25 };
+    let hard_limit = (context_length as f64 * hard_share).max(1.0) as usize;
+    let soft_limit = (context_length as f64 * soft_share).max(1.0) as usize;
 
     if injected_tokens > hard_limit {
         warnings.push(format!(
@@ -909,9 +918,14 @@ mod tests {
             "src/main.rs",
             "line1\nline2\nline3\nline4\nline5\n",
         );
-        let result =
-            preprocess_context_references("review @file:src/main.rs:2-3", dir.path(), 100_000)
-                .await;
+        let result = preprocess_context_references(
+            "review @file:src/main.rs:2-3",
+            dir.path(),
+            100_000,
+            0.0,
+            0.0,
+        )
+        .await;
         assert!(result.expanded);
         assert!(!result.blocked);
         assert!(result.message.contains("line2"));
@@ -947,6 +961,8 @@ mod tests {
             "compare @file:big.log and @file:small.txt",
             dir.path(),
             100_000,
+            0.0,
+            0.0,
         )
         .await;
 
@@ -966,7 +982,8 @@ mod tests {
     async fn missing_file_becomes_warning() {
         let dir = tmp_repo();
         let result =
-            preprocess_context_references("check @file:nope.txt", dir.path(), 100_000).await;
+            preprocess_context_references("check @file:nope.txt", dir.path(), 100_000, 0.0, 0.0)
+                .await;
         assert!(result.expanded);
         assert_eq!(result.warnings.len(), 1);
         assert!(result.message.contains("not found") || result.message.contains("does not exist"));
@@ -1005,7 +1022,8 @@ mod tests {
         let escape = dir.path().join("../escape.txt");
         let _ = write_file(dir.path().parent().unwrap(), "escape.txt", "secret");
         let result =
-            preprocess_context_references("@file:../escape.txt", dir.path(), 100_000).await;
+            preprocess_context_references("@file:../escape.txt", dir.path(), 100_000, 0.0, 0.0)
+                .await;
         let _ = std::fs::remove_file(&escape);
         assert!(result.warnings.iter().any(|w| w.contains("outside")));
     }
@@ -1015,7 +1033,8 @@ mod tests {
         let dir = tmp_repo();
         let big = "x".repeat(100_000);
         write_file(dir.path(), "big.txt", &big);
-        let result = preprocess_context_references("@file:big.txt", dir.path(), 10_000).await;
+        let result =
+            preprocess_context_references("@file:big.txt", dir.path(), 10_000, 0.0, 0.0).await;
         assert!(result.blocked);
         assert!(result.warnings.iter().any(|w| w.contains("50% hard limit")));
     }
@@ -1025,7 +1044,8 @@ mod tests {
         let dir = tmp_repo();
         write_file(dir.path(), "src/main.py", "def main():\n    pass\n");
         write_file(dir.path(), "src/helper.py", "x = 1\n");
-        let result = preprocess_context_references("list @folder:src", dir.path(), 100_000).await;
+        let result =
+            preprocess_context_references("list @folder:src", dir.path(), 100_000, 0.0, 0.0).await;
         assert!(result.expanded);
         assert!(result.message.contains("main.py"));
         assert!(result.message.contains("helper.py"));
@@ -1034,7 +1054,8 @@ mod tests {
     #[tokio::test]
     async fn no_refs_returns_unchanged() {
         let dir = tmp_repo();
-        let result = preprocess_context_references("plain message", dir.path(), 100_000).await;
+        let result =
+            preprocess_context_references("plain message", dir.path(), 100_000, 0.0, 0.0).await;
         assert!(!result.expanded);
         assert_eq!(result.message, "plain message");
     }

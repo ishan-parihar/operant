@@ -113,8 +113,14 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // user via the AgentEvent channel below.
     let context_window = agent.effective_context_window();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let ctx =
-        context_references::preprocess_context_references(user_query, &cwd, context_window).await;
+    let ctx = context_references::preprocess_context_references(
+        user_query,
+        &cwd,
+        context_window,
+        agent.config.context_reference_hard_share,
+        agent.config.context_reference_soft_share,
+    )
+    .await;
     let effective_query = ctx.message.clone();
 
     if !ctx.warnings.is_empty() && !ctx.blocked {

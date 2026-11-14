@@ -661,7 +661,15 @@ impl LlmCompressor {
         let mut tokens = 0usize;
 
         for (i, msg) in msgs.iter().enumerate().rev() {
-            tokens += estimate_tokens(&msg.content) + 4; // +4 for role overhead
+            // The AUTHORITATIVE estimator, not a local re-implementation.
+            // `estimate_tokens(content) + 4` drops
+            // `tool_calls[].function.arguments`, which
+            // `context_management::estimate_message_tokens` counts — and the
+            // tail is exactly where tool-call turns live, so a tail of 20
+            // assistant turns carrying 100 KB of `write_file` arguments was
+            // measured at ~80 tokens and the "tail budget" held several times
+            // what it claimed. One estimator, one truth.
+            tokens += crate::context_management::estimate_message_tokens(msg);
             if tokens >= budget {
                 // Return the index of the first message in the tail
                 return i;

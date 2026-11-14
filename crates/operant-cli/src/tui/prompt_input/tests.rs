@@ -2532,6 +2532,8 @@ async fn accepted_file_ref_token_injects_via_context_references() {
         "read @file:src/notes.txt please",
         &dir,
         100_000,
+        0.0,
+        0.0,
     )
     .await;
     assert!(!ctx.blocked, "injection refused: {:?}", ctx.warnings);

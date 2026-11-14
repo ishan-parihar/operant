@@ -195,6 +195,9 @@ Use the echo tool to repeat information and the calculate tool for math."
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
         context_semantic_compaction: false,
+        context_semantic_max_groups: 0,
+        context_reference_hard_share: 0.0,
+        context_reference_soft_share: 0.0,
         ponytail: Default::default(),
     };
 

@@ -209,6 +209,15 @@ context_compression = false
 # Needs an embedding model below (context_lcm_embedding_model; "local:hash"
 # is the zero-dependency option).
 # context_semantic_compaction = false
+# Most tool-exchange groups the semantic rung will embed (0 = the built-in 64).
+# Above the cap the rung silently falls back to the recency cut, which is the
+# drifted-conversation failure it exists to fix, so an agentic session with many
+# tool exchanges needs a higher number here.
+# context_semantic_max_groups = 0
+# Share of the window above which @file:/@folder: injection is refused, and the
+# share above which it is warned about (0 = the built-in 0.50 / 0.25).
+# context_reference_hard_share = 0.0
+# context_reference_soft_share = 0.0
 # Same-provider model fallback (hermes `fallback_providers` parity, same
 # client): when the primary model fails with a retryable error (5xx, 429,
 # network), the agent retries each fallback model in order on the SAME client

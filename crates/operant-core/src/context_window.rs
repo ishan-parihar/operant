@@ -220,7 +220,18 @@ pub fn resolve(
         .max_output
         .filter(|tokens| (256..=1_048_576).contains(tokens));
     let (window, source) = if configured > AUTOMATIC {
-        (configured, WindowSource::Configured)
+        // A CONFIGURED window is the operator's intent — but a LEARNED limit is
+        // hard evidence: it came from a real 400 where the provider rejected
+        // the request as too large for the model. Ignoring it meant an
+        // operator who set a window above the model's real one got that larger
+        // number used silently, and every request kept failing; the warning
+        // that promised "the smaller one is enforced" was unreachable, because
+        // `resolve` never produced a value below `configured` for it to fire
+        // on. The smaller of the two wins, which is what the message says.
+        match learned {
+            Some(learned) if learned < configured => (learned, WindowSource::Learned),
+            _ => (configured, WindowSource::Configured),
+        }
     } else if let Some(learned) = learned {
         (learned, WindowSource::Learned)
     } else if let Some(window) = discovered.context_window {
@@ -523,8 +534,18 @@ mod tests {
         );
     }
 
+    /// A LEARNED limit is a CEILING, exactly as `resolve`'s own doc says: "it
+    /// cannot raise the configured or discovered window above what it says,
+    /// because a rejected request is hard evidence that the larger number does
+    /// not fit."
+    ///
+    /// This test used to assert the opposite — that 200,000 configured beat a
+    /// learned 64,000 — which contradicted the doc and left the operator with a
+    /// window the provider had already rejected, retried forever. The
+    /// "the smaller one is enforced" warning was unreachable because `resolve`
+    /// never produced a value below `configured` for it to fire on.
     #[test]
-    fn configured_wins_over_every_live_source() {
+    fn a_learned_limit_is_a_ceiling_on_the_configured_window() {
         let resolved = resolve(
             200_000,
             Some(64_000),
@@ -535,9 +556,15 @@ mod tests {
                 max_output: Some(32_768),
             },
         );
-        assert_eq!(resolved.window, 200_000);
-        assert_eq!(resolved.source, WindowSource::Configured);
+        assert_eq!(resolved.window, 64_000, "the learned ceiling binds");
+        assert_eq!(resolved.source, WindowSource::Learned);
         assert_eq!(resolved.max_output, Some(32_768));
+
+        // A configured window BELOW the learned ceiling is left alone: the
+        // ceiling only ever lowers, never raises.
+        let resolved = resolve(32_000, Some(64_000), Discovered::default());
+        assert_eq!(resolved.window, 32_000);
+        assert_eq!(resolved.source, WindowSource::Configured);
     }
 
     #[test]
@@ -559,8 +586,18 @@ mod tests {
         assert_eq!(resolved.max_output, Some(131_072));
     }
 
+    /// A learned limit beats the endpoint AND the operator: it is a provider's
+    /// own refusal, so a configured window above it is a window every request
+    /// will fail on.
+    ///
+    /// The name of this test used to say "but not the operator", and it asserted
+    /// that a configured 400,000 beat a learned 200,000. That left the operator
+    /// retrying a request the provider had already refused, with the only clue a
+    /// warning that could never fire (`resolve` never returned below
+    /// `configured`). The operator's remedy is still theirs — fix the config or
+    /// `--reset` — but the ceiling binds until they do.
     #[test]
-    fn a_learned_limit_beats_the_endpoint_but_not_the_operator() {
+    fn a_learned_limit_beats_the_endpoint_and_the_operator() {
         let discovered = Discovered {
             endpoint_reachable: false,
             context_window: Some(1_048_576),
@@ -571,8 +608,8 @@ mod tests {
         assert_eq!(auto.window, 200_000);
         assert_eq!(auto.source, WindowSource::Learned);
         let explicit = resolve(400_000, Some(200_000), discovered);
-        assert_eq!(explicit.window, 400_000);
-        assert_eq!(explicit.source, WindowSource::Configured);
+        assert_eq!(explicit.window, 200_000, "the learned ceiling binds");
+        assert_eq!(explicit.source, WindowSource::Learned);
     }
 
     #[test]
