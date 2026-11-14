@@ -271,7 +271,9 @@ fn dock_activity(member: &SwarmMemberStatus) -> String {
 /// ╰ +2 more ──────────── nodes 4/9 ▰▰▰▱▱ ╯
 /// ```
 fn render_swarm_dock(info: &SwarmInfo, inner: Rect) -> Framed {
-    use crate::tui::operant_render::swarm_gallery::{humanize_age, status_accent, status_glyph};
+    use crate::tui::operant_render::swarm_gallery::{
+        current_swarm_spinner_frame, humanize_age, status_accent, status_glyph,
+    };
     let members = &info.managed_members;
     let width = inner.width as usize;
 
@@ -321,7 +323,7 @@ fn render_swarm_dock(info: &SwarmInfo, inner: Rect) -> Framed {
     let mut lines = Vec::with_capacity(rows);
     for member in shown {
         let accent = status_accent(&member.status);
-        let glyph = status_glyph(&member.status, info.spinner_frame);
+        let glyph = status_glyph(&member.status, current_swarm_spinner_frame());
         let finished = dock_is_finished(&member.status);
 
         // Working agents show todo progress; finished or idle ones show how

@@ -317,8 +317,6 @@ pub struct SwarmInfo {
     pub focused: bool,
     /// Swarm plan progress (completed, running, total), when a plan is active.
     pub plan_progress: Option<(u32, u32, u32)>,
-    /// Spinner frame for animating active agents' status glyphs.
-    pub spinner_frame: usize,
 }
 
 /// Background task status for the info widget

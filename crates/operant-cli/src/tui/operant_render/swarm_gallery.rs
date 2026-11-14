@@ -74,6 +74,23 @@ pub const STRIP_SPINNER_FRAME_MS: u64 = 80;
 /// [port-source] swarm_gallery.rs:65-66
 pub const STRIP_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// The spinner cell for active members, derived from the clock.
+///
+/// This used to be a field on SwarmInfo (`spinner_frame`) that nothing ever
+/// wrote — the only writers were test literals — so `status_glyph` always
+/// received 0 and an active agent's glyph never animated (MEASURED 2026-11-14).
+/// Deriving it at the read site removes the state that could not be kept in sync,
+/// and honours the same animation policy as the memory spinner.
+pub fn current_swarm_spinner_frame() -> usize {
+    if !crate::tui::operant_app::perf::tui_policy().enable_decorative_animations {
+        return 0;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_millis() / 120) as usize)
+        .unwrap_or(0)
+}
+
 /// A glyph summarizing a member's lifecycle status. Active members (running,
 /// thinking, streaming) animate via the spinner frame; terminal states get a
 /// fixed glyph. `spinner_frame` selects the spinner cell for active members.
