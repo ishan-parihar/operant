@@ -85,18 +85,6 @@ impl DisplayMessage {
         }
     }
 
-    /// Create a swarm notification message (DM/channel/broadcast/shared context).
-    pub fn swarm(title: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: "swarm".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: Some(title.into()),
-            tool_data: None,
-        }
-    }
-
     /// Create a user message.
     pub fn user(content: impl Into<String>) -> Self {
         Self {
