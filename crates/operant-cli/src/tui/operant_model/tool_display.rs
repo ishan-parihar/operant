@@ -4,13 +4,17 @@
 // See operant_model/mod.rs for scope.
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+// `communicate` -> `swarm`, and `task`/`task_runner` -> `subagent`, were removed
+// 2026-11-14: no tool in this tree is registered under those names (checked every
+// `fn name()` in crates/operant-core/src/tools), so both arms were an unreachable
+// render path that read as a surface which does not exist. The live delegation
+// tool is `delegate_task`, which needs no alias.
 /// Map provider-side tool names to internal display names.
 /// Mirrors Registry::resolve_tool_name so TUI surfaces show friendly names.
 pub fn resolve_display_tool_name(name: &str) -> &str {
     match name {
-        "communicate" => "swarm",
         "discover_tools" => "integration_tools",
-        "task" | "task_runner" => "subagent",
         "shell_exec" => "bash",
         "file_read" => "read",
         "file_write" => "write",
@@ -24,7 +28,6 @@ pub fn resolve_display_tool_name(name: &str) -> &str {
 
 pub fn canonical_tool_name(name: &str) -> &str {
     match name {
-        "communicate" => "swarm",
         "discover_tools" => "integration_tools",
         "Write" => "write",
         "Edit" => "edit",
