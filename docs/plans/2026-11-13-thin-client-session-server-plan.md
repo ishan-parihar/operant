@@ -148,6 +148,27 @@ number instead of the word "target".
 **Why:** the audit's finding 10 — a scale claim with no number behind it.
 **Test:** the script runs and prints a table (a smoke check, not a unit test).
 
+## Execution record (updated as the iterations land)
+
+| # | Iteration | State | What landed |
+|---|---|---|---|
+| I1 | AgentEvent becomes a wire type | **done** (iter-2197) | `AgentEvent` + `TurnExitReason` derive Serialize/Deserialize; RT-546 closed |
+| I2 | The session protocol as data | **done** (iter-2199) | `session_protocol`: WireMessage, Envelope, encode/decode, ProtocolError |
+| I3 | The gateway serves a client socket | **done** (iter-2213) | `session_server` + `gateway run --socket PATH` |
+| I4 | A session a client can drive | **done** (iter-2219) | per-slot event channels, `SessionBus`, the socket subscribes a client to its session |
+| I5 | The TUI can attach | **half done** (iter-2225) | `SessionClient` + `operant chat --attach <socket>` (headless attach). The full TUI render-over-socket is the remaining half |
+| I6 | Approve, deny, cancel cross the socket | open | RT-550 (cancel does not cancel) is the same work |
+| I7 | The client dies, the session lives | open | the grace window |
+| I8 | One server, one child fleet | open | the ACP daemon folds into the gateway; the three runtime builders become one |
+| I9 | The cap and the slot count agree | **done** (iter-2223) | `slot_count_for` follows `max_concurrent_sessions`; RT-548 closed |
+| I10 | The number is published | open | the bench script |
+
+**The shape after I1-I5 + I9:** a terminal can reach a running gateway over a
+socket and drive a real turn there without building a runtime. What is left is
+the TUI's own render path over that socket (I5's second half), the control
+messages that need a live turn (I6), the session's survival (I7), the daemon
+merge (I8), and the measured number (I10).
+
 ## What this plan does not do
 
 - It does not change the channel side. The gateway already owns the channels,
