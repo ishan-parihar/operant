@@ -684,12 +684,21 @@ impl SkillManager {
     /// underneath a long-running gateway (RT-175's `/reload-skills` is the
     /// live example).
     pub fn list_available(&self) -> Vec<(String, String)> {
-        let mut pairs: Vec<_> = self
-            .skills
-            .values()
-            .filter(|s| self.is_available(s))
-            .map(|s| (s.name.clone(), s.description.clone()))
-            .collect();
+        // One row per skill, same reasoning as `list()`: the map is keyed by
+        // every alias, so iterating values lists a nested skill once per
+        // spelling. Here the cost is higher than a duplicated row -- this is
+        // the ADVERTISED block, so a duplicate spends the token budget twice
+        // on one skill and can push a real skill out under the ceiling.
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for skill in self.skills.values() {
+            if !self.is_available(skill) {
+                continue;
+            }
+            if pairs.iter().any(|(name, _)| name == &skill.name) {
+                continue;
+            }
+            pairs.push((skill.name.clone(), skill.description.clone()));
+        }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         pairs
     }
@@ -1512,6 +1521,20 @@ mod tests {
             listed,
             vec!["deep".to_string()],
             "the nested skill is not listed exactly once under its leaf: {listed:?}"
+        );
+
+        // The ADVERTISED list has the same aliasing hazard, and a higher
+        // cost: a duplicate row spends the token budget twice on one skill and
+        // can push a real skill out under the ceiling.
+        let advertised: Vec<String> = {
+            let mut mgr = SkillManager::from_roots(&roots);
+            mgr.load_all().expect("load");
+            mgr.list_available().into_iter().map(|(n, _)| n).collect()
+        };
+        assert_eq!(
+            advertised,
+            vec!["deep".to_string()],
+            "the advertised block lists one skill once: {advertised:?}"
         );
 
         // And both spellings resolve to the same directory.
