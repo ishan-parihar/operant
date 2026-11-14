@@ -1373,141 +1373,168 @@ impl OperantTool for SubAgentTool {
             Err(error) => return ToolResult::error(TOOL_NAME, error),
         };
 
+        // Four dispatch paths, one per method, so each can be read (and edited)
+        // on its own. This function was 143 lines with all four inline, and the
+        // background path alone took three separate fixes before the split.
+
         // Query mode: poll a previously dispatched background delegation.
-        if let Some(query_id) = parsed.query {
-            return match async_delegation::get_record(&query_id) {
-                Some(record) => {
-                    let content = serde_json::to_value(&record).unwrap_or(Value::Null);
-                    ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, content)
-                }
-                None => ToolResult::error(
-                    TOOL_NAME,
-                    format!(
-                        "No background delegation found with id '{query_id}'. It either never \
-                         existed or is gone: this process keeps the {} most recently FINISHED \
-                         delegations, and a restart forgets all of them. Do not re-dispatch the \
-                         work on this error alone — check the session store for the child's \
-                         output first; if the record was pending when the process restarted, its \
-                         child died with the process and the work must be re-run.",
-                        async_delegation::MAX_RETAINED_TERMINAL
-                    ),
-                ),
-            };
+        if let Some(query_id) = parsed.query.clone() {
+            return self.poll_delegation(&query_id);
         }
 
         // Background mode: dispatch and return a handle immediately.
         if parsed.background.unwrap_or(false) {
-            let Some(goal) = parsed.goal else {
-                return ToolResult::error(
-                    TOOL_NAME,
-                    "Background delegation requires 'goal'".to_string(),
-                );
-            };
-            if parsed.tasks.is_some() {
-                return ToolResult::error(
-                    TOOL_NAME,
-                    "Background mode supports a single 'goal', not batch 'tasks'".to_string(),
-                );
-            }
-            let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-            let timeout = parsed
-                .timeout_seconds
-                .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
-            return match self
-                .dispatch_background(
-                    goal,
-                    parsed.context,
-                    role,
-                    parsed.max_iterations,
-                    timeout,
-                    parsed.output_schema,
-                    parsed.toolsets.clone(),
-                    parsed.working_dir.clone(),
-                )
-                .await
-            {
-                Ok(handle) => ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, handle),
-                Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
-            };
+            return self.dispatch_in_background(parsed).await;
         }
 
         // Swarm mode: one real worker session per task, fanned out behind the
         // process-wide spawn guard.
-        if let Some(tasks) = parsed.tasks {
-            if !tasks.is_empty() {
-                let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-                let timeout = parsed
-                    .timeout_seconds
-                    .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
-                let workers: Vec<WorkerSpec> = tasks
-                    .into_iter()
-                    .map(|task| WorkerSpec {
-                        goal: task.goal,
-                        context: task.context,
-                        role,
-                        max_iterations: parsed.max_iterations,
-                        timeout_secs: timeout,
-                        output_schema: task.output_schema,
-                        // A task's own request wins over the top-level one.
-                        toolsets: task.toolsets.or_else(|| parsed.toolsets.clone()),
-                        working_dir: parsed.working_dir.clone(),
-                    })
-                    .collect();
+        if parsed.tasks.is_some() {
+            return self.run_a_swarm(parsed).await;
+        }
 
-                match self.call_batch(workers).await {
-                    Ok(content) => ToolResult {
-                        tool_call_id: TOOL_NAME.to_string(),
-                        name: TOOL_NAME.to_string(),
-                        success: true,
-                        content,
-                        error: None,
-                        timed_out: false,
-                    },
-                    Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
-                }
-            } else {
-                ToolResult::error(TOOL_NAME, "Tasks array cannot be empty".to_string())
+        self.run_one(parsed).await
+    }
+}
+
+// The four dispatch paths, on the inherent impl rather than the trait: they are
+// `delegate_task`'s internal branching, not part of the `OperantTool` contract.
+impl SubAgentTool {
+    /// Query mode: poll a previously dispatched background delegation.
+    fn poll_delegation(&self, query_id: &str) -> ToolResult {
+        match async_delegation::get_record(query_id) {
+            Some(record) => {
+                let content = serde_json::to_value(&record).unwrap_or(Value::Null);
+                ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, content)
             }
-        } else {
-            // Single mode: require goal
-            let goal = match parsed.goal {
-                Some(g) => g,
-                None => {
-                    return ToolResult::error(
-                        TOOL_NAME,
-                        "Either 'goal' or 'tasks' must be provided".to_string(),
-                    );
-                }
-            };
+            None => ToolResult::error(
+                TOOL_NAME,
+                format!(
+                    "No background delegation found with id '{query_id}'. It either never \
+                     existed or is gone: this process keeps the {} most recently FINISHED \
+                     delegations, and a restart forgets all of them. Do not re-dispatch the \
+                     work on this error alone — check the session store for the child's \
+                     output first; if the record was pending when the process restarted, its \
+                     child died with the process and the work must be re-run.",
+                    async_delegation::MAX_RETAINED_TERMINAL
+                ),
+            ),
+        }
+    }
 
-            let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-            let timeout = parsed
-                .timeout_seconds
-                .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+    /// Background mode: dispatch and return a handle immediately.
+    async fn dispatch_in_background(&self, parsed: SubAgentArgs) -> ToolResult {
+        let Some(goal) = parsed.goal else {
+            return ToolResult::error(
+                TOOL_NAME,
+                "Background delegation requires 'goal'".to_string(),
+            );
+        };
+        if parsed.tasks.is_some() {
+            return ToolResult::error(
+                TOOL_NAME,
+                "Background mode supports a single 'goal', not batch 'tasks'".to_string(),
+            );
+        }
+        let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
+        let timeout = parsed
+            .timeout_seconds
+            .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+        match self
+            .dispatch_background(
+                goal,
+                parsed.context,
+                role,
+                parsed.max_iterations,
+                timeout,
+                parsed.output_schema,
+                parsed.toolsets,
+                parsed.working_dir,
+            )
+            .await
+        {
+            Ok(handle) => ToolResult::success_with_name(TOOL_NAME, TOOL_NAME, handle),
+            Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
+        }
+    }
 
-            match self
-                .call(
-                    goal,
-                    parsed.context,
-                    role,
-                    parsed.max_iterations,
-                    timeout,
-                    parsed.output_schema,
-                    parsed.toolsets.clone(),
-                    parsed.working_dir.clone(),
-                )
-                .await
-            {
-                Ok(content) => ToolResult {
-                    tool_call_id: TOOL_NAME.to_string(),
-                    name: TOOL_NAME.to_string(),
-                    success: true,
-                    content,
-                    error: None,
-                    timed_out: false,
-                },
-                Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
-            }
+    /// Swarm mode: one real worker session per task, fanned out behind the
+    /// process-wide spawn guard.
+    async fn run_a_swarm(&self, parsed: SubAgentArgs) -> ToolResult {
+        let Some(tasks) = parsed.tasks else {
+            return ToolResult::error(TOOL_NAME, "Tasks array cannot be empty".to_string());
+        };
+        if tasks.is_empty() {
+            return ToolResult::error(TOOL_NAME, "Tasks array cannot be empty".to_string());
+        }
+        let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
+        let timeout = parsed
+            .timeout_seconds
+            .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+        let workers: Vec<WorkerSpec> = tasks
+            .into_iter()
+            .map(|task| WorkerSpec {
+                goal: task.goal,
+                context: task.context,
+                role,
+                max_iterations: parsed.max_iterations,
+                timeout_secs: timeout,
+                output_schema: task.output_schema,
+                // A task's own request wins over the top-level one.
+                toolsets: task.toolsets.or_else(|| parsed.toolsets.clone()),
+                working_dir: parsed.working_dir.clone(),
+            })
+            .collect();
+
+        match self.call_batch(workers).await {
+            Ok(content) => ToolResult {
+                tool_call_id: TOOL_NAME.to_string(),
+                name: TOOL_NAME.to_string(),
+                success: true,
+                content,
+                error: None,
+                timed_out: false,
+            },
+            Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
+        }
+    }
+
+    /// Single mode: one child, synchronously.
+    async fn run_one(&self, parsed: SubAgentArgs) -> ToolResult {
+        let Some(goal) = parsed.goal else {
+            return ToolResult::error(
+                TOOL_NAME,
+                "Either 'goal' or 'tasks' must be provided".to_string(),
+            );
+        };
+
+        let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
+        let timeout = parsed
+            .timeout_seconds
+            .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+
+        match self
+            .call(
+                goal,
+                parsed.context,
+                role,
+                parsed.max_iterations,
+                timeout,
+                parsed.output_schema,
+                parsed.toolsets,
+                parsed.working_dir,
+            )
+            .await
+        {
+            Ok(content) => ToolResult {
+                tool_call_id: TOOL_NAME.to_string(),
+                name: TOOL_NAME.to_string(),
+                success: true,
+                content,
+                error: None,
+                timed_out: false,
+            },
+            Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
         }
     }
 }
