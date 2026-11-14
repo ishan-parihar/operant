@@ -204,16 +204,6 @@ impl PreviewFilter {
         }
     }
 
-    /// The short label the preview header paints, so the active filter is
-    /// visible rather than remembered.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Full => "full session",
-            Self::UserOnly => "your prompts",
-            Self::UserAndTurnEnd => "prompts + replies",
-        }
-    }
-
     /// Whether a message is shown under this filter.
     ///
     /// The end-of-turn predicate is the data's own: an assistant message that

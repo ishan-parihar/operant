@@ -39,11 +39,13 @@ pub struct SwarmMemberStatus {
     /// members when inline streaming taps are active.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
-    /// Session id this member reports back to (its spawner/parent in the swarm
-    /// tree). Walking this chain reconstructs the spawn tree, which lets a
-    /// client scope the inline gallery to the subtree it actually spawned.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub report_back_to_session_id: Option<String>,
+    /// (2026-11-15, third-pass audit, finding 8) `report_back_to_session_id`
+    /// was here: a `Some`/`None` field, named after jcode's parent-edge field,
+    /// written at three construction sites and read by NOTHING. Operant's parent
+    /// edge is `SessionEntryV2::parent_id`, which `records_snapshot` fills from
+    /// `parent_session_id` (iter-2355) and the hub and gateway both read. Two
+    /// names for one truth, one of them dead: deleted rather than wired, because
+    /// wiring it would fork the truth the other field already owns.
     /// Todo/plan progress as (completed, total) for this member, when known.
     /// Surfaced on the inline swarm strip as a compact "C/T" counter.
     #[serde(default, skip_serializing_if = "Option::is_none")]

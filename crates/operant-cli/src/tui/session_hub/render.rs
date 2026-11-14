@@ -38,13 +38,26 @@ pub(crate) const SPLIT: (Constraint, Constraint) =
 
 /// How many columns the LIST pane gets of a frame `width` wide.
 ///
+/// Derived from [`SPLIT`], never restated. MEASURED 2026-11-15 (third-pass
+/// audit, finding 7, and item 2c of `docs/plans/2026-11-15-session-hub-
+/// surfaces-and-agent-identity.md`): the body was `(width * 45 / 100)`, a second
+/// copy of the 45 that `SPLIT` owns — so the moment the split moves, the helper
+/// and the renderer disagree, and the helper is what the tests measure with.
+///
 /// (2026-11-14, plan iteration 5) The tests used to hardcode `width * 2 / 5`,
 /// which was the split at 40/60. When the split moved to 45/55 every pane-width
 /// assertion silently measured a pane that no longer exists — the test's slice
 /// and the renderer's layout disagreed, and the failure read as a rendering bug.
 /// Take the budget from the layout call, never from a literal.
+#[cfg(test)]
 pub(crate) fn list_pane_width(width: u16) -> usize {
-    (usize::from(width) * 45 / 100).min(usize::from(width))
+    let percent = match SPLIT.0 {
+        Constraint::Percentage(p) => usize::from(p),
+        // A non-percentage split has no single list width; the half is the only
+        // answer that still tracks the layout rather than inventing one.
+        _ => 50,
+    };
+    ((usize::from(width) * percent) / 100).min(usize::from(width))
 }
 
 /// How many rows of organising chrome sit above the session rows inside the
@@ -308,30 +321,6 @@ fn row_title(row: &SessionEntryV2) -> String {
                 base
             }
         }
-    }
-}
-
-/// Compact token count for the row's meta line: a 14,103-message session's
-/// token total is seven digits, which at a 40%-width list would push the
-/// session id off the row entirely. `k`/`M` keeps the identifier visible.
-///
-/// (2026-11-02, measured) The unit went too: with the Status and Updated
-/// columns also on the line, " · 1.2k tok" cost 11 cells and pushed the row's
-/// `$cost` off the 46-column inner pane entirely. Dropping the repeated " tok"
-/// (the column header says what the number is) fits the row at 48-wide panes
-/// again, and a token count nobody reads to three digits.
-fn tokens_suffix(tokens: u64) -> String {
-    const K: f64 = 1_000.0;
-    const M: f64 = 1_000_000.0;
-    let t = tokens as f64;
-    if tokens == 0 {
-        String::new()
-    } else if t >= M {
-        format!(" \u{2022} {:.1}M", t / M)
-    } else if t >= K {
-        format!(" \u{2022} {:.1}k", t / K)
-    } else {
-        format!(" \u{2022} {tokens}")
     }
 }
 

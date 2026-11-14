@@ -33,7 +33,7 @@
 
 | Claim | Why partial |
 |---|---|
-| `SubAgentTool::new(test_config(), SubAgentRole::Orchestrator)` signature | Method exists (`sub_agent_tool.rs`) but parameter shape for config vs `&Config` needs verification. Audit code may fail to compile. |
+| ~~`SubAgentTool::new(test_config(), SubAgentRole::Orchestrator)` signature~~ | **This row was itself the fabrication.** No such signature ever existed. The constructor is `with_parent_tool_policy(&OpenAIClient, model, depth, toolsets, disabled_tools, disabled_toolsets, db, event_tx)`. A six-argument `new` forwarding to it was deleted at iter-2377 precisely because these audit docs were its only reference. |
 | `registry.get("delegate_task").is_some()` test stub | Registry is async (`RwLock<HashMap<...>>`); `.get()` returns `Some(Arc<dyn OperantTool>)` not `Some(())`. Need `registry.contains(name).await`. |
 | `assert_eq!(r.content, r#"{"ok":true}"#)` (no whitespace) | serde_json default has no whitespace, so this would actually pass for JSON objects — fine. |
 

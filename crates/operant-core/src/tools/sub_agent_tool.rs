@@ -584,29 +584,17 @@ pub struct SubAgentTool {
 }
 
 impl SubAgentTool {
-    pub fn new(
-        parent_client: &OpenAIClient,
-        model: impl Into<String>,
-        parent_depth: u32,
-        parent_toolsets: Vec<String>,
-        database: Arc<Database>,
-        event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
-    ) -> Self {
-        Self::with_parent_tool_policy(
-            parent_client,
-            model,
-            parent_depth,
-            parent_toolsets,
-            std::collections::HashSet::new(),
-            std::collections::HashSet::new(),
-            database,
-            event_tx,
-        )
-    }
-
     /// Construct with the parent's disabled tool/toolset policy so that
     /// spawned children inherit the exact same tool restrictions as the
     /// parent registry (hermes parity).
+    ///
+    /// MEASURED 2026-11-15 (third-pass audit, finding 6): a six-argument `new`
+    /// used to sit here and forward to this one with two empty `HashSet::new()`
+    /// arguments. `git grep SubAgentTool::new` found 9 hits, ALL in two audit
+    /// documents describing a signature `(&Config, SubAgentRole)` that never
+    /// existed in this tree — zero code callers, in any of the 28 worktrees'
+    /// tracked files. The docs were the only thing keeping it findable, and they
+    /// advertised a constructor the code did not have. Deleted.
     #[expect(
         clippy::too_many_arguments,
         reason = "builder mirrors the SubAgentTool fields (hermes parity); callers construct it directly"

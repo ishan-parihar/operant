@@ -4,6 +4,20 @@
 **Trigger**: User-reported "Tool Testing Summary" — 27 ✅ / 7 🟡 / 3 ❌ (delegate_task, clarify, skill_manage)
 **Goal**: Identify structural defects in the backend tool pipeline that the surface report does not see, then produce a refactor plan that resolves them at the foundation rather than per-tool.
 
+> **CORRECTION (iter-2377).** Every `SubAgentTool::new(...)` written below is
+> **fabricated API**: no such constructor ever existed in this tree, in any
+> shape. The real one is
+> `SubAgentTool::with_parent_tool_policy(&OpenAIClient, model, depth,
+> toolsets, disabled_tools, disabled_toolsets, db, event_tx)`. The proposals
+> here were never applied as written. `crates/operant-runtime/` is also not a
+> path in this repo — the tool layer lives in `crates/operant-core/`.
+>
+> A six-argument `new` forwarding to `with_parent_tool_policy` did briefly
+> exist, but only because these two audit documents cited it; it had zero code
+> callers and was deleted at iter-2377. The lesson is the one this repo keeps
+> relearning: a doc that names an API is a claim, and a claim is not a
+> signature. Read the code.
+
 ---
 
 ## Executive Summary

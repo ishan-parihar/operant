@@ -1385,7 +1385,6 @@ impl App {
                     live_attachments: None,
                     status_age_secs: Some(now.saturating_sub(rec.dispatch_time)),
                     output_tail: None,
-                    report_back_to_session_id: None,
                     todo_progress: (total > 0).then_some((completed, total)),
                     todo_items,
                     runtime: SwarmMemberRuntime {
@@ -1422,7 +1421,6 @@ impl App {
                         live_attachments: None,
                         status_age_secs: Some(m.age_secs),
                         output_tail: None,
-                        report_back_to_session_id: None,
                         todo_progress: None,
                         todo_items: Vec::new(),
                         runtime: SwarmMemberRuntime {
