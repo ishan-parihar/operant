@@ -2554,6 +2554,14 @@ impl CredentialPoolSettings {
 /// Configuration for an auxiliary model assigned to a specific task slot.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuxiliaryModelConfig {
+    /// A LABEL, not a route. Every auxiliary call goes through the single
+    /// OpenAI-compatible client (`moa::slot_client`), which seeds from the
+    /// primary `ClientConfig` and overrides only `base_url` and `api_key` —
+    /// `ClientConfig` has no provider field at all. So setting
+    /// `provider = "anthropic"` with no `base_url` silently uses the primary
+    /// route and the primary credential. To move a slot to another host, set
+    /// `base_url` (and `api_key` when it needs its own); the provider name is
+    /// used only for the `[provider:model]` label in diagnostics.
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,

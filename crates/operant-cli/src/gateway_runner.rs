@@ -6255,9 +6255,42 @@ pub async fn start_gateway(
                     let slot_channel = current_channel_for_events.lock().await.clone();
                     let target =
                         resolve_background_target(&session_id, pinned_channel, slot_channel);
+
+                    // The summary carries TWO different things: the CARD the
+                    // operator reads (one block per note) and, for a review
+                    // that should continue the run, the marker plus the
+                    // machine batch the MODEL must receive. The TUI splits at
+                    // the marker (tui/app/agent_events.rs); the gateway sent
+                    // the whole string verbatim, so a Telegram user got the
+                    // boundary guidance and the raw `<advisory severity="...">`
+                    // XML as their card. The card is everything BEFORE the
+                    // marker, exactly as the TUI reads it.
+                    let marker = operant_core::advisor::CONTINUATION_TAG;
+                    let (card, continuation) = match summary.find(marker) {
+                        Some(pos) => (
+                            summary[..pos].trim_end().to_string(),
+                            Some(summary[pos..].trim().to_string()),
+                        ),
+                        None => (summary.clone(), None),
+                    };
+                    if let Some(batch) = continuation
+                        && !batch.is_empty()
+                    {
+                        // There is no gateway path that submits a follow-up
+                        // turn: the agent handle is not in this event loop's
+                        // scope (only the TUI's loop can continue a run). Say
+                        // so, rather than dropping it silently — an undelivered
+                        // continuation is the difference between "the advisor
+                        // advised and nothing happened" and "nobody knows".
+                        tracing::warn!(
+                            session = %session_id,
+                            "advisor: a continuation batch was produced but the gateway has no                              turn-submission path — the notes are delivered as a card only"
+                        );
+                    }
+
                     match target {
                         Some((platform, channel_id, thread_id)) => {
-                            let msg = OutgoingMessage::new(&channel_id, &summary)
+                            let msg = OutgoingMessage::new(&channel_id, &card)
                                 .with_thread_id(thread_id);
                             let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                         }

@@ -224,9 +224,16 @@ pub struct AdvisorConfig {
     #[serde(default)]
     pub instructions: String,
     /// Lowest severity that wakes an idle primary for one continuation
-    /// (omp `advisor.continueSeverity`, default `concern`). Notes below
-    /// this stay visible cards that ride the conversation into the
-    /// model's context with the next user turn.
+    /// (omp `advisor.continueSeverity`, default `concern`).
+    ///
+    /// Notes below this stay HOST-VISIBLE CARDS and do NOT enter the model's
+    /// context: the host renders them for the operator. An earlier version of
+    /// this doc said a card "rides the conversation into the model's context
+    /// with the next user turn" — that was false (the TUI pushes cards into a
+    /// UI-only vector no agent-side code reads) and the module doc at the top
+    /// of this file already records the correction. The generator copies this
+    /// text into the operator-facing registry, so the wrong version was the
+    /// one an operator actually read.
     #[serde(default = "default_continue_severity")]
     pub continue_severity: Severity,
     /// Max consecutive identical-note suppressions before a repeat is
@@ -336,6 +343,29 @@ fn quarantine_hazard(note: &str) -> Option<&'static str> {
 /// (omp's advise-tool schema, inline). A bare `- text` line is a nit (omp:
 /// "Omit for a plain nit"); an unknown bracket word falls back to nit
 /// rather than dropping the note. An empty set means "no notes".
+/// Longest note text one review may inject, in characters.
+///
+/// `max_notes_per_update` bounds the COUNT of notes, never their length, so
+/// before this the batch was bounded only by the advisory model's verbosity:
+/// four notes of ten thousand characters each reached the primary as a single
+/// user turn, and the continuation turn is charged against the window. That
+/// is the same unbounded-injection defect memory had before iter-2345. A note
+/// is a "short note of concrete concern" by contract; this is the code that
+/// makes the contract true rather than requested.
+const MAX_NOTE_CHARS: usize = 500;
+
+/// Cut one note to [`MAX_NOTE_CHARS`], on a character boundary.
+///
+/// The truncation is STATED rather than silent: a note the primary cannot read
+/// in full must not look complete, or it acts on half a sentence.
+fn truncate_note(text: &str) -> String {
+    if text.chars().count() <= MAX_NOTE_CHARS {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(MAX_NOTE_CHARS).collect();
+    format!("{kept} [truncated]")
+}
+
 fn extract_notes(reply: &str) -> Vec<ParsedNote> {
     reply
         .lines()
@@ -346,6 +376,7 @@ fn extract_notes(reply: &str) -> Vec<ParsedNote> {
             if rest.is_empty() || rest == "no notes" {
                 return None;
             }
+
             // Optional [severity] prefix, then the note text.
             if let Some(close) = rest.find(']')
                 && rest.starts_with('[')
@@ -358,12 +389,12 @@ fn extract_notes(reply: &str) -> Vec<ParsedNote> {
                 let severity = Severity::parse(bracket).unwrap_or(Severity::Nit);
                 return Some(ParsedNote {
                     severity,
-                    text: text.to_string(),
+                    text: truncate_note(text),
                 });
             }
             Some(ParsedNote {
                 severity: Severity::Nit,
-                text: rest.to_string(),
+                text: truncate_note(rest),
             })
         })
         .collect()
@@ -448,7 +479,15 @@ pub fn spawn_advisor(
         return;
     }
     let suppress_streak = suppress_streak.max(1);
-    let max_notes_per_update = max_notes_per_update.max(1);
+    // `0` means "the built-in default", as documented on the field and in the
+    // registry — not 1. The old `.max(1)` turned an explicit 0 into a cap of
+    // ONE note, so an operator writing 0 to mean "leave the default alone"
+    // silently cut the batch to a single note.
+    let max_notes_per_update = if max_notes_per_update == 0 {
+        default_max_notes_per_update()
+    } else {
+        max_notes_per_update
+    };
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = crate::moa::slot_client(&base, &model);
     let advisor_model = model
@@ -640,7 +679,16 @@ pub fn spawn_advisor(
                     continue;
                 }
                 // Emission guard: suppress consecutive identical notes.
-                {
+                //
+                // BLOCKERS ARE EXEMPT, the same as they are exempt from the
+                // note budget. operant.example.toml promises a blocker "always
+                // reaches the model and always continues the run", but the
+                // guard was severity-blind: a blocker repeating across a long
+                // incident was suppressed for `suppress_streak` reviews, and a
+                // review whose every note was suppressed delivered NOTHING at
+                // all — the one signal that must never be dropped. A repeated
+                // blocker is the same blocker, so it still rides through.
+                if note.severity != Severity::Blocker {
                     let mut last = st.last_note.lock();
                     if last.0 == note.text && last.1 < suppress_streak {
                         last.1 += 1;
@@ -762,6 +810,36 @@ mod tests {
         );
         assert!(extract_notes("no notes").is_empty());
         assert!(extract_notes("").is_empty());
+    }
+
+    /// A note longer than the cap is cut, and the cut is STATED.
+    ///
+    /// `max_notes_per_update` bounds the COUNT of notes, never their length, so
+    /// before this the injected batch was bounded only by the advisory model's
+    /// verbosity — four ten-thousand-character notes reached the primary as one
+    /// user turn, charged against the window.
+    #[test]
+    fn a_note_is_cut_to_the_cap_and_says_so() {
+        let long = "x".repeat(MAX_NOTE_CHARS * 3);
+        let notes = extract_notes(&format!("- [blocker] {long}"));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].text.ends_with(" [truncated]"));
+        assert!(notes[0].text.chars().count() < long.chars().count());
+        assert_eq!(notes[0].severity, Severity::Blocker);
+
+        // A note under the cap is untouched, byte for byte.
+        let short = "- [concern] guard the boundary";
+        assert_eq!(extract_notes(short)[0].text, "guard the boundary");
+    }
+
+    /// A note cut on a CHARACTER boundary, never mid-codepoint.
+    #[test]
+    fn the_note_cut_lands_on_a_character_boundary() {
+        let long = "é".repeat(MAX_NOTE_CHARS + 50);
+        let notes = extract_notes(&format!("- [nit] {long}"));
+        let kept = notes[0].text.strip_suffix(" [truncated]").expect("stated");
+        assert_eq!(kept.chars().count(), MAX_NOTE_CHARS);
+        assert_eq!(kept, "é".repeat(MAX_NOTE_CHARS));
     }
 
     /// OMP: "Omit for a plain nit" — an unknown bracket word falls back to
@@ -1184,6 +1262,13 @@ mod engine {
             *self.transcript.lock() = messages;
         }
 
+        /// The current transcript, so a test can APPEND a genuinely new turn
+        /// rather than replacing the history (which the fingerprint guard
+        /// reads as a replay of material it already reviewed).
+        fn transcript_snapshot(&self) -> Vec<Message> {
+            self.transcript.lock().clone()
+        }
+
         /// Shrink the transcript the way compaction does: the length drops.
         fn shrink_to(&self, n: usize) {
             self.transcript.lock().truncate(n);
@@ -1454,6 +1539,42 @@ mod engine {
         assert!(
             d.batch.contains("the build is red"),
             "the blocker's text must be in the batch the model receives"
+        );
+    }
+
+    /// A repeated BLOCKER is still delivered.
+    ///
+    /// operant.example.toml promises a blocker "always reaches the model and
+    /// always continues the run". The emission guard was severity-blind, so a
+    /// blocker repeating across an incident was suppressed for `suppress_streak`
+    /// reviews and a review whose every note was suppressed delivered NOTHING.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_repeated_blocker_is_still_delivered() {
+        let h = Harness::with_severity(
+            "- [blocker] the build is red",
+            vec![Message::user("one")],
+            Severity::Concern,
+        )
+        .await;
+        h.end_turn();
+        assert!(eventually(|| !h.delivered().is_empty()).await);
+        assert_eq!(h.delivered().len(), 1);
+
+        // The same blocker again, three turns running — the streak the
+        // suppression guard exists to catch. A nit would be suppressed here.
+        // Each turn's DELTA must be genuinely new, or the fingerprint loop
+        // guard correctly skips it as a replay of material already reviewed.
+        for i in 0..3 {
+            let mut t = h.transcript_snapshot();
+            t.push(Message::user(format!("try {i}")));
+            h.set_transcript(t);
+            h.end_turn();
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+        assert!(
+            h.delivered().len() > 1,
+            "a repeated blocker must reach the operator every time, but only {} of 4              reviews delivered",
+            h.delivered().len()
         );
     }
 
