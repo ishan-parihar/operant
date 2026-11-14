@@ -137,19 +137,23 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Cycle reasoning effort",
             },
+            // Up/Down walk the composer's OWN rows first and reach the prompt
+            // history only at the top/bottom row (operator report 2026-11-14;
+            // the descriptions said "History previous/next", which is only
+            // true at the boundary and read as "these keys are the ladder").
             DefaultBinding {
                 key: KeyCode::Up,
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::HistoryPrevious,
                 context: BindingContext::Prompt,
-                description: "History previous",
+                description: "Line up, then history previous at the top row",
             },
             DefaultBinding {
                 key: KeyCode::Down,
                 modifiers: KeyModifiers::NONE,
                 action: KeyAction::HistoryNext,
                 context: BindingContext::Prompt,
-                description: "History next",
+                description: "Line down, then history next at the bottom row",
             },
             // iter-429: the Ctrl+P "History previous" entry is GONE. It never
             // worked — the Ctrl+P arm opens global search. History previous is

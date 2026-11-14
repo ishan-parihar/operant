@@ -43,7 +43,14 @@ impl PromptInputState {
             // (red-team 2, 2026-11-14; probed, see the audit §2.)
             self.pending_pastes.clear();
             self.text = self.history[pos].clone();
-            self.cursor = self.text.len();
+            // Going BACK in time, the caret belongs at the TOP-START: the
+            // operator pressed Up to reach an older prompt, and an entry that
+            // opens with the caret at its end reads as "this is the newest
+            // line", which is the opposite of the gesture. It also makes the
+            // next Up walk the entry's own first row instead of immediately
+            // stepping further back (operator report 2026-11-14).
+            self.cursor = 0;
+            self.preferred_col = None;
             self.history_recall = Some(self.text.clone());
             self.update_token_estimate();
             // (2026-10-25) A recalled `/…` entry must not re-open the
@@ -70,7 +77,10 @@ impl PromptInputState {
                 self.history_pos = None;
                 self.pending_pastes.clear();
                 self.text = self.history_draft.clone();
+                // Back to the draft: the caret belongs at the BOTTOM-END,
+                // where the operator left it (operator report 2026-11-14).
                 self.cursor = self.text.len();
+                self.preferred_col = None;
                 self.history_recall = None;
                 self.update_token_estimate();
                 self.suppress_suggestions_once = true;
@@ -81,7 +91,11 @@ impl PromptInputState {
                 self.history_pos = Some(n + 1);
                 self.pending_pastes.clear();
                 self.text = self.history[n + 1].clone();
+                // Going FORWARD in time, the caret belongs at the BOTTOM-END:
+                // Down reaches toward the present, and the tail is where the
+                // operator's eye is after walking back up through an entry.
                 self.cursor = self.text.len();
+                self.preferred_col = None;
                 self.history_recall = Some(self.text.clone());
                 self.update_token_estimate();
                 self.suppress_suggestions_once = true;

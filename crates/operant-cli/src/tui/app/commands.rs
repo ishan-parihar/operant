@@ -279,9 +279,14 @@ impl App {
     /// the next one. This one is delivered WITH the next turn (see
     /// `take_pending_queued_messages`).
     pub(crate) fn queue_for_next_turn(&mut self, text: &str) -> String {
-        if self.steer_queue_handle.is_none() {
-            return "Queueing is unavailable (no live agent to deliver to).".to_string();
-        }
+        // No agent gate, deliberately. The next-turn queue is the App's OWN
+        // `Vec`, and `take_pending_queued_messages` hands it to the next
+        // submission — it never touches `steer_queue_handle`. Gating it on a
+        // live agent refused Ctrl+Enter in exactly the windows the operator
+        // reaches for it: before the first turn of a session, and after an
+        // agent that failed to attach. `steer_now` keeps its gate, because a
+        // steer really does need somewhere to be injected (operator report
+        // 2026-11-14: "the queue/steer is still not working effectively").
         self.next_turn_queue.push(text.to_string());
         format!("Queued for the next turn: {}", text)
     }
@@ -589,8 +594,11 @@ impl App {
                 let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
                 let pool = self.config.skills.root_dir.clone();
                 if name.is_empty() {
-                    self.skills_view
-                        .open(pool, vendor_roots, self.config.skills.extra_roots.clone());
+                    self.skills_view.open(
+                        pool,
+                        vendor_roots,
+                        self.config.skills.extra_roots.clone(),
+                    );
                     return true;
                 }
                 // Optional trailing instruction after the skill name:

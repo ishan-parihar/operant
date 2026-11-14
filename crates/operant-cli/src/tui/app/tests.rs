@@ -1244,8 +1244,8 @@ fn every_advertised_binding_dispatches() {
         ("Shift+Enter", "Insert newline"),
         ("Esc", "Cancel"),
         ("Tab", "Accept completion"),
-        ("Up", "History previous"),
-        ("Down", "History next"),
+        ("Up", "Line up, then history previous at the top row"),
+        ("Down", "Line down, then history next at the bottom row"),
         ("Ctrl+n", "History next"),
         ("Ctrl+e", "Move to end"),
         ("Ctrl+f", "Word right"),
@@ -16033,4 +16033,450 @@ fn no_wholesale_text_writer_can_leave_an_orphan_payload() {
             "{name}: the store describes text that is no longer there"
         );
     }
+}
+
+// ---- operator report 2026-11-14: Up/Down line-first + recall cursor ----
+
+/// The operator's report: "The up/dn arrow must ORIGINALLY navigate the
+/// input-area lines, rather than directly navigate the prompt history."
+///
+/// A multi-line draft with the caret on its last row: Up moves the caret up a
+/// row. History is reached only from the TOP row.
+#[test]
+fn up_walks_the_draft_lines_before_reaching_for_history() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    let draft = "line one\nline two\nline three";
+    app.prompt_input.replace_text(draft.to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Up on a multi-line draft must move the caret, not recall history"
+    );
+    assert!(
+        app.prompt_input.cursor < draft.len(),
+        "the caret must actually have moved up"
+    );
+}
+
+/// The case the `!text.contains('\n')` guard got wrong: a SINGLE-line draft
+/// that WRAPS to several visual rows. Up on row 3 must walk to row 2, not
+/// recall an old prompt and discard the draft being edited.
+#[test]
+fn up_walks_a_wrapped_single_line_draft_before_reaching_for_history() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 24, 6));
+    let long = "the quick brown fox jumps over the lazy dog and keeps running";
+    app.prompt_input.replace_text(long.to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+    assert!(
+        app.prompt_input.cursor_visual_pos(20).0 > 0,
+        "setup: the caret starts below the first visual row"
+    );
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Up on a WRAPPED draft must walk the visual row, not recall history"
+    );
+}
+
+/// And Down on the same wrapped draft: it must walk down. The old guard made
+/// Down a dead key on any single-line draft, wrapped or not.
+#[test]
+fn down_walks_a_wrapped_single_line_draft() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 24, 6));
+    let long = "the quick brown fox jumps over the lazy dog and keeps running";
+    app.prompt_input.replace_text(long.to_string());
+    app.prompt_input.cursor = 0;
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Down must not step into history from a fresh composer"
+    );
+    assert!(
+        app.prompt_input.cursor > 0,
+        "the caret must move down a row"
+    );
+}
+
+/// The operator's second rule: "the cursor must always stay at the top-start,
+/// or bottom-end for effective navigation of prompt history."
+///
+/// Up (back in time) lands at the TOP-START.
+#[test]
+fn a_recall_going_back_puts_the_caret_at_the_top_start() {
+    let mut app = make_app();
+    app.prompt_input.replace_text("draft".to_string());
+    app.prompt_input.history = vec![
+        "first old prompt".to_string(),
+        "second old prompt\nwith a second line".to_string(),
+    ];
+
+    app.prompt_input.history_up();
+
+    assert_eq!(
+        app.prompt_input.cursor, 0,
+        "an Up recall must put the caret at the TOP-START"
+    );
+}
+
+/// Down (forward in time) lands at the BOTTOM-END, including the exit back to
+/// the draft the operator was editing.
+#[test]
+fn a_recall_going_forward_puts_the_caret_at_the_bottom_end() {
+    let mut app = make_app();
+    app.prompt_input.replace_text("draft".to_string());
+    app.prompt_input.history = vec!["older\nsecond line".to_string(), "newer".to_string()];
+    app.prompt_input.history_up(); // -> "newer"
+    app.prompt_input.history_up(); // -> "older\nsecond line"
+
+    app.prompt_input.history_down(); // -> "newer"
+
+    assert_eq!(
+        app.prompt_input.cursor,
+        app.prompt_input.text.len(),
+        "a Down recall must put the caret at the BOTTOM-END"
+    );
+
+    app.prompt_input.history_down(); // -> back to the draft
+
+    assert_eq!(
+        app.prompt_input.cursor,
+        app.prompt_input.text.len(),
+        "exiting the ladder back to the draft must land at its end"
+    );
+}
+
+/// And the ladder still answers from the boundary: on the TOP row, Up recalls.
+#[test]
+fn up_recalls_history_once_the_caret_is_on_the_top_row() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    app.prompt_input
+        .replace_text("line one\nline two\nline three".to_string());
+    app.prompt_input.cursor = 0; // top row
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "Up on the top row must reach the history ladder"
+    );
+}
+
+/// The Enter contract, pinned end to end (the operator's third report). These
+/// all passed before this change too - they are here because the report says
+/// the keys are wrong, and the evidence says the app-side dispatch is right, so
+/// the next agent needs the tests that prove it rather than the claim.
+#[test]
+fn enter_chords_keep_their_meaning_in_both_states() {
+    // Shift+Enter is a newline, idle and streaming.
+    for streaming in [false, true] {
+        let mut app = make_app();
+        app.is_streaming = streaming;
+        app.prompt_input.replace_text("first".to_string());
+        app.prompt_input.cursor = app.prompt_input.text.len();
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert!(
+            !submitted,
+            "Shift+Enter must never submit (streaming={streaming})"
+        );
+        assert_eq!(
+            app.prompt_input.text, "first\n",
+            "Shift+Enter must insert a newline (streaming={streaming})"
+        );
+    }
+
+    // Ctrl+Enter queues for the next turn, in BOTH states, and never steers.
+    for streaming in [false, true] {
+        let mut app = make_app();
+        let steer: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&steer));
+        app.is_streaming = streaming;
+        app.prompt_input
+            .replace_text("next turn please".to_string());
+        let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert!(!submitted, "Ctrl+Enter must never submit");
+        assert_eq!(
+            app.next_turn_queue,
+            vec!["next turn please".to_string()],
+            "Ctrl+Enter must queue for the next turn (streaming={streaming})"
+        );
+        assert!(
+            steer.try_lock().unwrap().is_empty(),
+            "Ctrl+Enter must not steer (streaming={streaming})"
+        );
+    }
+
+    // Plain Enter steers while streaming, and submits when idle.
+    let mut app = make_app();
+    let steer: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&steer));
+    app.is_streaming = true;
+    app.prompt_input
+        .replace_text("focus on the parser".to_string());
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!submitted, "plain Enter must not submit mid-turn");
+    assert_eq!(
+        *steer.try_lock().unwrap(),
+        vec!["focus on the parser".to_string()],
+        "plain Enter must steer while streaming"
+    );
+
+    let mut app = make_app();
+    app.is_streaming = false;
+    app.prompt_input.replace_text("hello there".to_string());
+    assert!(
+        app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)),
+        "plain Enter must submit when idle"
+    );
+}
+
+/// COMPLAINT 3, the "still not working effectively" half.
+///
+/// The queue is the App's OWN store, drained by `take_pending_queued_messages`
+/// at the next submission. It does not need an agent handle. It used to be
+/// gated on `steer_queue_handle.is_some()`, which refused Ctrl+Enter in exactly
+/// the windows the operator reaches for it: before the first turn of a session,
+/// and after an agent that failed to attach.
+#[test]
+fn the_queue_works_before_any_agent_is_attached() {
+    let mut app = make_app();
+    app.is_streaming = false;
+    app.steer_queue_handle = None;
+    app.prompt_input.replace_text("park this".to_string());
+
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+
+    assert!(!submitted, "Ctrl+Enter must never submit");
+    assert_eq!(
+        app.next_turn_queue,
+        vec!["park this".to_string()],
+        "the next-turn queue is the App's own store and needs no agent"
+    );
+    assert!(
+        app.prompt_input.text.is_empty(),
+        "a successful queue consumes the composer"
+    );
+}
+
+/// The mirror case, so the asymmetry is deliberate rather than accidental: a
+/// STEER does need an agent, and refuses honestly.
+#[test]
+fn a_steer_without_an_agent_still_refuses() {
+    let mut app = make_app();
+    app.is_streaming = true;
+    app.steer_queue_handle = None;
+    app.prompt_input.replace_text("steer me".to_string());
+
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(!submitted, "there is nothing running to steer");
+    assert_eq!(
+        app.prompt_input.text, "steer me",
+        "a refused steer must not lose the draft"
+    );
+}
+
+// ---- red team 3: attacking the Up/Down change (all six became tests) ----
+
+/// The Up arm now always tries `move_visual_up` first. When the composer has
+/// never been laid out (`width == 0`) the visual model is undefined, so the walk
+/// cannot move and Up must fall through to history rather than silently doing
+/// nothing. This is the case the change could have broken.
+#[test]
+fn up_recalls_history_when_the_composer_was_never_laid_out() {
+    let mut app = make_app();
+    // `last_input_area` left at its default (zero) — no layout yet.
+    app.prompt_input.replace_text("a draft".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "with no layout the caret cannot walk, so Up must recall"
+    );
+}
+
+/// A single-line draft on a WIDE composer (no wrap) with the caret at the end:
+/// Up has no row above, so it must recall. This is the hermes-agent
+/// single-line behavior the old code had, and the change must not remove it.
+#[test]
+fn up_recalls_on_a_short_draft_that_does_not_wrap() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    app.prompt_input.replace_text("short".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "a one-row draft has nothing above it, so Up must recall"
+    );
+}
+
+/// Walking to the top row and pressing Up once more recalls on the very next
+/// press — the run must not need two presses at the boundary.
+#[test]
+fn up_recalls_on_the_next_press_after_reaching_the_top_row() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 40, 5));
+    app.prompt_input
+        .replace_text("one two three four five six seven eight".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    for _ in 0..12 {
+        app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+        if app.prompt_input.history_pos.is_some() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "reaching the top row must be enough for the next Up to recall"
+    );
+}
+
+/// The consequence of the top-start rule, pinned so it is a decision rather
+/// than an accident: after a recall the caret is at the top, so typing inserts
+/// ABOVE the recalled text. The operator asked for the caret to "always stay at
+/// the top-start" for navigation, and this is what that costs on the first
+/// keystroke.
+#[test]
+fn typing_after_a_recall_inserts_at_the_top_start() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["the recalled prompt".to_string()];
+    app.prompt_input.history_up();
+
+    app.prompt_input.insert_char('!');
+
+    assert_eq!(
+        app.prompt_input.text, "!the recalled prompt",
+        "the caret is at the top-start, so typing inserts there"
+    );
+}
+
+/// Down at the BOTTOM row of a multi-line draft does nothing rather than
+/// jumping into history: stepping forward into the past is the browsing gate's
+/// job, and a fresh draft has nothing to browse.
+#[test]
+fn down_at_the_bottom_row_does_not_step_into_the_future() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    app.prompt_input
+        .replace_text("line one\nline two".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Down at the bottom row must not step into history from a fresh draft"
+    );
+}
+
+/// The wrap boundary, exactly: a caret at the END of a wrapped row belongs to
+/// THAT row, so the first Up walks to the row above and only the next recalls.
+#[test]
+fn up_at_the_wrap_boundary_walks_then_recalls() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 20, 5));
+    app.prompt_input
+        .replace_text("aaaa bbbb cccc dddd".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    let after_first = app.prompt_input.history_pos;
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    let after_second = app.prompt_input.history_pos;
+
+    assert!(after_first.is_none(), "the first Up walks to the row above");
+    assert_eq!(
+        after_second,
+        Some(0),
+        "the Up after reaching the top row recalls"
+    );
+}
+
+// ---- ponytail audit: gaps in the Up/Down rule ----
+
+/// GAP. Ctrl+N is catalogued as "History next" (`keybindings/defaults.rs`) and
+/// the arm guards on `history_pos.is_some()`, so it only ever fires WHILE
+/// browsing — it cannot start a browse, and it steps the ladder even when the
+/// caret has visual rows below it. It is a fourth path to the ladder that the
+/// new rule does not govern. Probe whether it can strand a browse.
+#[test]
+fn probe_ctrl_n_steps_the_ladder_regardless_of_the_caret() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 24, 6));
+    let long = "the quick brown fox jumps over the lazy dog and keeps running";
+    app.prompt_input.replace_text(long.to_string());
+    app.prompt_input.cursor = 0; // top row, NOT browsing
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Char('n'), KeyModifiers::CONTROL));
+
+    eprintln!(
+        "PROBE ctrl-n not browsing: pos={:?}",
+        app.prompt_input.history_pos
+    );
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Ctrl+N must not start a browse from a fresh draft"
+    );
+}
+
+/// GAP. The catalogue documents Ctrl+P as the readline "history previous", and
+/// an earlier iteration removed the arm because Ctrl+P opens global search.
+/// Probe which one actually wins with a focused composer.
+#[test]
+fn probe_ctrl_p_claims_a_history_meaning_somewhere() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    app.prompt_input.replace_text("draft".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+    eprintln!(
+        "PROBE ctrl-p: pos={:?} text={:?}",
+        app.prompt_input.history_pos, app.prompt_input.text
+    );
 }

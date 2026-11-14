@@ -2430,36 +2430,25 @@ impl App {
                 {
                     // Suggestions visible: navigate them
                     self.prompt_input.suggestion_prev();
-                } else if !self.prompt_input.text.contains('\n') {
-                    // Single-line input: always navigate history (like hermes-agent).
-                    // (iter-124 — was only navigating when move_visual_up failed,
-                    // which meant Up did nothing on single-line input.)
-                    //
-                    // (2026-10-25 history-nav fix) The browsing check comes FIRST,
-                    // OMP-style (#historyIndex > -1 before any popup branch): while
-                    // the user is walking history, Up/Down step history even if a
-                    // stale popup is somehow showing. The old order fed the popup
-                    // after any recall that started with '/', stranding browsing in
-                    // slash-completions.
-                    if !self.prompt_input.history.is_empty() {
-                        self.prompt_input.history_up();
-                    }
                 } else {
-                    // Multi-line input: move the caret up one visual row,
-                    // and fall through to HISTORY when the caret is
-                    // already on the top row. `move_visual_up` reports
-                    // whether it moved (2026-11-12: the return value was
-                    // discarded, so Up on the top row of a multi-line draft
-                    // did nothing at all — the caret could never reach the
-                    // history ladder). A zero width means the composer has
-                    // not been laid out yet: the visual-row model is
-                    // undefined there, so nothing is recalled.
+                    // Up walks the composer's OWN rows first and reaches the
+                    // history only from the top row (operator report
+                    // 2026-11-14). The old `text.contains('\n')` split measured
+                    // the wrong thing: a single line WRAPS, so Up on row 3 of a
+                    // wrapped draft recalled an old prompt and discarded the
+                    // draft being edited. `move_visual_up` answers the real
+                    // question — is there a row above the caret — for a wrapped
+                    // line exactly as for a hard break.
+                    //
+                    // It reports whether it moved (2026-11-12: the return value
+                    // was discarded, so Up on the top row of a multi-line draft
+                    // did nothing at all). A zero width means the composer has
+                    // never been laid out, so the visual model is undefined and
+                    // nothing is recalled.
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
-                    if width > 0
-                        && !self.prompt_input.move_visual_up(width)
-                        && !self.prompt_input.history.is_empty()
-                    {
+                    let walked = width > 0 && self.prompt_input.move_visual_up(width);
+                    if !walked && !self.prompt_input.history.is_empty() {
                         self.prompt_input.history_up();
                     }
                 }
@@ -2501,13 +2490,15 @@ impl App {
                 {
                     // Suggestions visible: navigate them
                     self.prompt_input.suggestion_next();
-                } else if !self.prompt_input.text.contains('\n') {
-                    // Single-line input, NOT browsing (the browsing-first
-                    // branch above already took the browsing case). OMP's Down
-                    // does nothing when not walking history — it must not
-                    // step into the past from a fresh composer.
                 } else {
-                    // Multi-line input: move cursor down within the text.
+                    // Down mirrors Up: it walks the composer's own rows. It
+                    // never steps into the future of the ladder from a fresh
+                    // composer — that is the browsing-first branch above, and
+                    // Down reaches history only once a recall is live.
+                    //
+                    // The old `!text.contains('\n')` guard made Down a DEAD key
+                    // on any single-line draft, wrapped or not: the caret sat on
+                    // row 0 of a 4-row wrapped draft and did not move.
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_down(width);
