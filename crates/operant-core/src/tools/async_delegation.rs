@@ -66,6 +66,21 @@ pub struct AsyncDelegationRecord {
     /// so a ledger written before this field still loads.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The session that dispatched this delegation — the parent edge.
+    ///
+    /// MEASURED 2026-11-14 (audit finding 2): the record carried the child's
+    /// session but not the parent's, so `records_snapshot` set
+    /// `parent_id: None` for every subagent row and the delegation tree could
+    /// not be rebuilt. Both references carry this edge as primary structure —
+    /// jcode walks `report_back_to_session_id` for ancestry, codex writes a
+    /// graph edge at spawn. Without it the hub shows a flat list in which a
+    /// worker is indistinguishable from a top-level session, and nothing can
+    /// answer "what did this session spawn?".
+    ///
+    /// `serde(default)` for the same reason as `session_id`: a ledger written
+    /// before the edge existed still loads.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, AsyncDelegationRecord>> {
@@ -250,6 +265,7 @@ fn insert_pending(
     map: &mut HashMap<String, AsyncDelegationRecord>,
     goal: &str,
     model: &str,
+    parent_session_id: Option<&str>,
 ) -> String {
     let id = new_id();
     map.insert(
@@ -264,15 +280,19 @@ fn insert_pending(
             result: None,
             error: None,
             session_id: None,
+            parent_session_id: parent_session_id.map(str::to_string),
         },
     );
     id
 }
 
 /// Register a pending background delegation and return its handle id.
+///
+/// No parent edge: a caller that knows which session dispatched the work wants
+/// [`try_create_record`], which carries it.
 pub fn create_record(goal: &str, model: &str) -> String {
     if let Ok(mut map) = registry().lock() {
-        insert_pending(&mut map, goal, model)
+        insert_pending(&mut map, goal, model, None)
     } else {
         // Registry poisoned: fall back to an id that simply won't resolve.
         new_id()
@@ -283,7 +303,16 @@ pub fn create_record(goal: &str, model: &str) -> String {
 /// under ONE lock acquisition, so concurrent dispatches can't both pass a
 /// check-then-act race (the count can never exceed `max_pending`).
 /// Returns `Some(id)` when a slot was free, `None` when the cap is reached.
-pub fn try_create_record(goal: &str, model: &str, max_pending: usize) -> Option<String> {
+///
+/// `parent_session_id` is the dispatching session — the edge the hub needs to
+/// place a worker under its parent rather than among top-level sessions
+/// (audit finding 2). `None` when the caller genuinely has no session.
+pub fn try_create_record(
+    goal: &str,
+    model: &str,
+    max_pending: usize,
+    parent_session_id: Option<&str>,
+) -> Option<String> {
     let mut map = registry().lock().ok()?;
     let pending = map
         .values()
@@ -292,7 +321,12 @@ pub fn try_create_record(goal: &str, model: &str, max_pending: usize) -> Option<
     if pending >= max_pending {
         return None;
     }
-    Some(insert_pending(&mut map, goal, model))
+    Some(insert_pending(
+        &mut map,
+        goal,
+        model,
+        parent_session_id,
+    ))
 }
 
 /// Join a delegation to the session its child ran in.
@@ -416,7 +450,10 @@ pub fn records_snapshot() -> Vec<crate::session::listing::SessionEntryV2> {
             };
             SessionEntryV2 {
                 id: r.delegation_id,
-                parent_id: None,
+                // Audit finding 2: the parent edge. This was `None` for every
+                // row, so a subagent could not be placed under the session that
+                // spawned it and the tree could not be rebuilt.
+                parent_id: r.parent_session_id,
                 title: None,
                 updated_at,
                 // A delegation's runtime is dispatch -> completion. The registry
@@ -622,6 +659,43 @@ mod tests {
         let rec: AsyncDelegationRecord =
             serde_json::from_str(old).expect("a pre-join ledger must load");
         assert!(rec.session_id.is_none());
+        // Audit finding 2: the parent edge is additive too. A ledger written
+        // before the edge existed must load, or the first start after this
+        // upgrade would discard every delegation the operator had.
+        assert!(rec.parent_session_id.is_none());
+    }
+
+    /// Audit finding 2: a delegation records which session dispatched it, and
+    /// the session-hub row carries it as the parent edge.
+    #[test]
+    fn a_delegation_records_the_session_that_dispatched_it() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let id = try_create_record("audit the pool", "m", 3, Some("sess_parent42"))
+            .expect("a free slot");
+        assert_eq!(
+            get_record(&id).unwrap().parent_session_id.as_deref(),
+            Some("sess_parent42"),
+            "the record must name the dispatching session"
+        );
+
+        // The hub row is where the operator sees it: without this the row was
+        // flat and a worker was indistinguishable from a top-level session.
+        let row = records_snapshot()
+            .into_iter()
+            .find(|r| r.id == id)
+            .expect("the delegation has a hub row");
+        assert_eq!(
+            row.parent_id.as_deref(),
+            Some("sess_parent42"),
+            "the hub row must carry the parent edge"
+        );
+
+        // A caller with no session still works, and says so rather than
+        // inventing one.
+        let orphan = create_record("no session", "m");
+        assert!(get_record(&orphan).unwrap().parent_session_id.is_none());
+        __test_reset_registry();
     }
 
     #[test]
@@ -640,6 +714,7 @@ mod tests {
             result: None,
             error: None,
             session_id: None,
+            parent_session_id: Some("dlg-parent-1".to_string()),
         };
         let done = AsyncDelegationRecord {
             delegation_id: "dlg-old-2".to_string(),
@@ -651,6 +726,7 @@ mod tests {
             result: Some("ok".to_string()),
             error: None,
             session_id: None,
+            parent_session_id: Some("dlg-parent-1".to_string()),
         };
         std::fs::write(
             &path,

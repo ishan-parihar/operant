@@ -1057,6 +1057,7 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
+        parent_session: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         // Refuse BEFORE the handle exists when there is no breadth headroom at
         // all. MEASURED 2026-11-14: with the process-wide cap already full, this
@@ -1079,6 +1080,7 @@ impl SubAgentTool {
             &goal,
             &self.model,
             async_delegation::DEFAULT_MAX_ASYNC_CHILDREN,
+            parent_session.as_deref(),
         ) else {
             return Err(format!(
                 "Too many background delegations in flight (max {}); \
@@ -1599,11 +1601,17 @@ impl OperantTool for SubAgentTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let parsed = match parse_args(args) {
             Ok(parsed) => parsed,
             Err(error) => return ToolResult::error(TOOL_NAME, error),
         };
+        // MEASURED 2026-11-14 (audit finding 2): this parameter was `_context`
+        // and nothing read it, so a background delegation had no way to record
+        // which session dispatched it and the hub could not place a worker under
+        // its parent. The id is already here — `tool_context` puts it on both
+        // channels (iter-2354) — so the record just has to carry it.
+        let parent_session = context.resolved_session_id().map(str::to_string);
 
         // Four dispatch paths, one per method, so each can be read (and edited)
         // on its own. This function was 143 lines with all four inline, and the
@@ -1616,7 +1624,7 @@ impl OperantTool for SubAgentTool {
 
         // Background mode: dispatch and return a handle immediately.
         if parsed.background.unwrap_or(false) {
-            return self.dispatch_in_background(parsed).await;
+            return self.dispatch_in_background(parsed, parent_session).await;
         }
 
         // Swarm mode: one real worker session per task, fanned out behind the
@@ -1655,7 +1663,11 @@ impl SubAgentTool {
     }
 
     /// Background mode: dispatch and return a handle immediately.
-    async fn dispatch_in_background(&self, parsed: SubAgentArgs) -> ToolResult {
+    async fn dispatch_in_background(
+        &self,
+        parsed: SubAgentArgs,
+        parent_session: Option<String>,
+    ) -> ToolResult {
         let Some(goal) = parsed.goal else {
             return ToolResult::error(
                 TOOL_NAME,
@@ -1682,6 +1694,7 @@ impl SubAgentTool {
                 parsed.output_schema,
                 parsed.toolsets,
                 parsed.working_dir,
+                parent_session,
             )
             .await
         {
