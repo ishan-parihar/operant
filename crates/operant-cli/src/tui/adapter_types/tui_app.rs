@@ -24,6 +24,19 @@ pub struct TuiApp {
     /// and a second attach on the same field would rewind the session the
     /// operator switched to afterwards.
     resume_session_id: Option<String>,
+    /// The live socket client in attach mode (RT-542). Shared between the
+    /// reader task that forwards the server's events into the render layer and
+    /// the submit path that sends the operator's prompt to the server. `None`
+    /// when this process owns its own agent, and `None` inside the slot while
+    /// the server is unreachable.
+    attach_client: Option<
+        std::sync::Arc<tokio::sync::Mutex<Option<operant_core::session_client::SessionWriter>>>,
+    >,
+    /// The session the attached client is addressing, from the server's `Hello`
+    /// answer, or a fresh id when the server holds none. A shared cell because
+    /// the reader task is what learns it from the handshake and the submit path
+    /// is what sends it.
+    attach_session: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
     /// The server to attach to instead of building a runtime (RT-542).
     ///
     /// `None` is the ordinary TUI: this process builds the agent and the
@@ -120,6 +133,8 @@ impl TuiApp {
             no_mouse,
             metrics,
             resume_session_id,
+            attach_client: None,
+            attach_session: None,
             attach_socket: None,
         })
     }
@@ -149,33 +164,72 @@ impl TuiApp {
         // builds no registry, no database handles, no MCP children and no AFT
         // bridge.
         if let Some(socket) = self.attach_socket.clone() {
+            use operant_core::session_protocol::WireMessage;
             let tx = agent_tx.clone();
+            // The client is kept HERE as well as in the reader task, so the
+            // submit path can write to the same connection (RT-542's send
+            // half). One mutex: a read and a write never interleave on the
+            // same socket.
+            let client_slot: std::sync::Arc<
+                tokio::sync::Mutex<Option<operant_core::session_client::SessionWriter>>,
+            > = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+            self.attach_client = Some(std::sync::Arc::clone(&client_slot));
+            let session_slot: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(None));
+            self.attach_session = Some(std::sync::Arc::clone(&session_slot));
             tokio::spawn(async move {
                 match operant_core::session_client::SessionClient::connect(&socket).await {
-                    Ok(mut client) => {
-                        while let Ok(Some(message)) = client.recv().await {
+                    Ok(client) => {
+                        // The session the server named at hello is the one
+                        // this client addresses; a server holding no sessions
+                        // falls back to a fresh id.
+                        if let Some(session) = client.sessions.first().cloned()
+                            && let Ok(mut held) = session_slot.lock()
+                        {
+                            *held = Some(session);
+                        }
+                        // One task reads, the other writes: the halves are the
+                        // socket's own, so the write never waits behind a read.
+                        let (mut reader, writer) = client.into_split();
+                        *client_slot.lock().await = Some(writer);
+                        while let Ok(Some(message)) = reader.recv().await {
                             match message {
-                                operant_core::session_protocol::WireMessage::Event {
-                                    event,
-                                    ..
-                                } => {
+                                WireMessage::HelloOk { .. } => {}
+                                WireMessage::Event { event, .. } => {
                                     if tx.send(event).await.is_err() {
                                         break;
                                     }
                                 }
-                                operant_core::session_protocol::WireMessage::Error {
-                                    message,
-                                    ..
-                                } => {
+                                WireMessage::Error { message, .. } => {
                                     let _ = tx
                                         .send(operant_core::agent::AgentEvent::Error {
                                             error: message,
                                         })
                                         .await;
                                 }
+                                WireMessage::History { messages, .. } => {
+                                    for line in messages {
+                                        let _ = tx
+                                            .send(operant_core::agent::AgentEvent::Content {
+                                                text: format!("{line}\n"),
+                                            })
+                                            .await;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
+                        // The server closed the connection (a restart, or a
+                        // stop). Say so: a terminal that looks attached and is
+                        // not is worse than one that says the server went away.
+                        *client_slot.lock().await = None;
+                        let _ = tx
+                            .send(operant_core::agent::AgentEvent::Error {
+                                error: "the session server closed the connection — \
+                                        re-run with --attach to rejoin"
+                                    .to_string(),
+                            })
+                            .await;
                     }
                     Err(error) => {
                         let _ = tx
@@ -324,173 +378,187 @@ impl TuiApp {
             tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
         self.app.permission_rx = Some(permission_rx);
 
-        let config = self.app.config.clone();
-        let mcp_manager = operant_core::mcp::McpManager::new();
-        let skills_dir = config.skills.root_dir.clone();
-
-        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
-            match crate::create_runtime_agent(
-                &config,
-                &config.agent,
-                None,
-                agent_tx,
-                &mcp_manager,
-                &skills_dir,
-                Some(std::sync::Arc::clone(&self.metrics)),
-            )
-            .await
-            {
-                Ok(mut agent) => {
-                    // Idle recap (omp `recap.*` parity): attach the engine so a
-                    // quiet 240s (agent.recap_idle_seconds) after a completed
-                    // turn renders a `※ recap:` line. 0 = off (engine returns a
-                    // disconnected handle).
-                    let idle = config.agent.recap_idle_seconds;
-                    let activity = agent.attach_recap_engine(
-                        std::time::Duration::from_secs(idle),
-                        config.recap.clone(),
-                        crate::client_config(&config),
-                    );
-                    self.app.recap_activity = Some(activity);
-                    // Advisor watchdog (omp advisor/ parity): always-on
-                    // transcript reviewer emitting `⚑ advisor:` notes when
-                    // `[advisor] enabled = true`. Disabled by default.
-                    agent.attach_advisor(config.advisor.clone(), crate::client_config(&config));
-                    Some(std::sync::Arc::new(agent.with_permissions(permission_tx)))
-                }
-                Err(e) => {
-                    // A FATAL state, not an event: it stays until the
-                    // operator acts, so it has no TTL.
-                    self.app
-                        .set_status_message_persistent(format!("Agent init failed: {}", e));
-                    None
-                }
-            };
-
-        // Store the real McpManager + steer queue handle on the App so the
-        // run loop can act on /mcp reconnect and /steer. (iter-93 — closes
-        // the /mcp reconnect + /steer parity gaps.)
-        self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
-        if let Some(ref agent) = agent {
-            self.app.steer_queue_handle = Some(agent.steer_queue_handle());
-            // Clone of the agent's live registry so /mcp reconnect can
-            // materialize MCP tools mid-session via sync_tools_to_registry.
-            self.app.core_tool_registry = Some(agent.registry());
-            // Handle to the agent's memory provider so the /mcp reconnect
-            // task can ensure the agentmemory backend is up before
-            // connecting its MCP server (fast reconnect).
-            self.app.core_memory_provider = agent.memory_provider();
-            // RT-206: the anchor for Ctrl+B's `CurrentBranch` filter comes from
-            // the agent's LIVE session id (see the third closure on
-            // `SessionSwitchSource` below), NOT from a remembered field.
-            // MEASURED LIVE: `agent.session_id()` is `None` at adapter
-            // construction — the id is minted on the first turn — so a field
-            // seeded here stays `None` for a plain `operant chat` start, and
-            // the filter that claims "this branch's tree" then lists every
-            // session in the store (`[all]` = 19, identical ids).
-            // (iter-1489) Read-only rewind-mark source. The rewind selector is a
-            // fullscreen overlay, so the async drain that normally feeds it
-            // (`run_pending_agent_actions`) never runs while it is open;
-            // `App::run` mirrors this on every frame instead. At creation the
-            // session id is `None` until the first turn mints one, which offers
-            // no marks — the honest state before anything has happened.
-            let rewind_source =
-                std::sync::Arc::new(crate::tui::rewind_marks::RewindMarksSource::new(
-                    agent.rewind_marks_source(),
-                    agent.session_id(),
-                    Vec::new(),
-                ));
-            // (iter-1544) The epoch the selector's filter keys on. Seeded at
-            // construction so the rule is in force from the first frame rather
-            // than only after the drain happens to fire, and refreshed by the
-            // drain on every pass.
-            rewind_source.set_epoch(agent.conv_epoch());
-            self.app.core_rewind_marks = Some(rewind_source);
-            // (iter-1503) Read-only session-switch source, same shape and for
-            // the same reason: the hub's Enter runs inside `App::run`, so the
-            // outer async drain cannot apply the retarget it sets until the
-            // operator's next submit. Two closures over the agent this loop
-            // already holds — no await anywhere on the frame-loop path.
-            let agent_for_switch = std::sync::Arc::clone(agent);
-            let agent_for_snapshot = std::sync::Arc::clone(agent);
-            let agent_for_id = std::sync::Arc::clone(agent);
-            self.app.core_session_switch = Some(std::sync::Arc::new(
-                crate::tui::session_switch::SessionSwitchSource::new(
-                    move |session_id| {
-                        agent_for_switch.set_session_id(session_id);
-                        agent_for_switch.notify_session_switch(session_id, "", false);
-                    },
-                    move || agent_for_snapshot.conversation_snapshot(),
-                    // (RT-206) the agent is the only authority on which session
-                    // the operator is attached to. Read when Ctrl+B is pressed,
-                    // not at construction: before the first turn there IS no id,
-                    // and reading early is what left the remembered field empty.
-                    move || agent_for_id.session_id(),
-                ),
-            ));
-        }
-        // Claim the session for THIS process (plan 2026-11-02, P0).
-        //
-        // The presence registry has existed since iter-1634 with no caller
-        // at all, so `session_is_live` answered false for every session —
-        // including the one this process is about to stream into. Claiming
-        // here is what makes "live" mean anything, which is what lets the
-        // interrupted status tell a dead process from a running one.
-        //
-        // Read the id AFTER the source is installed: before the first turn
-        // there is no id (RT-206 recorded exactly this trap), so a claim on
-        // an empty id would be a claim on nothing.
-        if let Some(session_id) = self
-            .app
-            .core_session_switch
-            .as_ref()
-            .and_then(|s| s.session_id())
+        // In attach mode this process builds NO runtime: no registry, no
+        // database handles, no MCP children, no AFT bridge. The agent lives in
+        // the server; this terminal is a window onto it. The socket reader was
+        // wired above; everything below this line is the LOCAL stack and must
+        // be skipped so the attached client costs a connection instead of a
+        // ~61 MiB process with its own child fleet.
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> = if self
+            .attach_socket
+            .is_some()
         {
-            // (RT-522) The claim can be REFUSED: another live process owns
-            // the session. That used to be invisible — the caller ignored
-            // everything but an error, so two processes could both believe
-            // they owned one session.
-            match operant_core::active_sessions::claim_session_here(&session_id) {
-                Ok(true) => {}
-                Ok(false) => tracing::warn!(
-                    session_id = %session_id,
-                    "another live process owns this session — the claim was refused"
-                ),
-                Err(e) => {
-                    tracing::debug!(error = %e, "Failed to claim the session for this process")
+            None
+        } else {
+            let config = self.app.config.clone();
+            let mcp_manager = operant_core::mcp::McpManager::new();
+            let skills_dir = config.skills.root_dir.clone();
+
+            let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
+                match crate::create_runtime_agent(
+                    &config,
+                    &config.agent,
+                    None,
+                    agent_tx,
+                    &mcp_manager,
+                    &skills_dir,
+                    Some(std::sync::Arc::clone(&self.metrics)),
+                )
+                .await
+                {
+                    Ok(mut agent) => {
+                        // Idle recap (omp `recap.*` parity): attach the engine so a
+                        // quiet 240s (agent.recap_idle_seconds) after a completed
+                        // turn renders a `※ recap:` line. 0 = off (engine returns a
+                        // disconnected handle).
+                        let idle = config.agent.recap_idle_seconds;
+                        let activity = agent.attach_recap_engine(
+                            std::time::Duration::from_secs(idle),
+                            config.recap.clone(),
+                            crate::client_config(&config),
+                        );
+                        self.app.recap_activity = Some(activity);
+                        // Advisor watchdog (omp advisor/ parity): always-on
+                        // transcript reviewer emitting `⚑ advisor:` notes when
+                        // `[advisor] enabled = true`. Disabled by default.
+                        agent.attach_advisor(config.advisor.clone(), crate::client_config(&config));
+                        Some(std::sync::Arc::new(agent.with_permissions(permission_tx)))
+                    }
+                    Err(e) => {
+                        // A FATAL state, not an event: it stays until the
+                        // operator acts, so it has no TTL.
+                        self.app
+                            .set_status_message_persistent(format!("Agent init failed: {}", e));
+                        None
+                    }
+                };
+
+            // Store the real McpManager + steer queue handle on the App so the
+            // run loop can act on /mcp reconnect and /steer. (iter-93 — closes
+            // the /mcp reconnect + /steer parity gaps.)
+            self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
+            if let Some(ref agent) = agent {
+                self.app.steer_queue_handle = Some(agent.steer_queue_handle());
+                // Clone of the agent's live registry so /mcp reconnect can
+                // materialize MCP tools mid-session via sync_tools_to_registry.
+                self.app.core_tool_registry = Some(agent.registry());
+                // Handle to the agent's memory provider so the /mcp reconnect
+                // task can ensure the agentmemory backend is up before
+                // connecting its MCP server (fast reconnect).
+                self.app.core_memory_provider = agent.memory_provider();
+                // RT-206: the anchor for Ctrl+B's `CurrentBranch` filter comes from
+                // the agent's LIVE session id (see the third closure on
+                // `SessionSwitchSource` below), NOT from a remembered field.
+                // MEASURED LIVE: `agent.session_id()` is `None` at adapter
+                // construction — the id is minted on the first turn — so a field
+                // seeded here stays `None` for a plain `operant chat` start, and
+                // the filter that claims "this branch's tree" then lists every
+                // session in the store (`[all]` = 19, identical ids).
+                // (iter-1489) Read-only rewind-mark source. The rewind selector is a
+                // fullscreen overlay, so the async drain that normally feeds it
+                // (`run_pending_agent_actions`) never runs while it is open;
+                // `App::run` mirrors this on every frame instead. At creation the
+                // session id is `None` until the first turn mints one, which offers
+                // no marks — the honest state before anything has happened.
+                let rewind_source =
+                    std::sync::Arc::new(crate::tui::rewind_marks::RewindMarksSource::new(
+                        agent.rewind_marks_source(),
+                        agent.session_id(),
+                        Vec::new(),
+                    ));
+                // (iter-1544) The epoch the selector's filter keys on. Seeded at
+                // construction so the rule is in force from the first frame rather
+                // than only after the drain happens to fire, and refreshed by the
+                // drain on every pass.
+                rewind_source.set_epoch(agent.conv_epoch());
+                self.app.core_rewind_marks = Some(rewind_source);
+                // (iter-1503) Read-only session-switch source, same shape and for
+                // the same reason: the hub's Enter runs inside `App::run`, so the
+                // outer async drain cannot apply the retarget it sets until the
+                // operator's next submit. Two closures over the agent this loop
+                // already holds — no await anywhere on the frame-loop path.
+                let agent_for_switch = std::sync::Arc::clone(agent);
+                let agent_for_snapshot = std::sync::Arc::clone(agent);
+                let agent_for_id = std::sync::Arc::clone(agent);
+                self.app.core_session_switch = Some(std::sync::Arc::new(
+                    crate::tui::session_switch::SessionSwitchSource::new(
+                        move |session_id| {
+                            agent_for_switch.set_session_id(session_id);
+                            agent_for_switch.notify_session_switch(session_id, "", false);
+                        },
+                        move || agent_for_snapshot.conversation_snapshot(),
+                        // (RT-206) the agent is the only authority on which session
+                        // the operator is attached to. Read when Ctrl+B is pressed,
+                        // not at construction: before the first turn there IS no id,
+                        // and reading early is what left the remembered field empty.
+                        move || agent_for_id.session_id(),
+                    ),
+                ));
+            }
+            // Claim the session for THIS process (plan 2026-11-02, P0).
+            //
+            // The presence registry has existed since iter-1634 with no caller
+            // at all, so `session_is_live` answered false for every session —
+            // including the one this process is about to stream into. Claiming
+            // here is what makes "live" mean anything, which is what lets the
+            // interrupted status tell a dead process from a running one.
+            //
+            // Read the id AFTER the source is installed: before the first turn
+            // there is no id (RT-206 recorded exactly this trap), so a claim on
+            // an empty id would be a claim on nothing.
+            if let Some(session_id) = self
+                .app
+                .core_session_switch
+                .as_ref()
+                .and_then(|s| s.session_id())
+            {
+                // (RT-522) The claim can be REFUSED: another live process owns
+                // the session. That used to be invisible — the caller ignored
+                // everything but an error, so two processes could both believe
+                // they owned one session.
+                match operant_core::active_sessions::claim_session_here(&session_id) {
+                    Ok(true) => {}
+                    Ok(false) => tracing::warn!(
+                        session_id = %session_id,
+                        "another live process owns this session — the claim was refused"
+                    ),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "Failed to claim the session for this process")
+                    }
                 }
             }
-        }
 
-        // Attach to the session `operant continue` named. The App's frame loop
-        // drains this on its first pass (the `!is_streaming` branch), so the
-        // agent is retargeted and the display rebuilt before the operator sees
-        // a frame — the same path the session hub's Enter takes.
-        if let Some(session_id) = self.resume_session_id.take() {
-            self.app.pending_switch_session = Some(session_id);
-        }
+            // Attach to the session `operant continue` named. The App's frame loop
+            // drains this on its first pass (the `!is_streaming` branch), so the
+            // agent is retargeted and the display rebuilt before the operator sees
+            // a frame — the same path the session hub's Enter takes.
+            if let Some(session_id) = self.resume_session_id.take() {
+                self.app.pending_switch_session = Some(session_id);
+            }
 
-        // Create the user-question channel and register the sender with
-        // operant_core::user_question. The clarify tool will push
-        // UserQuestionRequest { question, choices, reply_tx } to this
-        // channel; the TUI drains it in the run loop and opens the
-        // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
-        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
-            operant_core::user_question::UserQuestionRequest,
-        >();
-        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
-        self.app.user_question_rx = Some(uq_rx);
+            // Create the user-question channel and register the sender with
+            // operant_core::user_question. The clarify tool will push
+            // UserQuestionRequest { question, choices, reply_tx } to this
+            // channel; the TUI drains it in the run loop and opens the
+            // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
+            let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+                operant_core::user_question::UserQuestionRequest,
+            >();
+            let _ = operant_core::user_question::set_user_question_sender(uq_tx);
+            self.app.user_question_rx = Some(uq_rx);
 
-        // Attach the MCP manager + file-history + current-turn counter to the
-        // App. Without these, /mcp always shows "Disconnected" for every
-        // server, /changes always shows "No changes", the "iter N" status
-        // pill never renders, and the subagent HUD never renders. (Bug #3
-        // from iter-82 audit.)
-        // (iter-208: stub TUI McpManager deleted. load_mcp_servers now reads
-        // directly from core_mcp_manager, which is set below at line ~2148.)
+            // Attach the MCP manager + file-history + current-turn counter to the
+            // App. Without these, /mcp always shows "Disconnected" for every
+            // server, /changes always shows "No changes", the "iter N" status
+            // pill never renders, and the subagent HUD never renders. (Bug #3
+            // from iter-82 audit.)
+            // (iter-208: stub TUI McpManager deleted. load_mcp_servers now reads
+            // directly from core_mcp_manager, which is set below at line ~2148.)
 
-        // (iter-209: FileHistory + current_turn stub creation deleted.
-        // The turn-diff feature never worked — /changes now uses git-diff.)
+            // (iter-209: FileHistory + current_turn stub creation deleted.
+            // The turn-diff feature never worked — /changes now uses git-diff.)
+            agent
+        };
 
         // Warms the models.dev disk cache that the default model and the context
         // window read. A failed fetch leaves the cache as it was.
@@ -738,6 +806,12 @@ impl TuiApp {
                         }
                     }
 
+                    if self.attach_socket.is_some() {
+                        // Attached: the server runs the turn, not this process.
+                        let input = self.expand_skill_mentions(input);
+                        self.submit_over_socket(input).await;
+                        continue;
+                    }
                     if let Some(agent) = &agent {
                         // (plan 03 §5) the ONE submit path: steer-if-streaming
                         // and the stopping-turn guard both live inside
@@ -874,6 +948,61 @@ impl TuiApp {
     /// Shared by the initial-query path, /retry, and the /skill + /bundle
     /// expansion so the submission wiring lives in exactly one place.
     /// (iter-320 — dedupe three near-identical submission blocks.)
+    /// Send the operator's prompt to the SERVER instead of running it here
+    /// (RT-542's send half).
+    ///
+    /// The attached client owns no agent: the message is pushed into the local
+    /// transcript (so the operator sees what they sent), the turn is marked
+    /// begun, and the prompt goes down the socket. The server's events come
+    /// back through the reader task into the SAME render receiver the local
+    /// agent would have fed.
+    async fn submit_over_socket(&mut self, text: String) {
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        let Some(client) = self.attach_client.as_ref().map(std::sync::Arc::clone) else {
+            self.app
+                .set_status_notice("not attached to a session server".to_string());
+            return;
+        };
+        // A streaming turn takes a STEER, exactly as the local path does.
+        let streaming = self.app.is_streaming;
+        let session_id = self
+            .attach_session
+            .as_ref()
+            .and_then(|cell| cell.lock().ok().and_then(|held| held.clone()))
+            .unwrap_or_else(|| "attached".to_string());
+        self.app.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text(text.clone()),
+        });
+        self.app.invalidate_transcript();
+        if !streaming {
+            self.app.is_streaming = true;
+            self.app.begin_turn();
+            self.app.streaming_text.clear();
+            self.app.streaming_thinking.clear();
+        }
+        let message = if streaming {
+            operant_core::session_protocol::WireMessage::Steer { session_id, text }
+        } else {
+            operant_core::session_protocol::WireMessage::Prompt { session_id, text }
+        };
+        let mut guard = client.lock().await;
+        match guard.as_mut() {
+            Some(client) => {
+                if let Err(error) = client.send(&message).await {
+                    self.app
+                        .set_status_notice(format!("cannot reach the session server: {error}"));
+                }
+            }
+            None => {
+                self.app.set_status_notice(
+                    "the session server closed the connection — re-run with --attach to rejoin"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
@@ -1393,6 +1522,11 @@ impl TuiApp {
                             );
                             continue;
                         }
+                    }
+                    if self.attach_socket.is_some() {
+                        let input = self.expand_skill_mentions(input);
+                        self.submit_over_socket(input).await;
+                        continue;
                     }
                     if let Some(agent) = &agent {
                         // (plan 03 §5) the one submit path, shared with the

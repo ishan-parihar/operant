@@ -61,6 +61,18 @@ pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf)
     let listener = tokio::net::UnixListener::bind(socket).map_err(|e| {
         anyhow::anyhow!("Failed to bind the session socket {}: {e}", path.display())
     })?;
+    // 0600: the socket carries full control of the agent and its tools. The
+    // default umask gives the socket 0755, which is only safe because the
+    // operant home happens to be 0700 — an operator who binds /tmp/session.sock
+    // gets none of that protection.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        if let Err(e) = std::fs::set_permissions(socket, perms) {
+            tracing::warn!(error = %e, path = %path.display(), "the session socket perms could not be tightened");
+        }
+    }
     tracing::info!(socket = %path.display(), "the session socket is listening");
 
     loop {
@@ -96,6 +108,11 @@ where
     // that never sends a session-scoped message has none and is served as
     // before: ask, answer.
     let mut subscription: Option<broadcast::Receiver<WireMessage>> = None;
+    // Which session that subscription follows. A client that names a DIFFERENT
+    // session is re-subscribed to it — without this the first session a client
+    // touched owned the connection for its whole life, so `Switch` and a second
+    // session were unreachable.
+    let mut subscribed_session: Option<String> = None;
 
     loop {
         // The next thing to do: the client's next line, or the next event on
@@ -165,13 +182,35 @@ where
         // client asking again.
         let session_id = message.session_id();
         if let Some(session_id) = session_id
-            && subscription.is_none()
+            && subscribed_session.as_deref() != Some(session_id)
             && let Some(rx) = handler.subscribe(session_id)
         {
+            subscribed_session = Some(session_id.to_string());
             subscription = Some(rx);
         }
 
-        for reply in handler.handle(message) {
+        // `LoadHistory` reads the session store, which is a SQLite read behind
+        // a mutex. Running it inline parks a runtime worker for the length of
+        // that read, so at a thousand attached clients a burst of history loads
+        // stalls every other connection. The blocking pool is where it belongs;
+        // every other message is pure bookkeeping and stays inline.
+        let replies = if matches!(message, WireMessage::LoadHistory { .. }) {
+            let handler = std::sync::Arc::clone(&handler);
+            match tokio::task::spawn_blocking(move || handler.handle(message)).await {
+                Ok(replies) => replies,
+                Err(e) => {
+                    let reply = WireMessage::Error {
+                        session_id: None,
+                        message: format!("the history read did not finish: {e}"),
+                    };
+                    write_line(&mut writer, &reply).await?;
+                    continue;
+                }
+            }
+        } else {
+            handler.handle(message)
+        };
+        for reply in replies {
             write_line(&mut writer, &reply).await?;
         }
     }

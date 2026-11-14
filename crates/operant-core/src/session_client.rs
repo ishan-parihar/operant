@@ -78,6 +78,57 @@ impl SessionClient {
         let message = decode(&line, PROTOCOL_VERSION)?;
         Ok(Some(message))
     }
+
+    /// Split into a read half and a write half.
+    ///
+    /// The interactive client reads the server's events on one task while the
+    /// operator's prompt is written from another, and a `tokio::Mutex` around
+    /// the whole client would make a slow read block the write. The halves are
+    /// the socket's own; splitting them costs nothing.
+    pub fn into_split(self) -> (SessionReader, SessionWriter) {
+        (
+            SessionReader {
+                reader: self.reader,
+            },
+            SessionWriter {
+                writer: self.writer,
+            },
+        )
+    }
+}
+
+/// The reading half of a session connection.
+pub struct SessionReader {
+    reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+}
+
+impl SessionReader {
+    /// Read the server's next message, if it sends one.
+    pub async fn recv(&mut self) -> Result<Option<WireMessage>> {
+        let mut line = String::new();
+        let read = self.reader.read_line(&mut line).await?;
+        if read == 0 {
+            return Ok(None);
+        }
+        let message = decode(&line, PROTOCOL_VERSION)?;
+        Ok(Some(message))
+    }
+}
+
+/// The writing half of a session connection.
+pub struct SessionWriter {
+    writer: tokio::net::unix::OwnedWriteHalf,
+}
+
+impl SessionWriter {
+    /// Send one message to the server.
+    pub async fn send(&mut self, message: &WireMessage) -> Result<()> {
+        let line = encode(message, PROTOCOL_VERSION)?;
+        self.writer.write_all(line.as_bytes()).await?;
+        self.writer.write_all(b"\n").await?;
+        self.writer.flush().await?;
+        Ok(())
+    }
 }
 
 /// The default socket path a server and its clients agree on.

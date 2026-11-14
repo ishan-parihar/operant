@@ -1104,6 +1104,16 @@ it — see RG-010 for the check.
   `operant-core/src/client.rs`
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
+
+- **The session socket is part of the daemon** (`crates/operant-core/src/session_server.rs`,
+  `session_protocol.rs`, `session_client.rs`). Every `operant gateway run` binds it at
+  `session_client::default_socket_path()` (`<operant home>/operant-session.sock`; `--socket PATH`
+  overrides the location), and `operant chat --attach <path> ["prompt"]` attaches: the client
+  builds no registry, no database handles, no MCP children and no AFT bridge. The wire is one JSON
+  object per line (`WireMessage`), and the server answers `Hello` with the sessions the daemon has
+  bound. A prompt obeys the SAME gates a channel turn does — ESTOP, `max_concurrent_sessions`, the
+  slot's session binding (`bind_slot_to_session`), and the turn's error is published on the session
+  bus rather than dropped.
 - Telegram: fully implemented (long-poll + Bot API)
 - Discord: fully implemented (Gateway WS + REST API)
 - Slack: outbound only — the Socket Mode WebSocket does not exist (RT-86)
