@@ -679,7 +679,10 @@ mod tests {
         // And the values the accessors hand out are the quantized ones: with a
         // 256-colour terminal, `nord`'s border (76, 86, 106) becomes an indexed
         // colour rather than a triple the terminal would have to crush.
-        let quantized = quantize_palette(&ColorPalette::for_theme("nord"), ColorDepth::Palette256);
+        let quantized = quantize_palette(
+            &ColorPalette::for_theme("nord").expect("'nord' is a built-in theme"),
+            ColorDepth::Palette256,
+        );
         assert!(matches!(quantized.border, Color::Indexed(_)));
         assert!(matches!(quantized.emphasis, Color::Indexed(_)));
         assert!(matches!(quantized.panel_bg, Color::Indexed(_)));

@@ -344,7 +344,10 @@ backend = "none"
 #word_completion = "off"
 # Override the engine's show threshold (default 0.15; lower shows more).
 #word_completion_threshold = 0.15
-theme = "opencode"
+# One of ColorPalette::NAMES — default | dark | light | solarized | nord |
+# dracula | monokai | deuteranopia. Anything else warns at startup and
+# renders the default palette.
+theme = "default"
 # (plan 2026-11-14 U1) Per-role colour overrides, applied ON TOP of the active
 # theme, so a key here wins over that theme's own value for the role. The key is
 # a role name (the `Role::key()` set in

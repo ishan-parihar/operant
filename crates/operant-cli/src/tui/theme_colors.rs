@@ -17,7 +17,7 @@ use crate::tui::vendor::style::palette::{self, Palette, Role};
 use crate::tui::vendor::style::theme_mode::{self, ThemeMode};
 
 /// Color palette for a specific theme.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColorPalette {
     /// Error messages and alerts (normally red, but color-blind friendly)
     pub error: Color,
@@ -62,18 +62,37 @@ pub struct ColorPalette {
 
 impl ColorPalette {
     /// Get the color palette for a given theme name.
-    pub fn for_theme(theme_name: &str) -> Self {
+    ///
+    /// Returns `None` for a name that is not one of the eight built-ins, rather
+    /// than silently substituting the default palette: the shipped config
+    /// template and `Default for TuiSettings` both named `"opencode"`, which is
+    /// not a theme, so every operator on the default was rendering the fallback
+    /// and being told nothing. [`set_active_theme`] turns `None` into a warning.
+    pub fn for_theme(theme_name: &str) -> Option<Self> {
         match theme_name {
-            "deuteranopia" => Self::deuteranopia(),
-            "dark" => Self::dark(),
-            "light" => Self::light(),
-            "solarized" => Self::solarized(),
-            "nord" => Self::nord(),
-            "dracula" => Self::dracula(),
-            "monokai" => Self::monokai(),
-            _ => Self::default_theme(),
+            "default" => Some(Self::default_theme()),
+            "deuteranopia" => Some(Self::deuteranopia()),
+            "dark" => Some(Self::dark()),
+            "light" => Some(Self::light()),
+            "solarized" => Some(Self::solarized()),
+            "nord" => Some(Self::nord()),
+            "dracula" => Some(Self::dracula()),
+            "monokai" => Some(Self::monokai()),
+            _ => None,
         }
     }
+
+    /// Every theme name [`for_theme`] accepts, in the order `/theme` lists them.
+    pub const NAMES: &'static [&'static str] = &[
+        "default",
+        "dark",
+        "light",
+        "solarized",
+        "nord",
+        "dracula",
+        "monokai",
+        "deuteranopia",
+    ];
 
     /// Default Operant theme
     const fn default_theme() -> Self {
@@ -300,8 +319,9 @@ fn with_active(f: impl FnOnce(&ColorPalette) -> Color) -> Color {
 
 /// Apply a theme by name, making it the palette every renderer reads.
 ///
-/// Unknown names fall back to [`DEFAULT_PALETTE`], matching
-/// [`ColorPalette::for_theme`].
+/// An unknown name warns and falls back to [`DEFAULT_PALETTE`] — matching
+/// [`ColorPalette::for_theme`], which returns `None` for anything outside
+/// [`ColorPalette::NAMES`] rather than silently substituting the default.
 ///
 /// This is also where the palette is quantized to the terminal's colour depth:
 /// it is the only write path for [`ACTIVE`], so quantizing here means all 14
@@ -310,7 +330,23 @@ fn with_active(f: impl FnOnce(&ColorPalette) -> Color) -> Color {
 /// rather than one per styled span. [`crate::tui::color_depth::detect`] is
 /// itself cached, so the detection cost is paid once per process, here.
 pub fn set_active_theme(theme_name: &str) {
-    let source = ColorPalette::for_theme(theme_name);
+    // An unrecognised name warns instead of silently rendering the fallback:
+    // the config template and the `TuiSettings` default both shipped an
+    // invalid name, so "the default theme" was quietly the fallback palette.
+    //
+    // A match, not `unwrap_or_else`: this runs in the render path, and a theme
+    // name must never be able to take the UI down.
+    let source = match ColorPalette::for_theme(theme_name) {
+        Some(palette) => palette,
+        None => {
+            tracing::warn!(
+                theme = theme_name,
+                known = ?ColorPalette::NAMES,
+                "unknown theme name; falling back to the default palette"
+            );
+            ColorPalette::default_theme()
+        }
+    };
     let next =
         crate::tui::color_depth::quantize_palette(&source, crate::tui::color_depth::detect());
     match ACTIVE.write() {
@@ -708,14 +744,14 @@ pub(crate) mod tests {
 
     #[test]
     fn default_theme_has_correct_colors() {
-        let palette = ColorPalette::for_theme("default");
+        let palette = ColorPalette::for_theme("default").expect("default is built in");
         assert_eq!(palette.error, Color::Rgb(255, 87, 51));
         assert_eq!(palette.success, Color::Rgb(76, 175, 80));
     }
 
     #[test]
     fn deuteranopia_uses_blue_for_success() {
-        let palette = ColorPalette::for_theme("deuteranopia");
+        let palette = ColorPalette::for_theme("deuteranopia").expect("deuteranopia is built in");
         // Success should be blue, not green
         assert_eq!(palette.success, Color::Rgb(0, 150, 200));
         // Error should be orange, not red
@@ -724,8 +760,8 @@ pub(crate) mod tests {
 
     #[test]
     fn dark_theme_is_different_from_default() {
-        let default = ColorPalette::for_theme("default");
-        let dark = ColorPalette::for_theme("dark");
+        let default = ColorPalette::for_theme("default").expect("default is built in");
+        let dark = ColorPalette::for_theme("dark").expect("dark is built in");
         assert_ne!(default.error, dark.error);
         assert_ne!(default.border, dark.border);
     }
@@ -755,7 +791,7 @@ pub(crate) mod tests {
     /// for it and no surface that migrated to it can ever be themed.
     #[test]
     fn every_role_is_seeded() {
-        let seeded = role_palette_for(&ColorPalette::for_theme("nord"));
+        let seeded = role_palette_for(&ColorPalette::for_theme("nord").expect("built-in"));
         for role in palette::ALL_ROLES {
             assert!(
                 seeded.is_overridden(*role),
@@ -785,7 +821,7 @@ pub(crate) mod tests {
             "monokai",
             "deuteranopia",
         ] {
-            let source = ColorPalette::for_theme(name);
+            let source = ColorPalette::for_theme(name).expect("loop name is built in");
             let seeded = role_palette_for(&source);
             for (field, color) in palette_fields(&source) {
                 let Some(value) = role_rgb(color) else {
@@ -815,7 +851,7 @@ pub(crate) mod tests {
     /// reached, and the only fields with no role are the documented ones.
     #[test]
     fn seed_covers_every_role() {
-        let source = ColorPalette::for_theme("default");
+        let source = ColorPalette::for_theme("default").expect("default is built in");
         let mut covered: Vec<Role> = palette_fields(&source)
             .iter()
             .flat_map(|(field, _)| roles_for_field(field).iter().copied())
@@ -844,25 +880,45 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn all_themes_return_palette() {
-        for theme in [
-            "default",
-            "dark",
-            "light",
-            "solarized",
-            "nord",
-            "dracula",
-            "monokai",
-            "deuteranopia",
-            "unknown",
-        ] {
-            let palette = ColorPalette::for_theme(theme);
-            // Just verify it doesn't panic and returns valid colors
+    fn all_named_themes_resolve_to_a_palette() {
+        for theme in ColorPalette::NAMES {
+            let palette = ColorPalette::for_theme(theme)
+                .unwrap_or_else(|| panic!("{theme} is in NAMES, so it must resolve"));
             assert!(matches!(
                 palette.error,
                 Color::Rgb(_, _, _) | Color::Red | Color::White | Color::Black
             ));
         }
+    }
+
+    #[test]
+    fn an_unknown_name_resolves_to_nothing_so_the_caller_must_decide() {
+        // The whole defect U2 closes: `"opencode"` shipped as the config and
+        // `TuiSettings` default while being a provider id, not a theme, and
+        // `for_theme` quietly substituted the fallback palette. Selection is
+        // now explicit: an unknown name is `None`, and the caller decides
+        // (`set_active_theme` warns and falls back).
+        assert_eq!(ColorPalette::for_theme("opencode"), None);
+        assert_eq!(ColorPalette::for_theme(""), None);
+        assert_eq!(ColorPalette::for_theme("DARK"), None, "lookup is exact");
+    }
+
+    #[test]
+    fn the_config_and_settings_default_theme_is_a_real_theme() {
+        // The three shipped defaults must agree and must all be real, or the
+        // regression returns silently. `operant.example.toml` and
+        // `Default for TuiSettings` both pointed at a provider id.
+        let example = include_str!("../../../../operant.example.toml");
+        let theme = operant_core::config::TuiSettings::default().theme;
+        assert_eq!(
+            ColorPalette::for_theme(&theme),
+            Some(ColorPalette::default_theme()),
+            "the TuiSettings default must be a real theme"
+        );
+        assert!(
+            example.contains(&format!("theme = \"{theme}\"")),
+            "operant.example.toml must advertise the TuiSettings default theme"
+        );
     }
 
     #[test]
@@ -933,9 +989,19 @@ pub(crate) mod tests {
 
         // And that the accessors actually follow the global, not a snapshot.
         with_theme("dracula", || {
-            assert_eq!(accent(), ColorPalette::for_theme("dracula").emphasis);
+            assert_eq!(
+                accent(),
+                ColorPalette::for_theme("dracula")
+                    .expect("dracula is built in")
+                    .emphasis
+            );
             set_active_theme("monokai");
-            assert_eq!(accent(), ColorPalette::for_theme("monokai").emphasis);
+            assert_eq!(
+                accent(),
+                ColorPalette::for_theme("monokai")
+                    .expect("monokai is built in")
+                    .emphasis
+            );
         });
     }
 
@@ -969,7 +1035,7 @@ pub(crate) mod tests {
         );
         // A role the operator did NOT name must keep the theme's value — the
         // override applies to one role, it does not reset the palette.
-        let seeded = role_palette_for(&ColorPalette::for_theme("dark"));
+        let seeded = role_palette_for(&ColorPalette::for_theme("dark").expect("built-in"));
         assert_eq!(
             live.rgb(palette::Role::Border),
             seeded.rgb(palette::Role::Border),
@@ -987,7 +1053,7 @@ pub(crate) mod tests {
         // ...and the newly seeded theme must still have reached every OTHER
         // role, which is what proves the merge kept the seed rather than
         // replacing it with `from_pairs`' defaults.
-        let light_seeded = role_palette_for(&ColorPalette::for_theme("light"));
+        let light_seeded = role_palette_for(&ColorPalette::for_theme("light").expect("built-in"));
         assert_eq!(
             live.rgb(palette::Role::Border),
             light_seeded.rgb(palette::Role::Border),
@@ -1000,7 +1066,8 @@ pub(crate) mod tests {
         // proxy for "the operator configured something". The value is.
         set_role_overrides(&std::collections::BTreeMap::new());
         set_active_theme("default");
-        let default_seeded = role_palette_for(&ColorPalette::for_theme("default"));
+        let default_seeded =
+            role_palette_for(&ColorPalette::for_theme("default").expect("built-in"));
         assert_eq!(
             palette::configured_palette()
                 .expect("the seed installs a palette")
@@ -1025,7 +1092,7 @@ pub(crate) mod tests {
         set_role_overrides(&pairs);
         set_active_theme("dark");
 
-        let seeded = role_palette_for(&ColorPalette::for_theme("dark"));
+        let seeded = role_palette_for(&ColorPalette::for_theme("dark").expect("built-in"));
         let live = palette::configured_palette().expect("the seed installs a palette");
 
         // The malformed pair must not reach the palette.

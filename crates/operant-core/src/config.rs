@@ -1345,7 +1345,12 @@ fn default_double_escape_action() -> String {
 impl Default for TuiSettings {
     fn default() -> Self {
         Self {
-            theme: "opencode".to_string(),
+            // Must be a name `theme_colors::ColorPalette::NAMES` carries: this
+            // shipped as "opencode", which is a provider id, not a theme, so
+            // every operator who never picked a theme was rendering the silent
+            // fallback palette and being told nothing. `Theme::default()` is
+            // `Theme::Default` -> "default".
+            theme: "default".to_string(),
             rich_output: true,
             terminal_scroll_mode: false,
             show_tool_calls: true,

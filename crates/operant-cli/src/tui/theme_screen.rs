@@ -83,16 +83,12 @@ impl Default for ThemeScreen {
 // ---------------------------------------------------------------------------
 
 /// The themes offered by the picker, in display order.
-const THEME_NAMES: &[&str] = &[
-    "default",
-    "dark",
-    "light",
-    "solarized",
-    "nord",
-    "dracula",
-    "monokai",
-    "deuteranopia",
-];
+///
+/// The palette's own `NAMES` rather than a second hand-written list: this array
+/// was a duplicate of `ColorPalette::for_theme`'s match arms, so a theme added
+/// to one and not the other produced a picker row that could only ever render
+/// the fallback palette.
+const THEME_NAMES: &[&str] = crate::tui::theme_colors::ColorPalette::NAMES;
 
 fn theme_label(name: &str) -> &'static str {
     match name {
@@ -125,11 +121,16 @@ fn theme_description(name: &str) -> &'static str {
 fn builtin_themes() -> Vec<ThemeOption> {
     THEME_NAMES
         .iter()
-        .map(|name| {
+        .filter_map(|name| {
             // The swatch is read from the palette itself, so the preview can
-            // never drift from what `/theme` actually applies.
+            // never drift from what `/theme` actually applies. `THEME_NAMES` is
+            // `ColorPalette::NAMES`, so this lookup cannot miss — but a theme
+            // that fails to resolve must not render as a row that lies about
+            // its colours, so it is omitted rather than swatched from a
+            // fallback. `debug_assert` makes the invariant loud in tests.
             let palette = ColorPalette::for_theme(name);
-            ThemeOption {
+            debug_assert!(palette.is_some(), "{name} must resolve");
+            palette.map(|palette| ThemeOption {
                 name: (*name).to_string(),
                 label: theme_label(name).to_string(),
                 description: theme_description(name).to_string(),
@@ -139,7 +140,7 @@ fn builtin_themes() -> Vec<ThemeOption> {
                     palette.success,
                     palette.text,
                 ],
-            }
+            })
         })
         .collect()
 }
