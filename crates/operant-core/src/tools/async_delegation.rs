@@ -765,10 +765,19 @@ mod tests {
     #[test]
     fn the_live_list_is_the_all_list_filtered_not_a_second_ordering() {
         let _guard = test_lock().lock().unwrap();
+        let _drain = RegistryDrain::new();
+        // Scope every assertion to THIS test's records. Not every test in the
+        // module drains the registry, so a leaked row from another test would
+        // break a bare `assert_eq!(all.len(), 4)` — which is exactly what
+        // happened when this ran alongside the rest of the suite.
         let a = create_record("live-a", "m");
         let b = create_record("live-b", "m");
         let c = create_record("live-c", "m");
         let d = create_record("live-d", "m");
+        let mine: std::collections::HashSet<String> = [&a, &b, &c, &d]
+            .into_iter()
+            .cloned()
+            .collect();
 
         // Force DISTINCT dispatch times. `create_record` stamps `now_secs()`, so
         // three records created in the same second share one timestamp and a
@@ -794,10 +803,16 @@ mod tests {
         mark_completed(&a, "done");
         mark_failed(&b, "boom");
 
-        let all = list_records();
-        let live = live_records();
+        let all: Vec<AsyncDelegationRecord> = list_records()
+            .into_iter()
+            .filter(|r| mine.contains(&r.delegation_id))
+            .collect();
+        let live: Vec<AsyncDelegationRecord> = live_records()
+            .into_iter()
+            .filter(|r| mine.contains(&r.delegation_id))
+            .collect();
 
-        assert_eq!(all.len(), 4, "all four records: {all:?}");
+        assert_eq!(all.len(), 4, "all four of THIS test's records: {all:?}");
         assert_eq!(live.len(), 2, "the two pending ones: {live:?}");
         assert_eq!(
             live[0].delegation_id, d,
