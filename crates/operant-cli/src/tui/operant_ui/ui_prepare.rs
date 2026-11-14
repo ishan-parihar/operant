@@ -622,45 +622,49 @@ fn swarm_members_signature(
     hasher.finish()
 }
 
-fn spawned_member_for_tool<'a>(
+/// The swarm workers a fan-out tool row is responsible for, in registry order.
+///
+/// MEASURED 2026-11-14 (audit finding 1): this gate required a tool canonically
+/// named `swarm` and a `Spawned new agent: <id>` line, and NEITHER has a
+/// producer in this tree — `canonical_tool_name` maps nothing to `swarm`, the
+/// real fan-out tool is `delegate_task`, and nothing emits that line — so the
+/// transcript's swarm card was unreachable at any load.
+///
+/// The join is now the one the result already carries: `delegate_task` with a
+/// `tasks` array, and a result whose section headings name each worker id
+/// (`### sub-3 · <goal> (session …)`, see `format_swarm_outcomes`). Matching on
+/// the ids the parent was actually given means a refused or failed worker
+/// simply has no section and so gets no card, instead of a card that claims a
+/// worker the swarm never ran.
+fn spawned_members_for_tool<'a>(
     msg: &DisplayMessage,
     members: &'a [crate::tui::operant_app::protocol::SwarmMemberStatus],
-) -> Option<&'a crate::tui::operant_app::protocol::SwarmMemberStatus> {
-    let tool = msg.tool_data.as_ref()?;
-    if tools_ui::canonical_tool_name(&tool.name) != "swarm" {
-        return None;
+) -> Vec<&'a crate::tui::operant_app::protocol::SwarmMemberStatus> {
+    let Some(tool) = msg.tool_data.as_ref() else {
+        return Vec::new();
+    };
+    if tools_ui::canonical_tool_name(&tool.name) != "delegate_task" {
+        return Vec::new();
     }
-
-    // Live remote tool output is decorated as `[swarm] Spawned new agent: …`.
-    // The completed ToolCall can also lose its parsed input across a reload or
-    // event race, so the server-issued session ID is the authoritative signal.
-    let session_id = msg
+    // A single-mode delegation has no workers to card; only the fan-out does.
+    let is_fan_out = tool
+        .input
+        .get("tasks")
+        .and_then(|tasks| tasks.as_array())
+        .is_some_and(|tasks| !tasks.is_empty());
+    if !is_fan_out {
+        return Vec::new();
+    }
+    let named: Vec<&str> = msg
         .content
         .lines()
-        .find_map(|line| line.split_once("Spawned new agent: ").map(|(_, id)| id))
-        .map(str::trim);
-    if let Some(member) = session_id.and_then(|session_id| {
-        members
-            .iter()
-            .find(|member| member.session_id == session_id)
-    }) {
-        return Some(member);
-    }
-
-    // The server may publish the member snapshot before or after the tool result,
-    // and older/reformatted tool results may not retain the exact session-id line.
-    // The spawn label is copied into `task_label`, so use a unique label match as
-    // a safe fallback. Requiring uniqueness prevents an old spawn row from
-    // adopting a newer worker when labels are reused.
-    if tool.input.get("action").and_then(|value| value.as_str()) != Some("spawn") {
-        return None;
-    }
-    let label = tool.input.get("label").and_then(|value| value.as_str())?;
-    let mut matching = members
+        .filter_map(|line| line.strip_prefix("### "))
+        .filter_map(|heading| heading.split_whitespace().next())
+        .collect();
+    members
         .iter()
-        .filter(|member| member.task_label.as_deref() == Some(label));
-    let member = matching.next()?;
-    matching.next().is_none().then_some(member)
+        .filter(|member| named.contains(&member.session_id.as_str()))
+        .collect()
 }
 
 fn prepare_active_batch_progress(
@@ -1799,13 +1803,11 @@ fn render_message_into(
             // [port-decision un-gated at batch-4]: the W7 info_widget family
             // landed (info_widget_swarm_gallery.rs); live path, inert until
             // operant produces swarm-member events.
-            if let Some(member) = spawned_member_for_tool(msg, &ctx.swarm_members) {
-                for line in
-                    crate::tui::operant_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
-                        std::slice::from_ref(member),
-                        width.saturating_sub(1) as usize,
-                    )
-                {
+            for member in spawned_members_for_tool(msg, &ctx.swarm_members) {
+                for line in crate::tui::operant_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
+                    std::slice::from_ref(member),
+                    width.saturating_sub(1) as usize,
+                ) {
                     acc.push_auto(line.alignment(ratatui::layout::Alignment::Left));
                 }
             }
