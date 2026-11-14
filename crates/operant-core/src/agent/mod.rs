@@ -1281,9 +1281,10 @@ const MAX_TOOL_RESULT_LEN: usize = 4096;
 /// reached the parent: MEASURED 2026-11-14, a 6-worker swarm with ~1.5 KB
 /// answers kept worker 1 and part of worker 2, then head-truncated the rest, so
 /// workers 3-6 were paid for and never read. This budget fits the default swarm
-/// breadth (6 workers capped at `MAX_WORKER_REPORT_CHARS = 4000` each, plus
-/// headings) so every admitted worker survives the read-back; the per-worker cap
-/// is what keeps one answer from eating it.
+/// breadth (6 workers capped at `SWARM_REPORT_PREVIEW_CHARS = 600` each, plus
+/// headings) so every admitted worker survives the read-back; the per-worker
+/// preview is what keeps one answer from eating it, and the tail is one
+/// `session_search(session_id=…)` away (audit finding 3).
 const MAX_DELEGATE_RESULT_LEN: usize = 32 * 1024;
 
 /// The read-back budget for one tool's result.

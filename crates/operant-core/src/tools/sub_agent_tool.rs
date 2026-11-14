@@ -1466,16 +1466,23 @@ fn build_child_system_prompt(
     parts.join("\n")
 }
 
-/// One worker's report budget, in characters.
+/// How much of each worker's report is pushed into the parent's context.
 ///
-/// A worker can end its turn with a very long answer (a whole file, a long
-/// transcript). One worker's answer must not consume the entire swarm budget
-/// and starve the others: the parent reads the CONCATENATION, so an uncapped
-/// worker pushed its siblings past the read-back cap and they never reached the
-/// model (MEASURED 2026-11-14: a 6-worker swarm with ~1.5 KB answers kept
-/// worker 1 and part of worker 2). jcode parity: a completion report is capped
-/// and summarised before it is injected into the parent.
-const MAX_WORKER_REPORT_CHARS: usize = 4000;
+/// MEASURED 2026-11-14 (audit finding 3): this was 4000, so a 6-worker swarm
+/// pushed ~24 KB into the transcript permanently — about 6k tokens the parent
+/// pays for whether or not it reads the text. Both references deliver a bounded
+/// notification and let the parent PULL: codex returns `{agent_path, status}`
+/// and jcode delivers out-of-band through the bus, never into history.
+///
+/// A PREVIEW rather than a status line, and deliberately not a dispatch-time
+/// choice: the parent cannot know at fan-out time which workers it will need,
+/// so a "summary vs full" switch forces a guess. A preview is enough to decide
+/// which reports matter, and the full text is one call away — which is why
+/// iter-2356 had to land first, so the session id in the heading is actually
+/// readable. 600 chars is roughly the length of a verdict; only long reports
+/// (a file, a transcript) get cut, and those are exactly the ones worth
+/// pulling. jcode parity: a completion report is capped before it is injected.
+const SWARM_REPORT_PREVIEW_CHARS: usize = 600;
 
 /// How much of a sibling's goal a worker is told.
 ///
@@ -1484,28 +1491,34 @@ const MAX_WORKER_REPORT_CHARS: usize = 4000;
 /// text is replicated into every child's prompt (audit finding 6).
 const SIBLING_GOAL_CHARS: usize = 80;
 
-/// Cap one worker's report on a character boundary, keeping its own text.
+/// Cap one worker's report to a preview, keeping its own text.
 ///
-/// The notice names the session the tail is in. MEASURED 2026-11-14 (audit
-/// finding 4): it used to say only "the full text is in the session store",
-/// which is a pointer with no key — the child's session id was minted inside
-/// `turn_context` and never carried back, so neither the parent model nor the
-/// operator could ask for the tail. The id is the key.
+/// The notice names the session and the CALL that reads the rest. MEASURED
+/// 2026-11-14 (audit finding 4): it used to say only "the full text is in the
+/// session store", a pointer with no key — the child's session id was minted
+/// inside `turn_context` and never carried back, so neither the parent model nor
+/// the operator could ask for the tail. iter-2320 made the id travel; iter-2356
+/// made it openable (`session_search(session_id=…)` reads a session tail). A
+/// pointer that names the session but not the call still costs the reader a
+/// hunt, so the notice says which tool to use.
 fn cap_worker_report(answer: &str, session_id: Option<&str>) -> String {
-    if answer.chars().count() <= MAX_WORKER_REPORT_CHARS {
+    if answer.chars().count() <= SWARM_REPORT_PREVIEW_CHARS {
         return answer.to_string();
     }
-    let mut out: String = answer.chars().take(MAX_WORKER_REPORT_CHARS).collect();
+    let mut out: String = answer.chars().take(SWARM_REPORT_PREVIEW_CHARS).collect();
     match session_id {
         Some(id) => out.push_str(&format!(
-            "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — the full text is \
-             in session {id}]"
+            "\n[preview: {} of {} chars — session_search(session_id=\"{id}\") reads the rest]",
+            SWARM_REPORT_PREVIEW_CHARS,
+            answer.chars().count()
         )),
         // No id read back: say so rather than naming a store the parent cannot
         // address. A child that never reached its prologue has no session.
         None => out.push_str(&format!(
-            "\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — this worker \
-             reported no session id, so the tail is not addressable]"
+            "\n[preview: {} of {} chars — this worker reported no session id, so the rest \
+             is not addressable]",
+            SWARM_REPORT_PREVIEW_CHARS,
+            answer.chars().count()
         )),
     }
     out
@@ -2751,7 +2764,7 @@ mod tests {
             );
         }
         assert!(
-            result.contains("worker report truncated"),
+            result.contains("preview:"),
             "the per-worker cap must be marked, not silent"
         );
         // 6 capped reports plus headings must fit the delegation read-back
@@ -2768,14 +2781,15 @@ mod tests {
     #[test]
     fn a_short_worker_report_is_not_marked_or_rewritten() {
         assert_eq!(cap_worker_report("all good", None), "all good");
-        let long = "y".repeat(MAX_WORKER_REPORT_CHARS + 1);
+        let long = "y".repeat(SWARM_REPORT_PREVIEW_CHARS + 1);
         let capped = cap_worker_report(&long, None);
         assert_eq!(
             capped,
             format!(
-                "{}\n[worker report truncated at {MAX_WORKER_REPORT_CHARS} chars — this worker \
-                 reported no session id, so the tail is not addressable]",
-                "y".repeat(MAX_WORKER_REPORT_CHARS)
+                "{}\n[preview: {SWARM_REPORT_PREVIEW_CHARS} of {} chars — this worker reported \
+                 no session id, so the rest is not addressable]",
+                "y".repeat(SWARM_REPORT_PREVIEW_CHARS),
+                long.chars().count()
             )
         );
     }
@@ -2783,17 +2797,61 @@ mod tests {
     /// Audit finding 4: the truncation notice must name the session the tail is
     /// in. A pointer with no key is the defect — "the full text is in the
     /// session store" told the parent nothing it could act on.
+    ///
+    /// Audit finding 3: naming the session is not enough either. The id is only
+    /// useful if the parent knows which tool opens it, so the notice carries the
+    /// call. iter-2356 made that call work (a session id alone reads the tail);
+    /// this pins that the notice points at it.
     #[test]
-    fn a_truncated_report_names_the_session_that_holds_the_tail() {
-        let long = "z".repeat(MAX_WORKER_REPORT_CHARS + 1);
+    fn a_truncated_report_names_the_session_and_the_call_that_reads_it() {
+        let long = "z".repeat(SWARM_REPORT_PREVIEW_CHARS + 1);
         let capped = cap_worker_report(&long, Some("sess_abc123"));
         assert!(
-            capped.contains("session sess_abc123"),
+            capped.contains("sess_abc123"),
             "the notice must carry the id: {capped}"
+        );
+        assert!(
+            capped.contains("session_search(session_id=\"sess_abc123\")"),
+            "the notice must name the call that reads the rest: {capped}"
         );
         assert!(
             !capped.contains("the full text is in the session store"),
             "the keyless pointer must be gone: {capped}"
+        );
+    }
+
+    /// Audit finding 3: the pushed form is a PREVIEW, so a 6-worker swarm costs
+    /// the parent a fraction of the ~24 KB it used to. MEASURED from the
+    /// formatter rather than asserted on the constant: what the parent reads is
+    /// the concatenation, so that is what this pins.
+    #[test]
+    fn a_swarm_pushes_previews_not_full_reports() {
+        let outcomes: Vec<WorkerOutcome> = (0..6)
+            .map(|i| WorkerOutcome {
+                id: format!("sub-{i}"),
+                goal: format!("task {i}"),
+                status: WorkerStatus::Completed(ChildAnswer {
+                    text: "q".repeat(4000),
+                    session_id: Some(format!("sess_{i}")),
+                }),
+            })
+            .collect();
+        let result = format_swarm_outcomes(&outcomes);
+        // Every worker still appears — the failure the old 4 KB read-back cap
+        // caused was workers 3-6 vanishing, and a preview must not bring it back.
+        for i in 0..6 {
+            assert!(result.contains(&format!("task {i}")), "worker {i} is missing");
+        }
+        // And the pushed text is bounded by the preview width, not the report.
+        assert!(
+            result.len() < 6 * (SWARM_REPORT_PREVIEW_CHARS + 200),
+            "swarm result is {} bytes, which is not a preview: it must stay near \
+             6 x {SWARM_REPORT_PREVIEW_CHARS} plus headings",
+            result.len()
+        );
+        assert!(
+            result.contains("session_search(session_id="),
+            "each cut report must say how to read the rest: {result}"
         );
     }
 
