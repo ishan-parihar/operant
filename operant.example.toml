@@ -456,6 +456,22 @@ enabled = false
 autoload = true
 # `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
+# Manual locations: extra skill roots the operator names by hand, in precedence
+# order AFTER root_dir and BEFORE the project root. Each is canonicalized and
+# checked against the credential-store deny-list; one that is missing, denied
+# or holds a dead symlink is skipped and REPORTED by `operant doctor`, never
+# silently dropped.
+# extra_roots = [
+#   "$HOME/.agents/skills",            # a shared agent-skills pool
+#   "$HOME/projects/team/skills",      # a team library outside the operant home
+# ]
+
+# Project-level discovery: "auto" (default) resolves <workspace>/skills, "off"
+# disables it, and any other string is an explicit path. The project pool is an
+# OVERLAY: it is never copied into root_dir, and a same-named root_dir skill
+# wins the collision. Set "off" for a gateway-only host with no repo.
+# project_root = "auto"
+
 [gateway]
 # `/sessions` browses this platform's sessions WITH their transcripts (title,
 # recency, message count) and `/sessions <n>` switches to one. It is reachable

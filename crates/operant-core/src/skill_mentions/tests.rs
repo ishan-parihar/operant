@@ -38,6 +38,20 @@ fn every_name_character_is_accepted() {
     assert_eq!(names("$skill-name"), vec!["skill-name"]);
     assert_eq!(names("$skill123"), vec!["skill123"]);
     assert_eq!(names("$plugin:skill"), vec!["plugin:skill"]);
+    // iter-2254: `/` makes a category-qualified name ONE token, because that
+    // is the path the listing shows (`software-development/axi`).
+    assert_eq!(names("$cat/leaf"), vec!["cat/leaf"]);
+}
+
+#[test]
+fn an_empty_path_segment_is_not_a_mention() {
+    // The popup must not offer a name `is_plain_relative_path` would refuse at
+    // resolve time, and the expander cannot run.
+    assert!(names("$foo/").is_empty(), "trailing slash");
+    assert!(names("$/foo").is_empty(), "leading slash");
+    assert!(names("$a//b").is_empty(), "empty middle segment");
+    // A real two-segment name is still one mention.
+    assert_eq!(names("$a/b"), vec!["a/b"]);
 }
 
 #[test]

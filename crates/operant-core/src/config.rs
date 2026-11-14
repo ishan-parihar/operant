@@ -1618,6 +1618,30 @@ pub struct SkillsSettings {
     /// Timeout (seconds) for each inline-shell snippet.
     #[serde(default = "default_skill_inline_shell_timeout")]
     pub inline_shell_timeout: u64,
+    /// Additional skill roots the operator named by hand, in precedence
+    /// order AFTER `root_dir` and BEFORE the project root.
+    ///
+    /// Empty by default: before this key existed the ONLY root was
+    /// `root_dir`, and a directory outside it was invisible to every skill
+    /// surface (the `$` popup, `/skill <Tab>`, `/skills`, `skills_list`,
+    /// `skill_view`, the gateway picker). `deny_unknown_fields` above makes
+    /// this a parse-time contract rather than a silently ignored key.
+    ///
+    /// Each entry is expanded (`~`, `$HOME`) and canonicalized; one that is
+    /// missing, unreadable, or inside a credential store is SKIPPED and
+    /// reported by `operant doctor` — never silently dropped.
+    #[serde(default)]
+    pub extra_roots: Vec<PathBuf>,
+    /// Project-level skill discovery: `"auto"` (default), `"off"`, or an
+    /// explicit path.
+    ///
+    /// `"auto"` resolves `<workspace>/skills`, the workspace being the
+    /// directory `@folder:` resolves against. A workspace without a
+    /// `skills/` is a normal state (a gateway chat has no repo), not a
+    /// warning. The project pool is an OVERLAY: it never copies into
+    /// `root_dir`, and the primary pool wins a name collision.
+    #[serde(default = "default_skill_project_root")]
+    pub project_root: String,
 }
 
 fn default_skill_template_vars() -> bool {
@@ -1625,6 +1649,12 @@ fn default_skill_template_vars() -> bool {
 }
 fn default_skill_inline_shell_timeout() -> u64 {
     10
+}
+/// Project-level discovery is on by default: it is what makes a repo's own
+/// `skills/` usable without the operator copying 100 directories into their
+/// home. `"off"` is the escape hatch, and the primary pool still wins.
+fn default_skill_project_root() -> String {
+    "auto".to_string()
 }
 
 impl SkillsSettings {
@@ -1637,6 +1667,37 @@ impl SkillsSettings {
     pub fn expand_paths(&mut self) {
         self.root_dir = expand_home_path(&self.root_dir);
         self.memory_dir = expand_home_path(&self.memory_dir);
+        // `extra_roots` are operator-written paths too, so they get the same
+        // expansion: a copied `$HOME/...` value must not reach the filesystem
+        // verbatim (RT-197's rule, extended to the roots that rule predates).
+        for root in &mut self.extra_roots {
+            *root = expand_home_path(root);
+        }
+        if self.project_root != "auto" && self.project_root != "off" {
+            let as_path = PathBuf::from(&self.project_root);
+            let expanded = expand_home_path(&as_path);
+            self.project_root = expanded.to_string_lossy().into_owned();
+        }
+    }
+
+    /// True when project-level discovery is on (the default).
+    ///
+    /// `"auto"` and an explicit path both mean on; only `"off"` disables it.
+    pub fn project_discovery_enabled(&self) -> bool {
+        !self.project_root.trim().eq_ignore_ascii_case("off")
+    }
+
+    /// The explicit project skills directory, when `project_root` names one
+    /// rather than the `auto`/`off` keyword.
+    pub fn explicit_project_root(&self) -> Option<&Path> {
+        let trimmed = self.project_root.trim();
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("auto")
+            || trimmed.eq_ignore_ascii_case("off")
+        {
+            return None;
+        }
+        Some(Path::new(trimmed))
     }
 }
 
@@ -1653,6 +1714,8 @@ impl Default for SkillsSettings {
             template_vars: true,
             inline_shell: false,
             inline_shell_timeout: 10,
+            extra_roots: Vec::new(),
+            project_root: default_skill_project_root(),
         }
     }
 }
@@ -4201,6 +4264,63 @@ model = "my-route-summarizer"
         assert_eq!(config.tui.word_completion, "off", "the opt-out is honored");
 
         assert_eq!(TuiSettings::default().word_completion, "ngram");
+    }
+
+    /// The two new `[skills]` keys parse, default sensibly, and expand `~`.
+    ///
+    /// `deny_unknown_fields` is what makes this a contract rather than a
+    /// silently ignored key: before these existed, a hand-written
+    /// `extra_roots` made the WHOLE config refuse to load.
+    #[test]
+    fn skills_extra_roots_and_project_root_parse_and_expand() {
+        let config: AppConfig = toml::from_str("").expect("empty config loads");
+        assert!(
+            config.skills.extra_roots.is_empty(),
+            "no manual roots by default"
+        );
+        assert_eq!(
+            config.skills.project_root, "auto",
+            "project discovery is on by default"
+        );
+        assert!(config.skills.project_discovery_enabled());
+        assert!(config.skills.explicit_project_root().is_none());
+
+        let mut config: AppConfig = toml::from_str(
+            r#"
+[skills]
+extra_roots = ["$HOME/agents-skills", "~/more-skills"]
+project_root = "off"
+"#,
+        )
+        .expect("the two keys parse");
+        assert_eq!(config.skills.extra_roots.len(), 2);
+        assert!(!config.skills.project_discovery_enabled());
+
+        config.skills.expand_paths();
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let home = PathBuf::from(home);
+        assert_eq!(config.skills.extra_roots[0], home.join("agents-skills"));
+        assert_eq!(config.skills.extra_roots[1], home.join("more-skills"));
+    }
+
+    /// An explicit `project_root` path survives expansion and is not confused
+    /// with the `auto`/`off` keywords.
+    #[test]
+    fn an_explicit_project_root_is_a_path_not_a_keyword() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[skills]
+project_root = "/srv/team/skills"
+"#,
+        )
+        .expect("an explicit project root parses");
+        assert!(config.skills.project_discovery_enabled());
+        assert_eq!(
+            config.skills.explicit_project_root(),
+            Some(Path::new("/srv/team/skills"))
+        );
     }
 
     /// A top-level `[[model_routes]]` is REJECTED by the config.

@@ -21,9 +21,13 @@ use crate::agent::skill_preprocessing::build_skill_invocation_message_in;
 
 /// Characters that may appear in a mention name.
 ///
-/// codex `chat_composer.rs::is_mention_name_char`.
+/// codex `chat_composer.rs::is_mention_name_char`, plus `/` so a
+/// category-qualified name (`$software-development/axi`) is ONE token — the
+/// listing shows that path, and the popup has to complete it. `/` cannot
+/// begin a shell variable name, so the shell-spelling guard below still
+/// rejects every real shell form.
 fn is_mention_name_char(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':')
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'/')
 }
 
 /// True when a bare `$name` is shell syntax rather than a skill name.
@@ -37,6 +41,14 @@ pub fn is_shell_spelling(name: &str) -> bool {
         return false;
     }
     name.bytes().all(|b| b.is_ascii_digit()) || !name.bytes().any(|b| b.is_ascii_lowercase())
+}
+
+/// True when a name is not a usable path-shaped skill name: an empty segment
+/// (`foo/`, `/foo`, `a//b`) can never resolve, and `is_plain_relative_path`
+/// would refuse it at resolve time — so the popup must not offer it.
+#[must_use]
+pub fn has_empty_path_segment(name: &str) -> bool {
+    name.split('/').any(str::is_empty)
 }
 
 /// One `$name` occurrence inside a message.
@@ -85,6 +97,7 @@ pub fn find_skill_mentions(text: &str) -> Vec<SkillMention> {
         if let Some(name) = text.get(index + 1..end)
             && !name.is_empty()
             && !is_shell_spelling(name)
+            && !has_empty_path_segment(name)
         {
             out.push(SkillMention {
                 name: name.to_string(),
@@ -232,10 +245,16 @@ pub fn loadable_skills(
     skills_dir: &Path,
     vendor_roots: &[std::path::PathBuf],
 ) -> Vec<(String, String)> {
-    let mut manager = crate::skills::SkillManager::new(skills_dir.to_path_buf());
-    for root in vendor_roots {
-        manager.add_extra_root(Some(root.clone()));
-    }
+    loadable_skills_in(&roots_from(skills_dir, vendor_roots))
+}
+
+/// [`loadable_skills`] over a resolved root list.
+///
+/// The pair form above stays for the surfaces that have not been threaded
+/// yet; a surface that HAS a [`crate::skills::SkillRoots`] calls this so it
+/// cannot disagree with the manager.
+pub fn loadable_skills_in(roots: &crate::skills::SkillRoots) -> Vec<(String, String)> {
+    let mut manager = crate::skills::SkillManager::from_roots(roots);
     if manager.load_all().is_err() {
         return Vec::new();
     }
@@ -257,12 +276,21 @@ pub fn search_skills(
     query: &str,
     limit: usize,
 ) -> Vec<(String, String)> {
+    search_skills_in(&roots_from(skills_dir, vendor_roots), query, limit)
+}
+
+/// [`search_skills`] over a resolved root list.
+pub fn search_skills_in(
+    roots: &crate::skills::SkillRoots,
+    query: &str,
+    limit: usize,
+) -> Vec<(String, String)> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return Vec::new();
     }
     let mut matched: Vec<(u8, String, String)> = Vec::new();
-    for (name, description) in loadable_skills(skills_dir, vendor_roots) {
+    for (name, description) in loadable_skills_in(roots) {
         let lowered = name.to_lowercase();
         let tier = if lowered == needle {
             0
@@ -281,6 +309,18 @@ pub fn search_skills(
         .take(limit)
         .map(|(_, name, description)| (name, description))
         .collect()
+}
+
+/// The flat root list the pair-form helpers consume: the pool first, then the
+/// vendor roots. `SkillRoots::resolve` is the form that also carries the
+/// operator's `extra_roots`, the project root and the refusal report.
+fn roots_from(skills_dir: &Path, vendor_roots: &[std::path::PathBuf]) -> crate::skills::SkillRoots {
+    crate::skills::SkillRoots {
+        roots: std::iter::once(skills_dir.to_path_buf())
+            .chain(vendor_roots.iter().cloned())
+            .collect(),
+        ..crate::skills::SkillRoots::default()
+    }
 }
 
 #[cfg(test)]

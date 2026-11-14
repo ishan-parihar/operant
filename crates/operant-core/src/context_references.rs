@@ -303,16 +303,40 @@ fn is_sensitive_path(path: &Path) -> bool {
     }
 }
 
+/// The reason `path` is on the sensitive-path deny-list, or `None` when it is
+/// not.
+///
+/// The seam that lets ANOTHER subsystem apply the SAME fail-closed list rather
+/// than a second copy of it: `crate::skills::SkillRoots` refuses a configured
+/// skill root that lands in a credential store, and a root is operator-named,
+/// so the check has to be the one `@folder:` already trusts.
+///
+/// Fails closed exactly like [`is_sensitive_path`]: no `HOME` means every path
+/// is denied, and the returned reason says so.
+#[must_use]
+pub fn sensitive_path_reason(path: &Path) -> Option<String> {
+    let Some(home) = dirs_home_dir() else {
+        return Some("no HOME set: fail closed".to_string());
+    };
+    sensitive_reason_with_home(path, &home)
+}
+
 /// Deny-list check with an explicit home (testable without env mutation).
 fn is_sensitive_path_with_home(path: &Path, home: &Path) -> bool {
+    sensitive_reason_with_home(path, home).is_some()
+}
+
+/// The deny-list, returning WHICH rule matched so a refusal can be reported
+/// rather than merely enforced.
+fn sensitive_reason_with_home(path: &Path, home: &Path) -> Option<String> {
     for rel in SENSITIVE_HOME_FILES {
         if path == home.join(rel) {
-            return true;
+            return Some(format!("credential file {rel}"));
         }
     }
     for rel in SENSITIVE_HOME_DIRS {
         if path.starts_with(home.join(rel)) {
-            return true;
+            return Some(format!("credential directory {rel}"));
         }
     }
 
@@ -325,14 +349,14 @@ fn is_sensitive_path_with_home(path: &Path, home: &Path) -> bool {
             if suffix == &".env" && !path_str.ends_with("/.env") && path_str != ".env" {
                 continue;
             }
-            return true;
+            return Some(format!("credential store {suffix}"));
         }
     }
     // `.env` exact-component match (covers bare `project/.env`).
     if path_str.ends_with("/.env") || path_str == ".env" {
-        return true;
+        return Some("credential store .env".to_string());
     }
-    false
+    None
 }
 
 fn dirs_home_dir() -> Option<PathBuf> {

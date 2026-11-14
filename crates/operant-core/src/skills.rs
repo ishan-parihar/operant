@@ -38,6 +38,11 @@ pub enum SkillOrigin {
     /// A versioned vendor dir under `~/.operant/integrations/` (e.g.
     /// ponytail-v5.3.2/skills/) — auto-updated content, never hand-edited.
     Integration,
+    /// `<workspace>/skills` (or an explicit `project_root` path) — the
+    /// repository's own skills, version-controlled by someone else. Readable
+    /// and invocable; `create`/`delete` refuse it for the same reason they
+    /// refuse an integration: an in-place edit is a change to another tree.
+    Project,
 }
 
 /// A loaded skill with parsed metadata and content.
@@ -92,7 +97,6 @@ pub fn configured_skills_dir() -> PathBuf {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // The ONE rule for which roots a skill may live in (iter-2159)
 // ---------------------------------------------------------------------------
@@ -110,7 +114,9 @@ pub fn vendor_skill_roots(host_roots: &[PathBuf]) -> Vec<PathBuf> {
     if crate::platform::is_holon_run() {
         return Vec::new();
     }
-    let mut roots: Vec<PathBuf> = crate::ponytail::installed_skills_dir().into_iter().collect();
+    let mut roots: Vec<PathBuf> = crate::ponytail::installed_skills_dir()
+        .into_iter()
+        .collect();
     roots.extend(host_roots.iter().cloned());
     roots
 }
@@ -127,6 +133,286 @@ pub fn find_skill_in_roots(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// The ONE resolver for which roots a skill lives in (iter-2254)
+// ---------------------------------------------------------------------------
+
+/// One entry in a root walk that is not a loadable skill — reported, never
+/// swallowed. A dead symlink is a configuration defect the operator has to
+/// be able to see, and a credential-store path is a refusal they have to be
+/// able to audit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootIssue {
+    /// The root the problem was found under.
+    pub root: PathBuf,
+    /// The offending entry (absolute where it could be resolved).
+    pub entry: PathBuf,
+    /// Where a symlink pointed, when that is what made it an issue.
+    pub link_target: Option<PathBuf>,
+    /// Machine-stable reason: `dead_symlink`, `sensitive_path`, `missing`,
+    /// `unreadable`, `not_a_directory`.
+    pub reason: String,
+}
+
+impl RootIssue {
+    /// The human-readable line the doctor prints.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match &self.link_target {
+            Some(target) => format!(
+                "{}: {} -> {} ({})",
+                self.root.display(),
+                self.entry.display(),
+                target.display(),
+                self.reason
+            ),
+            None => format!(
+                "{}: {} ({})",
+                self.root.display(),
+                self.entry.display(),
+                self.reason
+            ),
+        }
+    }
+}
+
+/// Every directory a skill may live in, in precedence order, plus the
+/// problems found while resolving them.
+///
+/// This is the single owner of the list. Every surface that can see or run a
+/// skill takes it: the `$` popup and `/skill <Tab>`, the `/skills` overlay,
+/// the `$name` expansion in both the TUI and the gateway, the `skills_list` /
+/// `skill_view` tools, the gateway's picker, and the agent's `SkillManager`.
+/// iter-2159 and iter-2198 each hand-threaded a list and each found a surface
+/// that disagreed with the rest; the fix is one producer, not a third copy.
+#[derive(Debug, Clone, Default)]
+pub struct SkillRoots {
+    /// Roots in precedence order. The first root that yields a name wins.
+    pub roots: Vec<PathBuf>,
+    /// Roots that were configured but missing, unreadable, denied, or that
+    /// contained a dead symlink. Printed by `operant doctor`.
+    pub issues: Vec<RootIssue>,
+    /// True when a walk hit its cap, so the set is known to be incomplete.
+    pub truncated: bool,
+    /// The project root that was resolved, when one was.
+    pub project: Option<PathBuf>,
+}
+
+/// The most directory entries one root walk will visit.
+///
+/// `~/.agents/skills` holds 3 517 files over 285 skills; a cap of 20 000
+/// visits covers any plausible pool without letting a pathological tree (a
+/// recursive symlink farm, a `node_modules` that is not skipped because it
+/// sits above the skill) stall a turn. Truncation is REPORTED, never silent.
+pub const SKILL_ROOT_WALK_LIMIT: usize = 20_000;
+
+impl SkillRoots {
+    /// Resolve the root list from the config, the host's vendor roots and the
+    /// session workspace.
+    ///
+    /// Precedence: the primary pool (`config.root_dir`, or `holon_override`
+    /// on a Holon run) → the operator's `extra_roots` → the project root →
+    /// the vendor roots. A Holon run keeps its existing rule: the brief's
+    /// library only, no personal pool and no vendor integration — the
+    /// decision stays with the caller that already reads `is_holon_run()`.
+    #[must_use]
+    pub fn resolve(
+        config: &crate::config::SkillsSettings,
+        vendor_roots: &[PathBuf],
+        workspace: Option<&Path>,
+        holon_override: Option<&Path>,
+    ) -> SkillRoots {
+        let mut out = SkillRoots::default();
+
+        // The primary pool. `root_dir` is already `~`-expanded by
+        // `SkillsSettings::expand_paths`.
+        let primary = holon_override
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| config.root_dir.clone());
+        out.push_root(&primary);
+
+        if holon_override.is_some() {
+            // A Holon run resolves to the brief's library only: the operator's
+            // `extra_roots`, the project and the vendor roots would all hand a
+            // personal or ambient library to an org body.
+            return out;
+        }
+
+        for extra in &config.extra_roots {
+            out.push_root(extra);
+        }
+
+        let project = if config.project_discovery_enabled() {
+            config
+                .explicit_project_root()
+                .map(Path::to_path_buf)
+                .or_else(|| workspace.map(|ws| ws.join("skills")))
+        } else {
+            None
+        };
+        if let Some(dir) = &project {
+            out.push_root(dir);
+        }
+        out.project = project;
+
+        for vendor in vendor_roots {
+            out.push_root(vendor);
+        }
+
+        out
+    }
+
+    /// Add one root, recording why it was refused instead of dropping it.
+    fn push_root(&mut self, root: &Path) {
+        // Canonicalize so a symlinked root and its target dedupe, and so a
+        // relative configured path is resolved before anything is compared.
+        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if self.roots.contains(&canonical) {
+            return;
+        }
+        if let Some(reason) = crate::context_references::sensitive_path_reason(&canonical) {
+            self.issues.push(RootIssue {
+                root: canonical,
+                entry: root.to_path_buf(),
+                link_target: None,
+                reason: format!("sensitive_path: {reason}"),
+            });
+            return;
+        }
+        match std::fs::metadata(&canonical) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.issues.push(RootIssue {
+                    root: canonical,
+                    entry: root.to_path_buf(),
+                    link_target: None,
+                    reason: "missing".to_string(),
+                });
+            }
+            Err(e) => {
+                self.issues.push(RootIssue {
+                    root: canonical,
+                    entry: root.to_path_buf(),
+                    link_target: None,
+                    reason: format!("unreadable: {e}"),
+                });
+            }
+            Ok(meta) if !meta.is_dir() => {
+                self.issues.push(RootIssue {
+                    root: canonical,
+                    entry: root.to_path_buf(),
+                    link_target: None,
+                    reason: "not_a_directory".to_string(),
+                });
+            }
+            Ok(_) => self.roots.push(canonical),
+        }
+    }
+
+    /// The roots as a flat slice, in the order `find_skill_in_roots` and
+    /// `SkillManager::load_all` consume them.
+    #[must_use]
+    pub fn as_paths(&self) -> Vec<PathBuf> {
+        self.roots.clone()
+    }
+
+    /// True when nothing at all resolved — a configuration the operator has
+    /// to hear about, not a silently empty skill list.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+}
+
+/// Walk one root for skills, depth-first, honouring the ONE skip rule and the
+/// ONE cap. Returns each skill directory (`<dir>/SKILL.md` exists).
+///
+/// The listing and the resolution used to disagree about depth: `load_root`
+/// read immediate children while `find_skill_recursive` recursed, so a
+/// category-nested skill was FINDABLE but not LISTABLE. This is the single
+/// walk every surface uses now.
+pub fn walk_skill_dirs(root: &Path, limit: usize) -> (Vec<PathBuf>, Vec<RootIssue>, bool) {
+    let mut found = Vec::new();
+    let mut issues = Vec::new();
+    let mut visited = 0usize;
+    let mut truncated = false;
+
+    fn recurse(
+        dir: &Path,
+        root: &Path,
+        limit: usize,
+        visited: &mut usize,
+        found: &mut Vec<PathBuf>,
+        issues: &mut Vec<RootIssue>,
+        truncated: &mut bool,
+    ) {
+        if *visited >= limit {
+            *truncated = true;
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        children.sort();
+        for path in children {
+            if *visited >= limit {
+                *truncated = true;
+                return;
+            }
+            *visited += 1;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            // A dead symlink is a defect to REPORT, not an entry to skip in
+            // silence: `Path::is_dir()` follows links, so the loader below
+            // would simply not see it.
+            if path.is_symlink() && !path.exists() {
+                issues.push(RootIssue {
+                    root: root.to_path_buf(),
+                    entry: path.clone(),
+                    link_target: std::fs::read_link(&path).ok(),
+                    reason: "dead_symlink".to_string(),
+                });
+                continue;
+            }
+            if !path.is_dir() || is_skipped_walk_name(&name) {
+                continue;
+            }
+            if path.join("SKILL.md").is_file() {
+                found.push(path);
+                continue;
+            }
+            recurse(&path, root, limit, visited, found, issues, truncated);
+        }
+    }
+
+    recurse(
+        root,
+        root,
+        limit,
+        &mut visited,
+        &mut found,
+        &mut issues,
+        &mut truncated,
+    );
+    (found, issues, truncated)
+}
+
+/// The ONE skip rule for a directory name during a root walk.
+///
+/// Hidden directories (`.git`, `.archive`, `.curator`, `.hub`), `_`-prefixed
+/// names, and the build/vendor trees that are never skills. This replaces
+/// three different rules across four walkers; the seeder calls the same
+/// function, so a bundled install and a live root cannot disagree.
+#[must_use]
+pub fn is_skipped_walk_name(name: &str) -> bool {
+    name.starts_with('.')
+        || name.starts_with('_')
+        || matches!(name, "node_modules" | "target" | "__pycache__")
 }
 
 fn find_skill_in_root(root: &Path, name: &str) -> Option<PathBuf> {
@@ -186,6 +472,10 @@ pub struct SkillManager {
     extra_roots: Vec<PathBuf>,
     /// Cache of loaded skills keyed by name
     skills: HashMap<String, Skill>,
+    /// Problems the last `load_all` found: dead symlinks and refused roots.
+    issues: Vec<RootIssue>,
+    /// Whether the last `load_all` hit the walk cap.
+    truncated: bool,
 }
 
 impl SkillManager {
@@ -195,7 +485,29 @@ impl SkillManager {
             skills_dir,
             extra_roots: Vec::new(),
             skills: HashMap::new(),
+            issues: Vec::new(),
+            truncated: false,
         }
+    }
+
+    /// Build a manager over a resolved root list — the same list every other
+    /// surface takes, so the manager, the tools and the popup cannot disagree
+    /// about which skills exist.
+    ///
+    /// The first root is the pool (`create`/`delete` target it); the rest are
+    /// read-only, with their origin carried per skill.
+    #[must_use]
+    pub fn from_roots(roots: &SkillRoots) -> Self {
+        let mut iter = roots.roots.iter();
+        let primary = iter
+            .next()
+            .cloned()
+            .unwrap_or_else(crate::platform::operant_skills_dir);
+        let mut manager = Self::new(primary);
+        for root in iter {
+            manager.add_extra_root(Some(root.clone()));
+        }
+        manager
     }
 
     /// Add a read-only extra root scanned AFTER the operator pool
@@ -211,13 +523,17 @@ impl SkillManager {
 
     /// Scan the skills directory and load all valid skills.
     ///
-    /// Each subdirectory containing a `SKILL.md` file is treated as a skill.
-    /// Skills with parse errors are logged and skipped. Extra roots
-    /// (phase 3) are scanned after the primary; their skills are invocable
-    /// and listable but NOT creatable/deletable through this manager
-    /// (see [`Skill::origin`]).
+    /// Each directory containing a `SKILL.md` file is treated as a skill,
+    /// at ANY depth under the root: a category-nested skill
+    /// (`software-development/axi`) is listed as well as found, which is what
+    /// `find_skill_in_roots` always did and `load_root` did not. Skills with
+    /// parse errors are logged and skipped. Extra roots are scanned after the
+    /// primary; their skills are invocable and listable but NOT
+    /// creatable/deletable through this manager (see [`Skill::origin`]).
     pub fn load_all(&mut self) -> Result<Vec<Skill>> {
         self.skills.clear();
+        self.issues.clear();
+        self.truncated = false;
 
         let mut loaded = Vec::new();
         // Same borrow shape as the extra-roots loop below: load_root takes
@@ -240,37 +556,38 @@ impl SkillManager {
         Ok(loaded)
     }
 
-    /// Scan one root. `load_all`'s old body, parameterized per-root.
+    /// The problems found while loading: dead symlinks under any root, and
+    /// anything the walk had to refuse. Empty on a clean configuration.
+    #[must_use]
+    pub fn issues(&self) -> &[RootIssue] {
+        &self.issues
+    }
+
+    /// True when a walk hit [`SKILL_ROOT_WALK_LIMIT`] and the loaded set is
+    /// known to be incomplete.
+    #[must_use]
+    pub fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+
+    /// Scan one root. `load_all`'s body, parameterized per-root.
     fn load_root(
         &mut self,
         root: &Path,
         origin: SkillOrigin,
         loaded: &mut Vec<Skill>,
     ) -> Result<()> {
-        let entries = std::fs::read_dir(root).map_err(|e| {
-            Error::Config(format!(
-                "Failed to read skills directory '{}': {}",
-                root.display(),
-                e
-            ))
-        })?;
+        if !root.is_dir() {
+            // A missing root is normal (an integration that is not installed);
+            // the resolver has already recorded it if the operator named it.
+            return Ok(());
+        }
 
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+        let (dirs, issues, truncated) = walk_skill_dirs(root, SKILL_ROOT_WALK_LIMIT);
+        self.issues.extend(issues);
+        self.truncated |= truncated;
 
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let skill_file = path.join("SKILL.md");
-            if !skill_file.exists() {
-                continue;
-            }
-
+        for path in dirs {
             match load_skill(&path, origin) {
                 Ok(skill) => {
                     // Index by both the frontmatter name and the directory
@@ -284,12 +601,26 @@ impl SkillManager {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| skill.name.clone());
+                    // A category-qualified alias too, so `$category/skill`
+                    // resolves by the path the listing shows. Built from the
+                    // root-relative path, which cannot escape the root.
+                    let qualified = path
+                        .strip_prefix(root)
+                        .ok()
+                        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                        .filter(|rel| rel.contains('/'));
                     let shadowed =
                         self.skills.contains_key(&skill.name) || self.skills.contains_key(&dir_key);
                     if !shadowed {
                         self.skills.insert(skill.name.clone(), skill.clone());
                         if dir_key != skill.name {
                             self.skills.insert(dir_key, skill.clone());
+                        }
+                        if let Some(qualified) = qualified
+                            && qualified != skill.name
+                            && !self.skills.contains_key(&qualified)
+                        {
+                            self.skills.insert(qualified, skill.clone());
                         }
                         loaded.push(skill);
                     }
@@ -415,11 +746,12 @@ impl SkillManager {
 
     /// Delete a skill by removing its directory.
     ///
-    /// Refuses integration-sourced skills (phase 3): the vendor tree is
-    /// version-managed by `operant update --integrations` — deleting a
-    /// skill from it would be silently undone by the next update anyway.
-    /// Delete the operator's shadowing copy or disable the integration
-    /// instead.
+    /// Refuses integration-sourced and project-sourced skills: the vendor tree
+    /// is version-managed by `operant update --integrations` — deleting a
+    /// skill from it would be silently undone by the next update anyway — and
+    /// a project `skills/` belongs to the repository, so deleting from it is a
+    /// change to someone else's tree. Delete the operator's shadowing copy or
+    /// disable the integration instead.
     pub fn delete(&mut self, name: &str) -> Result<()> {
         if let Some(skill) = self.skills.get(name)
             && skill.origin == SkillOrigin::Integration
@@ -429,6 +761,17 @@ impl SkillManager {
                  (the next `operant update --integrations` would restore it). \
                  Disable the integration or shadow it with an operator skill.",
                 name
+            )));
+        }
+        if let Some(skill) = self.skills.get(name)
+            && skill.origin == SkillOrigin::Project
+        {
+            return Err(Error::Config(format!(
+                "Skill '{}' comes from a project or configured root — delete is \
+                 refused (that tree is version-controlled by someone else). Copy it \
+                 into '{}' first if you want your own.",
+                name,
+                self.skills_dir.display()
             )));
         }
 
@@ -1073,6 +1416,196 @@ mod tests {
             mgr.list_available().is_empty(),
             "a skill with an unmet prerequisite must not be advertised"
         );
+
+        cleanup(&tmp);
+    }
+
+    // ── SkillRoots: one resolver, N locations (iter-2254) ───────────────
+
+    fn settings_with(
+        root: &Path,
+        extra_roots: Vec<PathBuf>,
+        project_root: &str,
+    ) -> crate::config::SkillsSettings {
+        crate::config::SkillsSettings {
+            root_dir: root.to_path_buf(),
+            extra_roots,
+            project_root: project_root.to_string(),
+            ..crate::config::SkillsSettings::default()
+        }
+    }
+
+    fn skill_at(dir: &Path, name: &str) {
+        let d = dir.join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} desc\n---\nBody of {name}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_manual_location_resolves_for_every_surface() {
+        // The operator's ask: a directory that is not `root_dir` has to be
+        // reachable from the popup, the listing and the expansion alike.
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        let manual = tmp.join("manual");
+        // `pool` is deliberately NOT created: only the manual root can resolve,
+        // so the assertion cannot be perturbed by a real `~/.operant/skills`
+        // on the host running the test.
+        skill_at(&manual, "only-manual");
+
+        let cfg = settings_with(&pool, vec![manual.clone()], "off");
+        let roots = SkillRoots::resolve(&cfg, &[], None, None);
+        assert_eq!(roots.roots.len(), 1, "only the manual root resolved");
+        assert_eq!(roots.roots[0], fs::canonicalize(&manual).unwrap());
+
+        let names: Vec<String> = crate::skill_mentions::loadable_skills_in(&roots)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(names, vec!["only-manual".to_string()]);
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn a_project_root_resolves_without_copying_into_the_pool() {
+        // The jcode rule: a project pool is an OVERLAY, never a copy. The
+        // seeder would otherwise copy 100 directories into the operator's home.
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        let ws = tmp.join("ws");
+        fs::create_dir_all(&pool).unwrap();
+        fs::create_dir_all(&ws).unwrap();
+        // The repository's shape: <category>/<skill>/SKILL.md.
+        let nested = ws.join("skills").join("testing").join("project-skill");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("SKILL.md"),
+            "---\nname: project-skill\ndescription: lives in the repo\n---\nBody\n",
+        )
+        .unwrap();
+
+        let cfg = settings_with(&pool, vec![], "auto");
+        let roots = SkillRoots::resolve(&cfg, &[], Some(&ws), None);
+        assert_eq!(roots.roots.len(), 2, "pool then project");
+        assert_eq!(roots.project.as_deref(), Some(ws.join("skills").as_path()));
+
+        let mut mgr = SkillManager::from_roots(&roots);
+        mgr.load_all().unwrap();
+        assert!(mgr.get("project-skill").is_some(), "leaf name resolves");
+        assert!(
+            mgr.get("testing/project-skill").is_some(),
+            "the category-qualified path the listing shows resolves too"
+        );
+        // The pool is untouched: nothing was copied.
+        assert!(!pool.join("project-skill").exists());
+        assert_eq!(fs::read_dir(&pool).unwrap().count(), 0);
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn a_denied_root_is_refused_and_names_the_reason() {
+        let tmp = make_temp_dir();
+        // The deny-list is anchored to HOME (`is_sensitive_path_with_home`), so
+        // the refused root has to be the REAL credential directory — a tmp dir
+        // merely NAMED `.ssh` is an ordinary directory, and refusing it would be
+        // wrong. It is not created: the deny check runs before the metadata
+        // check, so its existence is irrelevant, and no test writes into `~/.ssh`.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let Some(home) = home else {
+            // No HOME means fail-closed: every path is denied, which is the
+            // other half of the contract.
+            return;
+        };
+        let denied = home.join(".ssh");
+        let pool = tmp.join("pool");
+
+        let cfg = settings_with(&pool, vec![denied.clone()], "off");
+        let roots = SkillRoots::resolve(&cfg, &[], None, None);
+        assert!(
+            roots.roots.is_empty(),
+            "neither a missing pool nor a denied root is a root"
+        );
+        let issue = roots
+            .issues
+            .iter()
+            .find(|i| i.reason.starts_with("sensitive_path"))
+            .expect("the denial must be reported, not swallowed");
+        assert!(issue.describe().contains("credential directory .ssh"));
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn a_dead_symlink_is_reported_with_its_target() {
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        fs::create_dir_all(&pool).unwrap();
+        skill_at(&pool, "live");
+        let dead = pool.join("dead-link");
+        let _ = fs::remove_file(&dead);
+        std::os::unix::fs::symlink("/nonexistent/target", &dead).unwrap();
+
+        let mut mgr = SkillManager::new(pool.clone());
+        mgr.load_all().unwrap();
+        assert!(mgr.get("live").is_some());
+        assert!(mgr.get("dead-link").is_none(), "a dead link is not a skill");
+        let issue = mgr
+            .issues()
+            .iter()
+            .find(|i| i.reason == "dead_symlink")
+            .expect("the dead link must be reported");
+        assert_eq!(issue.entry, dead);
+        assert_eq!(
+            issue.link_target.as_deref(),
+            Some(Path::new("/nonexistent/target"))
+        );
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn the_walk_is_bounded_and_says_so() {
+        let tmp = make_temp_dir();
+        // One skill directory per level, nested far past any plausible depth.
+        let mut dir = tmp.clone();
+        for i in 0..50 {
+            dir = dir.join(format!("level-{i}"));
+            fs::create_dir_all(&dir).unwrap();
+        }
+        skill_at(&dir, "deep");
+
+        let (found, _issues, truncated) = walk_skill_dirs(&tmp, 10);
+        assert!(truncated, "a cap of 10 visits must truncate this tree");
+        assert!(
+            found.is_empty() || found.len() < 2,
+            "a truncated walk must not report the deep skill as found"
+        );
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn a_holon_run_resolves_to_the_brief_library_only() {
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        let brief = tmp.join("brief-skills");
+        let manual = tmp.join("manual");
+        let ws = tmp.join("ws");
+        for d in [&pool, &brief, &manual, &ws] {
+            fs::create_dir_all(d).unwrap();
+        }
+        skill_at(&brief, "brief-only");
+
+        let cfg = settings_with(&pool, vec![manual.clone()], "auto");
+        let roots = SkillRoots::resolve(&cfg, &[], Some(&ws), Some(&brief));
+        assert_eq!(roots.roots.len(), 1, "the brief's library only");
+        assert_eq!(roots.roots[0], fs::canonicalize(&brief).unwrap());
 
         cleanup(&tmp);
     }
