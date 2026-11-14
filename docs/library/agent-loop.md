@@ -77,6 +77,59 @@ the context? `ContextOverflow` triggers auto-compression via
   calls don't burn budget). At the limit the loop does a **grace call**:
   one final summarize-and-stop turn instead of a hard stop (iter-57).
 
+## The two-span policy (`agent/retry_policy.rs`, iters 2290/2291)
+
+The three budgets above are all WIRE-level: they retry inside one request or
+bound one dropped stream. None of them answers the SEAT — a provider down for
+four minutes left a chat with a message accepted and no answer, and the only
+knob that could stop it was the turn's wall clock, which stops the TURN rather
+than the retry.
+
+`RetryPolicy` is the layer above them, configured by `[agent.retry]`:
+
+```
+small_span_retries = 3      immediate re-issues of the SAME request, no sleep
+large_span_secs    = 300    then one request per span
+max_span_secs      = 0      0 = INFINITE (the default); set it to stop there
+announce_large_span = true  heartbeat on every large-span retry
+```
+
+- **Small span** (`attempt < small_span_retries`): zero delay, unannounced. A
+  provider that blipped and is fine now costs one round trip — the common case
+  and the one worth being fast about.
+- **Large span**: `large_span_secs` between attempts, and by DEFAULT IT DOES NOT
+  STOP. A seat that gives up is a seat that goes dark and the operator's only
+  other signal is a missing reply.
+- **Ceiling** (`max_span_secs`): opt-in, checked BEFORE the span so a ladder
+  cannot overshoot the one knob the operator set. `0` is infinite, not a clamp.
+- **Rate-limit aware**: a 429's `retry_after` replaces the flat span. The
+  provider is the authority on its own limiter; a ZERO hint is not a delay hint
+  and falls back to the flat span rather than busy-looping.
+
+The wait is interruptible (`interrupt_flag.wait_for_interrupt`), so a user who
+stops the turn during a five-minute wait gets "Turn stopped", not an error card
+five minutes later.
+
+**The stop is a SPAN, not the turn's wall clock.** They answer different
+questions: the wall clock is the caller's bound on ONE turn, the retry span is
+the bound on the RETRYING. Conflating them is how an operator who sets a 60 s
+turn silently loses the five-minute span they never knew they had.
+
+**The cron seam uses the same policy.** `CronScheduler` drives it by ATTEMPT
+rather than by elapsed time (a job runs once per tick and has no single ladder
+start), so the policy decides the SPACING and `MAX_TRANSIENT_RETRIES` stays the
+hard stop. Before this, `[30s, 120s]` gave a job two tries and then went dark
+until its next cadence tick — a lost hour at hourly cadence, for one 503.
+
+**Self-healing.** The `[agent.retry]` block rides the config-resilience
+contract (`config_heal.rs`): `large_span_secs = 0` heals to 1 s and is NAMED (a
+zero-length span is a busy loop against a dead provider, strictly worse than the
+hang), and a ceiling below the span is raised to one span (a config that silently
+does nothing is the one shape an operator cannot diagnose from outside).
+`max_span_secs = 0` and `small_span_retries = 0` are deliberate and are left
+alone. The doctor's `[config.resilience]` group reports a busy-loop span, an
+inert ceiling and the policy as configured.
+
 ## Model fallback (`agent/fallback.rs`)
 
 `FallbackModelClient` wraps the primary model with a fallback chain: on a

@@ -30,6 +30,25 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | does my config have defects | `operant doctor` → `[config.resilience]` | unknown-key, deprecated-key, missing-section, range, two-files, unparseable; silent on a healthy config |
 | what healed on load | the `warn!` line naming every `Healed { key, old, new, why }` | the load heals once, atomically, and is idempotent |
 
+## Agentic retry: the two spans
+
+| task | value | what it does |
+|---|---|---|
+| small span | `agent.retry.small_span_retries = 3` | immediate re-issues of the SAME request, no sleep |
+| large span | `agent.retry.large_span_secs = 300` | one request per span, **forever by default** |
+| ceiling | `agent.retry.max_span_secs = 0` | `0` = INFINITE; set it to stop and surface the typed error |
+| announce | `agent.retry.announce_large_span = true` | heartbeat on every large-span retry (the pill and the log line) |
+
+A seat that gives up is a seat that goes dark, so the large span does not stop by
+default. Set `max_span_secs` when you want a BOUNDED retry, not when you want
+fewer of them. The stop is a SPAN, not the turn's wall clock (`HERMES_TURN_TIMEOUT`
+answers "how long may one turn take", a different question).
+
+Where to read it: `operant doctor` -> `[config.resilience]` names the policy as
+configured and warns on a busy-loop span (`large_span_secs <= 1`) or a ceiling
+below the span (an inert retry policy). `docs/library/agent-loop.md` ("The
+two-span policy") is the mechanism.
+
 Where an unknown key is parked: the sidecar `~/.operant/operant.unknown.toml`
 (mode 0600), never the operator's own file. The sidecar is a downgrade
 round-trip, not a graveyard.
