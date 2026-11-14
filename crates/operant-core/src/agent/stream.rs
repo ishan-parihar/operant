@@ -2247,6 +2247,7 @@ mod rt466_tests {
                 skill_nudge_interval: 0,
                 memory_review_interval: 0,
                 max_retries: 1,
+                retry: Default::default(),
                 tool_search: Default::default(),
                 ponytail: Default::default(),
             },
@@ -2334,6 +2335,7 @@ mod turn_attribution_tests {
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
+            retry: Default::default(),
             tool_search: Default::default(),
             ponytail: Default::default(),
         }

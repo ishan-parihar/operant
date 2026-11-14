@@ -152,13 +152,15 @@ fn check_skill_roots(config: &AppConfig, items: &mut Vec<CheckResult>) {
         }
     };
 
-    let dead: Vec<&crate::skills::RootIssue> = roots
-        .issues
-        .iter()
-        .filter(|i| i.reason == "dead_symlink")
-        .collect();
+    // TWO sources, not one: `roots.issues` holds the roots the RESOLVER
+    // refused (missing, not a directory, denied), while the WALK's findings --
+    // dead symlinks inside a root that did resolve -- land in the MANAGER's
+    // list. Reading only the first silently drops the second, which is the
+    // exact defect this row exists to report: a dead symlink in the operator's
+    // own pool was counted nowhere and printed never.
+    let mut refusals: Vec<&crate::skills::RootIssue> = roots.issues.iter().collect();
+    refusals.extend(manager.issues().iter());
     let truncated = manager.is_truncated();
-    let refusals = roots.issues.len().saturating_sub(dead.len());
 
     if loaded == 0 {
         items.push(CheckResult::warn(
@@ -167,8 +169,8 @@ fn check_skill_roots(config: &AppConfig, items: &mut Vec<CheckResult>) {
                 "{} skill root{} resolve, but none holds a loadable skill ({} refusal{})",
                 roots.roots.len(),
                 if roots.roots.len() == 1 { "" } else { "s" },
-                refusals + dead.len(),
-                if refusals + dead.len() == 1 { "" } else { "s" },
+                refusals.len(),
+                if refusals.len() == 1 { "" } else { "s" },
             ),
         ));
     } else {
@@ -199,7 +201,7 @@ fn check_skill_roots(config: &AppConfig, items: &mut Vec<CheckResult>) {
 
     // One row per refused root: the path and the reason, because the two
     // together are the fix ("point extra_roots at the directory you meant").
-    for issue in &roots.issues {
+    for issue in &refusals {
         let detail = match &issue.link_target {
             Some(target) => format!("{} -> {}", issue.entry.display(), target.display()),
             None => issue.entry.display().to_string(),
@@ -1057,6 +1059,13 @@ mod tests {
             "---\nname: demo\ndescription: a demo skill\n---\n\nbody\n",
         )
         .expect("SKILL.md");
+        // A dead symlink INSIDE a root that DOES resolve. The resolver never
+        // sees it (the root is fine); only the WALK finds it, and it lands on
+        // the MANAGER's issue list, not the resolver's. Reading only the
+        // resolver's list -- which this row did -- dropped it in silence,
+        // which is the exact defect the row exists to report.
+        std::os::unix::fs::symlink(tmp.path().join("never-existed"), good.join("DEADLINK"))
+            .expect("symlink");
 
         // One good root, one missing, one that is a file. All three are
         // configuration the operator wrote; only the first resolves.
@@ -1091,14 +1100,19 @@ mod tests {
             joined.contains(&a_file.display().to_string()),
             "a root that is a file is dropped in silence: {joined}"
         );
-        // A configured root that IS the symlink is refused by `push_root`
-        // with `missing` (canonicalize fails). The `dead_symlink` reason is
-        // the walk's finding for a link INSIDE a live root, covered by
-        // `skills::tests::a_dead_symlink_is_reported_with_its_target`; here
-        // the assertion is the absence of silence, whichever reason it took.
+        // The walk's finding, with its target: a dead symlink in a root the
+        // operator's own pool named is a defect to REPORT, not to skip.
         assert!(
-            joined.contains(&dead_dir.display().to_string()),
-            "a dead symlink root is dropped in silence: {joined}"
+            joined.contains(&good.join("DEADLINK").display().to_string()),
+            "a dead symlink inside a live root is dropped in silence: {joined}"
+        );
+        assert!(
+            joined.contains("dead_symlink"),
+            "the reason is not named: {joined}"
+        );
+        assert!(
+            joined.contains("never-existed"),
+            "the link target is not named, so the operator cannot fix it: {joined}"
         );
     }
 

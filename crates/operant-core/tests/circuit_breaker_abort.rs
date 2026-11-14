@@ -371,7 +371,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         skill_nudge_interval: 0,
         memory_review_interval: 0,
         max_retries: 3,
-        retry: crate::config::RetrySettings::default(),
+        retry: operant_core::config::RetrySettings::default(),
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
         ponytail: Default::default(),
