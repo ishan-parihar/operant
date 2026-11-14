@@ -214,3 +214,38 @@ frequency-ranked word list, and a spell-check dictionary answers "is this word c
 which is the wrong question for a completion engine — the hygiene gate (`MIN_PROMPTS`) is
 what keeps typos out of the learned model, and a dictionary suggestion can only ever fill a
 gap the learned vocabulary left (RT-557, iter-2209).
+
+## Outcome (iter-2255, 2026-11-14)
+
+All four gates met. One paste owner now exists (`crates/operant-cli/src/tui/prompt_input/paste.rs`)
+and the composer's one refresh choke point enforces the store invariant, so no mutation
+site has to remember it.
+
+| row | what shipped | pinning test(s) |
+|---|---|---|
+| RT-559 | `pending_pastes: Vec<(placeholder, content)>` (label-keyed, no counter); `clear()` empties it; `drop_missing_paste_placeholders` at the choke point; label numbered from the LIVE set so a reclaimed number is reused | `deleting_a_placeholder_drops_its_payload`, `a_numbered_placeholder_does_not_keep_the_bare_one_alive`, `keeping_a_placeholder_keeps_its_payload`, `deleting_a_placeholder_reclaims_its_number` |
+| RT-560 | `history_recall` + `history_is_live()` gate used by both Up/Down arms and both ladder methods; no edit-path hook needed (an edit changes the text, so the gate opens by construction) | `editing_a_recalled_entry_ends_browsing`, `an_edited_recall_is_not_replaced_by_the_ladder` |
+| RT-561 | `preferred_col: Option<usize>` saved by the first vertical move, reused by later ones, cleared by every non-vertical primitive in `editing.rs` | `a_vertical_walk_keeps_the_column_it_started_from`, `a_horizontal_change_restarts_the_saved_column` |
+| RT-562 | re-paste expands THAT placeholder (spliced, so a second collapsed paste survives); the expand reports the line count through the status notice; `suppress_paste_expand` stops the choke point re-collapsing it | `repasting_the_same_content_expands_the_placeholder`, `expanding_reports_the_size_of_what_it_unwrapped`, `two_pastes_of_the_same_shape_are_not_confused`, `the_expand_target_is_the_placeholder_belonging_to_that_content`, `a_deleted_placeholder_is_not_resurrected_by_a_later_paste` |
+
+Two defects surfaced DURING the run and were fixed rather than recorded:
+
+- **`expand_target` keyed the shape off the wrong argument.** It called
+  `paste_placeholder(candidate, &[])` where `candidate` is already a placeholder string, so
+  the label was rebuilt from the placeholder's own line count (`[Pasted ~1 lines]`) and never
+  matched a real placeholder: the expand always returned `None`. Now the shape is read off the
+  placeholder and compared as an exact string.
+- **The expand replaced the whole buffer.** `replace_text(content)` on one placeholder wiped
+  every other collapsed paste in the composer. The expand now splices the payload in where the
+  placeholder was, leaves the caret at the end of what it inserted, and puts the payload back
+  if the text has no placeholder at the recorded offset (nothing is silently swallowed).
+  Pinned by `two_pastes_of_the_same_shape_are_not_confused`, which failed against the first
+  implementation.
+
+One pre-existing break was repaired in passing because it blocked the iteration's own gate:
+`crates/operant-cli/src/gateway_commands.rs:3767` carried the truncated call
+`telegr[REDACTED](&vendor)` (committed by iter-2217; `origin/main` itself does not compile its
+test target). The intended call is `telegram_bot_commands(&vendor)`. Fleet rule 7 says not to
+fix a peer's in-flight subsystem; this is not in-flight — it is published, it breaks
+`cargo test -p operant-cli` for every agent, and the fix is the one line the truncated token
+was meant to be.
