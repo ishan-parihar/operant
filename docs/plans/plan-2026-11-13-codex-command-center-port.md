@@ -9,6 +9,36 @@ now empty. This plan covers what those stages deliberately left open: the tab
 *axes*, the per-employee identity filter, the directory column, the
 first/last-message preview and the tool-call toggle.
 
+## Resume here
+
+**Every planned item has landed** (see "What landed" below), re-verified on
+2026-11-14 by re-running the completion claims rather than reading them:
+`list_sessions_rich_filtered_page`, `list_sessions_rich_page`,
+`count_sessions_by_filter`, `count_session_user_prompts`,
+`get_session_messages_preview`, `set_session_cwd` and the `Show more` row all
+exist with live call sites. Nothing in the iteration table is outstanding.
+
+What is left is not code:
+
+1. The operator's manual list at the end of this document — register the plan
+   (done 2026-11-14, iter-2334), regenerate the `/branch` and session-hub
+   corpus goldens, confirm the seat display names, and decide `Archived`'s fate
+   once the `a` affordance has shipped.
+2. Two residuals this plan's own constraint 2 names: `row_matches_filter` still
+   guards the visible set of the loaded page, so the status/cwd/employee/branch
+   definitions exist twice (SQL and the predicate) while `Working` exists only
+   in the predicate. Folding the predicate in is a cleanup with its own test
+   rework; it changes no behaviour.
+3. The headless sim cannot open the hub (the sandboxed config has no provider),
+   so every "on the drawn buffer" claim here is verified by unit test on the
+   rendered buffer, not by a screenshot. Run the sim with a provider configured
+   before claiming a visual result.
+
+Corrections of record live outside this file, per the genome rule that a
+dated-frozen plan is not edited after the iteration that implements it:
+`docs/audit/2026-11-14-swarm-and-hub-red-team.md` carries the row-by-row
+status.
+
 ## The request, verbatim
 
 > Currently, its session-picker is very broken, incomplete, and irrelevant. It
