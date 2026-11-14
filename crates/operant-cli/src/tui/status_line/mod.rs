@@ -13,7 +13,9 @@
 //!   `Role::StatusLineBg` (OMP's `statusLineBg`).
 //! - [`segments`] — the segment model, the presets, and the ordered overflow
 //!   degrade `draw_status` is being moved onto.
+//! - [`meter`] — the one `█`/`░` meter the three hand-written copies now share.
 
 pub mod bar;
+pub mod meter;
 pub mod segments;
 pub mod separators;

@@ -93,11 +93,28 @@ pub fn render_context_viz(
             .add_modifier(Modifier::BOLD),
     )]));
 
-    let filled = ((ctx_pct * bar_width as f32) as usize).min(bar_width);
+    // (plan 2026-11-14 U9) The cell COUNT comes from the shared meter, so this
+    // bar and the two others agree on rounding. The spans below still colour the
+    // two halves separately -- that per-cell colouring is this widget's point.
+    let bar = crate::tui::status_line::meter::meter(
+        ctx_pct,
+        bar_width,
+        crate::tui::status_line::meter::MeterStyle::BLOCK,
+    );
+    let filled = bar
+        .chars()
+        .filter(|c| *c == crate::tui::status_line::meter::MeterStyle::BLOCK.filled)
+        .count();
     let empty = bar_width - filled;
     lines.push(Line::from(vec![
         Span::styled(" [", Style::default().fg(theme_colors::muted())),
-        Span::styled("\u{2588}".repeat(filled), Style::default().fg(ctx_color)),
+        Span::styled(
+            crate::tui::status_line::meter::MeterStyle::BLOCK
+                .filled
+                .to_string()
+                .repeat(filled),
+            Style::default().fg(ctx_color),
+        ),
         Span::styled(
             "\u{2591}".repeat(empty),
             Style::default().fg(theme_colors::muted()),

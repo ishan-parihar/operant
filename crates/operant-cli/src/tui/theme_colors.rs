@@ -885,7 +885,7 @@ pub(crate) mod tests {
     /// reached, and the only fields with no role are the documented ones.
     /// Roles deliberately NOT seeded from a `ColorPalette` field.
     ///
-    /// The text-layer roles added at U3 carry the colours the markdown and
+    /// The bar fill (U7) and the text-layer roles added at U3 carry colours the
     /// syntax renderers used to hard-code. Those are not theme fields — they
     /// are the renderer's own palette — so there is nothing in `ColorPalette` to
     /// seed them from, and adding 20 fields to the eight hand-written palettes
@@ -894,6 +894,7 @@ pub(crate) mod tests {
     /// claims them, and `every_role_is_reachable_through_the_live_theming_path`
     /// proves that path works.
     const LITERAL_SEEDED_ROLES: &[Role] = &[
+        Role::StatusLineBg,
         Role::MdHeading,
         Role::MdLink,
         Role::MdLinkUrl,

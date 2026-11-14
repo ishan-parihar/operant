@@ -364,11 +364,15 @@ pub fn format_reset_time(timestamp: &str) -> String {
 }
 
 pub fn format_usage_bar(percent: f32, width: usize) -> String {
-    let filled = ((percent / 100.0) * width as f32).round() as usize;
-    let filled = filled.min(width);
-    let empty = width.saturating_sub(filled);
-    let bar: String = "█".repeat(filled) + &"░".repeat(empty);
-    format!("{} {:.0}%", bar, percent)
+    // (plan 2026-11-14 U9) One meter, one rounding rule. This site rounded and
+    // the other two truncated, so the same fraction drew a different bar
+    // depending on which surface you looked at.
+    let bar = crate::tui::status_line::meter::meter_percent(
+        percent,
+        width,
+        crate::tui::status_line::meter::MeterStyle::BLOCK,
+    );
+    format!("{bar} {percent:.0}%")
 }
 
 fn provider_detail_lines(report: &crate::tui::operant_app::usage::ProviderUsage) -> Vec<String> {

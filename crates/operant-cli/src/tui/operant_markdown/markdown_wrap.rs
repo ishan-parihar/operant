@@ -539,10 +539,11 @@ pub fn wrap_lines(
 }
 
 pub fn progress_bar(progress: f32, width: usize) -> String {
-    let filled = (progress * width as f32) as usize;
-    let empty = width.saturating_sub(filled);
-
-    std::iter::repeat_n('█', filled)
-        .chain(std::iter::repeat_n('░', empty))
-        .collect()
+    // (plan 2026-11-14 U9) Shared with the context and usage meters, so all
+    // three agree on how many cells a fraction earns.
+    crate::tui::status_line::meter::meter(
+        progress,
+        width,
+        crate::tui::status_line::meter::MeterStyle::BLOCK,
+    )
 }
