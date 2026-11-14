@@ -699,14 +699,24 @@ impl super::App {
     ///
     /// `filter` is the argument the operator typed (`/effort high`): the
     /// picker opens already narrowed to that level.
+    ///
+    /// (2026-11-15, model plan M1) The rows used to carry the DISPLAY names
+    /// `low | normal | high | max` as their wire values, while the wire
+    /// vocabulary `/effort-set` validates is
+    /// `"" | minimal | low | medium | high | xhigh` (`commands.rs`). So `normal`
+    /// and `max` were rejected on that path and are not wire levels at all.
+    /// The two that survived still ran the MODEL apply arm and set the
+    /// conversation model to the row's label. Both halves are fixed here: the
+    /// wire value is now the real one, and the picker declares its own kind so
+    /// the apply step cannot mistake it for a model choice.
     pub(super) fn open_effort_picker_inline(&mut self, filter: &str) {
         use crate::tui::model_effort::EffortLevel;
         let current = self.effort_level;
         let rows: &[(EffortLevel, &str, &str)] = &[
             (EffortLevel::Low, "low", "minimal reasoning effort"),
-            (EffortLevel::Normal, "normal", "balanced reasoning effort"),
+            (EffortLevel::Normal, "medium", "balanced reasoning effort"),
             (EffortLevel::High, "high", "deep reasoning effort"),
-            (EffortLevel::Max, "max", "maximum reasoning effort"),
+            (EffortLevel::Max, "xhigh", "maximum reasoning effort"),
         ];
         let entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = rows
             .iter()
@@ -737,7 +747,7 @@ impl super::App {
             .collect();
         let selected = entries.iter().position(|e| e.is_current).unwrap_or(1);
         let mut picker = crate::tui::operant_app::tui_fns::InlineInteractiveState {
-            kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
+            kind: crate::tui::operant_app::tui_fns::PickerKind::Effort,
             entries,
             filtered: (0..0).collect(),
             selected,

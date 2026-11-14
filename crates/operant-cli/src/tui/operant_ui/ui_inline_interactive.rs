@@ -333,7 +333,11 @@ fn picker_render_width(
 
     let mut provider_width = max_provider_len + 1;
     let mut via_width = max_via_len + 1;
-    let model_cap = if picker.kind == crate::tui::operant_app::tui_fns::PickerKind::Model {
+    let model_cap = if matches!(
+        picker.kind,
+        crate::tui::operant_app::tui_fns::PickerKind::Model
+            | crate::tui::operant_app::tui_fns::PickerKind::Effort
+    ) {
         max_width
     } else if is_preview {
         42

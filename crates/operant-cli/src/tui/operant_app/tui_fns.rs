@@ -244,6 +244,17 @@ pub(crate) fn detect_kv_cache_problem(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     Model,
+    /// The reasoning-effort picker (`/effort`).
+    ///
+    /// (2026-11-15, model plan M1) This surface used to be `PickerKind::Model`
+    /// with effort-shaped rows, so its rows ran the MODEL apply path: choosing
+    /// `◕ high` set `pending_model = Some("◕ high")` — the row's display label,
+    /// symbol and all — and the agent was asked to switch to a model by that
+    /// name. A surface that shares another surface's kind shares its apply path,
+    /// so the kind is what had to be separated. The rows still carry their own
+    /// wire value; `apply_inline_picker_entry` branches on this kind and touches
+    /// `pending_effort` only.
+    Effort,
     Account,
     // [port-excision] Login — the operant-provider-metadata cascade that would
     // populate it is not ported, so no picker opens on this kind.
@@ -345,6 +356,22 @@ impl PickerKind {
                 active_submit_hint: "  ↑↓ ←→ ↵ Esc",
                 shows_default_shortcut_hint: false,
                 preview_activation_column: 2,
+            },
+            // The effort rows carry their level in the NAME and their wire value
+            // in `PickerEntry::effort`, so there is no second column to name: the
+            // schema's own `primary_label` is the whole row. A "PROVIDER" column
+            // here is what the old shared kind printed, and it was the tell that
+            // this was the model picker wearing another hat.
+            Self::Effort => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::Compact,
+                primary_label: "EFFORT",
+                secondary_label: "",
+                secondary_preview_label: "",
+                tertiary_label: "",
+                preview_submit_hint: "  ↵ set",
+                active_submit_hint: "  ↑↓/jk ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 0,
             },
         }
     }

@@ -288,11 +288,18 @@ pub(super) fn draw_prompt_history_search_overlay(
 /// palette floats over existing rows instead of reserving layout height.
 pub(super) fn draw_command_suggestions_overlay(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
     if let Some(picker) = app.inline_interactive_state()
-        && picker.kind == crate::tui::operant_app::tui_fns::PickerKind::Model
+        && matches!(
+            picker.kind,
+            crate::tui::operant_app::tui_fns::PickerKind::Model
+                | crate::tui::operant_app::tui_fns::PickerKind::Effort
+        )
     {
         // Use the command palette surface, not a separate bordered picker.
         // Keep it above the composer and size the window before building rows
         // so the selected model remains visible even on short terminals.
+        // (2026-11-15, model plan M1) The effort picker is the same surface, so
+        // it takes the same path; it used to reach it only by claiming to be the
+        // model picker.
         let height = area.y.saturating_sub(frame.area().y);
         let lines = super::inline_interactive_ui::model_suggestion_lines(
             picker,
