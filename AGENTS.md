@@ -211,10 +211,19 @@ code — it is never destroying a peer's work that lives only in the shared
 tree. These rules are load-bearing; every one exists because a specific
 incident happened.
 
-> **Status (2026-10-19, owner order):** no peer agent works in parallel with
-> the operator agent right now. The temporary-worktree build step (§7, rule 4)
-> is deferred; release builds run in the shared tree. The rules below return
-> to full force when peers resume.
+> **Status (owner order 2026-10-19; PREMISE CONTRADICTED 2026-11-14, owner
+> decision outstanding):** the order says no peer agent works in parallel with
+> the operator agent, and on that premise the temporary-worktree build step
+> (§7, rule 4) is deferred and release builds run in the shared tree.
+> MEASURED 2026-11-14: the premise no longer holds. `git worktree list` names
+> 23 live worktrees, 12 with HEADs from that day, and the shared tree carried
+> another writer's uncommitted files in `session_hub/`, `skill_mentions/`,
+> `prompt_input/` and `gateway_runner/` while this was being audited. Rules
+> 2, 3, 7, 8 and 11 are the ones that protect against exactly that, so they
+> are being followed regardless of the banner; only rule 4's worktree step
+> waits on the order. An operator who wants the fleet rules back at full
+> force should re-issue the order with a date — a banner whose premise has
+> expired is worse than no banner, because it reads as a live suspension.
 
 1. **The iteration-label authority is `origin/main`, hand-computed.** Fetch,
    read the top label, compute `top+1` yourself (arithmetic in the message,
