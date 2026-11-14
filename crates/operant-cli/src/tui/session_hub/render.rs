@@ -1448,7 +1448,7 @@ fn render_preview(
                             Style::default().fg(theme_colors::muted()),
                         )));
                     }
-                    if state.hide_tool_calls {
+                    if !state.preview_filter.shows_tool_calls() {
                         // The toggle must be VISIBLE. A preview that silently
                         // loses its tool calls reads as a broken transcript,
                         // and the operator cannot tell "hidden on purpose"
@@ -1466,7 +1466,13 @@ fn render_preview(
                         // A tool RESULT is the tool call's output — hiding the
                         // call but keeping its result would leave the operator
                         // reading the output of a call they cannot see.
-                        if state.hide_tool_calls && msg.role == "tool" {
+                        // One axis decides what the pane shows
+                        // (2026-11-14): the filter, not a second flag beside
+                        // it. A tool result is dropped with its call.
+                        if !state
+                            .preview_filter
+                            .keeps(&msg.role, !msg.tool_calls.is_empty())
+                        {
                             continue;
                         }
                         let (label, color) = match msg.role.as_str() {
@@ -1513,7 +1519,7 @@ fn render_preview(
                         // prompts, and the end of turn output remains", and a
                         // `[file_read]` label with no context is the same noise
                         // the toggle exists to remove.
-                        if !state.hide_tool_calls {
+                        if state.preview_filter.shows_tool_calls() {
                             for call in &msg.tool_calls {
                                 spans.push(Span::styled(
                                     format!("[{call}] "),
@@ -1560,7 +1566,7 @@ fn render_preview(
                 // — directly beneath a banner reading "tool calls hidden (t
                 // shows them)", so the pane contradicted itself about the same
                 // key at the same time.
-                if state.hide_tool_calls {
+                if !state.preview_filter.shows_tool_calls() {
                     "Enter switches to this session · t shows tool calls"
                 } else {
                     "Enter switches to this session · t hides tool calls"

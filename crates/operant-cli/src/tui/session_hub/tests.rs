@@ -1580,9 +1580,9 @@ fn reopening_the_hub_resets_the_scope() {
 #[test]
 fn the_tool_call_toggle_survives_a_reopen() {
     let mut hub = SessionHubState::new();
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
     hub.open(None);
-    assert!(hub.hide_tool_calls, "a stated preference is not a scope");
+    assert!(hub.preview_filter, "a stated preference is not a scope");
 }
 
 // ---- (2026-11-14, audit findings 7, 8, 9) the preview pane ----
@@ -1635,7 +1635,7 @@ fn the_preview_footer_says_what_t_does_now() {
         plain.contains("t hides tool calls"),
         "with nothing hidden the key HIDES: {plain}"
     );
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
     let hidden = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
     assert!(
         hidden.contains("t shows tool calls"),
@@ -1665,7 +1665,7 @@ fn the_visible_message_numbers_have_no_holes() {
         msg("assistant", "done"),
     ];
     hub.apply_preview("s1", msgs, 0);
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
     let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
     assert!(
         pane.contains("1. you: start"),
@@ -1827,7 +1827,7 @@ fn hiding_the_tool_calls_leaves_the_prompt_and_the_end_of_turn() {
     assert!(before_joined.contains("file_read"), "{before_joined}");
     assert!(before_joined.contains("the tool output"), "{before_joined}");
 
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
     let (_, after) = hub_rows_with(&mut hub);
     let after_joined = after.join("\n");
     assert!(
@@ -1853,7 +1853,7 @@ fn hiding_the_tool_calls_leaves_the_prompt_and_the_end_of_turn() {
 #[test]
 fn the_hidden_tool_calls_are_named_in_the_preview() {
     let mut hub = hub_with_transcript();
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
     let (_, preview) = hub_rows_with(&mut hub);
     assert!(
         preview.join("\n").contains("tool calls hidden"),
@@ -1866,8 +1866,8 @@ fn the_hidden_tool_calls_are_named_in_the_preview() {
 #[test]
 fn the_tool_calls_come_back_with_another_keypress() {
     let mut hub = hub_with_transcript();
-    hub.toggle_tool_calls();
-    hub.toggle_tool_calls();
+    hub.cycle_preview_filter();
+    hub.cycle_preview_filter();
     let (_, preview) = hub_rows_with(&mut hub);
     let joined = preview.join("\n");
     assert!(joined.contains("file_read"), "{joined}");

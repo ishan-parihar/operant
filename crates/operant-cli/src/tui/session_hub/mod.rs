@@ -170,6 +170,73 @@ impl HubFilterMode {
 /// which rows exist, grouping decides the order they are read in. Codex's four
 /// axes are Project/Directory/Status/Model; operant's are its own data's axes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the preview pane shows of a session's transcript.
+///
+/// (2026-11-14, operator request) "the right session preview must also have the
+/// filters for [full-session (shows all tool calls), user-messages,
+/// user-messages+end-turn-messages (set this as default)]".
+///
+/// This SUBSUMES the old `hide_tool_calls` flag rather than joining it. Two
+/// axes for one question is how the pane came to contradict itself: the banner
+/// said "t shows them" while the footer said "t hides tool calls"
+/// (iter-2230). One axis, one answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PreviewFilter {
+    /// Everything: prompts, assistant turns, tool calls and tool results.
+    Full,
+    /// Only what the operator typed.
+    UserOnly,
+    /// The prompts and the assistant's end-of-turn output — what the operator
+    /// asked for as the default: the shape of the conversation without the
+    /// machinery. A tool result is dropped with its call, because reading the
+    /// output of a call you cannot see is the noise the filter exists to
+    /// remove.
+    UserAndTurnEnd,
+}
+
+impl PreviewFilter {
+    /// The default the operator asked for.
+    pub const DEFAULT: Self = Self::UserAndTurnEnd;
+
+    /// The next filter in the cycle.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Full => Self::UserAndTurnEnd,
+            Self::UserAndTurnEnd => Self::UserOnly,
+            Self::UserOnly => Self::Full,
+        }
+    }
+
+    /// The short label the preview header paints, so the active filter is
+    /// visible rather than remembered.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full session",
+            Self::UserOnly => "your prompts",
+            Self::UserAndTurnEnd => "prompts + replies",
+        }
+    }
+
+    /// Whether a message is shown under this filter.
+    ///
+    /// The end-of-turn predicate is the data's own: an assistant message that
+    /// carries tool calls is MID-turn (it is about to call something), and one
+    /// without them is the turn's output. There is no second definition of
+    /// where a turn ends.
+    pub fn keeps(self, role: &str, has_tool_calls: bool) -> bool {
+        match self {
+            Self::Full => true,
+            Self::UserOnly => role == "user",
+            Self::UserAndTurnEnd => role == "user" || (role == "assistant" && !has_tool_calls),
+        }
+    }
+
+    /// Whether tool CALL labels are painted. Only `Full` shows them.
+    pub fn shows_tool_calls(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
 pub enum HubGroupMode {
     /// The order the rows arrived in — the global `updated_at DESC` the load
     /// already applies. The default, and the only mode that is not a regrade.
@@ -498,7 +565,7 @@ pub struct SessionHubState {
     /// the tool RESULT messages themselves. What it leaves: the prompts the
     /// operator typed and the assistant's end-of-turn output — which is
     /// exactly the pair the operator named.
-    pub hide_tool_calls: bool,
+    pub preview_filter: PreviewFilter,
     /// The EMPLOYEE ROSTER: every employee the store knows about, by id and
     /// by label.
     ///
@@ -579,7 +646,7 @@ impl SessionHubState {
             pending_archive: None,
             live_session_id: None,
             employee_filter: None,
-            hide_tool_calls: false,
+            preview_filter: PreviewFilter::DEFAULT,
             employee_roster: Vec::new(),
             preview_first_prompt: None,
             store_total: None,
@@ -607,9 +674,9 @@ impl SessionHubState {
         // not on the new page opened the hub EMPTY, with all seven tab counts
         // reading 0.
         //
-        // `hide_tool_calls` and `store_total` deliberately SURVIVE: the first
-        // is a stated presentation preference and it names itself in the
-        // preview, and the second is re-set by the next load.
+        // `preview_filter` and `store_total` deliberately SURVIVE a reopen:
+        // the first is a stated presentation preference and the preview header
+        // names it, and the second is re-set by the next load.
         self.filter_mode = HubFilterMode::All;
         self.search_query.clear();
         self.employee_filter = None;
@@ -802,8 +869,8 @@ impl SessionHubState {
     /// tool calls are still in the cached messages and are still what the
     /// operator may want back with one more keypress. Re-fetching would be
     /// both slower and a worse answer.
-    pub fn toggle_tool_calls(&mut self) {
-        self.hide_tool_calls = !self.hide_tool_calls;
+    pub fn cycle_preview_filter(&mut self) {
+        self.preview_filter = self.preview_filter.next();
     }
 
     /// The employee this list is restricted to, for the header's chip.
@@ -1466,6 +1533,9 @@ impl SessionHubState {
         // 2026-11-14): the question a session picker answers is "how did this
         // end". The render clamps to the measured bound while this is set.
         self.preview_follow_bottom = true;
+        // The filter is per-session, so a fresh transcript starts at the
+        // operator's default rather than inheriting the last one's view.
+        self.preview_filter = PreviewFilter::DEFAULT;
         self.preview_failures.retain(|id| id != session_id);
         true
     }
