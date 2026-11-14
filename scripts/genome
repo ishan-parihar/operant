@@ -5042,11 +5042,19 @@ def _wf_path(cfg: Cfg, wf: str) -> Path:
 
 
 def _board_of(cfg: Cfg, item: str) -> Path:
+    p = _board_of_or_none(cfg, item)
+    if p is None:
+        die(f"no workflow board holds `{item}` — `genome wf list`, or claim it by path "
+            f"with `genome claim \"{item}\" --paths <path> [...]`")
+    return p
+
+
+def _board_of_or_none(cfg: Cfg, item: str) -> Path | None:
     d = cfg.coord(cfg.path("workflows"))
     for f in sorted(d.glob("*.md")) if d.is_dir() else []:
         if find_row(f, item):
             return f
-    die(f"no workflow board holds `{item}` — `genome wf list`")
+    return None
 
 
 def cmd_wf(args) -> None:
@@ -5075,10 +5083,95 @@ def cmd_wf(args) -> None:
             print(f"{f.stem:24} {len(rs):3} rows, {sum(r[1] == 'open' for r in rs if len(r) > 1)} open")
 
 
+CLAIM_ROW = re.compile(r"^\|\s*`?([^`|]+?)`?\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$")
+CLAIM_HEADER = ("| item | agent | paths | since |\n"
+                "|---|---|---|---|\n")
+
+
+def _claims_path(cfg: Cfg) -> Path:
+    """The path-scope claim ledger. It lives beside the boards in the coordination
+    home so one flock'd inode holds every claim in the fleet (see coord_root)."""
+    return cfg.coord(cfg.path("workflows")).parent / "claims.md"
+
+
+def _claims(cfg: Cfg) -> list[dict]:
+    p = _claims_path(cfg)
+    if not p.is_file():
+        return []
+    rows = []
+    for line in read(p).splitlines():
+        m = CLAIM_ROW.match(line.strip())
+        if not m or m.group(1).strip() in ("item", "---"):
+            continue
+        rows.append({"item": m.group(1).strip(), "agent": m.group(2).strip(),
+                     "paths": [x.strip() for x in m.group(3).split(",") if x.strip()],
+                     "since": m.group(4).strip()})
+    return rows
+
+
+def _write_claims(cfg: Cfg, rows: list[dict]) -> None:
+    p = _claims_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(
+        f"| {r['item']} | {r['agent']} | {', '.join(r['paths'])} | {r['since']} |\n"
+        for r in rows)
+    p.write_text(CLAIM_HEADER + body)
+
+
+def _paths_conflict(a: str, b: str) -> bool:
+    """Two scopes overlap when one names the other's file or sits above it."""
+    a, b = a.rstrip("/"), b.rstrip("/")
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def _claim_paths(cfg: Cfg, args, aid: str) -> None:
+    """Claim an item that no board holds, against the files it will touch.
+
+    MEASURED 2026-11-14: `claim` died with 'no workflow board holds X' for any
+    slice that is not already a board row, so the coordination step was unavailable
+    to exactly the work that had not been planned onto a board — an agent either
+    edited unclaimed files or spent the turn inventing a board row. A claim is a
+    promise about FILES, so it can be made against files.
+    """
+    paths = [p.strip() for p in (args.paths or []) if p.strip()]
+    if args.release:
+        rows = _claims(cfg)
+        kept = [r for r in rows if not (r["item"] == args.item and r["agent"] == aid)]
+        if len(kept) == len(rows):
+            die(f"`{args.item}` is not claimed by you on the path ledger")
+        _write_claims(cfg, kept)
+        _post(cfg, aid, f"released the path claim on `{args.item}`")
+        print(f"{args.item}: path claim released")
+        return
+    if not paths:
+        die(f"`{args.item}` has no board row and no --paths: name the files it will "
+            f"touch, or put it on a board (`genome wf list`)")
+
+    rows = [r for r in _claims(cfg) if r["item"] != args.item]
+    for r in rows:
+        if r["agent"] == aid:
+            continue
+        clash = sorted({p for p in paths for q in r["paths"] if _paths_conflict(p, q)})
+        if clash:
+            die(f"{', '.join(clash)} is claimed by {r['agent']} for `{r['item']}` — "
+                f"post to the feed or take another slice", ERR)
+
+    now = subprocess.run(["date", "-u", "+%Y-%m-%d %H:%M"], capture_output=True,
+                         text=True).stdout.strip() or "unknown"
+    rows.append({"item": args.item, "agent": aid, "paths": paths, "since": now})
+    _write_claims(cfg, rows)
+    _post(cfg, aid, f"claiming `{args.item}` on paths {', '.join(paths)}")
+    print(f"{args.item}: claimed by {aid} on {', '.join(paths)}")
+    print(f"  release with: genome claim \"{args.item}\" --release")
+
+
 def cmd_claim(args) -> None:
     cfg = find_cfg()
     cfg.need("agents")
-    p = _board_of(cfg, args.item)
+    p = _board_of_or_none(cfg, args.item)
+    if p is None:
+        _claim_paths(cfg, args, agent_identity(cfg, args))
+        return
     aid = agent_identity(cfg, args)
     with Guarded(p):
         r = list(find_row(p, args.item))
@@ -8516,8 +8609,12 @@ def main() -> None:
     s = add("wf", cmd_wf, "workflow boards: new | add | list")
     s.add_argument("wf_cmd", choices=["new", "add", "list"]); s.add_argument("name", nargs="?")
     s.add_argument("item", nargs="?")
-    s = add("claim", cmd_claim, "claim a board item")
+    s = add("claim", cmd_claim, "claim a board item, or a slice by the paths it will touch")
     s.add_argument("item"); s.add_argument("--agent")
+    s.add_argument("--paths", nargs="*", metavar="PATH",
+                   help="claim an item no board holds, against these files or directories")
+    s.add_argument("--release", action="store_true",
+                   help="drop your own path claim on this item")
     s = add("done", cmd_done, "move a board item")
     s.add_argument("item"); s.add_argument("new_status", choices=STATUS_VOCAB)
     s.add_argument("--evidence"); s.add_argument("--note"); s.add_argument("--agent")
