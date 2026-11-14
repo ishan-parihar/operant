@@ -167,11 +167,15 @@ impl OperantTool for FileStateTool {
 
         // (RT-538) The session rides every operation: the snapshot map is
         // keyed by session and path, so one chat's `diff` never reports
-        // another chat's change.
+        // another chat's change. MEASURED 2026-11-14 (audit finding 1):
+        // reading the `session_id` FIELD alone made that comment false in
+        // production — `tool_context` set only the metadata key, so the key
+        // was `("", path)` for every session and all chats shared one entry.
+        // `resolved_session_id` reads both channels.
         match args.operation.as_str() {
             "check" => handle_check(&args.path),
-            "watch" => handle_watch(context.session_id.as_deref(), &args.path),
-            "diff" => handle_diff(context.session_id.as_deref(), &args.path),
+            "watch" => handle_watch(context.resolved_session_id(), &args.path),
+            "diff" => handle_diff(context.resolved_session_id(), &args.path),
             other => ToolResult::error(
                 "file_state",
                 format!(

@@ -100,9 +100,14 @@ impl OperantTool for EvidenceRecallTool {
             return ToolResult::error("evidence_recall", "key is required");
         };
         // The key names the session; the context is the fallback for a key
-        // that carried only a tool call id.
+        // that carried only a tool call id. MEASURED 2026-11-14 (audit
+        // finding 1): this read the `session_id` FIELD, which production
+        // never populated, so the fallback was always empty and a
+        // tool-call-only key was refused with "the call carries none" —
+        // advice the caller had already followed, since the marker prints
+        // exactly that key. `resolved_session_id` reads both channels.
         let session = if session.is_empty() {
-            context.session_id.as_deref().unwrap_or_default()
+            context.resolved_session_id().unwrap_or_default()
         } else {
             session
         };

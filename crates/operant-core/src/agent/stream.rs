@@ -31,10 +31,22 @@ impl OperantAgent {
     /// `harness_mount` in the allowlist got a refusal that told them to
     /// approve it in the allowlist.
     pub(crate) fn tool_context(&self, tool_name: &str) -> ToolContext {
-        let mut ctx = ToolContext::default().with_metadata(
-            "session_id",
-            self.session_id().unwrap_or_else(|| "default".to_string()),
-        );
+        // BOTH channels carry the id. MEASURED 2026-11-14 (audit finding 1):
+        // this set only the `session_id` METADATA key and left the
+        // `ToolContext::session_id` FIELD at `None`, while three production
+        // readers — `file_state`'s watch/diff and `evidence_recall` — read the
+        // field. They therefore ran with no session at all: `state_key(None,
+        // path)` is `("", path)`, so every session in the process shared one
+        // file-state entry per path, and `evidence_recall` refused a
+        // tool-call-only key with advice the caller had already followed. The
+        // test that covered the property built its context with
+        // `with_session_id`, the one channel production never used, so it
+        // could not fail. One id, both channels, so a reader of either is
+        // right.
+        let session = self.session_id().unwrap_or_else(|| "default".to_string());
+        let mut ctx = ToolContext::default()
+            .with_session_id(session.clone())
+            .with_metadata("session_id", session);
         if self.unattended {
             ctx = ctx.with_metadata("unattended", "true");
         }

@@ -388,6 +388,19 @@ impl ToolContext {
     pub fn get(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).map(|s| s.as_str())
     }
+
+    /// The caller's session id, from whichever channel carries it.
+    ///
+    /// MEASURED 2026-11-14 (audit finding 1): the `session_id` FIELD is the
+    /// documented channel, but `agent::stream::tool_context` populated only the
+    /// `session_id` METADATA key, so every production reader of the field ran
+    /// with `None`. Both channels now carry the id, and this reads the field
+    /// first with a metadata fallback, so a context built either way resolves
+    /// to the same session. A reader that consults only one channel is how the
+    /// two drifted apart in the first place.
+    pub fn resolved_session_id(&self) -> Option<&str> {
+        self.session_id.as_deref().or_else(|| self.get("session_id"))
+    }
 }
 
 /// Sandboxed tool executor with timeout support. The default `timeout`

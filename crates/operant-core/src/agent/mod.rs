@@ -1691,6 +1691,45 @@ mod tests {
         );
     }
 
+    /// MEASURED 2026-11-14 (audit finding 1): `tool_context` set only the
+    /// `session_id` METADATA key and left the `ToolContext::session_id` FIELD
+    /// `None`, so the three production readers of the field — `file_state`'s
+    /// watch/diff and `evidence_recall` — ran with no session at all. The test
+    /// that covered the property built its context with `with_session_id`, the
+    /// one channel production never used, so it could not fail. This one drives
+    /// the real producer.
+    #[test]
+    fn the_tool_context_carries_the_session_on_both_channels() {
+        let db = Database::init(std::env::temp_dir().join("test_tool_ctx_session.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+
+        // No host session: both channels say "default", and they agree.
+        let anonymous = agent.tool_context("file_state");
+        assert_eq!(anonymous.session_id.as_deref(), Some("default"));
+        assert_eq!(anonymous.get("session_id"), Some("default"));
+        assert_eq!(anonymous.resolved_session_id(), Some("default"));
+
+        // A real session reaches a reader of EITHER channel. This is the
+        // assertion that was missing: a tool reading only the field used to
+        // get `None` here.
+        agent.set_session_id("sess_abc123");
+        let ctx = agent.tool_context("file_state");
+        assert_eq!(
+            ctx.session_id.as_deref(),
+            Some("sess_abc123"),
+            "the field must carry the session — file_state and evidence_recall read it"
+        );
+        assert_eq!(ctx.get("session_id"), Some("sess_abc123"));
+        assert_eq!(ctx.resolved_session_id(), Some("sess_abc123"));
+    }
+
     /// The token estimate must be the LARGER of the current heuristic and
     /// the reported count.
     ///
