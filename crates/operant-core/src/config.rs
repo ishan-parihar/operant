@@ -2874,6 +2874,31 @@ fn load_app_config_impl(explicit: Option<&Path>, record_target: bool) -> Result<
     // path copied from the template never reaches the filesystem verbatim.
     config.skills.expand_paths();
 
+    // ── (plan 2026-11-14, L2) the heal contract ─────────────────────
+    //
+    // Everything above this point normalizes in memory and used to drop the
+    // result on the floor: an out-of-range value stayed wrong in the file
+    // forever. The heal tables turn each of those normalizations into a
+    // NAMED row, sum them, log one line each, and write the healed document
+    // back exactly once.
+    //
+    // The order matters. The aliases and the path expansions run FIRST,
+    // because they are the older contract and a heal that contradicts them
+    // would fight the existing behaviour; the tables only clamp values the
+    // readers above cannot use.
+    //
+    // A load that had to PARK unknown keys does not rewrite the file: the
+    // split already wrote the sidecar, and rewriting the operator's document
+    // to remove keys they wrote would destroy exactly what the parking
+    // exists to preserve.
+    let healed = crate::config_heal::heal_config(&mut config);
+    for row in &healed {
+        eprintln!("warning: healed {}", row.render());
+    }
+    if !healed.is_empty() {
+        crate::config_heal::persist_healed(&source, &config, &healed);
+    }
+
     // (plan 09) Record the file this process actually loaded — the one
     // `persist_config_key` writes into. Without it, every writer guessed
     // `~/.operant/operant.toml` and `operant -c <path>` runs wrote the
@@ -3383,20 +3408,38 @@ pub fn parse_config_file_without_recording(path: &Path) -> Result<AppConfig> {
 }
 
 fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Result<AppConfig> {
-    let mut cfg: AppConfig = toml::from_str(raw).map_err(|error| {
-        let message = match error.span() {
-            Some(span) => format!(
-                "Invalid TOML in '{}': {} (bytes {}..{})",
+    let mut cfg: AppConfig = match toml::from_str(raw) {
+        Ok(cfg) => cfg,
+        // (plan 2026-11-14, L2) A key this binary does not know is the
+        // UPGRADE case: a config written by a newer operant. Every settings
+        // struct denies unknown fields, so serde turned that into a hard load
+        // failure — the daemon would not start at all. Park the unknown keys
+        // in a sidecar and parse the remainder, so an older binary runs a
+        // newer config and loses nothing on the way back up.
+        //
+        // Only an `unknown field` / `unknown variant` error is recoverable
+        // this way. A type error, a bad value or malformed TOML is a real
+        // defect and still fails: parking the whole file to make one typo
+        // load would hide it.
+        Err(error) => {
+            if !is_unknown_key_error(&error) {
+                return Err(config_parse_error(raw, source, &error));
+            }
+            let sidecar = crate::config_heal::unknown_sidecar_for(source);
+            let (kept, parked) = crate::config_heal::split_unknown(raw, &known_config_key)
+                .ok_or_else(|| config_parse_error(raw, source, &error))?;
+            write_parked_sidecar(&sidecar, &parked)?;
+            eprintln!(
+                "warning: {} names keys this operant build does not know ({}). \
+                 They were parked in {} and are NOT in effect — upgrade operant, \
+                 or remove them from the config. The rest of the file loaded normally.",
                 source.display(),
-                error,
-                span.start,
-                span.end
-            ),
-            None => format!("Invalid TOML in '{}': {}", source.display(), error),
-        };
-
-        Error::Config(message)
-    })?;
+                parked.as_table().map(|t| t.len()).unwrap_or(0),
+                sidecar.display()
+            );
+            toml::from_str(&kept).map_err(|e| config_parse_error(&kept, source, &e))?
+        }
+    };
     validate_context_window(cfg.agent.context_window)?;
     cfg.config_path = Some(source.to_path_buf());
     // The same file the struct records, the GLOBAL records too —
@@ -3417,6 +3460,108 @@ fn parse_config_str_impl(raw: &str, source: &Path, record_target: bool) -> Resul
         record_loaded_config_path(source);
     }
     Ok(cfg)
+}
+
+/// The error message a config parse failure renders, with its byte span when
+/// serde has one.
+///
+/// (plan 2026-11-14, L2) The renderer the loader has always used, extracted
+/// so the unknown-key recovery path produces the SAME message for every
+/// non-recoverable failure instead of a second, differently-worded copy.
+///
+/// A byte offset on its own is a message the operator cannot act on: nobody
+/// counts bytes in a 400-line TOML. When serde reports a span, the offending
+/// LINE is quoted under the message, which is what makes the error fixable
+/// without opening an editor and searching.
+fn config_parse_error(raw: &str, source: &Path, error: &toml::de::Error) -> Error {
+    let mut message = match error.span() {
+        Some(span) => format!(
+            "Invalid TOML in '{}': {} (bytes {}..{})",
+            source.display(),
+            error,
+            span.start,
+            span.end
+        ),
+        None => format!("Invalid TOML in '{}': {}", source.display(), error),
+    };
+    if let Some(span) = error.span()
+        && let Some(line) = offending_line(raw, span.start)
+    {
+        message.push_str("\n  ");
+        message.push_str(line.trim());
+        message.push('^');
+    }
+    Error::Config(message)
+}
+
+/// The source line containing byte offset `at`, for the error message.
+fn offending_line(raw: &str, at: usize) -> Option<&str> {
+    if at > raw.len() {
+        return None;
+    }
+    let start = raw[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let end = raw[at..].find('\n').map(|i| at + i).unwrap_or(raw.len());
+    Some(&raw[start..end])
+}
+
+/// Whether a toml parse failure is "this binary does not know that key".
+///
+/// The one recoverable parse error in the upgrade path: serde's
+/// `deny_unknown_fields` emits `unknown field \`X\` (expected one of ...)`
+/// and enum tables emit `unknown variant`. A type error, a missing
+/// required field, or a bad number is a defect in the operator's file and
+/// must still fail loudly — the whole point of parking is that an UNKNOWABLE
+/// key from a future build never blocks the current one.
+fn is_unknown_key_error(error: &toml::de::Error) -> bool {
+    let text = error.to_string();
+    text.contains("unknown field") || text.contains("unknown variant")
+}
+
+/// Every dotted key this build's [`AppConfig`] understands.
+///
+/// ## Where the set comes from (and why it is not serde reflection)
+///
+/// The plan (`docs/plans/2026-11-14-config-resilience-architecture-...` §5)
+/// calls for ONE generated registry: the struct's key set with its dotted
+/// path, its default, and its note. Serde cannot enumerate a struct's field
+/// names from a `Deserialize` impl — the derived visitor reports them only
+/// through a `visit_map` call, and a type-level `Deserialize` bound has no
+/// way to reach that without a live map. Reflection was the wrong tool, so
+/// the registry is GENERATED FROM SOURCE by `scripts/gen-config-registry.py`
+/// into `crates/operant-core/src/config_registry.rs`, and this module is the
+/// runtime half of it.
+///
+/// The same file is what `scripts/audit-config-keys.py --check` reads, so
+/// the loader's notion of "known" and the gate's notion of "declared" cannot
+/// drift: they are one generated artifact.
+///
+/// A key the registry does not name is, by construction, a key this build
+/// cannot accept — which is exactly the condition the upgrade path parks.
+pub fn known_config_key(dotted: &str) -> bool {
+    crate::config_registry::KNOWN_KEYS.contains(&dotted)
+}
+
+/// Write the parked keys to the sidecar, atomically and owner-only.
+///
+/// A parked key can hold a value the operator wrote for a future build, so
+/// the file is written with the same secret-file discipline every other
+/// config artifact uses.
+fn write_parked_sidecar(path: &std::path::Path, parked: &toml::Value) -> Result<()> {
+    let body = toml::to_string_pretty(parked).map_err(|e| {
+        Error::Config(format!(
+            "cannot render the parked keys for {}: {e}",
+            path.display()
+        ))
+    })?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("create {}: {e}", parent.display())))?;
+    }
+    crate::fs_secrets::write_secret_file(path, body.as_bytes())
+        .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+    Ok(())
 }
 
 impl AppConfig {

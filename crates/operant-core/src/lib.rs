@@ -64,6 +64,8 @@ pub mod browser_provider;
 pub mod client;
 pub mod config;
 pub mod config_backup;
+pub mod config_heal;
+pub mod config_registry;
 pub mod context;
 pub mod context_budget;
 pub mod context_files;
