@@ -6,17 +6,22 @@
 //! bar's structure (which spans are segments) and its glyph is a property of the
 //! operator's taste.
 //!
-//! ## Restored, minus the caps
+//! ## Restored, with the caps and the edge they need
 //!
 //! The style table is transcribed from OMP
 //! (`packages/tui/src/status-line/separators.ts:4-41` + the `sep.*` glyph table in
-//! `packages/tui/src/theme/symbols.ts:460-469`). An earlier version of this table
-//! also carried `left_cap` / `right_cap` and was DELETED at `debe7541` for having
-//! no caller. The caps are **not** restored here, and the reason is the deletion's
-//! own lesson: a cap needs an *end* to the bar, and operant's status row is a flat
-//! left-aligned `Paragraph` with no right edge. Restoring a cap method with nothing
-//! to call it is how the tree got 178 lines of unexercised vocabulary the first
-//! time. U14 lands the caps together with the edge they need.
+//! `packages/tui/src/theme/symbols.ts:460-469`).
+//!
+//! An earlier version of this table also carried `left_cap` / `right_cap` and was
+//! DELETED at `debe7541` for having no caller. They are restored here (U14) because
+//! the edge they need now exists: `bar::fill_style` is applied to the whole status
+//! `Rect`, so the bar's visual right edge is the rect's last column even though the
+//! text inside it is short. A cap therefore sits at `area.right() - 1` without the
+//! text having to be padded to the edge first.
+//!
+//! The caps are drawn ONLY for the two powerline styles, which is what OMP does:
+//! the other six have no cap glyph in the reference table, and inventing one would
+//! be a style the reference does not define.
 //!
 //! ## Why the default is `Dot` and not OMP's `powerline-thin`
 //!
@@ -99,6 +104,26 @@ impl SeparatorStyle {
         {
             Some(style) => (style, true),
             None => (SeparatorStyle::Dot, false),
+        }
+    }
+
+    /// The glyph capping the LEFT end of the bar, or `None` for a style with no
+    /// caps (OMP gives caps only to the two powerline styles).
+    ///
+    /// A cap is drawn in the fill colour as its own ink, so it reads as the bar's
+    /// edge rather than as content — see [`super::bar::cap_style`].
+    pub fn left_cap(self) -> Option<&'static str> {
+        match self {
+            SeparatorStyle::Powerline | SeparatorStyle::PowerlineThin => Some("\u{e0b2}"),
+            _ => None,
+        }
+    }
+
+    /// The glyph capping the RIGHT end of the bar.
+    pub fn right_cap(self) -> Option<&'static str> {
+        match self {
+            SeparatorStyle::Powerline | SeparatorStyle::PowerlineThin => Some("\u{e0b0}"),
+            _ => None,
         }
     }
 
@@ -229,6 +254,27 @@ mod tests {
             SeparatorStyle::parse("Powerline").0,
             SeparatorStyle::Powerline
         );
+    }
+
+    /// Only the two powerline styles have caps, and they point outward: `\u{e0b2}`
+    /// on the left, `\u{e0b0}` on the right. A style that grew caps here would be
+    /// drawing a glyph the reference does not define for it.
+    #[test]
+    fn only_powerline_styles_have_caps() {
+        for style in SeparatorStyle::ALL {
+            let has = style.left_cap().is_some();
+            assert_eq!(
+                has,
+                matches!(
+                    style,
+                    SeparatorStyle::Powerline | SeparatorStyle::PowerlineThin
+                ),
+                "{style:?} cap presence is wrong"
+            );
+            assert_eq!(style.right_cap().is_some(), has);
+        }
+        assert_eq!(SeparatorStyle::Powerline.left_cap(), Some("\u{e0b2}"));
+        assert_eq!(SeparatorStyle::Powerline.right_cap(), Some("\u{e0b0}"));
     }
 
     /// No style renders an empty boundary: an empty glyph would weld two

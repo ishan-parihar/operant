@@ -35,9 +35,8 @@ pub fn fill_style() -> Style {
 /// OMP marks its caps `useBgAsFg: true` and rewrites `\x1b[48;` to `\x1b[38;` at
 /// render time (`status-line/component.ts:3333`). In ratatui the two colours are
 /// independent fields, so the cap is simply the fill as its own foreground — no
-/// escape rewriting. U8 draws the caps; the translation is pinned here because
+/// escape rewriting. U14 draws the caps; the translation is pinned here because
 /// getting it wrong is what makes a cap invisible against the fill.
-#[allow(dead_code)] // U8 draws the caps; the translation is pinned here now.
 pub fn cap_style() -> Style {
     let fill = fill();
     Style::default().fg(fill).bg(fill)

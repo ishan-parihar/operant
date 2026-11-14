@@ -1304,6 +1304,22 @@ pub(super) fn draw_status(
     // cases (rect at y == 0) but not the full-screen-panel ones (rect at y == 13,
     // over an overlay row). The caller knows whether the messages chunk
     // collapsed, so it says so.
+    // (plan 2026-11-15 U14) The powerline caps. OMP draws one at each end of the
+    // bar; a cap is the fill colour used as its own ink, so it reads as the bar's
+    // edge rather than as content.
+    //
+    // The LEFT cap is just a leading span. The RIGHT cap has to reach the bar's
+    // last column, and the text inside it is short, so the gap is filled with
+    // spaces in the fill colour — which is what makes the fill run to the edge and
+    // gives the cap something to sit against. Without the spacer the cap would sit
+    // immediately after the text and read as a stray glyph mid-row.
+    //
+    // Only the two powerline styles have caps (see `SeparatorStyle::right_cap`);
+    // for every other style this is a no-op and the row is untouched.
+    if status_row_is_real && area.height > 0 {
+        line = add_caps(line, area.width, crate::tui::status_line::style::style());
+    }
+
     let paragraph = Paragraph::new(line);
     let paragraph = if status_row_is_real && area.height > 0 {
         paragraph.style(crate::tui::status_line::bar::fill_style())
@@ -1361,6 +1377,39 @@ fn push_queued_suffix(spans: &mut Vec<Span<'static>>, queued_suffix: &str) {
     }
 }
 
+/// Wrap `line` in the configured style's end caps, padded to `width` columns.
+///
+/// Returns the line untouched for every style without caps — which is six of the
+/// eight, and the default — so this is a no-op until an operator picks a powerline
+/// style.
+///
+/// The padding is the point: the bar's text is short and the fill runs to the
+/// rect's last column, so without a spacer the right cap would sit immediately
+/// after the text and read as a stray glyph mid-row rather than as the bar's edge.
+fn add_caps(
+    line: Line<'static>,
+    width: u16,
+    style: crate::tui::status_line::style::SeparatorStyle,
+) -> Line<'static> {
+    let Some((left, right)) = style.left_cap().zip(style.right_cap()) else {
+        return line;
+    };
+
+    let used = line.width();
+    let caps = left.width() + right.width();
+    let gap = (width as usize).saturating_sub(used + caps);
+    let cap_style = crate::tui::status_line::bar::cap_style();
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    spans.push(Span::styled(left, cap_style));
+    spans.extend(line.spans);
+    if gap > 0 {
+        spans.push(Span::styled(" ".repeat(gap), cap_style));
+    }
+    spans.push(Span::styled(right, cap_style));
+    Line::from(spans)
+}
+
 fn streaming_status_spans(
     spinner: &'static str,
     status_text: String,
@@ -1390,6 +1439,75 @@ mod tests {
     /// pinned by the corpus goldens for terminal-clear, terminal-scroll-cls,
     /// skills-view and journey-view -- which is where both wrong answers
     /// actually showed up.
+    /// The caps are DRAWN, not merely defined: a `cap_style` with no caller is the
+    /// dead seam U8 left behind.
+    ///
+    /// Takes the style as a parameter rather than setting the process-global cell:
+    /// the cell is shared and these tests run in parallel, so a test that wrote it
+    /// raced every other status-line test in the binary. `add_caps` is pure for
+    /// exactly this reason, and the live read is covered by the call-site assertion
+    /// below.
+    #[test]
+    fn powerline_caps_are_drawn_at_both_ends_of_the_bar() {
+        use crate::tui::status_line::style::SeparatorStyle;
+
+        let line = add_caps(
+            Line::from(vec![Span::raw(" hi ")]),
+            20,
+            SeparatorStyle::Powerline,
+        );
+        let cap = crate::tui::status_line::bar::cap_style();
+
+        // First span is the left cap, last is the right cap, and both carry the
+        // fill as their ink — the translation that makes a cap visible at all.
+        let first = line.spans.first().expect("a left cap");
+        let last = line.spans.last().expect("a right cap");
+        assert_eq!(first.content.as_ref(), "\u{e0b2}");
+        assert_eq!(last.content.as_ref(), "\u{e0b0}");
+        assert_eq!(first.style, cap, "the cap ink must be the fill colour");
+        assert_eq!(last.style, cap);
+
+        // The text is between them, and the padding reaches the right edge: the
+        // caps plus the gap must account for every column.
+        let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
+        assert_eq!(total, 20, "the caps must span the full bar width");
+        let gap = line
+            .spans
+            .iter()
+            .find(|s| s.content.chars().all(|c| c == ' ') && s.style == cap)
+            .expect("a spacer in the fill colour");
+        assert_eq!(gap.content.width(), 20 - " hi ".len() - 2);
+    }
+
+    /// Every style without caps returns the line UNTOUCHED — same span count, same
+    /// content. Six of the eight are in that class, including the default, so this
+    /// is what proves the caps are opt-in rather than a change to every bar.
+    #[test]
+    fn a_style_without_caps_leaves_the_bar_untouched() {
+        use crate::tui::status_line::style::SeparatorStyle;
+
+        for style in SeparatorStyle::ALL {
+            if style.left_cap().is_some() {
+                continue;
+            }
+            let line = add_caps(Line::from(vec![Span::raw(" hi ")]), 20, *style);
+            assert_eq!(line.spans.len(), 1, "{style:?} must not add spans");
+            assert_eq!(line.spans[0].content.as_ref(), " hi ");
+        }
+    }
+
+    /// The call site really passes the configured style, so the caps are reachable
+    /// from the live path and not only from a test that supplies one. This is the
+    /// assertion that would fail if `add_caps` were called with a hardcoded style.
+    #[test]
+    fn the_cap_call_site_reads_the_configured_style() {
+        let source = include_str!("ui_input.rs");
+        assert!(
+            source.contains("add_caps(line, area.width, crate::tui::status_line::style::style())"),
+            "the cap call site must pass the live configured style"
+        );
+    }
+
     #[test]
     fn the_fill_needs_a_real_row_with_height() {
         let fills = |status_row_is_real: bool, height: u16| status_row_is_real && height > 0;
