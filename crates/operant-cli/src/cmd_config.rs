@@ -41,6 +41,23 @@ pub enum ConfigSubcommand {
         #[command(subcommand)]
         action: BackupAction,
     },
+    /// Describe every config key: dotted path, default, note, and whether the
+    /// running config differs from it.
+    ///
+    /// The agent-facing surface the config-resilience plan's L3 requires.
+    Describe {
+        /// Only keys under this section (e.g. "gateway", "tools.tool_search").
+        section: Option<String>,
+        /// Emit as JSON instead of the aligned table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the full note for ONE config key: why it exists, its range, and
+    /// how the loader heals it.
+    Notes {
+        /// Dotted config key, e.g. "agent.context_window".
+        key: String,
+    },
 }
 
 /// What `operant config backups` does.
@@ -69,6 +86,8 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
         ConfigSubcommand::EnvPath => handle_env_path(),
         ConfigSubcommand::Migrate { apply } => handle_migrate(apply),
         ConfigSubcommand::Backups { action } => handle_backups(action),
+        ConfigSubcommand::Describe { section, json } => handle_describe(config, section, json),
+        ConfigSubcommand::Notes { key } => handle_notes(&key),
     }
 }
 
@@ -645,4 +664,173 @@ mod tests {
         let result = operant_core::config::set_nested_json(&mut obj, &[], "value");
         assert!(result.is_err());
     }
+}
+
+/// Render the whole config surface: every key, its default, its note, and
+/// whether the RUNNING config differs from that default.
+///
+/// The L3 surface (`docs/plans/2026-11-14-config-resilience-architecture-...`).
+/// Two rules make it useful rather than decorative:
+///
+/// - **It reads the registry, not a hand-written list.** The registry is
+///   generated from the settings structs, so `describe` cannot drift from what
+///   the binary accepts — a key the struct has and the registry lacks would be
+///   a key the loader parks as unknown.
+/// - **It marks the NON-DEFAULT values.** A wall of 272 rows in which the
+///   operator's own three settings are invisible is not a map; the `*` is what
+///   makes it one.
+fn handle_describe(config: &AppConfig, section: Option<String>, json: bool) -> Result<()> {
+    let live = serde_json::to_value(config).context("serialise the running config")?;
+    let mut rows: Vec<(String, String, String, bool)> = Vec::new();
+
+    for (key, default, note) in operant_core::config_registry::CONFIG_KEYS {
+        if let Some(prefix) = section.as_deref()
+            && !(*key == prefix || key.starts_with(&format!("{prefix}.")))
+        {
+            continue;
+        }
+        let current = read_dotted(&live, key);
+        let is_default = match (&current, *default) {
+            (Some(value), _) => value == default || values_agree(value, default),
+            (None, _) => false,
+        };
+        rows.push((
+            (*key).to_string(),
+            current.unwrap_or_else(|| (*default).to_string()),
+            (*note).to_string(),
+            !is_default,
+        ));
+    }
+
+    if json {
+        let payload: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(key, value, note, non_default)| {
+                serde_json::json!({
+                    "key": key,
+                    "value": value,
+                    "default": operant_core::config_registry::CONFIG_KEYS
+                        .iter()
+                        .find(|(k, _, _)| *k == key.as_str())
+                        .map(|(_, d, _)| *d)
+                        .unwrap_or(""),
+                    "note": note,
+                    "non_default": non_default,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    // Column widths from the widest cell, so the table reads at any width.
+    let key_width = rows
+        .iter()
+        .map(|r| r.0.len())
+        .max()
+        .unwrap_or(8)
+        .max("KEY".len());
+    println!(
+        "{:<kw$}  {:<vw$}  {}",
+        "KEY",
+        "VALUE",
+        "NOTE",
+        kw = key_width,
+        vw = 24
+    );
+    println!("{}", "-".repeat(key_width + 2 + 24 + 2 + 40));
+    for (key, value, note, non_default) in &rows {
+        // A non-default row is marked, because the default rows are the
+        // background and the operator's own choices are the signal.
+        let marker = if *non_default { "*" } else { " " };
+        println!(
+            "{marker}{:<kw$}  {:<vw$}  {}",
+            key,
+            truncate(&value, 24),
+            truncate(note, 200),
+            kw = key_width,
+            vw = 24
+        );
+    }
+    println!(
+        "\n{} keys; * marks a value that differs from the default.",
+        rows.len()
+    );
+    Ok(())
+}
+
+/// The note for ONE key.
+///
+/// When the key is unknown to this build the command FAILS with the closest
+/// matches rather than printing an empty note: an agent that guessed a key name
+/// must be told the name is wrong, not handed a blank.
+fn handle_notes(key: &str) -> Result<()> {
+    let Some((dotted, default, note)) = operant_core::config_registry::CONFIG_KEYS
+        .iter()
+        .find(|(k, _, _)| *k == key)
+    else {
+        let mut close: Vec<&str> = operant_core::config_registry::CONFIG_KEYS
+            .iter()
+            .map(|(k, _, _)| *k)
+            .filter(|k| {
+                let a = k.split('.').last().unwrap_or(k);
+                let b = key.split('.').last().unwrap_or(key);
+                a.starts_with(b) || b.starts_with(a)
+            })
+            .collect();
+        close.sort();
+        close.truncate(8);
+        anyhow::bail!(
+            "unknown config key '{key}'.{}",
+            if close.is_empty() {
+                String::new()
+            } else {
+                format!(" Did you mean: {}?", close.join(", "))
+            }
+        );
+    };
+
+    let live = runtime_config();
+    let value = serde_json::to_value(&live)
+        .ok()
+        .and_then(|v| read_dotted(&v, dotted));
+
+    println!("{dotted}");
+    println!();
+    println!("  default : {default}");
+    if let Some(current) = value {
+        println!("  current : {current}");
+    }
+    println!("  note    : {note}");
+    Ok(())
+}
+
+/// Read a dotted path out of a JSON value, returning its scalar rendering.
+fn read_dotted(value: &serde_json::Value, dotted: &str) -> Option<String> {
+    let mut cursor = value;
+    for segment in dotted.split('.') {
+        cursor = cursor.get(segment)?;
+    }
+    Some(match cursor {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "<unset>".to_string(),
+        other => other.to_string(),
+    })
+}
+
+/// Whether a live JSON scalar and a registry default string describe the same
+/// thing. The registry records the Rust source of the default (`"auto"` is
+/// recorded with its quotes, `3` without), so the comparison strips them.
+fn values_agree(live: &str, default: &str) -> bool {
+    let unquote = |s: &str| s.trim().trim_matches('"').trim().to_string();
+    unquote(live) == unquote(default)
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }

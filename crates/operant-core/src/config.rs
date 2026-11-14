@@ -2752,7 +2752,12 @@ pub fn compression_config() -> crate::agent::evidence::EvidenceConfig {
 /// `operant-config`'s schema layer loads `config.toml`, but the binary's
 /// loader reads `operant.toml` — `~/.operant/config.toml` is in no load path
 /// at all (ENV-3). A dead file that looks authoritative is worth one line.
-fn ignored_config_files(chosen: &Path) -> Vec<PathBuf> {
+///
+/// PUBLIC because the doctor's L4 sweep reports the same pair (plan 2026-11-14,
+/// L4 `config.two-files`): the load prints the warning once, and a `doctor` run
+/// that did not name the sibling would leave the operator with a config split
+/// and no diagnostic.
+pub fn ignored_config_files(chosen: &Path) -> Vec<PathBuf> {
     // The sibling of the file the loader ACTUALLY read — not
     // `platform::operant_home()`, which follows `HERMES_HOME` and not the
     // `OPERANT_CONFIG_DIR` / `~/.operant` the loader resolves.

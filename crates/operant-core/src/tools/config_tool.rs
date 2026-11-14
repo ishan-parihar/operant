@@ -155,9 +155,57 @@ impl OperantTool for ConfigManageTool {
                 }
                 Err(e) => ToolResult::error("config_manage", format!("reload failed: {e}")),
             },
+            // (plan 2026-11-14, L3) The agent-facing map. The CLI's
+            // `config describe` and this arm read the SAME generated registry,
+            // so an agent that only has the tool sees the same key set the
+            // operator sees — there is no second list to drift.
+            "describe" => {
+                let prefix = parsed.key.as_deref().filter(|k| !k.is_empty());
+                let rows: Vec<Value> = crate::config_registry::CONFIG_KEYS
+                    .iter()
+                    .filter(|(key, _, _)| match prefix {
+                        Some(p) => *key == p || key.starts_with(&format!("{p}.")),
+                        None => true,
+                    })
+                    .map(|(key, default, note)| {
+                        json!({
+                            "key": key,
+                            "default": default,
+                            "note": note,
+                            "current": get_config_value(key).ok(),
+                        })
+                    })
+                    .collect();
+                ToolResult::success("config_manage", json!({ "keys": rows }))
+            }
+            "notes" => {
+                let Some(key) = parsed.key.as_deref().filter(|k| !k.is_empty()) else {
+                    return ToolResult::error("config_manage", "notes requires a 'key'");
+                };
+                match crate::config_registry::CONFIG_KEYS
+                    .iter()
+                    .find(|(k, _, _)| *k == key)
+                {
+                    Some((dotted, default, note)) => ToolResult::success(
+                        "config_manage",
+                        json!({
+                            "key": dotted,
+                            "default": default,
+                            "note": note,
+                            "current": get_config_value(dotted).ok(),
+                        }),
+                    ),
+                    None => ToolResult::error(
+                        "config_manage",
+                        format!("unknown config key '{key}' — `describe` lists every key"),
+                    ),
+                }
+            }
             other => ToolResult::error(
                 "config_manage",
-                format!("Unknown action '{other}' — expected get|set|show|path|reload"),
+                format!(
+                    "Unknown action '{other}' — expected get|set|show|path|reload|describe|notes"
+                ),
             ),
         }
     }
