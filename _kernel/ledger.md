@@ -1574,3 +1574,66 @@ Six findings from the magic-context / oh-my-pi contrast audit, committed as
   Core lib suite: 3,278 passed; 5 pre-existing tools::kernel failures need the
   git submodule this worktree does not have. 12 core + 31 CLI tests cover the
   new paths. clippy clean with --all-targets.
+
+## iter-2364 follow-up — context-lifecycle audit, red-team and remediation
+
+The audit (5 read-only studies, every finding hand-verified against `59bab8e0`)
+produced 26 findings. All 26 are now shipped as six iterations.
+
+### Shipped
+
+- **iter-2365** `cd2695c2`-line — the recall ceiling inverted below 20 tokens
+  (a raw `saturating_sub` underflowed to `fit_to_token_budget`'s "unset" branch
+  and produced the 4,000 default: 400x the ceiling at a setting of 10); the dead
+  `[memory] injection_budget_tokens` twin deleted (379 → 378 keys); the truncation
+  now lands on an item boundary instead of mid-memory. 2 guards, mutation-proven.
+- **iter-2366** — `[skills] autoload` was a documented knob with **zero readers**;
+  now the off switch it names (an empty manager → nothing loaded, advertised or
+  offered). An orphaned doc block had put `max_tool_result_share`'s text on
+  `advertised_skills_token_budget`; both keys now read correctly. Guard
+  mutation-proven.
+- **iter-2367** — the gateway sent the model's continuation batch as the
+  operator's card (the TUI splits at the marker, the gateway did not) and now
+  logs the continuation it cannot deliver; `max_notes_per_update = 0` meant 1,
+  not the documented default 4; a repeated blocker was suppressed by the
+  severity-blind emission guard (guard: 1 of 4 reviews delivered without the
+  exemption, 4 of 4 with); the note batch had no length ceiling; the stale
+  "a card rides into the model's context" doc still shipped in the registry;
+  `AuxiliaryModelConfig.provider` is documented as a label, not a route.
+- **iter-2368** — the recap sent the whole transcript (`build_advisory_messages`
+  bounds tool results only), so on a long session every recap failed and
+  delivered nothing; now cut to the newest turns that fit an 8,000-token budget
+  (mutation-proven: 41,200 → under 8,000). `operant --no-tui` attached **neither**
+  engine and now attaches both.
+- **iter-2369** — micro-compaction's 40% trigger was unreachable behind bust
+  permission (the fold is documented as running *ahead* of the ladder); the
+  threshold is now its own trigger. Removing the gate exposed a pre-existing
+  convergence bug the gate had hidden: folding to exactly the threshold
+  re-triggered on the next turn's append, so a crossing cost a rewrite every
+  turn. Now folds to a target a quarter of the threshold below, so a crossing
+  costs one rewrite (measured: every ~8 turns at ~14,500 against 20,000, where
+  before it was every turn at ~19,900 and the store grew). The compression
+  threshold takes the effective window as a parameter.
+- **iter-2370** — `agent.context_semantic_max_groups`,
+  `agent.context_reference_hard_share`/`_soft_share` are new controls (both were
+  compile-time literals with no knob); the compressor's tail estimator now calls
+  the authoritative `estimate_message_tokens` instead of a local
+  `content + 4` that dropped tool-call arguments; the reactive decay constants
+  are named beside the preflight pair, which are **deliberately** more
+  aggressive (my audit's "one rule, two values" framing was wrong and is
+  corrected in the commit); and a learned limit is now the ceiling `resolve`'s own
+  doc always claimed — two tests codified the contradiction and are renamed.
+
+### Method notes
+
+- Every finding was re-verified against the shipped source before entering a
+  commit; two of my own audit findings were corrected or dropped on that pass
+  (the decay "one rule" framing; the "checkpoint test is TMPDIR-sensitive"
+  claim, which was right but mis-attributed).
+- Several tests use `std::env::temp_dir()` keyed by process id, so a **reused**
+  scratch dir leaves stale sidecars that fail unrelated checkpoint and config
+  tests. All gates above were run with a fresh `TMPDIR`; the failure counts are
+  the pristine tip's plus my own new tests.
+- `cargo fmt --all` reflows 15-16 unrelated files on this tip (52 files are
+  pre-existing unformatted on `origin/main`). Each iteration reverted them; none
+  was committed.
