@@ -1392,6 +1392,37 @@ impl App {
                     },
                 }
             })
+            // FOREGROUND swarms live in their own registry: a `tasks=[…]` call
+            // creates no delegation record, so before this they had no row at all
+            // and a running swarm was invisible in the one pane an operator reads
+            // (audit finding 4, 2026-11-14). Process-lifetime only — the durable
+            // account is the transcript's swarm card.
+            .chain(
+                operant_core::tools::foreground_swarm::list()
+                    .into_iter()
+                    .map(|m| SwarmMemberStatus {
+                        session_id: m.id,
+                        friendly_name: Some(m.label),
+                        status: m.status,
+                        detail: m.detail,
+                        task_label: None,
+                        role: Some("agent".to_string()),
+                        is_headless: Some(true),
+                        live_attachments: None,
+                        status_age_secs: Some(m.age_secs),
+                        output_tail: None,
+                        report_back_to_session_id: None,
+                        todo_progress: None,
+                        todo_items: Vec::new(),
+                        runtime: SwarmMemberRuntime {
+                            model: None,
+                            provider: None,
+                            auth_method: None,
+                            effort: None,
+                            elapsed_secs: Some(m.age_secs),
+                        },
+                    }),
+            )
     }
 
     /// Spawn the /mcp reconnect task: re-add all enabled servers by

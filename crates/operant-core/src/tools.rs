@@ -33,6 +33,7 @@ pub mod env_probe_tool;
 pub mod evidence_recall;
 pub mod file_state;
 pub mod file_tools;
+pub mod foreground_swarm;
 pub mod harness_tools;
 pub mod http_tool;
 pub mod image_generation_tool;

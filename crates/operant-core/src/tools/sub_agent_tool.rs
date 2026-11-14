@@ -347,6 +347,8 @@ struct WorkerSpec {
     /// Where the child should work, if the caller asked for somewhere other than
     /// the parent's working directory (refused — see `resolve_child_cwd`).
     working_dir: Option<String>,
+    /// Stable id for this worker, also the id an operator surface shows.
+    id: String,
 }
 
 /// How a single worker ended. Every exit path — success, agent error,
@@ -371,6 +373,8 @@ enum WorkerStatus {
 /// result to the request that produced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkerOutcome {
+    /// The worker's id, so an operator surface can be told which row ended.
+    id: String,
     goal: String,
     status: WorkerStatus,
 }
@@ -412,6 +416,7 @@ where
         let run = &run;
         async move {
             let goal = worker.goal.clone();
+            let id = worker.id.clone();
             let secs = worker.timeout_secs;
 
             // `run(worker)` is INSIDE the unwind boundary: building a worker's
@@ -428,7 +433,7 @@ where
                 Ok(Ok(Ok(answer))) => WorkerStatus::Completed(answer),
             };
 
-            WorkerOutcome { goal, status }
+            WorkerOutcome { id, goal, status }
         }
     });
 
@@ -541,6 +546,7 @@ impl SubAgentTool {
             SpawnPermit::reserve(1, child_depth).map_err(|refusal| refusal.to_string())?;
 
         self.call_unguarded(WorkerSpec {
+            id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
             role,
@@ -823,6 +829,7 @@ impl SubAgentTool {
                     )
                 });
                 outcomes.push(WorkerOutcome {
+                    id: worker.id,
                     goal: worker.goal,
                     status: WorkerStatus::Refused(reason),
                 });
@@ -842,6 +849,15 @@ impl SubAgentTool {
             .clamp(1, 10)
             .min(admitted_slots.max(1));
 
+        // An operator surface reads this while the swarm runs. MEASURED 2026-11-14
+        // (audit finding 4): a foreground swarm recorded nothing anywhere — the
+        // async registry holds only background delegations — so a running swarm was
+        // invisible in the one pane an operator reads, and the first sign of it was
+        // its result landing in the transcript.
+        for worker in &admitted {
+            crate::tools::foreground_swarm::begin(worker.id.clone(), preview_of(&worker.goal, 80));
+        }
+
         let tool = self.clone_for_task();
         outcomes.extend(
             run_swarm(admitted, max_in_flight, move |worker| -> WorkerRun {
@@ -854,6 +870,20 @@ impl SubAgentTool {
             })
             .await,
         );
+
+        // Close each row with the status the operator sees, not just the model's.
+        for outcome in &outcomes {
+            let (status, detail) = match &outcome.status {
+                WorkerStatus::Completed(_) => ("completed", None),
+                WorkerStatus::Failed(error) => ("failed", Some(error.clone())),
+                WorkerStatus::TimedOut { after_secs } => {
+                    ("timed_out", Some(format!("timed out after {after_secs}s")))
+                }
+                WorkerStatus::Panicked => ("panicked", Some("worker panicked".to_string())),
+                WorkerStatus::Refused(reason) => ("refused", Some(reason.clone())),
+            };
+            crate::tools::foreground_swarm::finish(&outcome.id, status, detail);
+        }
 
         let mut results: Vec<String> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
@@ -1474,6 +1504,7 @@ impl SubAgentTool {
         let workers: Vec<WorkerSpec> = tasks
             .into_iter()
             .map(|task| WorkerSpec {
+                id: next_subagent_id(),
                 goal: task.goal,
                 context: task.context,
                 role,
@@ -2336,10 +2367,12 @@ mod tests {
     fn format_swarm_outcomes_labels_each_worker_by_its_goal() {
         let outcomes = vec![
             WorkerOutcome {
+                id: "sub-a".to_string(),
                 goal: "audit the parser".to_string(),
                 status: WorkerStatus::Completed("found two issues".to_string()),
             },
             WorkerOutcome {
+                id: "sub-b".to_string(),
                 goal: "review the pool".to_string(),
                 status: WorkerStatus::Failed("provider 503".to_string()),
             },
@@ -2354,6 +2387,7 @@ mod tests {
     #[test]
     fn format_swarm_outcomes_marks_refusals_as_not_spawned() {
         let outcomes = vec![WorkerOutcome {
+            id: "sub-c".to_string(),
             goal: "over budget".to_string(),
             status: WorkerStatus::Refused("Spawn refused: 6/6 slots live".to_string()),
         }];
@@ -2370,6 +2404,7 @@ mod tests {
     fn every_worker_in_a_long_swarm_is_reported_within_the_budget() {
         let outcomes: Vec<WorkerOutcome> = (0..6)
             .map(|i| WorkerOutcome {
+                id: format!("sub-{i}"),
                 goal: format!("task {i}"),
                 status: WorkerStatus::Completed("x".repeat(6_000)),
             })
@@ -2426,6 +2461,7 @@ mod tests {
 
     fn spec(goal: &str, timeout_secs: u64) -> WorkerSpec {
         WorkerSpec {
+            id: next_subagent_id(),
             working_dir: None,
             goal: goal.to_string(),
             context: None,
