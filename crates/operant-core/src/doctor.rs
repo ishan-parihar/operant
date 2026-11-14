@@ -84,10 +84,131 @@ pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     check_config_semantics(config, &mut items);
     check_config_resilience(config, &mut items);
     check_memory_provider(config, &mut items);
+    check_skill_roots(config, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
     check_cli_tools(config, &mut items);
     items
+}
+
+// ── skill roots ────────────────────────────────────────────────────
+
+/// Where the skills actually come from, and what was refused.
+///
+/// The `$` popup, `/skill <Tab>`, the `/skills` panel, `skills_list`,
+/// `skill_view`, the gateway picker and the agent's `SkillManager` all read
+/// the same resolved list now (iter-2260), so a skill that is missing is
+/// missing from ONE place — and the reason it is missing is a configuration
+/// fact the operator can act on. A root that is missing, a file rather than
+/// a directory, denied by `@folder:`'s fail-closed list, or holding a dead
+/// symlink was previously dropped in silence.
+///
+/// The advertised count is reported beside the loaded count because the two
+/// are different measurements and only the difference is actionable: a skill
+/// whose platform or prerequisite env var is absent is listed and then
+/// dropped by `is_available`, so `skills_list` and the in-loop `skills` tool
+/// disagree about how many exist.
+fn check_skill_roots(config: &AppConfig, items: &mut Vec<CheckResult>) {
+    let cat = "skills";
+    let roots = crate::skills::SkillRoots::resolve(&config.skills, &[], None, None);
+
+    if roots.is_empty() {
+        let reason = roots
+            .issues
+            .first()
+            .map(|i| format!(" (first refusal: {}", i.reason))
+            .unwrap_or_default();
+        items.push(CheckResult::error(
+            cat,
+            format!(
+                "no skill root resolves — the `$` popup, `/skill <Tab>`, `/skills`, \
+                 skills_list/skill_view and the gateway picker are all empty{reason})"
+            ),
+        ));
+        return;
+    }
+
+    let mut manager = crate::skills::SkillManager::from_roots(&roots);
+    let (loaded, available) = match manager.load_all() {
+        Ok(_) => {
+            let listed = manager.list().len();
+            let available = {
+                let mut n = 0usize;
+                for (name, _) in manager.list() {
+                    if manager.get(&name).is_some_and(|s| manager.is_available(s)) {
+                        n += 1;
+                    }
+                }
+                n
+            };
+            (listed, available)
+        }
+        Err(e) => {
+            items.push(CheckResult::error(
+                cat,
+                format!("skill root scan failed: {e}"),
+            ));
+            return;
+        }
+    };
+
+    let dead: Vec<&crate::skills::RootIssue> = roots
+        .issues
+        .iter()
+        .filter(|i| i.reason == "dead_symlink")
+        .collect();
+    let truncated = manager.is_truncated();
+    let refusals = roots.issues.len().saturating_sub(dead.len());
+
+    if loaded == 0 {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{} skill root{} resolve, but none holds a loadable skill ({} refusal{})",
+                roots.roots.len(),
+                if roots.roots.len() == 1 { "" } else { "s" },
+                refusals + dead.len(),
+                if refusals + dead.len() == 1 { "" } else { "s" },
+            ),
+        ));
+    } else {
+        items.push(CheckResult::ok(
+            cat,
+            format!(
+                "{} skill{} loadable from {} root{}{}{}",
+                loaded,
+                if loaded == 1 { "" } else { "s" },
+                roots.roots.len(),
+                if roots.roots.len() == 1 { "" } else { "s" },
+                if available == loaded {
+                    String::new()
+                } else {
+                    format!(", {available} usable in this environment")
+                },
+                if truncated {
+                    format!(
+                        " (walk truncated at {} entries)",
+                        crate::skills::SKILL_ROOT_WALK_LIMIT
+                    )
+                } else {
+                    String::new()
+                },
+            ),
+        ));
+    }
+
+    // One row per refused root: the path and the reason, because the two
+    // together are the fix ("point extra_roots at the directory you meant").
+    for issue in &roots.issues {
+        let detail = match &issue.link_target {
+            Some(target) => format!("{} -> {}", issue.entry.display(), target.display()),
+            None => issue.entry.display().to_string(),
+        };
+        items.push(CheckResult::warn(
+            cat,
+            format!("skill root refused ({}): {detail}", issue.reason),
+        ));
+    }
 }
 
 // ── memory provider pins that leave the memory_* tools dead ─────────
@@ -845,7 +966,15 @@ mod tests {
         }
         assert_eq!(
             categories,
-            ["config", "workspace", "environment", "cli-tools"]
+            [
+                "config",
+                "config.resilience",
+                "config",
+                "skills",
+                "workspace",
+                "environment",
+                "cli-tools",
+            ]
         );
 
         for category in categories {
@@ -854,6 +983,67 @@ mod tests {
                 "category {category} produced no results"
             );
         }
+    }
+
+    /// The skill-roots row names the resolved roots AND what was refused.
+    /// A row that said only "N roots" would be the silent drop again: the
+    /// operator's actionable fact is WHICH path the config named and why it
+    /// did not resolve.
+    #[test]
+    fn the_skill_roots_row_names_every_refused_root_and_its_reason() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let good = tmp.path().join("pool");
+        std::fs::create_dir_all(&good).expect("pool dir");
+        let skill = good.join("demo");
+        std::fs::create_dir_all(&skill).expect("skill dir");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo\ndescription: a demo skill\n---\n\nbody\n",
+        )
+        .expect("SKILL.md");
+
+        // One good root, one missing, one that is a file. All three are
+        // configuration the operator wrote; only the first resolves.
+        let missing = tmp.path().join("not-there");
+        let a_file = tmp.path().join("a-file");
+        std::fs::write(&a_file, "not a directory").expect("file");
+        let mut dead_dir = tmp.path().join("dead");
+        std::fs::create_dir_all(&dead_dir).expect("dead dir");
+        dead_dir.push("gone");
+        std::os::unix::fs::symlink(tmp.path().join("never-existed"), &dead_dir).expect("symlink");
+
+        let mut config = AppConfig::default();
+        config.skills.root_dir = good.clone();
+        config.skills.extra_roots = vec![missing.clone(), a_file.clone(), dead_dir.clone()];
+
+        let rows: Vec<String> = diagnose(&config)
+            .into_iter()
+            .filter(|r| r.category == "skills")
+            .map(|r| format!("{:?}: {}", r.severity, r.message))
+            .collect();
+
+        let joined = rows.join("\n");
+        assert!(
+            joined.contains(&good.display().to_string()) || joined.contains("loadable"),
+            "the resolved root is not named: {joined}"
+        );
+        assert!(
+            joined.contains(&missing.display().to_string()),
+            "a configured-but-missing root is dropped in silence: {joined}"
+        );
+        assert!(
+            joined.contains(&a_file.display().to_string()),
+            "a root that is a file is dropped in silence: {joined}"
+        );
+        // A configured root that IS the symlink is refused by `push_root`
+        // with `missing` (canonicalize fails). The `dead_symlink` reason is
+        // the walk's finding for a link INSIDE a live root, covered by
+        // `skills::tests::a_dead_symlink_is_reported_with_its_target`; here
+        // the assertion is the absence of silence, whichever reason it took.
+        assert!(
+            joined.contains(&dead_dir.display().to_string()),
+            "a dead symlink root is dropped in silence: {joined}"
+        );
     }
 
     /// Both consumer surfaces derive from one list: the text render and the
