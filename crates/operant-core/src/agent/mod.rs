@@ -1544,6 +1544,40 @@ pub use auto_poke::{is_auto_poke_message, is_non_retryable_auto_poke_error};
 // a field on the agent (the shared InterruptFlag incident, 2026-10-05).
 pub use run::{SEAT_BUDGET_ENVELOPE, SeatBudgetEnvelope, TURN_RETENTION, turn_retains};
 
+/// Test-only agent construction, shared across modules.
+///
+/// `recap.rs` and `advisor.rs` both test an engine that attaches to a real
+/// agent's `TurnEndBus`, and the agent constructor needs a client, a tool
+/// registry and a database. Keeping one builder here stops each engine's
+/// tests from growing its own copy.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+    use crate::agent::clients::openai::OpenAIModelClient;
+    use crate::client::OpenAIClient;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An agent with a default config, a demo client, and a private SQLite
+    /// file. Unique per call, because parallel tests must never share the DB.
+    pub(crate) fn agent_for_recap_test() -> OperantAgent {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db = Database::init(std::env::temp_dir().join(format!(
+            "operant_recap_test_{}_{n}.sqlite",
+            std::process::id()
+        )))
+        .expect("a temp database");
+        OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

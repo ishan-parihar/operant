@@ -58,6 +58,20 @@ pub const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 /// `config::validate_context_window`'s floor.
 pub const MIN_CONTEXT_WINDOW: usize = 4_097;
 
+/// The largest window a DISCOVERED value may claim.
+///
+/// A provider's `/models` listing is authoritative for what it serves, but it
+/// is still an unauthenticated remote string: a proxy that reports
+/// `context_length: 1000` or a placeholder like `1` would otherwise set the
+/// window below the protected floor and every turn would fail typed as
+/// `ContextExhausted` — with an error that blames the model, not the listing.
+/// The reference bound is 3,000,000 for OpenCode and 10,000,000 for Pi
+/// (`shared/models-dev-cache.ts:51-58`, `pi-context-limit.ts:11-12`); 10M
+/// covers every shipping model and still rejects a corrupt value. The
+/// operator's explicit `agent.context_window` is NOT clamped — that is a
+/// deliberate choice, and the floor is the only limit on it.
+pub const MAX_DISCOVERED_CONTEXT_WINDOW: usize = 10_000_000;
+
 /// `agent.context_window = 0`: resolve from the live sources.
 pub const AUTOMATIC: usize = 0;
 
@@ -355,7 +369,17 @@ async fn discover_endpoint(
                     .is_some_and(|leaf| leaf == model.rsplit('/').next().unwrap_or(model))
         })
         .map(|row| Discovered {
-            context_window: row.context_length,
+            // Sanity-banded at the TRUST BOUNDARY, not in `resolve`: the
+            // number arrived from a remote listing, and a value below the
+            // runtime floor or above any real model is a corrupt answer, not
+            // a window. Clamping here keeps the "endpoint" label honest —
+            // after `resolve` it would be indistinguishable from a value the
+            // provider really sent.
+            context_window: row.context_length.and_then(|tokens| {
+                (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW)
+                    .contains(&tokens)
+                    .then_some(tokens)
+            }),
             window_source: row.context_length.map(|_| WindowSource::Endpoint),
             max_output: row.max_output,
             endpoint_reachable: true,
@@ -410,6 +434,64 @@ mod tests {
         assert_eq!(resolved.source, WindowSource::Default);
     }
 
+    /// A corrupt or absurd number from a `/models` listing must not become
+    /// the window. Below the runtime floor, every turn fails typed as
+    /// `ContextExhausted` with an error that blames the model; above any
+    /// real model, the protected floor can never fit and the same thing
+    /// happens at the other end. Both are clamp-and-reject, at the trust
+    /// boundary, so the endpoint stays the authority for every real value.
+    #[test]
+    fn an_absurd_discovered_window_is_rejected() {
+        // The band edges, inclusive.
+        for good in [
+            MIN_CONTEXT_WINDOW,
+            128_000,
+            1_048_576,
+            MAX_DISCOVERED_CONTEXT_WINDOW,
+        ] {
+            assert!(
+                (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW).contains(&good),
+                "{good} is inside the band and must be accepted"
+            );
+        }
+        // Below the floor and above the ceiling: a corrupt listing.
+        for bad in [
+            0usize,
+            1,
+            128,
+            4_096,
+            MAX_DISCOVERED_CONTEXT_WINDOW + 1,
+            usize::MAX,
+        ] {
+            let accepted = (MIN_CONTEXT_WINDOW..=MAX_DISCOVERED_CONTEXT_WINDOW).contains(&bad);
+            assert!(!accepted, "{bad} is outside the band and must be rejected");
+        }
+    }
+
+    /// The operator's explicit window is NOT clamped — only discovered values
+    /// are. A deliberate choice: an override is the operator's own number,
+    /// and silently raising it would make the config a lie.
+    #[test]
+    fn a_configured_window_is_not_clamped_by_the_band() {
+        let resolved = resolve(
+            2_000, // below MIN_CONTEXT_WINDOW, but deliberately set
+            None,
+            Discovered::default(),
+        );
+        assert_eq!(
+            resolved.window, MIN_CONTEXT_WINDOW,
+            "the runtime floor still applies — a 2k window cannot fit the response reserve"
+        );
+        let resolved = resolve(
+            20_000_000, // above the band, but deliberately set
+            None,
+            Discovered::default(),
+        );
+        assert_eq!(
+            resolved.window, 20_000_000,
+            "an explicit override is the operator's number and must not be silently lowered"
+        );
+    }
 
     #[test]
     fn configured_wins_over_every_live_source() {

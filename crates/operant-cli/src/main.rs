@@ -1163,9 +1163,20 @@ pub(crate) fn llm_compressor_config(
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| {
-            tracing::debug!(
-                "no [auxiliary_models.compression] model set — using the default \
-                 summarizer model (gpt-4o-mini); set the slot to match your route"
+            // WARN, not debug: this is the one path where the flagship
+            // context feature silently does not do what it claims. The
+            // hardcoded default is an OpenAI model name, so on any other
+            // route the summarizer call fails and `generate_summary`
+            // degrades to truncation with a warn nobody reads — compaction
+            // still "works", so nothing surfaces. The operator must be able
+            // to see that LLM compaction is NOT running.
+            tracing::warn!(
+                "no [auxiliary_models.compression] model set — the summarizer will call \
+                 \"{}\", which only an OpenAI route serves; on any other route every \
+                 summarization fails and compaction degrades to deterministic truncation. \
+                 Set the slot to match your route.",
+                operant_core::agent::llm_compressor::LlmCompressorConfig::default()
+                    .summarizer_model
             );
             operant_core::agent::llm_compressor::LlmCompressorConfig::default().summarizer_model
         });

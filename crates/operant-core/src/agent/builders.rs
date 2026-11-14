@@ -705,7 +705,7 @@ impl OperantAgent {
     /// system line.
     ///
     /// No-op-friendly by design: `idle == 0` returns a disconnected handle
-    /// (the config-off state costs one channel allocation), and hosts that
+    /// (the config-off state costs no channel), and hosts that
     /// never call it keep the pre-seam behavior byte-for-byte.
     pub fn attach_recap_engine(
         &mut self,
@@ -713,6 +713,14 @@ impl OperantAgent {
         slot: crate::recap::RecapConfig,
         base: crate::client::ClientConfig,
     ) -> crate::recap::RecapActivity {
+        // The off switch, enforced HERE rather than in the engine: the
+        // module doc named this gate and neither host implemented it, so
+        // `recap_idle_seconds = 0` handed `sleep` an already-elapsed
+        // duration and produced a recap after EVERY turn instead of never.
+        // A zero window is off, not instant.
+        if idle.is_zero() {
+            return crate::recap::RecapActivity::disabled();
+        }
         if self.turn_end_bus.is_none() {
             self.turn_end_bus = Some(crate::turn_end::TurnEndBus::new());
         }

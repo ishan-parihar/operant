@@ -32,18 +32,35 @@
 //!
 //! ## Delivery
 //!
-//! Notes are BOTH model-visible and host-rendered (omp parity, corrected
-//! 2026-10-28): the engine batches one review's notes and routes them
-//! through the host callback with a channel decision — `Delivery::Card`
-//! (below `continue_severity`: a visible card that rides the conversation
-//! into the model's context with the next user turn) or
-//! `Delivery::Continue` (at/above `continue_severity`: the batch enters
-//! the primary's context as a follow-up turn so the advice is acted on).
-//! The old "never into the acting agent's context" stance was a misreading
-//! of omp: omp's advisor notes ARE model-visible — the quarantine guards
-//! below exist precisely because of that, and the `<advisory ...>`
-//! framing tells the primary the notes are advice to weigh, not
-//! instructions to obey.
+//! The engine batches one review's notes and routes them through the host
+//! callback with a channel decision:
+//!
+//! * `Delivery::Continue` (a note at/above `continue_severity`) — the batch
+//!   enters the primary's context as a follow-up turn, so the advice is
+//!   acted on.
+//! * `Delivery::Card` (below `continue_severity`) — a HOST-VISIBLE card
+//!   only. The engine returns it; the host renders it for the operator. It
+//!   does NOT enter the model's context.
+//!
+//! The distinction is the whole point of the severity ladder, so it is stated
+//! plainly: sub-threshold notes are advisory to the OPERATOR, not to the
+//! model. An earlier version of this doc claimed a card "rides the
+//! conversation into the model's context with the next user turn" — the TUI
+//! pushes cards into `system_annotations`, a UI-only vector that no
+//! agent-side code reads (`tui/app/messaging.rs:208`,
+//! `tui/operant_model/adapter.rs:126`), so the claim was false for every
+//! delivery below the threshold. An operator who set
+//! `continue_severity = "blocker"` to keep the model focused would have lost
+//! every nit silently, believing the model could still see it.
+//!
+//! omp's card DOES reach the model (as a `developer`-role message,
+//! `packages/agent/src/compaction/messages.ts:195-227`); if we adopt that,
+//! this section and the host wiring change together. Until then, do not
+//! describe a card as model-visible.
+//!
+//! The quarantine guards below exist because a CONTINUE batch is
+//! model-visible, and the `<advisory ...>` framing tells the primary the
+//! notes are advice to weigh, not instructions to obey.
 
 use crate::client::{ClientConfig, Message};
 use crate::config::AuxiliaryModelConfig;
@@ -184,8 +201,9 @@ pub fn advisor_review_summary(review: &AdvisorDelivery) -> String {
 
 /// Channel decision (omp `resolveAdvisorDeliveryChannel`, the idle arm
 /// that is the only live state in operant: notes arrive after `run()`
-/// returned). `true` = the batch continues the run (a note at/above
-/// `continue_severity`); `false` = preserve as a card.
+/// returned). `true` = a note at/above `continue_severity` exists, so the
+/// host continues the run on the batch; `false` = keep the notes as a
+/// host-visible card. A card is NOT model-visible.
 pub fn review_should_continue(notes: &[ParsedNote], continue_severity: Severity) -> bool {
     notes.iter().any(|n| n.severity >= continue_severity)
 }
@@ -215,6 +233,17 @@ pub struct AdvisorConfig {
     /// allowed through anyway (guards against a stuck guard hiding a real
     /// recurrence). Default 3.
     pub suppress_streak: u32,
+    /// Hard ceiling on the notes ONE review may inject, applied after
+    /// quarantine and the emission guard. The prompt ASKS for at most three
+    /// ("at most three short notes", `advisor_system_prompt`), but a model
+    /// that replies with fifteen `- [concern]` lines produced fifteen
+    /// `<advisory>` elements — the request was a courtesy, not a rule, and
+    /// the batch is bounded only by the model's verbosity. omp enforces this
+    /// in code (`advisor.maxNotesPerUpdate`, 1-32, default 4,
+    /// `advisor/settings.ts:128-148`; blockers exempt, `emission-guard.ts`).
+    /// 0 keeps the default. Default 4.
+    #[serde(default = "default_max_notes_per_update")]
+    pub max_notes_per_update: usize,
     /// Side-call timeout in seconds (default 120). The advisor is a
     /// best-effort reviewer — a slow advisory model must never stall the
     /// bus drain, so the call is bounded and a timeout is a skipped
@@ -231,6 +260,12 @@ fn default_advisor_timeout_secs() -> u64 {
     120
 }
 
+/// omp's default per-update note budget (`ADVISOR_DEFAULT_BUDGET_PER_UPDATE`,
+/// `advisor/settings.ts:128-148`).
+fn default_max_notes_per_update() -> usize {
+    4
+}
+
 /// Manual impl so `timeout_secs` (120) and `suppress_streak` (3) match the
 /// serde defaults — a derived Default would hand the engine 0-second
 /// timeouts and a 0-streak suppression guard when constructed in code
@@ -244,6 +279,7 @@ impl Default for AdvisorConfig {
             continue_severity: default_continue_severity(),
             suppress_streak: 3,
             timeout_secs: default_advisor_timeout_secs(),
+            max_notes_per_update: default_max_notes_per_update(),
         }
     }
 }
@@ -342,13 +378,14 @@ pub struct AdvisorDelivery {
     pub notes: Vec<ParsedNote>,
     /// `true` when the highest note meets `continue_severity` — the host
     /// must deliver the batch into the primary's CONTEXT (a follow-up
-    /// turn). `false` preserves the notes as a visible card; the batch
-    /// text still enters the conversation so the next user turn carries
-    /// it (omp preserve channel).
+    /// turn). `false` keeps the notes as a host-visible card. The card
+    /// is rendered for the operator and is NOT placed in the model's
+    /// context (see the module doc).
     pub should_continue: bool,
-    /// The model-visible batch text (guidance header + `<advisory>`
-    /// elements). For `should_continue` this is the continuation query
-    /// body; for preserve it is the card body that rides the transcript.
+    /// The batch text (guidance header + `<advisory>` elements). For
+    /// `should_continue` this is the continuation query body. For the
+    /// card channel it is the payload the host splits off the card when
+    /// it renders — it is not model-visible in this configuration.
     pub batch: String,
     /// Session whose turn produced the notes (iter-812: the gateway
     /// routes background events by this tag).
@@ -363,6 +400,13 @@ struct AdvisorState {
     /// Transcript length (messages) at the last review. The delta is
     /// everything past this cursor.
     cursor: AtomicU64,
+    /// Continue-channel deliveries emitted but not yet answered by a
+    /// completed primary turn; decremented once per turn end. The
+    /// `[ADVISOR_CONTINUATION]` tag rides a user message, and compaction
+    /// replaces that exchange with a marker — so the text search in the
+    /// delta is not a reliable latch. This counter is the same latch
+    /// without the dependency on the tag's bytes surviving the fold.
+    continuations_outstanding: AtomicU64,
     /// Fingerprint of the last delta reviewed (loop guard).
     last_delta_fingerprint: parking_lot::Mutex<u64>,
     /// Last note emitted, plus how many times it was suppressed
@@ -398,11 +442,13 @@ pub fn spawn_advisor(
         continue_severity,
         suppress_streak,
         timeout_secs,
+        max_notes_per_update,
     } = config;
     if !enabled {
         return;
     }
     let suppress_streak = suppress_streak.max(1);
+    let max_notes_per_update = max_notes_per_update.max(1);
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = crate::moa::slot_client(&base, &model);
     let advisor_model = model
@@ -418,6 +464,7 @@ pub fn spawn_advisor(
     let mut deliver = deliver;
     let state = Arc::new(AdvisorState {
         cursor: AtomicU64::new(0),
+        continuations_outstanding: AtomicU64::new(0),
         last_delta_fingerprint: parking_lot::Mutex::new(0),
         last_note: parking_lot::Mutex::new((String::new(), 0)),
     });
@@ -435,6 +482,36 @@ pub fn spawn_advisor(
             tracing::debug!(model = %advisor_model, "advisor woke on turn end");
             let messages = snapshot();
             let cursor = st.cursor.load(Ordering::Relaxed) as usize;
+            // The transcript can SHRINK: compaction folds each old exchange
+            // into one marker, and /new wipes the whole conversation. The
+            // cursor is a message COUNT, so a shrink leaves it past the end —
+            // `messages.len() <= cursor` then holds forever and the engine
+            // skips every turn without reviewing anything. Nothing logged
+            // above `trace`, so the operator saw a working advisor that had
+            // stopped. omp resets its advisor runtime on exactly these
+            // events (compaction, compaction-rescue, shake, session switch —
+            // `session/session-maintenance.ts:799,849,934,1040,1163,2700,
+            // 4809`, reset at `advisor/runtime.ts:733-765`) and replays the
+            // post-compaction transcript; this is that contract.
+            let (cursor, rewound) = if messages.len() < cursor {
+                tracing::info!(
+                    before = cursor,
+                    after = messages.len(),
+                    "The transcript shrank — the advisor cursor was past its end and no further \
+                     review would have run; resetting to replay the surviving transcript"
+                );
+                (0usize, true)
+            } else {
+                (cursor, false)
+            };
+            // A rewind is a fresh transcript for this engine's purposes: the
+            // guards that key off transcript content (the loop guard's
+            // fingerprint, the emission guard's last note) belong to the
+            // PRE-shrink material and must not suppress the replay.
+            if rewound {
+                *st.last_delta_fingerprint.lock() = 0;
+                *st.last_note.lock() = (String::new(), 0);
+            }
             if messages.len() <= cursor {
                 // No new material since the last review (loop guard's other
                 // face: same turn re-emitted, or snapshot raced).
@@ -451,10 +528,25 @@ pub fn spawn_advisor(
             // cascade into a second continuation — the latch breaks the
             // loop. The cursor still advances so the continuation is
             // never re-reviewed as fresh material later.
-            if delta.iter().any(|m| {
-                m.role == crate::client::Role::User && m.content.contains(CONTINUATION_TAG)
-            }) {
-                tracing::debug!("advisor: continuation delta — latch holds, review skipped");
+            //
+            // Two guards, because compaction makes the first unreliable:
+            // the tag's bytes ride a user message that `micro_compact`
+            // replaces with a marker, so the text search cannot be trusted
+            // alone. The counter is set when the continue-channel delivery
+            // was emitted and survives the fold.
+            let by_counter = st.continuations_outstanding.load(Ordering::Relaxed) > 0;
+            if by_counter {
+                st.continuations_outstanding.fetch_sub(1, Ordering::Relaxed);
+            }
+            if by_counter
+                || delta.iter().any(|m| {
+                    m.role == crate::client::Role::User && m.content.contains(CONTINUATION_TAG)
+                })
+            {
+                tracing::debug!(
+                    by = if by_counter { "counter" } else { "tag" },
+                    "advisor: continuation delta — latch holds, review skipped"
+                );
                 st.cursor.store(messages.len() as u64, Ordering::Relaxed);
                 continue;
             }
@@ -547,7 +639,27 @@ pub fn spawn_advisor(
             // question is whether the batch wakes the primary for one
             // continuation or preserves as a card that rides the next
             // user turn. Any note at/above continue_severity continues.
+            // The note budget, enforced HERE rather than trusted to the
+            // prompt: a verbose advisory model can otherwise inflate the
+            // injected block without bound.
+            if accepted.len() > max_notes_per_update {
+                tracing::debug!(
+                    parsed = accepted.len(),
+                    kept = max_notes_per_update,
+                    "advisor: note budget applied — the batch is capped"
+                );
+                accepted.truncate(max_notes_per_update);
+            }
             let should_continue = review_should_continue(&accepted, continue_severity);
+            // The batch below is a continuation: the host submits it as the
+            // next turn's query, and that turn's delta must not be reviewed.
+            // Latch on EMISSION, so the guard holds even if the tag's bytes
+            // are folded away before that turn ends. The counter is
+            // decremented at the next turn end, so an unanswered continuation
+            // can suppress exactly one turn — it can never wedge the engine.
+            if should_continue {
+                st.continuations_outstanding.fetch_add(1, Ordering::Relaxed);
+            }
             let batch = format_advisor_batch(&accepted);
             deliver(AdvisorDelivery {
                 notes: accepted,
@@ -575,7 +687,6 @@ fn delta_fingerprint(delta: &[Message]) -> u64 {
     }
     h
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -825,5 +936,355 @@ mod tests {
         let c = vec![Message::user("hello"), Message::user("world")];
         assert_eq!(delta_fingerprint(&a), delta_fingerprint(&b));
         assert_ne!(delta_fingerprint(&a), delta_fingerprint(&c));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ENGINE tests — the loop itself, not the pure helpers above
+//
+// The helpers had ten tests and the ENGINE had none, so the cursor, the
+// continuation latch, the loop guard and the emission guard were untested —
+// and the first two lifecycle defects the audit found lived exactly there.
+// `recap.rs` drives its engine over a real `TurnEndBus`; this is the same
+// shape: a scripted loopback model, a transcript the test owns, and a
+// condition polled with a deadline (the engine is a spawned task, so a fixed
+// sleep is a race).
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod engine {
+    use super::*;
+    use parking_lot::Mutex as PMutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A loopback model answering every request with `reply`, recording how
+    /// many calls it served and what each request body contained.
+    ///
+    /// A real HTTP server rather than a trait stub: `spawn_advisor` builds its
+    /// OWN `OpenAIClient` from the `ClientConfig`, so the engine cannot be
+    /// handed a mock trait object — and the wire path is the thing worth
+    /// exercising.
+    struct ScriptedModel {
+        base_url: String,
+        calls: Arc<PMutex<usize>>,
+    }
+
+    impl ScriptedModel {
+        async fn start(reply: &'static str) -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind a loopback port");
+            let addr = listener.local_addr().expect("the bound address");
+            let calls = Arc::new(PMutex::new(0usize));
+            let c2 = Arc::clone(&calls);
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let mut buf = vec![0u8; 256 * 1024];
+                    let read = socket.read(&mut buf).await.unwrap_or(0);
+                    *c2.lock() += 1;
+                    // Drain the request so the socket sees EOF and the client
+                    // finishes its write; the body is not asserted on.
+                    let _ = read;
+                    let response = format!(
+                        "{{\"id\":\"1\",\"object\":\"chat.completion\",\"created\":0,\
+                         \"model\":\"adv\",\"choices\":[{{\"index\":0,\"message\":{{\
+                         \"role\":\"assistant\",\"content\":{}}},\"finish_reason\":\"stop\"}}],\
+                         \"usage\":{{\"prompt_tokens\":1,\"completion_tokens\":1,\
+                         \"total_tokens\":2}}}}",
+                        serde_json::Value::String(reply.to_string())
+                    );
+                    let out = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\n\r\n{}",
+                        response.len(),
+                        response
+                    );
+                    let _ = socket.write_all(out.as_bytes()).await;
+                    let _ = socket.flush().await;
+                }
+            });
+            Self {
+                base_url: format!("http://{addr}/v1"),
+                calls,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock()
+        }
+    }
+
+    /// Poll until `cond` holds, or give up. Bounded so a regression FAILS
+    /// rather than hangs the suite.
+    async fn eventually(mut cond: impl FnMut() -> bool) -> bool {
+        for _ in 0..400 {
+            if cond() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        cond()
+    }
+
+    /// The engine, plus everything a test needs to drive it.
+    struct Harness {
+        model: Arc<ScriptedModel>,
+        bus: crate::turn_end::TurnEndBus,
+        transcript: Arc<PMutex<Vec<Message>>>,
+        delivered: Arc<PMutex<Vec<AdvisorDelivery>>>,
+    }
+
+    impl Harness {
+        /// `continue_severity` at `Blocker` so a nit never continues the run
+        /// unless a test is specifically about the continue channel.
+        async fn start(reply: &'static str, transcript: Vec<Message>) -> Self {
+            Self::with_severity(reply, transcript, Severity::Blocker).await
+        }
+
+        async fn with_severity(
+            reply: &'static str,
+            transcript: Vec<Message>,
+            continue_severity: Severity,
+        ) -> Self {
+            let model = Arc::new(ScriptedModel::start(reply).await);
+            let bus = crate::turn_end::TurnEndBus::new();
+            let transcript = Arc::new(PMutex::new(transcript));
+            let delivered = Arc::new(PMutex::new(Vec::<AdvisorDelivery>::new()));
+            let (snap_t, del_t) = (Arc::clone(&transcript), Arc::clone(&delivered));
+            let config = AdvisorConfig {
+                enabled: true,
+                model: AuxiliaryModelConfig {
+                    provider: None,
+                    model: Some("adv".to_string()),
+                    base_url: Some(model.base_url.clone()),
+                    api_key: Some("test-key".to_string()),
+                },
+                continue_severity,
+                suppress_streak: 3,
+                timeout_secs: 10,
+                ..Default::default()
+            };
+            spawn_advisor(
+                config,
+                ClientConfig {
+                    base_url: model.base_url.clone(),
+                    api_key: Some("test-key".to_string()),
+                    ..Default::default()
+                },
+                "primary-model".to_string(),
+                bus.subscribe(),
+                move || snap_t.lock().clone(),
+                move |d| del_t.lock().push(d),
+            );
+            Self {
+                model,
+                bus,
+                transcript,
+                delivered,
+            }
+        }
+
+        /// A completed turn: the engine's only stimulus.
+        fn end_turn(&self) {
+            self.bus.emit("sess", 1, 0, "done", None);
+        }
+
+        fn set_transcript(&self, messages: Vec<Message>) {
+            *self.transcript.lock() = messages;
+        }
+
+        /// Shrink the transcript the way compaction does: the length drops.
+        fn shrink_to(&self, n: usize) {
+            self.transcript.lock().truncate(n);
+        }
+
+        fn len(&self) -> usize {
+            self.transcript.lock().len()
+        }
+
+        fn delivered(&self) -> Vec<AdvisorDelivery> {
+            self.delivered.lock().clone()
+        }
+    }
+
+    /// The regression the audit found as finding 1: after a compaction the
+    /// transcript is SHORTER than the cursor, and every later turn was
+    /// skipped forever with only a `trace` line.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_shrunk_transcript_reviews_again() {
+        // Eight messages, one review consumes them all.
+        let h = Harness::start("- [nit] first look", vec![Message::user("one")]).await;
+        // Grow past the cursor so a review happens and the cursor advances.
+        let mut transcript = vec![Message::user("one")];
+        for i in 0..9 {
+            transcript.push(Message::assistant(format!("reply {i}")));
+            transcript.push(Message::user(format!("ask {i}")));
+        }
+        h.set_transcript(transcript);
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() == 1).await,
+            "the first turn must be reviewed"
+        );
+        let cursor_after_first = h.len();
+
+        // Compaction: the transcript shrinks below the cursor.
+        h.shrink_to(3);
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user("two"),
+            Message::assistant("b"),
+            Message::user("three"),
+        ]);
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() == 2).await,
+            "a shrunk transcript must be RE-REVIEWED (the cursor was {cursor_after_first}, \
+             the transcript is now {}) — without the reset the advisor is dead for the rest \
+             of the session and only a trace line says so",
+            h.len()
+        );
+    }
+
+    /// A `/new`-style wipe (empty transcript) must not wedge the engine
+    /// either: the cursor sits past a zero-length history.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wiped_transcript_reviews_again() {
+        let mut transcript = vec![Message::user("one")];
+        for i in 0..9 {
+            transcript.push(Message::assistant(format!("r{i}")));
+            transcript.push(Message::user(format!("q{i}")));
+        }
+        let h = Harness::start("- [nit] note", transcript).await;
+        h.end_turn();
+        assert!(eventually(|| h.model.calls() == 1).await);
+
+        h.set_transcript(Vec::new()); // /new
+        h.set_transcript(vec![Message::user("fresh session")]);
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() == 2).await,
+            "a wiped transcript must be reviewable again"
+        );
+    }
+
+    /// The loop guard: an identical delta is a replay, not new material.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unchanged_transcript_is_not_reviewed_twice() {
+        let h = Harness::start("- [nit] note", vec![Message::user("one")]).await;
+        h.end_turn();
+        assert!(eventually(|| h.model.calls() == 1).await);
+        // Same length, same content: the cursor says there is nothing new.
+        h.end_turn();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(
+            h.model.calls(),
+            1,
+            "a turn end that added no messages must not be reviewed again"
+        );
+    }
+
+    /// The continuation latch, by the TAG: a delta carrying the tag is the
+    /// primary answering our own advice and must not be reviewed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tagged_continuation_is_not_reviewed() {
+        let h = Harness::start("- [nit] note", vec![Message::user("one")]).await;
+        h.end_turn();
+        assert!(eventually(|| h.model.calls() == 1).await);
+
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user(format!("{CONTINUATION_TAG} act on the advice")),
+        ]);
+        h.end_turn();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            h.model.calls(),
+            1,
+            "a continuation delta must not be reviewed (the cascade guard)"
+        );
+    }
+
+    /// The continuation latch, by the COUNTER, with the tag's bytes GONE —
+    /// which is what compaction does to it. A continue-channel delivery
+    /// latches on emission, so the answer to it is skipped even after
+    /// `micro_compact` has replaced the tagged message with a marker.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_continuation_is_latched_even_when_the_tag_is_folded_away() {
+        // A concern continues the run at the default severity.
+        let h = Harness::with_severity(
+            "- [concern] fix the race",
+            vec![Message::user("one")],
+            Severity::Concern,
+        )
+        .await;
+        h.end_turn();
+        assert!(
+            eventually(|| !h.delivered().is_empty()).await,
+            "the concern must be delivered"
+        );
+        assert!(
+            h.delivered()[0].should_continue,
+            "a concern is at/above continue_severity and continues"
+        );
+
+        // Compaction folds the continuation exchange into a marker: the tag
+        // is gone, the counter is what remains.
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user("[compacted exchange — earlier conversation folded] done"),
+        ]);
+        h.end_turn();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            h.model.calls(),
+            1,
+            "the counter must hold the latch after the tag is folded away"
+        );
+    }
+
+    /// A nit never continues the run, so no counter is latched and the next
+    /// turn IS reviewed — the latch must not over-suppress.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_nit_does_not_latch_the_continuation_counter() {
+        let h = Harness::with_severity(
+            "- [nit] typo in the comment",
+            vec![Message::user("one")],
+            Severity::Concern,
+        )
+        .await;
+        h.end_turn();
+        assert!(eventually(|| !h.delivered().is_empty()).await);
+        assert!(!h.delivered()[0].should_continue);
+
+        h.set_transcript(vec![
+            Message::user("one"),
+            Message::assistant("a"),
+            Message::user("two"),
+        ]);
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() == 2).await,
+            "a nit delivery must not suppress the next review"
+        );
+    }
+
+    /// The batch the host receives is bounded by the note contract the model
+    /// was given; the engine does not silently drop a high-severity note.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blocker_note_survives_to_the_delivery() {
+        let h = Harness::start("- [blocker] the build is red", vec![Message::user("one")]).await;
+        h.end_turn();
+        assert!(eventually(|| !h.delivered().is_empty()).await);
+        let d = &h.delivered()[0];
+        assert_eq!(d.notes.len(), 1);
+        assert_eq!(d.notes[0].severity, Severity::Blocker);
+        assert!(d.batch.contains("the build is red"));
+        assert!(d.should_continue);
     }
 }

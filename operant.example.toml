@@ -222,7 +222,8 @@ memory_nudge_interval = 10
 creation_nudge_interval = 10
 # Idle-recap: seconds of quiet after a completed turn before a `※ recap:`
 # status line is generated over a transcript snapshot (omp recap.* parity).
-# 0 = disabled. Default 240.
+# 0 = disabled (no engine is attached, so there is no side call at all).
+# Default 240.
 recap_idle_seconds = 240
 
 # [agent.ponytail] — the ponytail content integration (DietrichGebert/
@@ -255,10 +256,14 @@ update = true
 # [advisor] — always-on transcript watchdog (omp advisor/ parity).
 # Distinct from [moa]: MoA fans out per turn; the advisor reviews the
 # incremental transcript delta after each completed turn and surfaces short
-# notes of concern. One merged review delivers per turn: a note at/above
-# continue_severity continues the run on the advice (the batch enters the
-# model's context as a follow-up turn); lower severities stay visible
-# cards that ride the transcript into the next user turn.
+# notes of concern. One merged review delivers per turn:
+#   * a note at/above continue_severity CONTINUES the run — the batch
+#     enters the model's context as a follow-up turn, so the advice is
+#     acted on;
+#   * lower severities are HOST-VISIBLE CARDS only — they are shown to you,
+#     the operator, and are NOT placed in the model's context. If you want
+#     the model to see a note, raise its severity to continue_severity or
+#     lower continue_severity.
 [advisor]
 enabled = false
 # Optional model overrides — empty = use the primary model's route.
@@ -271,6 +276,10 @@ enabled = false
 # Lowest severity that wakes an idle agent for one continuation:
 # "nit", "concern" (default), or "blocker".
 # continue_severity = "concern"
+# Hard cap on the notes one review may inject (default 4). The prompt asks
+# for at most three, but this is the rule that enforces it: a verbose
+# advisory model cannot inflate the injected block past this.
+# max_notes_per_update = 4
 # Consecutive-identical-note suppression streak (default 3).
 # suppress_streak = 3
 # Side-call timeout in seconds (default 120; a timeout is a skipped

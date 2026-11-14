@@ -609,6 +609,68 @@ pub async fn check_context_window(
              RAM).",
         );
     }
+    check_compression_route(config);
+}
+
+/// The LLM summarizer's route.
+///
+/// Compaction claims to summarize the middle with an LLM. When
+/// `[auxiliary_models.compression].model` is unset the config falls back to
+/// the hardcoded `gpt-4o-mini`, which only an OpenAI route serves — on any
+/// other route every summarization fails and the compressor silently degrades
+/// to deterministic truncation (`llm_compressor.rs:528-532`). Compaction still
+/// "works", so nothing else surfaces it: this check is the only place the
+/// operator learns the feature is off.
+fn check_compression_route(config: &AppConfig) {
+    match compression_route_verdict(config) {
+        CompressionRoute::Off => {}
+        CompressionRoute::Configured(model) => check_ok(
+            "Context compaction has a summarizer route",
+            &format!("[auxiliary_models.compression].model = \"{model}\""),
+        ),
+        CompressionRoute::FallsBackToOpenAIDefault => {
+            let default = operant_core::agent::llm_compressor::LlmCompressorConfig::default()
+                .summarizer_model;
+            check_warn(
+                "Context compaction has no summarizer route",
+                &format!(
+                    "agent.context_compression is on but [auxiliary_models.compression].model is \
+                     unset, so the summarizer calls \"{default}\" — an OpenAI model name. On any \
+                     other route every summarization fails and compaction falls back to \
+                     deterministic truncation. Set the slot to your route's model."
+                ),
+            );
+        }
+    }
+}
+
+/// What the doctor should say about the summarizer route. Separate from the
+/// printing so the decision is testable without capturing stdout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompressionRoute {
+    /// Compaction is off: nothing to check.
+    Off,
+    /// A route is configured, by name.
+    Configured(String),
+    /// Compaction is on with no route, so it will silently truncate.
+    FallsBackToOpenAIDefault,
+}
+
+pub(crate) fn compression_route_verdict(config: &AppConfig) -> CompressionRoute {
+    if !config.agent.context_compression {
+        return CompressionRoute::Off;
+    }
+    match config
+        .auxiliary_models
+        .compression
+        .as_ref()
+        .and_then(|slot| slot.model.clone())
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+    {
+        Some(model) => CompressionRoute::Configured(model),
+        None => CompressionRoute::FallsBackToOpenAIDefault,
+    }
 }
 
 /// Is the context meter recording?
@@ -708,6 +770,7 @@ pub fn check_context_telemetry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use operant_core::config::AuxiliaryModelConfig;
 
     fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -872,5 +935,64 @@ mod tests {
             let in_ambient = has_ambient_provider_config(&env(&[(key, "value")]));
             assert_eq!(in_file, in_ambient, "{key} disagrees between the two scans");
         }
+    }
+
+    /// Compaction with no summarizer route is the silent-off case: the
+    /// compressor falls back to truncation on any non-OpenAI route and
+    /// nothing else says so. The verdict must name it.
+    #[test]
+    fn compaction_without_a_summarizer_route_is_flagged() {
+        let mut config = AppConfig::default();
+        config.agent.context_compression = true;
+        config.auxiliary_models.compression = None;
+        assert_eq!(
+            compression_route_verdict(&config),
+            CompressionRoute::FallsBackToOpenAIDefault,
+            "an unset slot must warn: the default model name only an OpenAI route serves"
+        );
+    }
+
+    /// A configured route is a pass, whatever the name.
+    #[test]
+    fn a_configured_summarizer_route_passes() {
+        let mut config = AppConfig::default();
+        config.agent.context_compression = true;
+        config.auxiliary_models.compression = Some(AuxiliaryModelConfig {
+            provider: None,
+            model: Some("gpt-4o-mini".to_string()),
+            base_url: None,
+            api_key: None,
+        });
+        assert_eq!(
+            compression_route_verdict(&config),
+            CompressionRoute::Configured("gpt-4o-mini".to_string())
+        );
+    }
+
+    /// Compaction off is not a warning: the operator turned it off.
+    #[test]
+    fn compaction_off_is_silent() {
+        let mut config = AppConfig::default();
+        config.agent.context_compression = false;
+        config.auxiliary_models.compression = None;
+        assert_eq!(compression_route_verdict(&config), CompressionRoute::Off);
+    }
+
+    /// A slot that is present but blank is the same as absent — the config
+    /// filters empty strings, and so must the check.
+    #[test]
+    fn a_blank_summarizer_slot_is_treated_as_unset() {
+        let mut config = AppConfig::default();
+        config.agent.context_compression = true;
+        config.auxiliary_models.compression = Some(AuxiliaryModelConfig {
+            provider: None,
+            model: Some("   ".to_string()),
+            base_url: None,
+            api_key: None,
+        });
+        assert_eq!(
+            compression_route_verdict(&config),
+            CompressionRoute::FallsBackToOpenAIDefault
+        );
     }
 }

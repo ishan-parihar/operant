@@ -47,6 +47,22 @@ pub struct RecapActivity {
 }
 
 impl RecapActivity {
+    /// The handle for a DISABLED engine: `recap_idle_seconds = 0` is the
+    /// documented off switch, so no engine is spawned and there is nothing
+    /// to cancel. `notify` is still safe to call — the host notifies on
+    /// every user message and must not have to know whether the engine is
+    /// live.
+    ///
+    /// Before this existed the off switch was a lie: the host passed
+    /// `Duration::from_secs(0)` straight into `sleep`, which is already
+    /// elapsed, so a recap fired on EVERY turn end instead of never.
+    pub fn disabled() -> Self {
+        let (tx, _rx) = mpsc::channel::<()>(1);
+        // The receiver is dropped immediately: `try_send` then fails and the
+        // notify is discarded, which is exactly the disabled behavior.
+        Self { tx }
+    }
+
     /// Signal activity: cancels any pending recap and re-arms the idle
     /// timer. Cheap (one try_send); lossy is fine — activity is a flood
     /// signal, not a queue.
@@ -317,5 +333,53 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(delivered.lock().is_empty());
         drop(engine);
+    }
+
+    /// THE OFF SWITCH, driven through the real seam.
+    ///
+    /// `recap_idle_seconds = 0` is documented as disabled in the config and in
+    /// this module's own doc, but the engine was handed the duration verbatim:
+    /// `sleep(Duration::ZERO)` is already elapsed, so a recap fired after EVERY
+    /// turn instead of never — the opposite of off. Proven by probe before the
+    /// fix: one recap inside 150 ms with `Duration::from_secs(0)`.
+    ///
+    /// The guard lives in `attach_recap_engine`, so the observable is the
+    /// HANDLE it returns: a live engine owns a broadcast receiver and a
+    /// disabled one has dropped it. Asserting on `RecapActivity::disabled()`
+    /// alone would pass with the guard deleted — mutation-proven: removing
+    /// the `idle.is_zero()` early return left that weaker test green.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zero_idle_window_attaches_a_disabled_handle() {
+        let mut agent = crate::agent::tests_support::agent_for_recap_test();
+        let handle = agent.attach_recap_engine(
+            std::time::Duration::from_secs(0),
+            RecapConfig::default(),
+            crate::client::ClientConfig::default(),
+        );
+        // A live engine's `notify` reaches a live receiver; a disabled
+        // handle's receiver is gone, so `try_send` fails. That difference is
+        // the whole contract.
+        assert!(
+            handle.tx.is_closed(),
+            "a zero idle window must attach a DISABLED handle — a live engine              here is the zero-second timer that fired a recap after every turn"
+        );
+        // And the host can still notify unconditionally.
+        handle.notify();
+    }
+
+    /// A non-zero window still spawns a live engine — the guard must not
+    /// disable the feature it guards.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_real_idle_window_attaches_a_live_handle() {
+        let mut agent = crate::agent::tests_support::agent_for_recap_test();
+        let handle = agent.attach_recap_engine(
+            std::time::Duration::from_secs(240),
+            RecapConfig::default(),
+            crate::client::ClientConfig::default(),
+        );
+        assert!(
+            !handle.tx.is_closed(),
+            "a 240s window must attach a live engine, or the recap never runs at all"
+        );
     }
 }
