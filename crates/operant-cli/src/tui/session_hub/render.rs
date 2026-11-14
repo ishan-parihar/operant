@@ -21,7 +21,31 @@ use crate::tui::theme_colors;
 use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 
 /// jcode's split: 40% list, 60% preview.
-const SPLIT: (Constraint, Constraint) = (Constraint::Percentage(40), Constraint::Percentage(60));
+// (2026-11-14, plan iteration 5) 45/55, measured rather than guessed.
+//
+// The left pane carries a project heading and an indent now (iteration 4), which
+// costs width; the right carries a pinned header and a transcript that wraps,
+// which reads better narrow. 45/55 gives the left the cells its indent needs
+// without taking the transcript below a readable measure.
+//
+// The tab-bar ladder DERIVES from this width, so every rung is re-measured after
+// the change — see the narrow-terminal test, which asserts the readable words at
+// 100, 110 and 120 columns. Assuming the ladder adapts is what produced
+// iter-2207 (the bar collapsed to one pill) and iter-2252 (fitted to the wrong
+// quantity).
+pub(crate) const SPLIT: (Constraint, Constraint) =
+    (Constraint::Percentage(45), Constraint::Percentage(55));
+
+/// How many columns the LIST pane gets of a frame `width` wide.
+///
+/// (2026-11-14, plan iteration 5) The tests used to hardcode `width * 2 / 5`,
+/// which was the split at 40/60. When the split moved to 45/55 every pane-width
+/// assertion silently measured a pane that no longer exists — the test's slice
+/// and the renderer's layout disagreed, and the failure read as a rendering bug.
+/// Take the budget from the layout call, never from a literal.
+pub(crate) fn list_pane_width(width: u16) -> usize {
+    (usize::from(width) * 45 / 100).min(usize::from(width))
+}
 
 /// How many rows of organising chrome sit above the session rows inside the
 /// list block: the header row, the filter tab bar, and the column header.

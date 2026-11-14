@@ -870,7 +870,7 @@ fn hub_rows_at(width: u16, rows: Vec<SessionEntryV2>) -> (Vec<String>, Vec<Strin
     use crate::tui::render::FrameCtx;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    let pane_end = (usize::from(width) * 2 / 5).min(usize::from(width));
+    let pane_end = super::render::list_pane_width(width);
     let mut hub = SessionHubState::new();
     hub.visible = true;
     hub.loading = false;
@@ -1493,12 +1493,18 @@ fn the_tab_bar_survives_three_digit_counts_at_120_columns() {
         .unwrap_or_default();
     let bar_inner = bar.trim().trim_matches('\u{2502}').trim();
     let pills: Vec<&str> = bar_inner.split_whitespace().collect();
-    // Seven labels plus the ACTIVE tab's count: the readable rung keeps the
-    // words and spends its budget on one count rather than seven.
-    assert_eq!(
-        pills.len(),
-        8,
-        "seven labels plus the active count must survive: {bar:?} (in {joined})"
+    // TWO readable rungs, and which one wins depends on the split — so assert
+    // the contract, not one rung's token count.
+    //
+    // (2026-11-14, plan iteration 5) This test asserted exactly 8 tokens, which
+    // was the only readable rung at a 40% pane. At 45% the pane is 52 cells and
+    // the short labels WITH EVERY count measure 50, so the richer rung wins and
+    // the bar reads "all 500 need 0 work 0 ready 500 ...". Both are readable:
+    // 8 = seven labels + the active count, 14 = seven label/count pairs.
+    assert!(
+        pills.len() == 8 || pills.len() == 14,
+        "a readable rung must win — 8 (labels + active count) or 14 (every          count), got {}: {bar:?} (in {joined})",
+        pills.len()
     );
     for label in ["all", "need", "work", "ready", "idle", "cur", "br"] {
         assert!(
@@ -1738,7 +1744,7 @@ fn preview_pane(
         .into_iter()
         .map(|line| {
             line.chars()
-                .skip((120usize * 2 / 5).min(120))
+                .skip(super::render::list_pane_width(120))
                 .collect::<String>()
         })
         .collect()
