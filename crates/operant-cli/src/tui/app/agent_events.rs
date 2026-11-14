@@ -696,6 +696,33 @@ impl App {
                     format!("Async delegation {delegation_id} {status}: {summary}"),
                     SystemMessageStyle::Info,
                 );
+                // The card is for the operator; this is for the MODEL.
+                //
+                // MEASURED defect (2026-11-14): the event stopped at the card, so
+                // a model that dispatched a background child and ended its turn
+                // never learned the child had finished — the answer sat in a RAM
+                // registry until the process exited. Latch it here and the run
+                // loop submits it at the next turn boundary, exactly as the
+                // advisor continuation does.
+                //
+                // Best-effort by construction: the event itself rides a try_send
+                // (a full parent channel drops it), and the registry still holds
+                // the answer, so a dropped event costs the push, not the answer —
+                // `delegate_task query="<id>"` remains the pull path.
+                if status != "pending" {
+                    let body = if summary.trim().is_empty() {
+                        "(no summary text was recorded)".to_string()
+                    } else {
+                        summary.clone()
+                    };
+                    let batch = format!(
+                        "<background_delegation id=\"{delegation_id}\" status=\"{status}\">\n\
+                         {body}\n</background_delegation>\n\n\
+                         This child was dispatched with delegate_task(background=true) and has now \
+                         finished. Fold its answer into your work; do not re-dispatch it."
+                    );
+                    self.pending_delegation_continuation = Some(batch);
+                }
             }
 
             AgentEvent::CompactionStarted { tokens_before } => {

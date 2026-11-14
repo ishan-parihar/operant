@@ -139,6 +139,50 @@ mod advisor_delivery_tests {
         assert!(app.pending_advisor_continuation.is_none());
     }
 
+    /// A finished background delegation is queued for the MODEL, not only drawn
+    /// as a card. MEASURED defect (2026-11-14): the event stopped at the card, so
+    /// a model that ended its turn after dispatching never learned the child had
+    /// finished and the answer sat in a RAM registry until the process exited.
+    #[test]
+    fn a_finished_delegation_is_queued_for_the_model() {
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::AsyncDelegation {
+            delegation_id: "dlg-1-7".to_string(),
+            status: "completed".to_string(),
+            summary: "the answer the child produced".to_string(),
+        });
+        let queued = app
+            .pending_delegation_continuation
+            .clone()
+            .expect("a completed delegation must be queued");
+        assert!(queued.contains("dlg-1-7"), "{queued}");
+        assert!(queued.contains("the answer the child produced"), "{queued}");
+        assert!(queued.contains("<background_delegation"), "{queued}");
+
+        // A still-pending event queues nothing: the child has no answer yet.
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::AsyncDelegation {
+            delegation_id: "dlg-1-8".to_string(),
+            status: "pending".to_string(),
+            summary: String::new(),
+        });
+        assert!(app.pending_delegation_continuation.is_none());
+
+        // A failed child is delivered too — the parent needs the failure, not
+        // silence.
+        let mut app = make_app();
+        app.handle_agent_event(AgentEvent::AsyncDelegation {
+            delegation_id: "dlg-1-9".to_string(),
+            status: "failed".to_string(),
+            summary: "provider 503".to_string(),
+        });
+        let queued = app
+            .pending_delegation_continuation
+            .clone()
+            .expect("a failed delegation must be queued");
+        assert!(queued.contains("provider 503"), "{queued}");
+    }
+
     /// An interrupted run drops any queued continuation (omp
     /// autoResumeSuppressed: a deliberate user stop is never auto-resumed).
     #[test]

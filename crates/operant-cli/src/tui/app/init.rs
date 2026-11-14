@@ -363,6 +363,7 @@ impl App {
             current_session: None,
             exit_is_deliberate: false,
             pending_advisor_continuation: None,
+            pending_delegation_continuation: None,
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,

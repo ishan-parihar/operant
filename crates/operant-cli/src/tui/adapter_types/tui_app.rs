@@ -636,6 +636,21 @@ impl TuiApp {
             // message path; the engine's continuation latch (advisor.rs)
             // sees the tag in the next delta and skips its review, so one
             // batch can never cascade into two continuations.
+            // A finished background delegation gets the same turn boundary: the
+            // parent model must READ the answer, not just see a card. The card
+            // went out when the event landed; this is the model's copy.
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && let Some(batch) = self.app.pending_delegation_continuation.take()
+            {
+                self.app.clear_failed_input_recovery();
+                self.app.set_status_notice(
+                    "\u{2139} background delegation finished: continuing with its answer."
+                        .to_string(),
+                );
+                self.submit_user_message(agent, batch).await;
+                continue;
+            }
             if !self.app.is_streaming
                 && let Some(agent) = agent.as_ref()
                 && let Some(batch) = self.app.pending_advisor_continuation.take()

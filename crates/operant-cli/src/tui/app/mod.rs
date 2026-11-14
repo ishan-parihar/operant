@@ -337,6 +337,17 @@ pub struct App {
     /// auto-continues (omp user-stop suppression).
     pub pending_advisor_continuation: Option<String>,
 
+    /// A finished BACKGROUND delegation's answer, waiting for the turn boundary.
+    ///
+    /// MEASURED defect (2026-11-14): a completed background delegation was
+    /// rendered as one info card and nothing else — it never entered the model's
+    /// conversation, so a model that ended its turn after dispatching never
+    /// learned the child had finished, and the answer sat in a RAM registry until
+    /// the process exited. This is the host side of that delivery: the run loop
+    /// submits it as the next turn's query, exactly as the advisor continuation
+    /// does, so the parent reads the child's answer in its own conversation.
+    pub pending_delegation_continuation: Option<String>,
+
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.
     ///
