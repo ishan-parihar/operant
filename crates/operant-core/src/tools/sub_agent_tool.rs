@@ -1985,6 +1985,24 @@ fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
         .timeout_seconds
         .map(|seconds| seconds.max(MIN_WORKER_TIMEOUT_SECONDS));
 
+    // A blank key is NO key, decided here and nowhere else. MEASURED 2026-11-15
+    // (fourth-pass audit, finding 1): the key was compared verbatim and never
+    // validated, so `Some("")` matched every other `Some("")` — two dispatches
+    // for DIFFERENT goals returned the same handle and the second one's work was
+    // never run. Proven by execution: `try_create_record("goal A", .., Some(""))`
+    // then `try_create_record("goal B", .., Some(""))` yielded
+    // `dlg-1794695429-0` twice. `parse_args` already rejects an empty `goal`; the
+    // key needed the same rule, and trimming is the same normalization
+    // `session_search`'s `session_id` applies.
+    //
+    // Blank becomes `None` rather than an error: a caller that has no key and
+    // emits `""` means "no key", and rejecting it would break a dispatch that
+    // was never wrong.
+    parsed.request_key = parsed
+        .request_key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
+
     Ok(parsed)
 }
 
@@ -3461,6 +3479,49 @@ mod tests {
         assert_eq!(args.timeout_seconds, Some(MIN_WORKER_TIMEOUT_SECONDS));
     }
 
+    /// A blank `request_key` is no key, or two different jobs merge into one.
+    ///
+    /// MEASURED 2026-11-15 (fourth-pass audit, finding 1): the key was compared
+    /// verbatim and never normalized, so `Some("")` matched every other
+    /// `Some("")`. Proven by execution before the fix — two dispatches for
+    /// DIFFERENT goals both with `Some("")` returned the SAME handle
+    /// (`dlg-1794695429-0` twice) and the second goal's work was never run. A
+    /// whitespace-only key did the same.
+    ///
+    /// MUTATION PROVEN: removing the normalization fails this test with
+    /// `left: Some(""), right: None`.
+    #[test]
+    fn a_blank_request_key_is_no_key() {
+        // Empty and whitespace-only both become None, so they cannot collide.
+        for blank in ["", "   ", "\t", "\n  "] {
+            let args = parse_args(serde_json::json!({
+                "goal": "audit the parser",
+                "request_key": blank,
+            }))
+            .expect("a blank key is not an error");
+            assert_eq!(
+                args.request_key, None,
+                "a blank key ({blank:?}) must become None, not a matchable key"
+            );
+        }
+
+        // A real key survives, trimmed of the padding a caller may add.
+        let padded = parse_args(serde_json::json!({
+            "goal": "audit the parser",
+            "request_key": "  job-42  ",
+        }))
+        .expect("a real key parses");
+        assert_eq!(
+            padded.request_key.as_deref(),
+            Some("job-42"),
+            "the key is trimmed, so two spellings of one key are one key"
+        );
+
+        // No key at all is still fine.
+        let none = parse_args(serde_json::json!({ "goal": "x" })).expect("no key parses");
+        assert_eq!(none.request_key, None);
+    }
+
     /// Audit 2026-11-15 (third pass, finding 1): a REPLAYED dispatch must be
     /// admitted even when the process has no worker headroom at all.
     ///
@@ -3555,6 +3616,46 @@ mod tests {
         drop(held);
         async_delegation::__test_reset_registry();
         set_max_global_workers(previous);
+    }
+
+    /// Two dispatches that differ only by a blank key must not merge.
+    ///
+    /// Drives the REGISTRY, which is where the merge actually happens. An earlier
+    /// draft drove `execute()` and passed under the mutation — a false guard,
+    /// because the spawned child settles its own record to Completed before the
+    /// second call, so the pending-only dedup never sees it. The property lives in
+    /// `try_create_record`, so that is what this pins.
+    ///
+    /// MUTATION PROVEN: removing the `parse_args` normalization does NOT affect
+    /// this test (it bypasses `parse_args`), so the guard for the normalization is
+    /// `a_blank_request_key_is_no_key`. What THIS pins is the registry half: that
+    /// two records with a blank key are genuinely one key, which is why the
+    /// normalization at the boundary is load-bearing rather than cosmetic.
+    #[test]
+    fn a_blank_key_is_one_key_at_the_registry() {
+        let _guard = guard_test_lock();
+        let _drain = async_delegation::RegistryDrain::new();
+        async_delegation::__test_reset_registry();
+
+        // The raw registry: no normalization, verbatim comparison. This is the
+        // behaviour `parse_args` exists to prevent a caller from reaching.
+        let first = async_delegation::try_create_record("goal A", "m", 3, None, Some(""))
+            .expect("the first blank-key dispatch");
+        let second = async_delegation::try_create_record("goal B", "m", 3, None, Some(""))
+            .expect("the second blank-key dispatch");
+
+        assert_eq!(
+            second,
+            async_delegation::DelegationAdmission::Reused(first.id().to_string()),
+            "a blank key IS one key at the registry, which is exactly why the boundary must reject it"
+        );
+        assert_eq!(
+            async_delegation::list_records().len(),
+            1,
+            "one key, one row — the second goal's work is never recorded"
+        );
+
+        async_delegation::__test_reset_registry();
     }
 
     /// The replay handle is one builder for both replay paths, so the read-first
