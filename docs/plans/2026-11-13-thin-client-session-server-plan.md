@@ -156,12 +156,16 @@ number instead of the word "target".
 | I2 | The session protocol as data | **done** (iter-2199) | `session_protocol`: WireMessage, Envelope, encode/decode, ProtocolError |
 | I3 | The gateway serves a client socket | **done** (iter-2213) | `session_server` + `gateway run --socket PATH` |
 | I4 | A session a client can drive | **done** (iter-2219) | per-slot event channels, `SessionBus`, the socket subscribes a client to its session |
-| I5 | The TUI can attach | **done** (iter-2225, iter-2241) | `SessionClient` + `operant chat --attach <socket>`; the headless attach (2225) and the TUI rendering the server's stream (2241) |
-| I6 | Approve, deny, cancel cross the socket | open | RT-550 (cancel does not cancel) is the same work |
-| I7 | The client dies, the session lives | open | the grace window |
-| I8 | One server, one child fleet | open | the ACP daemon folds into the gateway; the three runtime builders become one |
+| I5 | The TUI can attach | **done** (iter-2225, iter-2241) | `SessionClient` + `chat --attach`; the headless attach (2225) and the TUI rendering the server's stream (2241) |
+| I6 | Approve, deny, cancel cross the socket | **done** (iter-2233) | the session handler keeps the running turn's task handle and aborts it on cancel; RT-550 closed |
+| I7 | The session outlives its client | **done** (iter-2237) | `History` on the wire, `transcript_lines`, the gateway answers `LoadHistory` |
+| I8 | One server, one child fleet | **done as scoped** (iter-2239) | verified one builder, one McpManager per process; RT-549 closed. The ACP daemon as a second server is RT-543 (open) |
 | I9 | The cap and the slot count agree | **done** (iter-2223) | `slot_count_for` follows `max_concurrent_sessions`; RT-548 closed |
-| I10 | The number is published | open | the bench script |
+| I10 | The number is published | **done** (iter-2232) | `scripts/bench_session_memory.py` measured **19.3 MiB marginal per client**; RT-551 closed |
+
+**What is NOT closed, and why it is not hidden:** RT-542 (the interactive surfaces still build a runtime when no `--attach` is passed — the default is unchanged), RT-543 (the ACP daemon is a second server), RT-544 (the plan and the slot comment still promise an attach mode without saying what shipped — the promise is now true, the correction is owed), RT-545 (the ACP protocol itself is unchanged), RT-547 (the thin client had no caller — now it does, for `chat`), RT-552 (the read-only HTTP API is untouched).
+
+
 
 **The shape after the landed iterations:** a terminal can reach a running gateway over a
 socket and drive a real turn there without building a runtime. What is left is
