@@ -715,7 +715,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme_colors::border()));
     let inner_width = block.inner(area).width;
-    let body_items: Vec<ListItem> = if state.loading {
+    let mut body_items: Vec<ListItem> = if state.loading {
         vec![
             ListItem::new(Line::from(vec![
                 Span::styled("  ⏳ ", Style::default().fg(theme_colors::accent())),
@@ -1145,7 +1145,38 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
     //
     // The block is built first because the heading's count column needs the
     // inner width too.
-    let body_items: Vec<ListItem> = interpose_group_headings(state, body_items, inner_width);
+    body_items = interpose_group_headings(state, body_items, inner_width);
+    // J2 — the `Show more` row: the one slot past the last row (see
+    // `SessionHubState::has_more` and `select_next`). It is pushed LAST so the
+    // selection index (`state.selected == visible_rows().len()`) is exactly its
+    // position in `body_items`, and the list pane reads "500 of 3,314" with a
+    // way forward instead of a wall.
+    if state.has_more() {
+        let on_it = state.selected >= state.visible_rows().len();
+        let (marker, text) = if on_it {
+            ("\u{25b6}", "show more — load the next 500 sessions")
+        } else {
+            (
+                "\u{22ef}",
+                "show more (Enter) — the store has more than this page",
+            )
+        };
+        body_items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("  {marker} "),
+                Style::default().fg(theme_colors::accent()),
+            ),
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(theme_colors::text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])));
+    }
+    // The body length is read BEFORE the chain moves `body_items`: the
+    // `Show more` slot's rendered position is the last body item (J2).
+    let body_len = body_items.len();
     let items: Vec<ListItem> = chrome_items(state, inner_width)
         .into_iter()
         .chain(body_items)
@@ -1159,9 +1190,14 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
         // the highlight on the operator's row once Stage C inserts one heading
         // per group: with three groups and five rows, row 4 renders at
         // position 3 + 3 + 4, not 3 + 4.
-        list_state.select(Some(
-            CHROME_ROWS + group_heading_rows_above(state, state.selected) + state.selected,
-        ));
+        // The `Show more` slot is past the last row, so there is no group
+        // heading to count above it: its position is the last body item.
+        let selected_pos = if state.selected >= state.visible_rows().len() {
+            CHROME_ROWS + body_len - 1
+        } else {
+            CHROME_ROWS + group_heading_rows_above(state, state.selected) + state.selected
+        };
+        list_state.select(Some(selected_pos));
     }
     frame.render_stateful_widget(
         List::new(items)

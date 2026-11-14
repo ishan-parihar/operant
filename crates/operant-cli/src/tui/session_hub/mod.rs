@@ -371,6 +371,11 @@ pub enum HubSelection {
     SwitchSession(String),
     /// Focus a live subagent row (iter-C's focus view).
     FocusSubagent(String),
+    /// Load the next page of rows over the page cursor (J2). The hub loaded
+    /// one 500-row page and the operator had no way to ask for the next one,
+    /// so every session past the newest 500 was unreachable from the picker
+    /// (audit 2026-11-13, finding 3).
+    LoadMore,
 }
 
 /// Page state. Owned by `App`; rendered full-frame while `visible`.
@@ -503,6 +508,10 @@ pub struct SessionHubState {
     /// "N of M" (audit finding 3: the hub's own count read as the whole
     /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
     store_total: Option<usize>,
+    /// Whether the loaded page was FULL: a full page means the store very
+    /// likely has more, which is what draws the `Show more` row (J2). A
+    /// short page is the end of the list, and the row says so.
+    has_more: bool,
     /// The store-wide per-mode counts, when the app has loaded them.
     ///
     /// (plan F4) The tab counts used to be computed over the rows this pane
@@ -563,6 +572,7 @@ impl SessionHubState {
             employee_roster: Vec::new(),
             preview_first_prompt: None,
             store_total: None,
+            has_more: false,
             store_counts: None,
             filter_counts_cache: Vec::new(),
         }
@@ -823,6 +833,24 @@ impl SessionHubState {
 
     /// Replace the backing rows (background load landed) and keep the
     /// selection on the same row id when possible.
+    /// Append the next page to the loaded rows (J2's `Show more`).
+    ///
+    /// Appended, not replaced: the operator asked for MORE, not for a
+    /// different window. The selection is kept by row id exactly as
+    /// `replace_rows` keeps it, so paging cannot move the cursor.
+    pub fn extend_rows(&mut self, rows: Vec<SessionEntryV2>) {
+        let keep = self.selected_row().map(|r| r.id.clone());
+        self.rows.extend(rows);
+        self.mark_live_row();
+        self.loading = false;
+        self.rebuild_visible();
+        if let Some(id) = keep
+            && let Some(pos) = self.visible_idx.iter().position(|&i| self.rows[i].id == id)
+        {
+            self.selected = pos;
+        }
+    }
+
     pub fn replace_rows(&mut self, rows: Vec<SessionEntryV2>) {
         let keep = self.selected_row().map(|r| r.id.clone());
         // (audit R1) the CurrentBranch filter needs an anchor. Without one
@@ -1234,7 +1262,10 @@ impl SessionHubState {
     }
 
     pub fn select_next(&mut self) {
-        if self.selected + 1 < self.visible_idx.len() {
+        // One slot past the last row is the `Show more` row (J2), so the
+        // ladder can reach it; without the extra slot it is not selectable.
+        let slots = self.visible_idx.len() + usize::from(self.has_more);
+        if self.selected + 1 < slots {
             self.selected += 1;
             self.preview_scroll = 0;
             self.note_preview_miss();
@@ -1351,6 +1382,15 @@ impl SessionHubState {
 
     pub fn set_store_total(&mut self, total: Option<usize>) {
         self.store_total = total;
+    }
+
+    /// Whether a full page was loaded, so the list can offer the next one.
+    pub fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    pub fn set_has_more(&mut self, has_more: bool) {
+        self.has_more = has_more;
     }
 
     /// Hand the store-wide counts to the counts cache. Called with the same
@@ -1499,6 +1539,10 @@ impl SessionHubState {
 
     /// What Enter does on the current row.
     pub fn confirm_selection(&mut self) -> Option<HubSelection> {
+        // The slot past the last row is the `Show more` row, not a session.
+        if self.has_more && self.selected >= self.visible_idx.len() {
+            return Some(HubSelection::LoadMore);
+        }
         let row = self.selected_row()?;
         let selection = match &row.kind {
             RowKind::Subagent { .. } => Some(HubSelection::FocusSubagent(row.id.clone())),

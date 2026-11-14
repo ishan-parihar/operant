@@ -1090,6 +1090,42 @@ fn the_tab_counts_follow_the_rows_and_the_filters() {
     );
 }
 
+/// (J2) The `Show more` row is the one slot PAST the last row: the ladder
+/// can reach it, Enter on it asks for the next page, and with a short page
+/// (the end of the list) the slot does not exist at all.
+#[test]
+fn the_show_more_row_is_the_slot_past_the_last_row() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s1", None, Some("premiere")),
+        row("s2", None, None),
+    ]);
+    // A short page: the end of the list, so there is no slot and no ask.
+    hub.set_has_more(false);
+    for _ in 0..5 {
+        hub.select_next();
+    }
+    assert_eq!(hub.selected, 1, "the ladder stops at the last row");
+    assert!(
+        !matches!(hub.confirm_selection(), Some(HubSelection::LoadMore)),
+        "with nothing more to load, Enter is a switch, not a page"
+    );
+
+    // A full page: the store very likely has more, so the slot exists.
+    hub.set_has_more(true);
+    hub.select_next();
+    assert_eq!(
+        hub.selected, 2,
+        "the slot past the last row is reachable — the operator can ask for more"
+    );
+    assert!(
+        matches!(hub.confirm_selection(), Some(HubSelection::LoadMore)),
+        "Enter on the slot loads the next page"
+    );
+    hub.select_prev();
+    assert_eq!(hub.selected, 1, "and the ladder comes back off it");
+}
+
 /// (plan F4) When the store's counts have landed, the tabs show the STORE's
 /// numbers, not the page's. The page holds 500 of 3,314: a tab reading "2"
 /// because two loaded rows matched would be a lie about the store.

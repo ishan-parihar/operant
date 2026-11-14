@@ -776,6 +776,10 @@ pub struct App {
             Option<operant_core::database::SessionFilterCounts>,
         )>,
     >,
+    /// J2: the next hub row load appends instead of replacing (the operator
+    /// pressed Enter on the `Show more` row). Consumed by the drain, like
+    /// `rename_on_list_load`.
+    pub session_load_more: bool,
     /// Receiver for the hub's per-session PREVIEW load (the right pane's
     /// transcript window). Separate from `session_list_rx` so the list load
     /// and the pane load are independent flights: moving the cursor while
@@ -1106,6 +1110,11 @@ impl SynchronizedUpdate for ratatui::backend::TestBackend {
 /// that plus the preview read (a 14,103-message session) with room to spare,
 /// and the wait ENDS THE MOMENT nothing is in flight — a run with no async
 /// work pays for one extra loop pass and no wall-clock time at all.
+/// The hub's page size: how many rows one load reads, and what "a full page"
+/// means for the `Show more` row (J2). The plan's 500, the same number the
+/// hub has always loaded.
+const HUB_PAGE: usize = 500;
+
 const SIM_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 /**/
@@ -2040,6 +2049,20 @@ impl App {
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 self.session_list_rx = Some(rx);
                 let db_path = self.config.database_path.clone();
+                // J2: a `Show more` press pages forward over the cursor the
+                // database layer already speaks (`list_sessions_rich_page`'s
+                // `before`): the last row's own timestamp, so a page boundary
+                // is never skipped or repeated. A fresh open pages from the
+                // top.
+                let load_more = std::mem::take(&mut self.session_load_more);
+                let page_cursor = if load_more {
+                    self.session_hub
+                        .rows
+                        .last()
+                        .map(|r| r.updated_at.to_rfc3339())
+                } else {
+                    None
+                };
                 // The store-wide counts need the same axes the hub filters
                 // by, so they are read here and carried with the rows (F4):
                 // a count that ignored the employee axis would promise rows
@@ -2068,7 +2091,12 @@ impl App {
                             .unwrap_or_default();
                         let mut rows = db
                             .as_ref()
-                            .and_then(|d| d.list_sessions_rich(500).ok())
+                            .and_then(|d| match page_cursor.as_deref() {
+                                Some(cursor) => {
+                                    d.list_sessions_rich_page(HUB_PAGE, Some(cursor)).ok()
+                                }
+                                None => d.list_sessions_rich(HUB_PAGE).ok(),
+                            })
                             .unwrap_or_default();
                         let counts = db.as_ref().and_then(|d| {
                             d.count_sessions_by_filter(
@@ -2080,8 +2108,12 @@ impl App {
                             .ok()
                         });
                         // iter-C: subagent rows are process-local registry
-                        // state, appended (not joined) to the DB rows.
-                        rows.extend(operant_core::tools::async_delegation::records_snapshot());
+                        // state, appended (not joined) to the DB rows. Only on
+                        // a FRESH load: a `Show more` page must not append the
+                        // live delegations a second time (J2).
+                        if !load_more {
+                            rows.extend(operant_core::tools::async_delegation::records_snapshot());
+                        }
                         (rows, total, roster, counts)
                     })
                     .await

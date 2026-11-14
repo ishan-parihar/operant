@@ -180,6 +180,11 @@ impl App {
                 // The store total, so the header can say "500 of 3,302"
                 // instead of a bare "500" that reads as everything.
                 self.session_hub.set_store_total(total);
+                // J2: a FULL page means the store very likely has more, which
+                // is what draws the `Show more` row; a short page is the end
+                // of the list.
+                let was_more = std::mem::take(&mut self.session_load_more);
+                self.session_hub.set_has_more(rows.len() >= HUB_PAGE);
                 // The roster, so the employee axis can reach every seat the
                 // store knows about — not only the ones with a session inside
                 // the loaded page (audit finding 3).
@@ -188,7 +193,11 @@ impl App {
                 // the live id does: that call recomputes the count cache from
                 // whatever the hub holds (F4 — the cache now prefers these).
                 self.session_hub.set_store_counts(counts);
-                self.session_hub.replace_rows(rows);
+                if was_more {
+                    self.session_hub.extend_rows(rows);
+                } else {
+                    self.session_hub.replace_rows(rows);
+                }
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {
                     // /rename with no argument: the hub does not own rename

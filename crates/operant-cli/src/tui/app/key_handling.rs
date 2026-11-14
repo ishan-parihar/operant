@@ -873,6 +873,14 @@ impl App {
                             // The hub renders the focus view itself; nothing
                             // to apply here.
                         }
+                        Some(HubSelection::LoadMore) => {
+                            // J2: the next load appends a page over the cursor.
+                            // The hub stays open — the operator is paging, not
+                            // leaving.
+                            self.session_load_more = true;
+                            self.session_list_pending = true;
+                            self.set_status_notice("Loading the next 500 sessions…".to_string());
+                        }
                         None => {}
                     }
                 }

@@ -295,13 +295,15 @@ plan as documents, and **2191** advertised the hub's new keys — `e` and `t`
 existed in the key handler and on no screen, which the repo's own standard
 calls decoration the operator cannot find.
 
-**One planned item is still open** — J2 (the `Show more` row, which the page
-cursor makes possible). I1 landed as **iter-2214** (the preview reads the last
-400 messages with one indexed SQL read; the first prompt is a column on the
-session row, written once at turn start and backfilled for the 3,314 rows that
-predate it) and F4's count half as **iter-2225** (the tabs read the store, not
-the loaded page). The `Show more` row is next: the page cursor is in place, and
-the remaining work is the list pane's own row model plus Enter on that row.
+**Every planned item has landed.** I1 as **iter-2214** (the preview reads the
+last 400 messages with one indexed SQL read; the first prompt is a column on
+the session row, written once at turn start and backfilled for the 3,314 rows
+that predate it), F4's count half as **iter-2231** (the tabs read the store, not
+the loaded page), and J2 as **iter-2233**: the list pane has one slot past the
+last row, Enter on it pages forward over the cursor (`list_sessions_rich_page`
+with the last row's timestamp, appended rather than replaced), and a full page
+is what draws the row — so "500 of 3,314" now has a way forward instead of
+being a wall. The audit report is `docs/audit/2026-11-14-swarm-and-hub-red-team.md`.
 
 ## Iteration order (as planned)
 
