@@ -5205,6 +5205,37 @@ def cmd_done(args) -> None:
     print(f"{args.item} → {args.new_status}")
 
 
+ITER_RE = re.compile(r"\biter-(\d+)\b")
+
+
+def cmd_label(args) -> None:
+    """Print the next free iteration label, read from origin/main.
+
+    MEASURED 2026-11-14: this was hand-computed before every push, and the hand
+    computation raced. Four renumbers in one session came from reading a stale top
+    or from a peer taking the number between the read and the push. origin/main is
+    the only numbering authority (AGENTS.md "Iteration Numbering"), so the number
+    is read from git, not worked out by a human under time pressure.
+
+    Runs git in the CURRENT directory: the command needs no genome config, so it
+    works from any subdirectory of the tree, including a linked worktree.
+    """
+    if args.fetch:
+        subprocess.run(["git", "fetch", "origin", "--quiet"], capture_output=True, text=True)
+    raw = subprocess.run(["git", "log", "origin/main", "--format=%s"],
+                         capture_output=True, text=True)
+    if raw.returncode:
+        die(f"cannot read origin/main ({raw.stderr.strip() or 'unknown git error'}) — "
+            f"run `git fetch origin` first", ERR)
+    nums = [int(m.group(1)) for line in raw.stdout.splitlines()
+            if (m := ITER_RE.search(line))]
+    if not nums:
+        die("no iter-N label in origin/main's subjects — wrong repo, or the numbering "
+            "convention changed", ERR)
+    top = max(nums)
+    print(f"iter-{top}" if args.top else f"iter-{top + 1}")
+
+
 def cmd_claim_register(args) -> None:
     cfg = find_cfg()
     cfg.need("agents")
@@ -8609,6 +8640,10 @@ def main() -> None:
     s = add("wf", cmd_wf, "workflow boards: new | add | list")
     s.add_argument("wf_cmd", choices=["new", "add", "list"]); s.add_argument("name", nargs="?")
     s.add_argument("item", nargs="?")
+    s = add("label", cmd_label, "print the next free iteration label from origin/main")
+    s.add_argument("--top", action="store_true", help="print the current top label instead")
+    s.add_argument("--no-fetch", dest="fetch", action="store_false",
+                   help="read the local origin/main ref without fetching")
     s = add("claim", cmd_claim, "claim a board item, or a slice by the paths it will touch")
     s.add_argument("item"); s.add_argument("--agent")
     s.add_argument("--paths", nargs="*", metavar="PATH",
