@@ -90,6 +90,51 @@ pub enum Role {
     Border,
     /// Selected row background.
     SelectionBg,
+    // ---- Text layer (plan 2026-11-14 U3) ----------------------------------
+    // These carry the colours the MARKDOWN and SYNTAX renderers used to
+    // hard-code, so `/theme` can reach assistant output at all. Their defaults
+    // are the literals they replace, EXCEPT where that literal is already a
+    // seeded role's default -- see `LITERAL_SEEDED_ROLES` for why.
+    /// Markdown heading ink.
+    MdHeading,
+    /// Markdown link text.
+    MdLink,
+    /// Markdown link target suffix (` (url)`).
+    MdLinkUrl,
+    /// Inline code foreground.
+    MdCode,
+    /// Fenced code-block body foreground.
+    MdCodeBlock,
+    /// Blockquote text.
+    MdQuote,
+    /// Thematic break rule.
+    MdHr,
+    /// List bullet / ordered marker.
+    MdListBullet,
+    /// Diff added rows.
+    ToolDiffAdded,
+    /// Diff removed rows.
+    ToolDiffRemoved,
+    /// Diff context rows.
+    ToolDiffContext,
+    /// Syntax: comments.
+    SyntaxComment,
+    /// Syntax: keywords.
+    SyntaxKeyword,
+    /// Syntax: function names.
+    SyntaxFunction,
+    /// Syntax: variables.
+    SyntaxVariable,
+    /// Syntax: strings.
+    SyntaxString,
+    /// Syntax: numbers.
+    SyntaxNumber,
+    /// Syntax: type names.
+    SyntaxType,
+    /// Syntax: operators.
+    SyntaxOperator,
+    /// Syntax: punctuation.
+    SyntaxPunctuation,
 }
 
 /// All roles, in declaration order. Used by role listings and the palette
@@ -117,6 +162,26 @@ pub const ALL_ROLES: &[Role] = &[
     Role::Info,
     Role::Border,
     Role::SelectionBg,
+    Role::MdHeading,
+    Role::MdLink,
+    Role::MdLinkUrl,
+    Role::MdCode,
+    Role::MdCodeBlock,
+    Role::MdQuote,
+    Role::MdHr,
+    Role::MdListBullet,
+    Role::ToolDiffAdded,
+    Role::ToolDiffRemoved,
+    Role::ToolDiffContext,
+    Role::SyntaxComment,
+    Role::SyntaxKeyword,
+    Role::SyntaxFunction,
+    Role::SyntaxVariable,
+    Role::SyntaxString,
+    Role::SyntaxNumber,
+    Role::SyntaxType,
+    Role::SyntaxOperator,
+    Role::SyntaxPunctuation,
 ];
 
 impl Role {
@@ -145,6 +210,26 @@ impl Role {
             Role::Info => "info",
             Role::Border => "border",
             Role::SelectionBg => "selection_bg",
+            Role::MdHeading => "md_heading",
+            Role::MdLink => "md_link",
+            Role::MdLinkUrl => "md_link_url",
+            Role::MdCode => "md_code",
+            Role::MdCodeBlock => "md_code_block",
+            Role::MdQuote => "md_quote",
+            Role::MdHr => "md_hr",
+            Role::MdListBullet => "md_list_bullet",
+            Role::ToolDiffAdded => "tool_diff_added",
+            Role::ToolDiffRemoved => "tool_diff_removed",
+            Role::ToolDiffContext => "tool_diff_context",
+            Role::SyntaxComment => "syntax_comment",
+            Role::SyntaxKeyword => "syntax_keyword",
+            Role::SyntaxFunction => "syntax_function",
+            Role::SyntaxVariable => "syntax_variable",
+            Role::SyntaxString => "syntax_string",
+            Role::SyntaxNumber => "syntax_number",
+            Role::SyntaxType => "syntax_type",
+            Role::SyntaxOperator => "syntax_operator",
+            Role::SyntaxPunctuation => "syntax_punctuation",
         }
     }
 
@@ -182,6 +267,31 @@ impl Role {
             Role::Info => (140, 180, 255),
             Role::Border => (100, 100, 110),
             Role::SelectionBg => (60, 60, 80),
+            // Text layer. Every default here is UNIQUE across `ALL_ROLES`:
+            // `configured_native_color` attributes a cell to the FIRST role
+            // whose default matches, so two roles sharing a default make the
+            // second unconfigurable. Verified by
+            // `new_text_roles_have_unique_defaults`.
+            Role::MdHeading => (200, 155, 75),
+            Role::MdLink => (120, 180, 240),
+            Role::MdLinkUrl => (110, 110, 120),
+            Role::MdCode => (180, 180, 180),
+            Role::MdCodeBlock => (200, 200, 195),
+            Role::MdQuote => (150, 150, 150),
+            Role::MdHr => (130, 130, 140),
+            Role::MdListBullet => (200, 150, 90),
+            Role::ToolDiffAdded => (110, 200, 120),
+            Role::ToolDiffRemoved => (200, 110, 110),
+            Role::ToolDiffContext => (140, 140, 150),
+            Role::SyntaxComment => (106, 153, 85),
+            Role::SyntaxKeyword => (86, 156, 214),
+            Role::SyntaxFunction => (220, 220, 170),
+            Role::SyntaxVariable => (156, 220, 254),
+            Role::SyntaxString => (206, 145, 120),
+            Role::SyntaxNumber => (181, 206, 168),
+            Role::SyntaxType => (78, 201, 176),
+            Role::SyntaxOperator => (212, 212, 212),
+            Role::SyntaxPunctuation => (196, 196, 196),
         }
     }
 }
@@ -771,7 +881,70 @@ mod default_palette_is_frozen {
         (Role::Info, (140, 180, 255)),
         (Role::Border, (100, 100, 110)),
         (Role::SelectionBg, (60, 60, 80)),
+        // Text layer (plan 2026-11-14 U3).
+        (Role::MdHeading, (200, 155, 75)),
+        (Role::MdLink, (120, 180, 240)),
+        (Role::MdLinkUrl, (110, 110, 120)),
+        (Role::MdCode, (180, 180, 180)),
+        (Role::MdCodeBlock, (200, 200, 195)),
+        (Role::MdQuote, (150, 150, 150)),
+        (Role::MdHr, (130, 130, 140)),
+        (Role::MdListBullet, (200, 150, 90)),
+        (Role::ToolDiffAdded, (110, 200, 120)),
+        (Role::ToolDiffRemoved, (200, 110, 110)),
+        (Role::ToolDiffContext, (140, 140, 150)),
+        (Role::SyntaxComment, (106, 153, 85)),
+        (Role::SyntaxKeyword, (86, 156, 214)),
+        (Role::SyntaxFunction, (220, 220, 170)),
+        (Role::SyntaxVariable, (156, 220, 254)),
+        (Role::SyntaxString, (206, 145, 120)),
+        (Role::SyntaxNumber, (181, 206, 168)),
+        (Role::SyntaxType, (78, 201, 176)),
+        (Role::SyntaxOperator, (212, 212, 212)),
+        (Role::SyntaxPunctuation, (196, 196, 196)),
     ];
+
+    /// `configured_native_color` attributes a cell to the FIRST role whose
+    /// frozen default equals the cell's colour
+    /// (`vendor/style/palette.rs`, `configured_native_color`). Two roles sharing
+    /// a default therefore make the second one unconfigurable — configuring it
+    /// changes nothing, because every cell carrying that colour is claimed by
+    /// the earlier role.
+    ///
+    /// Three collisions were found and designed out before U3 landed:
+    /// `ToolDiffAdded` wanted `(100,200,100)` (= `Success`, 22 live sites),
+    /// `MdHr` wanted `(100,100,110)` (= `Border`, 21 live sites), and
+    /// `MdListBullet` wanted `(186,139,255)` (= `Accent`). This is the guard
+    /// that keeps them out.
+    #[test]
+    fn no_two_roles_share_a_default() {
+        let mut seen: Vec<((u8, u8, u8), Role)> = Vec::new();
+        for role in ALL_ROLES.iter().copied() {
+            let default = role.default_rgb();
+            if let Some((_, other)) = seen.iter().find(|(rgb, _)| *rgb == default) {
+                panic!(
+                    "{other:?} and {role:?} share the default {default:?};                      configured_native_color would attribute every cell of that                      colour to whichever is declared first, leaving the other                      permanently unconfigurable. Give one of them a unique default."
+                );
+            }
+            seen.push((default, role));
+        }
+    }
+
+    /// The hand-tuned registry must stay in step with `ALL_ROLES`: a role added
+    /// without a `HAND_TUNED` row silently escapes both this check and the
+    /// default-experience check above.
+    #[test]
+    fn hand_tuned_covers_every_role() {
+        let listed: Vec<Role> = HAND_TUNED.iter().map(|(role, _)| *role).collect();
+        let mut expected = ALL_ROLES.to_vec();
+        expected.sort();
+        let mut listed = listed;
+        listed.sort();
+        assert_eq!(
+            listed, expected,
+            "HAND_TUNED and ALL_ROLES disagree; a role added to one and not the              other is not covered by the default-experience check"
+        );
+    }
 
     #[test]
     fn every_role_keeps_its_hand_tuned_default() {

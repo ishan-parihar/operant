@@ -787,17 +787,51 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every role must be overridden, or the per-frame substitution is a no-op
-    /// for it and no surface that migrated to it can ever be themed.
+    /// Every role must be REACHABLE by the theming mechanism, or no surface
+    /// that migrated to it can ever be themed.
+    ///
+    /// This used to assert "every role is seeded from a `ColorPalette` field".
+    /// That was the only path until U1 added `[tui.colors]`, which writes roles
+    /// directly — so a role with no theme field (the 20 text-layer roles added
+    /// at U3) is now perfectly themeable, and the old assertion tested an
+    /// implementation detail rather than the contract.
+    ///
+    /// The contract is asserted end to end instead: for EVERY role, configuring
+    /// it through the live path must actually change the palette the render
+    /// pass reads. That is strictly stronger — it would also catch a role that
+    /// is seeded but whose key is misspelled, or one swallowed by the merge.
     #[test]
-    fn every_role_is_seeded() {
-        let seeded = role_palette_for(&ColorPalette::for_theme("nord").expect("built-in"));
-        for role in palette::ALL_ROLES {
+    fn every_role_is_reachable_through_the_live_theming_path() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A distinct, recognisable colour per role, keyed exactly as an
+        // operator would type it.
+        let mut pairs = std::collections::BTreeMap::new();
+        for (index, role) in palette::ALL_ROLES.iter().enumerate() {
+            let value = format!("#{:02x}{:02x}{:02x}", index + 1, 0x40 + index, 0x80);
+            pairs.insert(role.key().to_string(), value);
+        }
+        set_role_overrides(&pairs);
+        set_active_theme("nord");
+
+        let live =
+            palette::configured_palette().expect("configuring every role must install a palette");
+        for (index, role) in palette::ALL_ROLES.iter().enumerate() {
             assert!(
-                seeded.is_overridden(*role),
-                "{role:?} is never seeded, so no surface using it can ever be themed"
+                live.is_overridden(*role),
+                "{role:?} (key {:?}) did not take the operator's value, so no surface                  that migrated to it can ever be themed",
+                role.key()
+            );
+            assert_eq!(
+                live.rgb(*role),
+                (index as u8 + 1, 0x40 + index as u8, 0x80),
+                "{role:?} (key {:?}) is not reading back the configured colour",
+                role.key()
             );
         }
+
+        set_role_overrides(&std::collections::BTreeMap::new());
+        set_active_theme("default");
     }
 
     /// The safety property the whole seed table exists to hold: whenever a
@@ -849,12 +883,46 @@ pub(crate) mod tests {
     /// A typo in the seed table's field names would silently un-seed a role
     /// (and could open a collision), so pin both directions: every role is
     /// reached, and the only fields with no role are the documented ones.
+    /// Roles deliberately NOT seeded from a `ColorPalette` field.
+    ///
+    /// The text-layer roles added at U3 carry the colours the markdown and
+    /// syntax renderers used to hard-code. Those are not theme fields — they
+    /// are the renderer's own palette — so there is nothing in `ColorPalette` to
+    /// seed them from, and adding 20 fields to the eight hand-written palettes
+    /// to satisfy a guard would be the larger change for no gain: these roles
+    /// are meant to stay theme-independent until a theme or `[tui.colors]`
+    /// claims them, and `every_role_is_reachable_through_the_live_theming_path`
+    /// proves that path works.
+    const LITERAL_SEEDED_ROLES: &[Role] = &[
+        Role::MdHeading,
+        Role::MdLink,
+        Role::MdLinkUrl,
+        Role::MdCode,
+        Role::MdCodeBlock,
+        Role::MdQuote,
+        Role::MdHr,
+        Role::MdListBullet,
+        Role::ToolDiffAdded,
+        Role::ToolDiffRemoved,
+        Role::ToolDiffContext,
+        Role::SyntaxComment,
+        Role::SyntaxKeyword,
+        Role::SyntaxFunction,
+        Role::SyntaxVariable,
+        Role::SyntaxString,
+        Role::SyntaxNumber,
+        Role::SyntaxType,
+        Role::SyntaxOperator,
+        Role::SyntaxPunctuation,
+    ];
+
     #[test]
     fn seed_covers_every_role() {
         let source = ColorPalette::for_theme("default").expect("default is built in");
         let mut covered: Vec<Role> = palette_fields(&source)
             .iter()
             .flat_map(|(field, _)| roles_for_field(field).iter().copied())
+            .chain(LITERAL_SEEDED_ROLES.iter().copied())
             .collect();
         covered.sort();
         covered.dedup();
