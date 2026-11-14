@@ -2662,6 +2662,11 @@ struct GatewaySessionHandler {
     /// silent turn.
     handler: Option<std::sync::Arc<GatewayMessageHandler>>,
     bus: std::sync::Arc<SessionBus>,
+    /// Sessions with a socket turn ADMITTED but not yet holding a slot (W3-2
+    /// for the socket). A cancel needs to tell "running now" from "waiting for
+    /// a slot": only the first can be stopped by the interrupt flag, and only
+    /// the second can be dropped from the queue.
+    socket_inflight: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 /// A session's claim on the concurrency cap, released when it drops.
@@ -2683,6 +2688,16 @@ impl Drop for SessionLease {
     }
 }
 
+/// The channel key holding `tool_call_id`, if any (read-only).
+fn pending_permission_channel(tool_call_id: &str) -> Option<String> {
+    let store = PENDING_PERMISSIONS.get()?;
+    let guard = store.lock().ok()?;
+    let pending = guard.as_ref()?;
+    let map = pending.try_lock().ok()?;
+    map.iter()
+        .find_map(|(channel, request)| (request.tool_id == tool_call_id).then(|| channel.clone()))
+}
+
 /// Resolve a pending tool-permission ask by its tool-call id (the session
 /// socket's `/approve` and `/deny`).
 ///
@@ -2692,6 +2707,21 @@ impl Drop for SessionLease {
 /// answered, already timed out) reports false rather than inventing an approval.
 fn resolve_pending_permission(tool_call_id: &str, allow: bool) -> bool {
     use operant_core::agent::ToolPermissionResponse;
+    // The pending map is keyed by CHANNEL, and only channel turns write it:
+    // the permission receiver runs inside a channel turn, so a socket turn
+    // never raises an ask of its own. Matching by tool-call id alone therefore
+    // handed the socket authority over every channel's pending ask — a local
+    // process could approve a tool waiting for a human on Telegram. The socket
+    // has no channel, so it answers nothing here and says which channel does.
+    if let Some(channel) = pending_permission_channel(tool_call_id)
+        && !channel.is_empty()
+    {
+        tracing::warn!(
+            channel = %channel,
+            "an approval for a CHANNEL's pending request was refused on the socket"
+        );
+        return false;
+    }
     let Some(store) = PENDING_PERMISSIONS.get() else {
         return false;
     };
@@ -2719,6 +2749,53 @@ fn resolve_pending_permission(tool_call_id: &str, allow: bool) -> bool {
         ToolPermissionResponse::Deny
     };
     request.response_tx.send(response).is_ok()
+}
+
+impl GatewaySessionHandler {
+    /// Stop the session's turn, wherever it is: running, or waiting for a slot.
+    ///
+    /// One rule, two callers (`Cancel` and `/stop`). The interrupt flag belongs
+    /// to the SLOT and ends a RUNNING turn; a turn still waiting for a slot has
+    /// no flag to raise, so it is marked in `cancelled_queued` and the turn
+    /// entry returns before it runs. The channel path already works this way
+    /// (`W3-2`); the socket path had the first half only, so a queued prompt
+    /// could not be stopped at all.
+    fn stop_turn(&self, session_id: &str) -> &'static str {
+        let Some(handler) = self.handler.as_ref().map(std::sync::Arc::clone) else {
+            return "this server has no agent slots to run a turn in";
+        };
+        let running = handler
+            .running_session
+            .lock()
+            .map(|running| running.contains_key(session_id))
+            .unwrap_or(false);
+        if running {
+            handler
+                .slots
+                .slot_for(session_id)
+                .agent
+                .interrupt_flag()
+                .trigger();
+            return "the turn was cancelled";
+        }
+        let queued = self
+            .socket_inflight
+            .lock()
+            .map(|inflight| inflight.contains(session_id))
+            .unwrap_or(false);
+        if queued {
+            if let Ok(mut cancelled) = handler.cancelled_queued.lock() {
+                cancelled.insert(session_id.to_string());
+            }
+            // It will not run, so it is no longer in flight: leaving the mark
+            // behind made a second cancel report a turn that was already gone.
+            if let Ok(mut inflight) = self.socket_inflight.lock() {
+                inflight.remove(session_id);
+            }
+            return "the queued turn was cancelled";
+        }
+        "there was no turn to cancel"
+    }
 }
 
 impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
@@ -2757,11 +2834,28 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         message: "this server has no agent slots to run a turn in".to_string(),
                     }];
                 };
+                // Commands first, before any gate. `/stop` is what an operator
+                // reaches for when a turn is stuck, so a pause or a full cap
+                // must not make it answer "operant is paused" instead of
+                // stopping. A command is a slash plus a KNOWN name, not any
+                // leading slash: a prompt about `/etc/hosts` is a prompt.
+                match text.split_whitespace().next().unwrap_or("") {
+                    "/stop" => {
+                        let message = self.stop_turn(&session_id);
+                        return vec![WireMessage::Error {
+                            session_id: Some(session_id),
+                            message: message.to_string(),
+                        }];
+                    }
+                    "/sessions" => {
+                        return vec![WireMessage::HelloOk {
+                            sessions: handler.live_session_ids(),
+                        }];
+                    }
+                    _ => {}
+                }
                 // A turn over the socket obeys the SAME gates a channel turn
-                // does. ESTOP is a pause, not a channel-only setting, and the
-                // session cap bounds the memory the daemon spends — a prompt
-                // path that skips both makes the pause button and the cap
-                // decorative.
+                // does. ESTOP is a pause, not a channel-only setting.
                 if operant_core::estop::is_engaged() {
                     return vec![WireMessage::Error {
                         session_id: Some(session_id),
@@ -2783,79 +2877,81 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         message,
                     }];
                 }
-                // The cap bounds IN-FLIGHT turns, so it may never exceed the
-                // slots there are to run them in. `max_concurrent_sessions`
-                // doubles as the slot count; set to 1000 it built 256 slots and
-                // admitted 1000 prompts, and the other 744 queued on a slot lock
-                // holding their text in memory — a cap that bounds nothing.
+                // The cap bounds CONCURRENT TURNS, so it is counted, not
+                // reserved: a prompt is admitted while fewer than `max` turns
+                // are running, and takes its lease only once it holds a slot.
+                // Holding the lease while queued let one busy slot consume the
+                // whole cap — four sessions behind one long turn refused the
+                // fifth although three slots were idle.
                 let cap = handler
                     .max_concurrent_sessions
                     .map(|max| max.min(handler.slots.slots.len().max(1)));
-                let lease = match cap {
-                    Some(max) => {
-                        let tracker = operant_core::active_sessions::ActiveSessionTracker::new(
-                            handler.session_tracker_dir.clone(),
-                            Some(max),
-                        );
-                        if !tracker.acquire(&session_id).unwrap_or(true) {
-                            return vec![WireMessage::Error {
-                                session_id: Some(session_id),
-                                message: format!(
-                                    "too many concurrent sessions (limit {max}) — the turn was not started"
-                                ),
-                            }];
-                        }
-                        Some(SessionLease {
-                            tracker,
-                            session_id: session_id.clone(),
-                        })
-                    }
-                    None => None,
-                };
-                // A command is a slash plus a KNOWN name, not any leading
-                // slash: a prompt about `/etc/hosts` is a prompt. The channel
-                // path intercepts its full command surface before the agent;
-                // these are the ones that make sense with no local runtime.
-                match text.split_whitespace().next().unwrap_or("") {
-                    "/stop" => {
-                        let holder = handler.running_session.lock().ok().and_then(|running| {
-                            running
-                                .contains_key(&session_id)
-                                .then(|| Arc::clone(&handler))
-                        });
-                        let message = match holder {
-                            Some(handler) => {
-                                handler
-                                    .slots
-                                    .slot_for(&session_id)
-                                    .agent
-                                    .interrupt_flag()
-                                    .trigger();
-                                "the turn was cancelled".to_string()
-                            }
-                            None => "there was no turn to cancel".to_string(),
-                        };
+                if let Some(max) = cap {
+                    let tracker = operant_core::active_sessions::ActiveSessionTracker::new(
+                        handler.session_tracker_dir.clone(),
+                        Some(max),
+                    );
+                    let running = tracker.count().unwrap_or(0);
+                    if running >= max {
                         return vec![WireMessage::Error {
                             session_id: Some(session_id),
-                            message,
+                            message: format!(
+                                "too many concurrent sessions (limit {max}) — the turn was not started"
+                            ),
                         }];
                     }
-                    "/sessions" => {
-                        return vec![WireMessage::HelloOk {
-                            sessions: handler.live_session_ids(),
-                        }];
-                    }
-                    _ => {}
                 }
                 let bus = std::sync::Arc::clone(&self.bus);
                 let task_session = session_id.clone();
+                if let Ok(mut inflight) = self.socket_inflight.lock() {
+                    inflight.insert(session_id.clone());
+                }
+                let inflight = std::sync::Arc::clone(&self.socket_inflight);
                 tokio::spawn(async move {
-                    // Keeps the cap for exactly as long as the turn runs.
-                    let _lease = lease;
                     let slot = handler.slots.slot_for(&task_session);
                     // ONE turn at a time in this slot (the same lock every
                     // other gateway turn takes).
                     let _guard = slot.lock.lock().await;
+                    // Cancelled while it waited: drop it before it runs, the
+                    // same check the channel path makes at turn start.
+                    if let Ok(mut cancelled) = handler.cancelled_queued.lock()
+                        && cancelled.remove(&task_session)
+                    {
+                        if let Ok(mut inflight) = inflight.lock() {
+                            inflight.remove(&task_session);
+                        }
+                        return;
+                    }
+                    // Now that the slot is held the turn is real, so it takes a
+                    // cap slot — and if the cap filled while it waited, it says
+                    // so instead of running over the limit.
+                    let _lease = match cap {
+                        Some(max) => {
+                            let tracker = operant_core::active_sessions::ActiveSessionTracker::new(
+                                handler.session_tracker_dir.clone(),
+                                Some(max),
+                            );
+                            if !tracker.acquire(&task_session).unwrap_or(true) {
+                                if let Ok(mut inflight) = inflight.lock() {
+                                    inflight.remove(&task_session);
+                                }
+                                bus.publish(
+                                    &task_session,
+                                    operant_core::agent::AgentEvent::Error {
+                                        error: format!(
+                                            "too many concurrent sessions (limit {max}) — the turn was not started"
+                                        ),
+                                    },
+                                );
+                                return;
+                            }
+                            Some(SessionLease {
+                                tracker,
+                                session_id: task_session.clone(),
+                            })
+                        }
+                        None => None,
+                    };
                     // The same turn bookkeeping a channel turn does: the
                     // session claims its slot (so a cancel can tell this
                     // session's turn from a neighbour's) and arms a clean
@@ -2900,6 +2996,11 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                             },
                         );
                     }
+                    // The session no longer has a turn in flight, running or
+                    // queued: this is what a later cancel reads.
+                    if let Ok(mut inflight) = inflight.lock() {
+                        inflight.remove(&task_session);
+                    }
                 });
                 vec![]
             }
@@ -2935,32 +3036,10 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
             // flag is how `/stop` and the drain end a turn: the loop exits, the
             // tail is committed, and the slot's lock is released by its guard.
             WireMessage::Cancel { session_id, .. } => {
-                // WHO holds the turn decides whether this cancel reaches it.
-                // The interrupt flag belongs to the SLOT, and two sessions can
-                // hash to one slot: triggering it for a session that is only
-                // QUEUED behind a neighbour stopped the neighbour's turn. The
-                // running set is the record — a session is in it exactly while
-                // its turn holds the slot lock, and it is also what tells a
-                // finished turn from a running one (a stale task handle used to
-                // answer "cancelled" for a turn that had already ended).
-                let holder = self.handler.as_ref().and_then(|handler| {
-                    let running = handler.running_session.lock().ok()?;
-                    running
-                        .contains_key(&session_id)
-                        .then(|| Arc::clone(handler))
-                });
-                let stopped = holder.is_some();
-                if let Some(handler) = holder {
-                    let slot = handler.slots.slot_for(&session_id);
-                    slot.agent.interrupt_flag().trigger();
-                }
+                let message = self.stop_turn(&session_id);
                 vec![WireMessage::Error {
                     session_id: Some(session_id),
-                    message: if stopped {
-                        "the turn was cancelled".to_string()
-                    } else {
-                        "there was no turn to cancel".to_string()
-                    },
+                    message: message.to_string(),
                 }]
             }
             // RT-550's siblings: an approval the client can actually give.
@@ -3004,8 +3083,28 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         message: "this server has no agent slots".to_string(),
                     }];
                 };
+                if operant_core::estop::is_engaged() {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "operant is paused — the message was not queued".to_string(),
+                    }];
+                }
                 let depth = match handler.next_turn_queue.lock() {
                     Ok(mut map) => {
+                        // A queue with no bound is a memory sink a client
+                        // controls: park a million messages and the daemon
+                        // holds them all. Past the bound the answer is a
+                        // refusal, not a longer queue.
+                        if map.get(&session_id).map(|q| q.len()).unwrap_or(0)
+                            >= MAX_QUEUED_PER_SESSION
+                        {
+                            return vec![WireMessage::Error {
+                                session_id: Some(session_id),
+                                message: format!(
+                                    "the queue holds {MAX_QUEUED_PER_SESSION} messages already — send it after the next turn"
+                                ),
+                            }];
+                        }
                         map.entry(session_id.clone()).or_default().push(text);
                         map.get(&session_id).map(|q| q.len()).unwrap_or(0)
                     }
@@ -3026,6 +3125,12 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
             // A steer reaches the RUNNING turn between iterations — the same
             // queue the channel path pushes into (`agent.steer_queue_handle`).
             WireMessage::Steer { session_id, text } => {
+                if operant_core::estop::is_engaged() {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "operant is paused — the message was not sent".to_string(),
+                    }];
+                }
                 let slot = self
                     .handler
                     .as_ref()
@@ -3066,6 +3171,12 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
         Some(self.bus.subscribe(session_id))
     }
 }
+
+/// How many messages one session may park for the next turn (W3-2).
+///
+/// The queue is a `HashMap<session, Vec<String>>` a client can write to over
+/// the socket, so without a bound the daemon's memory is the client's to size.
+const MAX_QUEUED_PER_SESSION: usize = 32;
 
 /// The default number of agent slots the gateway runs (RT-508).
 ///
@@ -5555,6 +5666,7 @@ pub async fn start_gateway(
         let session_handler = std::sync::Arc::new(GatewaySessionHandler {
             handler: Some(std::sync::Arc::clone(&handler)),
             bus: std::sync::Arc::clone(&session_bus),
+            socket_inflight: std::sync::Arc::default(),
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -8146,6 +8258,42 @@ mod pending_permissions_tests {
             unattended: false,
             response_tx: tx,
         }
+    }
+
+    /// iter-2364: the socket may not approve a CHANNEL's pending tool ask.
+    ///
+    /// The pending map is keyed by channel and only channel turns write it, so
+    /// matching by tool-call id alone gave any local process the authority to
+    /// approve a tool waiting for a human on Telegram.
+    #[tokio::test]
+    async fn a_channel_owned_approval_is_refused_on_the_socket() {
+        let _guard = permissions_test_guard();
+        let store = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        store.lock().await.insert(
+            "telegram:42".to_string(),
+            ToolPermissionRequest {
+                response_tx: tx,
+                ..make_request()
+            },
+        );
+        store_pending_permissions(store.clone());
+
+        assert!(
+            !resolve_pending_permission("t-1", true),
+            "a channel's pending ask must not be approvable over the socket"
+        );
+        // And it is still there for the channel to answer.
+        let still = store
+            .lock()
+            .await
+            .get("telegram:42")
+            .map(|r| r.tool_id.clone());
+        assert_eq!(
+            still.as_deref(),
+            Some("t-1"),
+            "the refusal must not consume the request"
+        );
     }
 
     /// Serialises the tests in this module that INSTALL a store.

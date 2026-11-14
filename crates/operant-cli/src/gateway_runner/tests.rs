@@ -821,20 +821,29 @@ fn the_reload_decision_belongs_to_the_slot() {
         source.contains(per_slot.as_str()),
         "each slot must own its loaded-session cell"
     );
-    // The decision must read THIS session's slot, not a fixed one.
-    // The needle is one line's worth, so the formatter cannot split it.
-    let this_slot = ["slot_for(&session_key)", ""].concat();
-    // BOTH the read and the write of the cell must name this session's slot.
-    // The count is over the DECISION'S OWN BLOCK: the needle appears
-    // elsewhere in the file (other slot lookups), so a whole-file count
-    // would pass no matter what the decision read.
-    let start = source
-        .find("let needs_reload =")
-        .expect("the reload decision exists");
-    let block = &source[start..(start + 1200).min(source.len())];
+    // The decision now lives in ONE place, `bind_slot_to_session`, and it takes
+    // the slot as an ARGUMENT — so it can only touch the caller's slot. Both
+    // callers pass their own session's slot: the channel path by key, the
+    // socket path by the session it names. (The old shape inlined the decision
+    // at each turn entry, which is how a shared cell could leak across slots.)
+    let binder = "async fn bind_slot_to_session(";
     assert!(
-        block.matches(this_slot.as_str()).count() >= 2,
-        "the reload decision must read and write the slot of THIS session"
+        source.contains(binder),
+        "the reload decision must live in one slot-taking binder"
+    );
+    let start = source.find(binder).expect("the binder exists");
+    let block = &source[start..(start + 1600).min(source.len())];
+    assert!(
+        block.contains("slot.loaded_session"),
+        "the binder must read and write the SLOT's cell, not a shared one"
+    );
+    assert!(
+        source.contains("bind_slot_to_session(self.slots.slot_for(&session_key)"),
+        "the channel turn must bind the slot of ITS session key"
+    );
+    assert!(
+        source.contains("bind_slot_to_session(slot, &task_session"),
+        "the socket turn must bind the slot of the session it names"
     );
 }
 
@@ -3114,6 +3123,7 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
     let handler = std::sync::Arc::new(GatewaySessionHandler {
         handler: None,
         bus: std::sync::Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     });
     let server = tokio::spawn(operant_core::session_server::run_session_socket(
         handler,
@@ -3281,6 +3291,7 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     };
     // The turn is RUNNING: it holds the slot, and the set names it.
     handler
@@ -3355,8 +3366,51 @@ async fn turn_state<F: FnMut() -> bool>(mut ready: F) -> bool {
 /// The socket used to `acquire` and never `release`, so a session's lock file
 /// outlived its turn and was only reclaimed after six hours: with a cap of one,
 /// ONE socket session exhausted the daemon for the rest of the day.
+///
+/// The claim is held by a `SessionLease`, so the release is its `Drop` — which
+/// is what this pins. A live turn cannot be observed here: with no provider key
+/// a turn ends inside one poll, so the file exists for less than the poll
+/// interval and any read of it is a race.
 #[tokio::test]
 async fn the_session_cap_is_released_when_the_turn_ends() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let active = dir.path().join("active");
+    let tracker = operant_core::active_sessions::ActiveSessionTracker::new(active.clone(), Some(1));
+
+    assert!(tracker.acquire("first").expect("the claim"));
+    assert_eq!(
+        tracker.count().expect("the count"),
+        1,
+        "the claim is on disk"
+    );
+    assert!(
+        !tracker.acquire("second").expect("the cap check"),
+        "with a cap of one, a second session is refused while the first holds it"
+    );
+
+    // The turn ended: its lease dropped, and the cap came back with it.
+    drop(SessionLease {
+        tracker: operant_core::active_sessions::ActiveSessionTracker::new(active.clone(), Some(1)),
+        session_id: "first".to_string(),
+    });
+    assert_eq!(
+        tracker.count().expect("the count"),
+        0,
+        "dropping the lease must give the cap back"
+    );
+    assert!(
+        tracker.acquire("second").expect("the cap check"),
+        "the next session is admitted once the turn is over"
+    );
+}
+
+/// iter-2364: the cap counts RUNNING turns, so a queued prompt holds no slot.
+///
+/// The lease used to be taken at admission and held while the prompt waited for
+/// its slot, so one busy slot could consume the whole cap: four sessions behind
+/// one long turn refused the fifth although three slots were idle.
+#[tokio::test]
+async fn a_queued_prompt_holds_no_cap_slot() {
     use operant_core::session_protocol::WireMessage;
 
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -3370,6 +3424,7 @@ async fn the_session_cap_is_released_when_the_turn_ends() {
     ));
     let handler = GatewaySessionHandler {
         handler: Some(Arc::new(GatewayMessageHandler {
+            // ONE slot: every session queues behind the same turn.
             slots: slot_pool(agent),
             admins: vec![],
             max_concurrent_sessions: Some(1),
@@ -3393,50 +3448,67 @@ async fn the_session_cap_is_released_when_the_turn_ends() {
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     };
-    let prompt = |session: &str| WireMessage::Prompt {
-        session_id: session.to_string(),
-        text: "hello".to_string(),
-    };
-    let _ = operant_core::session_server::SessionHandler::handle(&handler, prompt("first"));
-    // The lock file is the claim, and its name is a hash of the session id, so
-    // the tracker's own count is the honest way to read it.
     let held = || {
         operant_core::active_sessions::ActiveSessionTracker::new(dir.path().join("active"), Some(1))
             .count()
             .unwrap_or(usize::MAX)
     };
-    let started = turn_state(|| held() > 0).await;
-    assert!(started, "the first turn must claim the cap");
-    // With no provider key a real turn retries, so the test ends the turn the
-    // way an operator would: with a cancel.
-    let _ = operant_core::session_server::SessionHandler::handle(
+
+    // A real turn is running in the only slot.
+    let slot = handler
+        .handler
+        .as_ref()
+        .expect("the handler")
+        .slots
+        .slot_for("s1");
+    let _guard = slot.lock.lock().await;
+
+    let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
-        WireMessage::Cancel {
-            session_id: "first".to_string(),
-            turn_id: None,
+        WireMessage::Prompt {
+            session_id: "s1".to_string(),
+            text: "waiting".to_string(),
         },
     );
-    let released = turn_state(|| held() == 0).await;
-    assert!(
-        released,
-        "the cap must be given back when the turn ends — the defect this pins"
-    );
-
-    // And the next session is admitted.
-    let replies = operant_core::session_server::SessionHandler::handle(&handler, prompt("second"));
     assert!(
         replies.is_empty(),
-        "the second session must be admitted once the first turn ended, got {replies:?}"
+        "a prompt for a busy slot is admitted and waits, got {replies:?}"
+    );
+    assert_eq!(
+        held(),
+        0,
+        "a prompt waiting for a slot must hold no cap slot — that is the defect"
+    );
+
+    // And with a turn actually running, the cap still refuses.
+    drop(_guard);
+    operant_core::active_sessions::ActiveSessionTracker::new(dir.path().join("active"), Some(1))
+        .acquire("other-session")
+        .expect("the claim");
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Prompt {
+            session_id: "s2".to_string(),
+            text: "waiting".to_string(),
+        },
+    );
+    assert!(
+        matches!(&replies[..], [WireMessage::Error { message, .. }] if message.contains("limit 1")),
+        "a full cap must still refuse, got {replies:?}"
     );
 }
 
-/// iter-2318: a cancel reaches only the turn that session is running.
+/// iter-2364: a prompt that is only QUEUED can be stopped.
 ///
-/// The interrupt flag belongs to the SLOT, and two sessions share a slot, so a
-/// cancel for a QUEUED session used to stop the neighbour's running turn.
+/// The interrupt flag ends a RUNNING turn; a prompt still waiting for a slot has
+/// no flag to raise, so it is marked in `cancelled_queued` and the turn entry
+/// returns before it runs. Before this, a queued prompt could not be stopped at
+/// all — the client was told "there was no turn to cancel" and the prompt ran
+/// anyway when the slot freed.
 #[tokio::test]
-async fn a_cancel_does_not_stop_another_session_in_the_same_slot() {
+async fn a_queued_prompt_can_be_cancelled() {
     use operant_core::session_protocol::WireMessage;
 
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -3450,9 +3522,7 @@ async fn a_cancel_does_not_stop_another_session_in_the_same_slot() {
     ));
     let handler = GatewaySessionHandler {
         handler: Some(Arc::new(GatewayMessageHandler {
-            // ONE slot: every session lands in it, which is the case a
-            // cross-session cancel gets wrong.
-            slots: slot_pool(Arc::clone(&agent)),
+            slots: slot_pool(agent),
             admins: vec![],
             max_concurrent_sessions: None,
             gateway: tokio::sync::Mutex::new(None),
@@ -3475,55 +3545,131 @@ async fn a_cancel_does_not_stop_another_session_in_the_same_slot() {
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     };
+    // The prompt was admitted and is waiting for a slot: it is NOT in the
+    // running set, and it IS in flight.
     handler
-        .handler
-        .as_ref()
-        .expect("the handler")
-        .running_session
+        .socket_inflight
         .lock()
-        .expect("the lock")
-        .insert("owner".to_string(), 0);
+        .unwrap()
+        .insert("s1".to_string());
 
-    // A NEIGHBOUR asks to cancel. It has no turn, so it must be told so, and
-    // the owner's turn must not be touched.
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
         WireMessage::Cancel {
-            session_id: "neighbour".to_string(),
+            session_id: "s1".to_string(),
+            turn_id: None,
+        },
+    );
+    match replies.as_slice() {
+        [WireMessage::Error { message, .. }] => assert_eq!(
+            message, "the queued turn was cancelled",
+            "a queued prompt must be cancellable, and the answer must say it was queued"
+        ),
+        other => panic!("a cancel must be answered with one error, got {other:?}"),
+    }
+    assert!(
+        handler
+            .handler
+            .as_ref()
+            .expect("the handler")
+            .cancelled_queued
+            .lock()
+            .expect("the lock")
+            .contains("s1"),
+        "the cancel must be marked so the turn entry drops it"
+    );
+
+    // A second cancel has nothing left to stop.
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Cancel {
+            session_id: "s1".to_string(),
             turn_id: None,
         },
     );
     match replies.as_slice() {
         [WireMessage::Error { message, .. }] => assert_eq!(
             message, "there was no turn to cancel",
-            "a cancel for a session with no turn must not touch the neighbour's"
+            "a second cancel must say there was nothing to stop"
         ),
-        other => panic!("a cancel must be answered with one error, got {other:?}"),
+        other => panic!("the second cancel must be answered, got {other:?}"),
+    }
+}
+
+/// iter-2364: the next-turn queue has a bound a client cannot exceed.
+#[tokio::test]
+async fn the_next_turn_queue_is_bounded() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 5 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = GatewaySessionHandler {
+        handler: Some(Arc::new(GatewayMessageHandler {
+            slots: slot_pool(agent),
+            admins: vec![],
+            max_concurrent_sessions: None,
+            gateway: tokio::sync::Mutex::new(None),
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            running_session: std::sync::Mutex::new(HashMap::new()),
+            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cancelled_queued: Default::default(),
+            mcp_manager: operant_core::mcp::McpManager::new(),
+            mcp_server_configs: Vec::new(),
+            skills_root_dir: dir.path().join("skills-absent"),
+            #[cfg(feature = "plugins-wasm")]
+            wasm_plugin_skill_roots: Vec::new(),
+            queue_waits: tokio::sync::Mutex::new(Default::default()),
+            skills_extra_roots: Vec::new(),
+            session_tracker_dir: dir.path().join("active"),
+        })),
+        bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
+    };
+
+    let mut last = String::new();
+    for _ in 0..=MAX_QUEUED_PER_SESSION {
+        let replies = operant_core::session_server::SessionHandler::handle(
+            &handler,
+            WireMessage::Queue {
+                session_id: "s1".to_string(),
+                text: "parked".to_string(),
+            },
+        );
+        if let [WireMessage::Error { message, .. }] = replies.as_slice() {
+            last = message.clone();
+        }
     }
     assert!(
-        !agent.interrupt_flag().is_triggered(),
-        "a neighbour's cancel must not raise the slot's flag — that would stop the owner's turn"
+        last.contains(&format!("{MAX_QUEUED_PER_SESSION} messages already")),
+        "the message past the bound must be refused, got {last:?}"
     );
-
-    // The owner can still stop its own turn.
-    let replies = operant_core::session_server::SessionHandler::handle(
-        &handler,
-        WireMessage::Cancel {
-            session_id: "owner".to_string(),
-            turn_id: None,
-        },
+    assert_eq!(
+        handler
+            .handler
+            .as_ref()
+            .expect("the handler")
+            .next_turn_queue
+            .lock()
+            .expect("the lock")
+            .get("s1")
+            .map(|q| q.len()),
+        Some(MAX_QUEUED_PER_SESSION),
+        "the queue must hold exactly the bound"
     );
-    match replies.as_slice() {
-        [WireMessage::Error { message, .. }] => {
-            assert_eq!(
-                message, "the turn was cancelled",
-                "the owner's cancel lands"
-            )
-        }
-        other => panic!("the owner's cancel must be answered, got {other:?}"),
-    }
-    assert!(agent.interrupt_flag().is_triggered());
 }
 
 /// iter-2318: a client can change session, and is told what it holds.
@@ -3534,6 +3680,7 @@ async fn a_switch_answers_with_the_session_it_switched_to() {
     let handler = GatewaySessionHandler {
         handler: None,
         bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     };
     let replies = operant_core::session_server::SessionHandler::handle(
         &handler,
@@ -3595,6 +3742,7 @@ async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_histor
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
     };
 
     // No client is attached: this is the daemon answering for a session that

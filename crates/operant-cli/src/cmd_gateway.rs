@@ -344,6 +344,12 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
                 "listen_addr": gw.webhooks_addr.as_deref().unwrap_or("localhost:0"),
             },
             "admins": gw.admins,
+            "socket": {
+                "path": operant_core::session_client::default_socket_path()
+                    .display()
+                    .to_string(),
+                "bound": operant_core::session_client::default_socket_path().exists(),
+            },
             "running": running,
             "pid_file": pid_path.display().to_string(),
             "memory": memory_json(runtime),
@@ -427,6 +433,18 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
         }
     );
     println!();
+
+    // The session socket is the daemon's other surface, and `chat --attach`
+    // needs its PATH — which the status never named, so the operator's first
+    // question ("can I attach?") was unanswerable from the tool meant to answer
+    // it.
+    let socket = operant_core::session_client::default_socket_path();
+    let socket_state = if socket.exists() {
+        "bound"
+    } else {
+        "not bound"
+    };
+    println!("Socket:    {} ({socket_state})", socket.display());
 
     match runtime {
         GatewayRuntime::Running { pid, source } => {
