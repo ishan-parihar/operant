@@ -1,4 +1,4 @@
-# Red team + ponytail audit — the session-continuation PROMPT (iter-2253)
+# Red team + ponytail audit — the session-continuation PROMPT (iter-2255)
 
 **Subject:** the session-continuation prompt (`operant continue <id>` and the block that names it) as
 it stands after iters 2165 / 2182 / 2201 / 2216 / 2217.
@@ -47,7 +47,7 @@ the file exists for two completely different reasons:
 So the notice could not tell "you were cut off last time" from "you are in a session right now".
 It said the first one every time.
 
-**Repair (this iteration).** The offer is made once per PROCESS, on the boot iteration only:
+**Repair (iter-2255).** The offer is made once per PROCESS, on the boot iteration only:
 `boot_notice_done` is declared before the loop and set on the first offer. A submit that re-enters
 the loop can no longer re-offer. `App::announce_interrupted_session` itself is unchanged in what it
 says — it still names an interruption — because the only marker that reaches it now is one a
@@ -146,15 +146,33 @@ restart cannot show two contradictory sentences about one close.
 
 | File | Change |
 |---|---|
-| `crates/operant-cli/src/cmd_continue.rs` | `ExitKind` + `state()`; `exit_leftover` (the one block); `CURRENT_SESSION_STATE`; `FORCED_EXIT_STATE`; `print_exit_leftover`; `exit_state` deleted; two new tests (the panic-path headline is neither claim, and the panic hook's wiring/ordering) |
+| `crates/operant-cli/src/cmd_continue.rs` | `ExitKind` + `state()`; `exit_leftover` (the one block); `CURRENT_SESSION_STATE`; `FORCED_EXIT_STATE`; `print_exit_leftover`; `exit_state` deleted; three new tests (the panic-path headline is neither claim, the panic hook's wiring/ordering, and the boot-iteration gate) |
 | `crates/operant-cli/src/tui/adapter_types/tui_app.rs` | `boot_notice_done` declared before the loop and set on the first offer (FINDINGS A + B); the panic hook captures the id/title and calls `print_exit_leftover` after the screen is popped (FINDING C); the teardown print routes through `exit_leftover` |
 | `crates/operant-cli/src/tui/app/mod.rs` | `announce_interrupted_session`'s annotation routes through `exit_leftover` (FINDING D) |
 | `crates/operant-cli/src/tui/app/commands.rs` | `/continue` uses `CURRENT_SESSION_STATE` (FINDING D) |
 
 **Verification (all run on the tree at `origin/main` + this patch, 2026-11-14):**
 `cargo check -p operant-cli --bin operant` clean (the one remaining `bus` warning is pre-existing
-peer code); `cargo test -p operant-cli --bin operant cmd_continue` 9/9; `cargo test -p
+peer code); `cargo test -p operant-cli --bin operant cmd_continue` 10/10; `cargo test -p
 operant-cli --bin operant interrupted` 14/14; `cargo test -p operant-cli --test continue_session`
 9/9. The `telegr[REDACTED]` compile break in `gateway_commands.rs` is pre-existing on `origin/main`
 and blocks the test target in BOTH trees; it was restored locally to run the suites and is NOT part
 of this change.
+
+The full `operant-cli` bin suite is 2486 passed / 6 failed, and the same 6 fail IDENTICALLY at the
+base commit with the patch reverted (2485 passed / 6 failed) — they are in `cmd_channel.rs`,
+`dashboard_server.rs`, `gateway_runner.rs`, `app/commands.rs` and `session_hub.rs`, none of which this
+change touches. The delta is therefore +1 test, +0 failures. Five of the six fail in isolation too;
+`the_posture_command_settles_into_the_agents_cell` passes alone and fails only in the full run, i.e.
+it is an ordering artifact that also predates this patch.
+
+**Mutation proof (both new tests).** Removing `&& !boot_notice_done` from the adapter's consume gate
+fails `the_opening_notice_is_gated_on_the_boot_iteration_only`; removing the `boot_notice_done = true`
+assignment on the offer branch fails the same test. Both mutations were applied and reverted in an
+isolated worktree, so each test is load-bearing rather than merely present.
+
+**Live binary run (the operator's own surface).** The real debug binary was driven against a throwaway
+`HERMES_HOME` (`operant continue`, no TTY): a marker with a title prints `Session — Smoke Test
+Session` plus `operant continue sess_smoke01`; an empty title falls back to the ID; a whitespace-only
+title also falls back (no blank line); an unknown ID is an error, not a silent fallback; a corrupt
+marker does not stop the launch and answers "No sessions found".

@@ -515,7 +515,7 @@ impl TuiApp {
             self.submit_user_message(agent, query).await;
         }
 
-        // (iter-2253) The guard that keeps the opening notice an OPENING
+        // (iter-2255) The guard that keeps the opening notice an OPENING
         // notice. The loop below runs once per submit as well as once per boot,
         // and a turn RE-WRITES the marker at its start — so an unguarded
         // consume fired again after the operator's first message and announced
@@ -599,7 +599,7 @@ impl TuiApp {
             // happens on the real boot path and not on `operant tui debug
             // simulate`, which drives the loop directly.
             //
-            // (iter-2253) The offer is made ONCE, before the first frame — and
+            // (iter-2255) The offer is made ONCE, before the first frame — and
             // this loop runs once per SUBMIT as well as once per boot, so an
             // unguarded `consume_marker()` here read a marker a turn had just
             // re-written and re-announced an interruption for a session the
@@ -609,7 +609,6 @@ impl TuiApp {
                 && !boot_notice_done
                 && let Some(marker) = operant_core::session_interrupted::consume_marker()
             {
-                boot_notice_done = true;
                 // The announcement lives on the App so it is TESTABLE and so
                 // the adapter holds no session logic of its own: the hub
                 // cursor, the status line, AND the copy-pasteable command that
@@ -618,6 +617,10 @@ impl TuiApp {
                 // announced an interruption without ever showing the id, so
                 // there was nothing to copy.
                 self.app.announce_interrupted_session(&marker);
+                // Closed on the OFFER, so the notice cannot repeat in this
+                // process: the same loop drains every SUBMIT and the marker is
+                // re-written at each turn's start (RT-511).
+                boot_notice_done = true;
                 tracing::info!(
                     session_id = %marker.session_id,
                     "Offered an interrupted-session resume from the exit marker"

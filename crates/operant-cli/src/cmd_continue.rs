@@ -503,4 +503,39 @@ mod tests {
             "the leftover must be printed after LeaveAlternateScreen, or the terminal erases it with the frame"
         );
     }
+
+    /// The opening notice must fire ONCE per process, on the boot iteration only.
+    ///
+    /// (iter-2255/2256, the operator's report) The loop that offers the interrupted
+    /// session is the same loop that drains every SUBMIT, and the marker is
+    /// written at every turn START (RT-511) — so an unguarded consume re-offered
+    /// the block after the operator's first message, at OPEN rather than at CLOSE.
+    /// This is the same source-contract shape as the panic-hook test: the gate is
+    /// control flow in another module, so the test pins that the gate EXISTS and
+    /// that it is set on the same branch that offers.
+    #[test]
+    fn the_opening_notice_is_gated_on_the_boot_iteration_only() {
+        let source = include_str!("tui/adapter_types/tui_app.rs");
+        let consume = source
+            .split_once("operant_core::session_interrupted::consume_marker()")
+            .expect("the adapter must consume the marker on the boot path");
+        // The gate is the token immediately BEFORE the consume, on the same `if`.
+        let gate_window = consume
+            .0
+            .rsplit_once("if ")
+            .map(|(_, tail)| tail)
+            .unwrap_or("");
+        assert!(
+            gate_window.contains("!boot_notice_done"),
+            "the marker consume must be gated on the boot iteration, or the block \
+             re-appears above the composer after the operator's first message"
+        );
+        // And the flag must be SET on the offer branch, or the gate never closes.
+        let offer_branch = consume.1.split("}").next().unwrap_or("");
+        assert!(
+            offer_branch.contains("boot_notice_done = true"),
+            "the boot notice must be marked done when it is offered, or the gate \
+             never closes and the notice repeats"
+        );
+    }
 }
