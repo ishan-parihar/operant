@@ -365,6 +365,56 @@ fn two_pastes_of_the_same_shape_are_not_confused() {
     );
 }
 
+#[test]
+fn a_wholesale_text_replacement_cannot_leave_an_orphan_payload() {
+    // RED TEAM 2 (2026-11-14). Every path that REPLACES the buffer wholesale —
+    // suggestion accept, history recall, the command palette, history-search
+    // preview — used to leave `pending_pastes` pointing at the text it had just
+    // replaced. The choke point (`expand_paste_placeholders`) discards an
+    // unclaimed store, so the MODEL never saw a grafted payload; what was at
+    // risk was the composer's own invariant, "the store describes the text".
+    // `replace_text` now drops it. This pins the invariant directly: after a
+    // wholesale replace, no payload survives to be grafted into fresh text.
+    let mut state = PromptInputState::new();
+    state.paste("line one\nline two\nline three\nline four\n");
+    assert_eq!(state.pending_pastes.len(), 1, "the big paste is collapsed");
+    state.replace_text("a different buffer entirely".to_string());
+    assert!(
+        state.pending_pastes.is_empty(),
+        "a wholesale replacement must not keep the old store"
+    );
+    assert!(
+        !state.text.contains("Pasted"),
+        "the replacement text is what is in the buffer"
+    );
+    // And the choke point agrees: the expansion is a no-op.
+    let taken = state.take();
+    assert_eq!(taken, "a different buffer entirely");
+}
+
+#[test]
+fn held_reports_the_paste_without_consuming_it() {
+    // RED TEAM 2 (2026-11-14). Ctrl+Enter (queue) and Enter (steer) read the
+    // composer's text to hand it to the agent, and both read `prompt_input.text`
+    // — the TOKEN. The queue and the steer queue are what the AGENT reads, so a
+    // large paste queued the literal `[Pasted ~5 lines]` and dropped the payload
+    // in the store. `held()` is the non-consuming form of `take()`: the two
+    // disagree today only in consumption, and any path that DELIVERS the
+    // composer's content must use one of them.
+    let mut state = PromptInputState::new();
+    let big = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+    state.paste(big);
+    let held = state.held();
+    assert_eq!(held, big, "the paste is what the operator pasted");
+    assert!(
+        state.text.contains("Pasted"),
+        "held() is not consuming: the token is still on screen"
+    );
+    // take() agrees with held(), then clears.
+    assert_eq!(state.take(), big);
+    assert!(state.text.is_empty(), "take() consumed it");
+}
+
 // ---- compute_typeahead ---------------------------------------------
 
 // Helper constants for tests
@@ -3205,5 +3255,36 @@ fn a_collapse_tells_the_operator_what_happened_and_how_to_expand() {
     assert!(
         notice.contains("expand"),
         "the notice must say how to get the text back, got: {notice}"
+    );
+}
+
+#[test]
+fn a_stale_store_does_not_swallow_a_same_shape_paste() {
+    // The invariant's payoff, pinned: recall wipes the text while a paste is
+    // live (the pre-fix orphan), then the operator pastes a DIFFERENT string of
+    // the SAME shape. The store must not hold the old payload by then, and the
+    // delivered text must be the NEW paste.
+    let mut state = PromptInputState::new();
+    state.paste("old-1\nold-2\nold-3\nold-4\nold-5\n");
+    state.history = vec!["a recalled entry".to_string()];
+    state.history_up();
+    assert!(
+        state.pending_pastes.is_empty(),
+        "recall dropped the store with the text"
+    );
+    state.paste("new-1\nnew-2\nnew-3\nnew-4\nnew-5\n");
+    assert_eq!(
+        state.pending_pastes.len(),
+        1,
+        "only the new paste's payload is held"
+    );
+    let delivered = state.take();
+    assert!(
+        delivered.contains("new-1\nnew-2\nnew-3\nnew-4\nnew-5"),
+        "the new paste is what is delivered: {delivered:?}"
+    );
+    assert!(
+        !delivered.contains("old-1"),
+        "the stale payload did not survive: {delivered:?}"
     );
 }

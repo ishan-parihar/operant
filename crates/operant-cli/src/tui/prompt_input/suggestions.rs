@@ -250,7 +250,19 @@ impl PromptInputState {
     }
 
     /// Replace the full text buffer and move the cursor to the end.
+    ///
+    /// The paste store is dropped with the old text: `text` here is a
+    /// WHOLESALE replacement (suggestion accept, history recall, palette
+    /// pick), and the caller hands in literal characters — it never carries a
+    /// `pending_pastes` store across. Keeping the old store would leave it
+    /// describing a string that is no longer in the buffer, and the next
+    /// `expand_paste_placeholders` would graft a retired payload into fresh
+    /// text. The choke point is `expand_paste_placeholders`, which keeps only
+    /// payloads whose token is present, so this is defence in depth: an
+    /// orphaned store is a correctness hazard in the composer's own invariant
+    /// ("the store describes the text"), not a live model-facing bug.
     pub fn replace_text(&mut self, text: String) {
+        self.pending_pastes.clear();
         self.text = text;
         self.cursor = self.text.len();
         self.history_pos = None;

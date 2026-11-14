@@ -2234,7 +2234,11 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::SHIFT) =>
             {
-                let held = self.prompt_input.text.clone();
+                // `held()`, not `text`: a large paste shows a token in the
+                // composer, and queueing the token would deliver
+                // `[Pasted ~5 lines]` to the agent with the paste still in the
+                // store (red-team audit 2026-11-14).
+                let held = self.prompt_input.held();
                 if held.trim().is_empty() {
                     self.set_status_notice("Nothing to queue — the composer is empty.".to_string());
                 } else {
@@ -2567,7 +2571,10 @@ impl App {
             // Commands never land here — the guard above already took
             // steer/queue and every registered command.
             KeyCode::Enter if self.is_streaming && key.modifiers == KeyModifiers::NONE => {
-                let held = self.prompt_input.text.clone();
+                // `held()` for the same reason as the queue arm above: the
+                // steer queue is what the agent reads, and the token is not
+                // what the operator pasted.
+                let held = self.prompt_input.held();
                 if held.trim().is_empty() {
                     self.set_status_notice("Nothing to steer — the composer is empty.".to_string());
                 } else {

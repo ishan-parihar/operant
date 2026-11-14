@@ -32,6 +32,16 @@ impl PromptInputState {
             }
         }
         if let Some(pos) = self.history_pos {
+            // The recalled entry replaces the text WHOLESALE and carries no
+            // store of its own: an entry is plain text, and the entry we were
+            // browsing may still have had a live paste store behind it. Drop
+            // the store with the text. The orphan this prevents is not a
+            // mis-delivery — the label numbering hands the next paste its own
+            // token, so the payload is never swapped — it is the invariant:
+            // the store is the only thing between `[Pasted ~N lines]` and the
+            // model, and it must not describe a buffer it was never in.
+            // (red-team 2, 2026-11-14; probed, see the audit §2.)
+            self.pending_pastes.clear();
             self.text = self.history[pos].clone();
             self.cursor = self.text.len();
             self.history_recall = Some(self.text.clone());
@@ -58,6 +68,7 @@ impl PromptInputState {
             None => {}
             Some(n) if n + 1 >= self.history.len() => {
                 self.history_pos = None;
+                self.pending_pastes.clear();
                 self.text = self.history_draft.clone();
                 self.cursor = self.text.len();
                 self.history_recall = None;
@@ -68,6 +79,7 @@ impl PromptInputState {
             }
             Some(n) => {
                 self.history_pos = Some(n + 1);
+                self.pending_pastes.clear();
                 self.text = self.history[n + 1].clone();
                 self.cursor = self.text.len();
                 self.history_recall = Some(self.text.clone());

@@ -15895,3 +15895,134 @@ fn the_session_label_is_none_without_a_title_or_a_prompt() {
     let app = make_app();
     assert!(app.session_label().is_none());
 }
+
+// ---- red team 2 regression tests -----------------------------------
+
+/// RED TEAM 2 (2026-11-14). Ctrl+Enter (queue) and Enter (steer) hand
+/// `prompt_input.text` to the AGENT, and for a large paste that string is the
+/// collapsed token. The model read `[Pasted ~5 lines]` while the payload sat
+/// unclaimed in the store — the 2026-10-13 model-facing bug, reintroduced by
+/// every new surface that delivers composer text. `held()` is the
+/// non-consuming delivery form of `take()`; both arms now use it.
+#[test]
+fn ctrl_enter_queues_the_paste_not_the_token() {
+    let big = "one\ntwo\nthree\nfour\nfive\n";
+    let mut app = make_app();
+    let queue: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+    app.is_streaming = true;
+    app.prompt_input.paste(big);
+    assert!(
+        app.prompt_input.text.contains("Pasted"),
+        "setup: the composer shows the token"
+    );
+
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+
+    assert!(!submitted, "Ctrl+Enter must not submit while streaming");
+    assert!(
+        queue.try_lock().unwrap().is_empty(),
+        "a QUEUED message must not reach the agent's steer queue"
+    );
+    assert_eq!(
+        app.next_turn_queue,
+        vec![big.to_string()],
+        "the paste itself must land in the next-turn queue, not the token"
+    );
+    assert!(
+        app.prompt_input.text.is_empty(),
+        "a successful queue consumes the composer and its store"
+    );
+    assert!(
+        app.prompt_input.pending_pastes.is_empty(),
+        "the store rides with the text"
+    );
+}
+
+/// The steer arm reads the same composer text and has the same failure mode.
+#[test]
+fn enter_steers_the_paste_not_the_token() {
+    let big = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+    let mut app = make_app();
+    let queue: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+    app.is_streaming = true;
+    app.prompt_input.paste(big);
+
+    let submitted = app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(!submitted, "Enter while streaming steers, never submits");
+    let held = queue.try_lock().unwrap().clone();
+    assert_eq!(
+        held,
+        vec![big.to_string()],
+        "the steer queue must carry the paste, not `[Pasted ~5 lines]`"
+    );
+}
+
+/// RED TEAM 2 (2026-11-14). The invariant behind every wholesale text writer:
+/// the paste store describes the text, so no payload can outlive the token that
+/// claims it. Enumerate the writers an operator reaches; the choke point
+/// (`drop_missing_paste_placeholders`, run from `refresh_prompt_input`) and
+/// `replace_text` keep it.
+#[test]
+fn no_wholesale_text_writer_can_leave_an_orphan_payload() {
+    let big = "1\n2\n3\n4\n5\n";
+    let writers: Vec<(&str, Box<dyn Fn(&mut PromptInputState)>)> = vec![
+        (
+            "replace_text",
+            Box::new(|s: &mut PromptInputState| s.replace_text("replaced".to_string())),
+        ),
+        (
+            "history_up",
+            Box::new(|s: &mut PromptInputState| {
+                s.history = vec!["an entry".to_string()];
+                s.history_up();
+            }),
+        ),
+        (
+            "restore_stash",
+            Box::new(|s: &mut PromptInputState| {
+                s.stash = Some(("stashed".to_string(), Vec::new()));
+                s.restore_stash();
+            }),
+        ),
+        (
+            "undo_burst",
+            Box::new(|s: &mut PromptInputState| {
+                for _ in 0..9 {
+                    s.record_edit();
+                }
+                s.undo_burst();
+            }),
+        ),
+        ("clear", Box::new(|s: &mut PromptInputState| s.clear())),
+        (
+            "take",
+            Box::new(|s: &mut PromptInputState| {
+                let _ = s.take();
+            }),
+        ),
+    ];
+
+    for (name, writer) in writers {
+        let mut s = PromptInputState::new();
+        s.paste(big);
+        assert_eq!(s.pending_pastes.len(), 1, "{name}: setup");
+        writer(&mut s);
+        // BEFORE the choke point: at the moment the operator can act — the
+        // frame the writer produced — the store must already describe the
+        // text. If it does not, the writer left an orphan, and the next
+        // `expand_paste_placeholders` would graft a retired payload into
+        // whatever the operator types next. `drop_missing_paste_placeholders`
+        // is the repair for one frame later, not the invariant.
+        assert!(
+            s.pending_pastes
+                .iter()
+                .all(|(placeholder, _)| s.text.contains(placeholder.as_str())),
+            "{name}: the store describes text that is no longer there"
+        );
+    }
+}

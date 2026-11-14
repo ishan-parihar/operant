@@ -128,6 +128,22 @@ impl PromptInputState {
         self.vim_search_buf.clear();
     }
 
+    /// The composer's text as the operator means it, WITHOUT consuming it.
+    ///
+    /// `self.text` is what the operator SEES, and for a large paste that is the
+    /// token: a path that delivers the composer's content to the AGENT — the
+    /// next-turn queue, the steer queue — must read this or `take()`, never
+    /// `self.text`. Reading `self.text` is how `[Pasted ~5 lines]` reached the
+    /// model with the payload still sitting in the store (red-team 2,
+    /// 2026-11-14; RT-566).
+    ///
+    /// The render layer still reads `self.text`, deliberately: the token is what
+    /// the operator is meant to see.
+    pub fn held(&self) -> String {
+        let text = expand_paste_placeholders(&self.text, &self.pending_pastes);
+        super::history::sanitize_pasted_text(&text)
+    }
+
     /// Take the current text, clearing the input.
     /// Large pastes are shown as placeholders; the taken text carries the
     /// real content (2026-10-13: the store was never read, so the model got
