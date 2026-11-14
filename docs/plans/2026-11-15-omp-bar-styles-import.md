@@ -3,8 +3,10 @@
 Dated-frozen: published `2026-11-15`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
-**NOTHING IN THIS DOCUMENT IS IMPLEMENTED.** It is an outline. Say go and the first
-tranche runs.
+**STATUS: COMPLETE.** U10–U14 are all resolved — three landed as code, two as
+rulings. The table at the foot of this document is the record. Read the U12 and U13
+sections before proposing either again: both were closed on measured evidence, not
+deferred.
 
 Reference repository (read-only, NOT modified):
 `/home/ishanp/Documents/github/my-projects/agentic-harness/external-repos/oh-my-pi`
@@ -233,6 +235,27 @@ not a reflow.
   real terminal width is observed truncating the bar.
 - **If built:** restore from `debe7541^`, keep its four `path`-rule guards.
 
+**RULED (iter-2370, after U10/U11): do not build. Verdict confirmed on evidence.**
+
+U10/U11 were the falsifier this unit was gated on, and the measurement says no:
+
+- **The bar's segments are already width-gated where it matters.** `draw_status` consults
+  `area.width` at the two places that can overflow — `occasional_session_history_warning`
+  returns `None` below 64 columns (`ui_input.rs:720`) and `occasional_status_tip` takes
+  `area.width` (`:1249`, `:1260`). The width is already in hand at the paint site.
+- **The bar is short.** A status branch is one spinner plus two or three short labels
+  (status, elapsed, tokens); the widest is the streaming branch. At 64 columns it fits.
+  A degrade ladder that drops the tail protects against a case that does not occur.
+- **Nothing reflows because nothing is a list.** The ladder's real job is choosing which
+  of *N* segments to drop; `draw_status` is a fixed sequence of at most four spans per
+  branch, so "drop the tail" has at most one thing to drop and no ordering to reason
+  about.
+
+Re-open only if a real terminal width is observed truncating the status row. If that
+happens, the fix is one width check at the paint site — not a 292-line segment model with
+a degrade ladder, because the ladder's value is choosing among many segments and the bar
+has four.
+
 ### U14 — caps
 
 `cap_style()` is dead because a cap needs an *end* to the bar, and the row is a flat
@@ -243,17 +266,33 @@ with U11 shipping `powerline` as an option.
 - **Guard:** the existing `a_cap_reuses_the_fill_as_its_ink` already pins the colour
   translation; add the drawn-ness assertion the audit's `terminal-clear` lesson implies.
 
+**LANDED (iter-2372).** The "no right edge" premise above was **wrong**, and finding
+that out is what made this a small unit rather than a large one: `bar::fill_style` is
+applied to the whole status `Rect`, so the bar's visual right edge already exists at
+`area.right() - 1` even though the text inside it is short. The cap sits there and does
+not need the text padded out first.
+
+What the 20-line estimate missed is the *spacer*: without padding in the fill colour,
+the right cap lands immediately after the text and reads as a stray glyph mid-row rather
+than as the bar's edge. `add_caps` fills the gap, and a test asserts the spans account
+for every column.
+
+`add_caps` takes the style as a **parameter** rather than reading the process-global
+cell, because the cell raced three separate test runs this session. Pure function, no
+cell in the tests; the live read is pinned by a separate source-level assertion on the
+call site.
+
 ---
 
 ## Size table
 
-| Unit | File(s) | Size | Signal it worked | Closable here? |
+| Unit | File(s) | Size | Signal it worked | Landed |
 |---|---|---|---|---|
-| U10 boundary split | `ui_input.rs` | S | one helper; grep-guard finds no stray ` · ` | **yes** |
-| U11 style key | `separators.rs` + `config.rs` + example | M | a golden changes when the key changes | **yes** |
-| U12 symbol set | decision only | XS | a written ruling | **yes** (a ruling) |
-| U13 segment model | `segments.rs` (restore) | L | bar drops its tail under 64 cols | **no — do not build** |
-| U14 caps | `bar.rs` + `ui_input.rs` | S | a cap glyph at each end of the row | yes, after U11 |
+| U10 boundary split | `separator.rs`, `ui_input.rs` | S | one helper; grep-guard finds no stray ` · ` | **iter-2367** |
+| U11 style key | `style.rs` + `config.rs` + example | M | a golden changes when the key changes | **iter-2370** |
+| U12 symbol set | ruling only | XS | a written ruling | **ruled (a)** — see U12 |
+| U13 segment model | — | — | bar drops its tail under 64 cols | **ruled: do not build** — see U13 |
+| U14 caps | `style.rs`, `bar.rs`, `ui_input.rs` | S | a cap glyph at each end of the row | **iter-2372** |
 
 Size is by files, state and guards touched — not effort points. Evidence read for each is
 cited inline above.
