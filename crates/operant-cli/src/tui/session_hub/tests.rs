@@ -1295,6 +1295,33 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     assert_eq!(hub.first_prompt_for("s1"), None);
 }
 
+/// The filter tags must read as WORDS, not as single letters.
+///
+/// (2026-11-14, live defect: "the session-picker showing up garbled text for
+/// its filter tags") The first ladder reached the one-letter tier at 120
+/// columns and rendered "a 500 n 0 w 0 r 500 i 0 c 0 b 500" — unreadable. The
+/// short words with counts only on the active tab fit at 41 cells, so they win.
+#[test]
+fn the_filter_tags_are_readable_words_at_120_columns() {
+    let mut hub = SessionHubState::new();
+    hub.set_store_total(Some(3302));
+    hub.replace_rows(realistic_rows());
+    let (list, _) = hub_rows_at(120, realistic_rows());
+    let joined = list.join("\n");
+    let tab_line = joined
+        .lines()
+        .find(|l| l.contains("all") || l.contains(" a "))
+        .unwrap_or_default();
+    assert!(
+        !tab_line.contains("a 500 n 0 w"),
+        "the one-letter tier must not reach the operator's screen: {tab_line:?}"
+    );
+    assert!(
+        tab_line.contains("need"),
+        "the short words must be shown: {tab_line:?}"
+    );
+}
+
 // ---- (2026-11-14, audit findings 1, 2, 16, 17) the geometry at REAL counts ----
 
 /// 500 rows, the size the hub actually loads. The counts are then three

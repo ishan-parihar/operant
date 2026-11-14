@@ -629,10 +629,20 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
             (LabelTier::Short, 1, true, true)
         } else if total_width(LabelTier::Short, 1, false, true) <= width {
             (LabelTier::Short, 1, false, true)
+        } else if total_width(LabelTier::Short, 1, false, false) <= width {
+            // (2026-11-14, live defect: "garbled text for its filter tags")
+            //
+            // The SHORT labels with counts on the ACTIVE pill only, BEFORE the
+            // one-letter tier. The first ladder put the letters first, and at
+            // the operator's 120-column frame the bar rendered
+            // "a 500 n 0 w 0 r 500 i 0 c 0 b 500" — seven single letters,
+            // which reads as garbled text, not as filter names. This rung
+            // measures 41 cells against the pane's 46 and shows real words:
+            // "all 500 need work ready idle cur br".
+            (LabelTier::Short, 1, false, false)
         } else if total_width(LabelTier::Min, 1, false, true) <= width {
-            // The rung that holds at the common width with real counts: seven
-            // one-letter labels, their counts, one-column gaps and no sort
-            // clause — measured 35 cells against the pane's 46.
+            // The last rung before the collapse: one-letter labels WITH their
+            // counts. Only reached on a pane too narrow for the words.
             (LabelTier::Min, 1, false, true)
         } else if total_width(LabelTier::Min, 1, false, false) <= width {
             // The seven labels with counts on the ACTIVE pill only. This comes

@@ -65,9 +65,23 @@ pub fn migrate(conn: &Connection, db_name: &str, migrations: &[&str]) -> anyhow:
     }
 
     if current > target {
+        // (2026-11-14, live defect) The message used to blame the DATABASE.
+        //
+        // The operator hit this at startup: "schema for sessions is at version
+        // 4 but only 3 migrations are declared". Read plainly that says the
+        // database is wrong, so the instinct is to delete or downgrade it —
+        // which destroys every session. The truth is the opposite: THIS
+        // BINARY is older than the database it opened, because a newer build
+        // had already migrated the file. The remedy is to update the binary,
+        // never to touch the data.
         anyhow::bail!(
-            "schema for {db_name} is at version {current} but only {target} migrations are \
-             declared (refusing to downgrade or run an old migration against a newer DB)"
+            "the operant BINARY is older than the {db_name} database \
+             (database schema v{current}, this build knows {target}). \
+             A newer operant already upgraded this database. \
+             Update the binary — `operant update`, or rebuild and reinstall — \
+             and run it again. Do NOT delete or downgrade the database: it holds \
+             every session. \
+             (refusing to run an older schema against a newer database)"
         );
     }
 
