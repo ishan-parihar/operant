@@ -75,6 +75,7 @@ fn test_agent(client: OneShotClient) -> OperantAgent {
     // Non-streaming: the mock serves the `chat` path, matching the
     // circuit-breaker harness's shape.
     let config = AgentConfig {
+        retry: Default::default(),
         advertised_skills_token_budget: 0,
         stream: false,
         ..AgentConfig::default()

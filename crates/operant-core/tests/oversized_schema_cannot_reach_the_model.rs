@@ -486,6 +486,7 @@ fn text_response() -> ChatResponse {
 
 fn config() -> AgentConfig {
     AgentConfig {
+        retry: Default::default(),
         advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),

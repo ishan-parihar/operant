@@ -219,6 +219,7 @@ fn varying_calls(tool: &str, n: usize) -> Vec<ChatResponse> {
 
 fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        retry: Default::default(),
         advertised_skills_token_budget: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
@@ -249,7 +250,6 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         skill_nudge_interval: 0,
         memory_review_interval: 0,
         max_retries: 3,
-        retry: operant_core::config::RetrySettings::default(),
         tool_search: Default::default(),
         guardrail_exempt_tools: Vec::new(),
         ponytail: Default::default(),
