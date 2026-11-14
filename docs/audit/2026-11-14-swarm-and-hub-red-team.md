@@ -1,5 +1,36 @@
 # Red-team audit — the subagent swarm and the command-center plan (2026-11-14)
 
+> **STATUS (updated 2026-11-14, after the fix round). Read this before acting
+> on any row.** This document was written against `main @ 651bc708`. Nine
+> iterations have landed since; the rows below are NOT all still open, and a
+> slice that re-fixes a closed row is the waste this header exists to prevent.
+>
+> | row | state | landed as |
+> |---|---|---|
+> | 1 (child cwd, no isolation switch) | **MISFRAMED, no code change** — codex never changes a delegated turn's cwd either; its isolation moves capability *roots*, not the directory. operant refuses a differing cwd with the reason, which is a defensible middle. The real gap (no typed isolation value) is not a row here. | — |
+> | 2 (zero-tool child says nothing) | **CLOSED before this round** — `flag_no_tools` and the child-prompt NOTE already existed at 651bc708. | pre-existing |
+> | 3 (background delegation is RAM-only) | **CLOSED** — opt-in JSON ledger, pending records recovered as failed | iter-2331 |
+> | 4 (foreground swarm invisible) | **HALF CLOSED, residual named** — the transcript card is reachable now (it was gated on a tool named `swarm` that nothing registers); the inline strip and the full page are still empty stubs, and the dead `swarm` render arms are still there | iter-2325, residual open |
+> | 5 (swarm output uncapped) | **RESTATED, not closed** — the claim was wrong: `agent::MAX_DELEGATE_RESULT_LEN` caps a `delegate_task` result at 32 KiB. The residual is that 32 KiB is 8x jcode's report and nothing summarises. | open |
+> | 6 (`max_global_workers` has no caller; no `[delegation]` block) | **CLOSED before this round** — `main.rs` calls the setter and `operant.example.toml` documents all five keys. | pre-existing |
+> | 7 (`max_iterations` documented 90, enforced 50) | **CLOSED before this round** — both are 50. | pre-existing |
+> | 8 (`agent://<name>` does not exist) | **CLOSED** — AGENTS.md rule 3 now names the agent feed | iter-2326 |
+> | 9, 16 (`communicate` / `task` / `swarm` map to nothing) | **CLOSED as a mapping, open as a deletion** — `communicate` is gone from `tool_display.rs` entirely; the three `swarm` render arms are still dead code | iter-2325, residual open |
+> | 10 (`Live` is a process fact in a DB projection) | open — by design; it is why the count push-down cannot be pure SQL | open |
+> | 11 (tab counts were window counts) | **CLOSED before this round** | pre-existing |
+> | 12, 13 (preview read the whole session; no first prompt) | **CLOSED before this round** | pre-existing |
+> | 14 (`Show more` does not exist) | **CLOSED before this round** — landed as iter-2235 | pre-existing |
+> | 15 (`Archived` has no tab) | open — a decision, not a bug | open |
+> | 17 (search haystack includes an always-NULL field) | **CLOSED before this round** | pre-existing |
+> | 18 (export paths still load whole sessions) | open — correct for an export; recorded so nobody "fixes" it | open |
+> | 19 (the plan's own record was stale in two rows) | **CLOSED before this round** | pre-existing |
+> | 20 (the gate can report green without running) | **CLOSED before this round** — `scripts/cargo-bin.sh` resolves a cargo that starts | pre-existing |
+>
+> Findings 11 and 12 of the fix round are not in this table because they were
+> found by that round, not by this audit: the three silent clamps (iter-2330)
+> and the constant that contradicted the shipped default (iter-2330). The
+> fleet-protocol rows the round closed are in `AGENTS.md`, not here.
+
 Scope: (1) the delegation/subagent machinery as it stands, measured against the
 two reference implementations the port names (jcode's `jcode-swarm-core`, codex's
 `codex_delegate` + agent roles + message board); (2) the execution of
