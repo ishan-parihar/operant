@@ -3059,6 +3059,19 @@ def cmd_close(args) -> None:
         checks.append((item, None))
     for text, ok in checks:
         print(f"  [{'x' if ok else ' ' if ok is False else '?'}] {text}")
+    # A judgement line that nothing acts on is decoration. `red` used to be set
+    # only by lint, the secret scan and the build gate, so `close --no-gate` with
+    # an unwritten worklog printed "[ ] worklog entry written" and then
+    # "close: green", exit 0 — MEASURED 2026-11-14: the handover existed only in
+    # the agent's session, and the command that is supposed to force it reported
+    # success. An unchecked `[ ]` is now red. The `[?]` core-checklist rows stay
+    # advisory: they have no mechanical falsifier, which is what the column says.
+    unchecked = [text for text, ok in checks if ok is False]
+    red = red or bool(unchecked)
+    if unchecked:
+        print("\nhandover incomplete — these are unchecked:")
+        for text in unchecked:
+            print(f"  [ ] {text}")
     if misplaced:
         print("\nnot committed — these are in no role's location:")
         for p in sorted(misplaced):
