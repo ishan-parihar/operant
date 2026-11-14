@@ -10,3 +10,4 @@
 | skill-directory-roots-004 | done | Add the doctor row: resolved roots, rejected roots with reasons, dead symlinks, advertised vs dropped | — | [2026-11-14] iter-2283 (1b13a696): `skills` category on the one engine list |
 | skill-directory-roots-005 | done | Land the resolver + config keys + recursive walk + / grammar (iter-2260, pushed cdd16b38) | — | [2026-11-14] crates/operant-core/src/skills.rs |
 | skill-directory-roots-006 | done | Move the seeder's `collect_skill_dirs` onto the shared bounded walk (iter-2272, 2b6a02e1) | — | [2026-11-14] crates/operant-cli/src/cmd_skills.rs |
+| skill-directory-roots-007 | done | Validate every per-surface claim in the plan against the code with a mutation-proven test | — | [2026-11-14] crates/operant-cli/src/tui/prompt_input/typeahead.rs |
