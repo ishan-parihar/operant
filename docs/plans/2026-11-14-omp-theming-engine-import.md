@@ -3,9 +3,11 @@
 Dated-frozen: published `2026-11-14`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
-**Resume here (2026-11-14, after U1/U2 landed):** U1 and U2 are DONE and on `origin/main`
-(iter-2265, iter-2270). U3 is DONE (iter-2274) and its shape changed from what is written here — read
-"U3 redesign" below for the constraint it had to satisfy. U4 is next.
+**Resume here — THE PLAN IS COMPLETE.** All nine units are on `origin/main`. The table
+below is the record. Two things a reader must know before trusting any single section:
+U3's shape changed (read "U3 redesign"), and U4/U5/U9 each discovered that
+`role_color` returns the frozen default by design, so a guard that asserts the
+*configured* colour at the accessor is testing the wrong layer.
 
 Reference repository (read-only, NOT modified):
 `/home/ishanp/Documents/github/my-projects/agentic-harness/external-repos/oh-my-pi`
@@ -62,12 +64,12 @@ its own palette, and pins one foreign theme instead.
 | U1 — `[tui.colors]` writer for the 22-role palette | **DONE** | iter-2265 |
 | U2 — theme selection total, default is a real theme | **DONE** | iter-2270 |
 | U3 — `md*` / `syntax*` / diff role keys | **DONE** | iter-2274 |
-| U4 — route markdown helpers through the roles | **NEXT** | — |
-| U5 — map syntect scopes onto theme syntax roles | pending | — |
-| U6 — theme the diff colours | pending | — |
-| U7 — bar fill + separator vocabulary | pending | — |
-| U8 — segment model + presets + overflow degrade | pending | — |
-| U9 — one meter primitive | pending | — |
+| U4 — route markdown helpers through the roles | **DONE** | iter-2277 |
+| U5 — map syntect scopes onto theme syntax roles | **DONE** | iter-2282 |
+| U6 — theme the diff colours | **DONE** | iter-2287 |
+| U7 — bar fill + separator vocabulary | **DONE** | iter-2290 |
+| U8 — segment model + presets + overflow degrade | **DONE** | iter-2294 |
+| U9 — one meter primitive | **DONE** | iter-2302 |
 
 ### What U1 actually landed
 
@@ -362,3 +364,40 @@ Recorded because they cost real time and are not in AGENTS.md:
 - 3 `operant-core` clippy warnings (`agent/turn_context.rs:331`, `agent/events.rs:786`,
   `gateway_runner.rs:2662`).
 - `origin/main` is not rustfmt-clean.
+---
+
+## What shipped, and the two things that are deliberately NOT done
+
+All nine units landed. Final state:
+
+| Surface | Before | After |
+|---|---|---|
+| markdown body / heading / code / link | 12 `const fn` literals | 3 read roles (U4); 8 still literal because their value is not a role default |
+| code syntax | syntect pinned to `base16-ocean.dark` | syntect parses, the palette colours (U5) |
+| diff added / removed | hardcoded literals | `ToolDiffAdded` / `ToolDiffRemoved` (U6) |
+| status bar | no fill, 51 ad-hoc ` · ` joins | `StatusLineBg` fill + 7-style separator table + segment model with an ordered degrade (U7, U8) |
+| meter | 3 implementations, 3 rounding rules | one (U9) |
+| role vocabulary | 22 roles, no writer | 43 roles, `[tui.colors]` writer (U1, U3, U7) |
+
+**NOT DONE, on purpose:**
+
+1. **`draw_status` still assembles its bar by hand.** U7/U8 built and tested the
+   vocabulary and the model; converting the 51 literals is a rewiring that would
+   change what the bar looks like at every width, and doing it inside the unit
+   that introduced the vocabulary would have mixed two reviews. The modules
+   carry a documented `allow(dead_code)` saying exactly this, rather than
+   pretending to be wired.
+2. **Eight markdown helpers keep their literals** (U4): `code_bg`, `math_fg`,
+   `bold_color`, the three heading depths, `md_dim`, `html_fg`, `text_color`.
+   Pointing them at a role changes rendered pixels, which is an appearance
+   decision, not a wiring step. `html_fg` must never be pointed at
+   `ToolDiffContext` even though the values match — HTML passthrough is not diff
+   context.
+
+## The one guard that keeps earning
+
+`no_two_roles_share_a_default` (U3) exists because `configured_native_color`
+attributes a cell to the FIRST role whose frozen default matches. It caught three
+collisions during design and would have caught the `StatusLineBg` seed omission
+if `seed_covers_every_role` had not. Any future role addition should assume it
+will fire.
