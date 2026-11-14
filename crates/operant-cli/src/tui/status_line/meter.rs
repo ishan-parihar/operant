@@ -40,16 +40,24 @@ impl MeterStyle {
 /// full meter rather than panicking on a `repeat` underflow — which is what the
 /// three hand-written versions each had to remember to do separately.
 pub fn meter(fraction: f32, width: usize, style: MeterStyle) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let clamped = fraction.clamp(0.0, 1.0);
-    let filled = ((clamped * width as f32).round() as usize).min(width);
-    let empty = width - filled;
-
+    let (filled, empty) = meter_cells(fraction, width);
     std::iter::repeat_n(style.filled, filled)
         .chain(std::iter::repeat_n(style.empty, empty))
         .collect()
+}
+
+/// How many cells of `width` are filled and empty for `fraction`.
+///
+/// This is the whole decision, separated from rendering so a caller that needs
+/// to colour the two halves differently (the context overlay does) does not
+/// have to build a string and count its characters back — which is what
+/// `context_viz` did, two allocations and a scan to recover a pair of numbers.
+pub fn meter_cells(fraction: f32, width: usize) -> (usize, usize) {
+    if width == 0 {
+        return (0, 0);
+    }
+    let filled = ((fraction.clamp(0.0, 1.0) * width as f32).round() as usize).min(width);
+    (filled, width - filled)
 }
 
 /// [`meter`] for a percentage in 0–100, which is how two of the three call sites
@@ -114,6 +122,33 @@ mod tests {
     #[test]
     fn a_zero_width_meter_is_empty() {
         assert_eq!(meter(0.5, 0, MeterStyle::BLOCK), "");
+    }
+
+    /// The counts are the whole decision, so they must agree with the rendering
+    /// and never exceed the width. This is what lets context_viz colour the two
+    /// halves separately without building a string to count back.
+    #[test]
+    fn the_counts_agree_with_the_rendered_meter() {
+        for width in [0usize, 1, 5, 40] {
+            for fraction in [-1.0f32, 0.0, 0.3, 0.5, 0.75, 1.0, 3.0] {
+                let (filled, empty) = meter_cells(fraction, width);
+                assert_eq!(
+                    filled + empty,
+                    width,
+                    "fraction {fraction} at width {width}"
+                );
+                let rendered = meter(fraction, width, MeterStyle::BLOCK);
+                assert_eq!(rendered.chars().count(), filled + empty);
+                assert_eq!(
+                    rendered
+                        .chars()
+                        .filter(|c| *c == MeterStyle::BLOCK.filled)
+                        .count(),
+                    filled,
+                    "the rendered fill must match the reported count"
+                );
+            }
+        }
     }
 
     /// The style is honoured, not hardcoded to the block pair.

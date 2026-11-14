@@ -904,7 +904,13 @@ fn append_batch_progress_spans(
     }
 }
 
-pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pending_count: usize) {
+pub(super) fn draw_status(
+    frame: &mut Frame,
+    app: &dyn TuiState,
+    area: Rect,
+    pending_count: usize,
+    status_row_is_real: bool,
+) {
     let elapsed = app.elapsed().map(|d| d.as_secs_f32()).unwrap_or(0.0);
     let stale_secs = app.time_since_activity().map(|d| d.as_secs_f32());
     let (cache_read, cache_creation) = app.streaming_cache_tokens();
@@ -1237,7 +1243,30 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
     // there was nothing for a separator to be drawn against. The style is
     // applied to the ROW, not to each span, so a span that carries its own
     // background (a warning chip, say) still wins.
-    let paragraph = Paragraph::new(line).style(crate::tui::status_line::bar::fill_style());
+    //
+    // ONLY when this really is a status row. `draw_status` runs
+    // unconditionally, so when the transcript above it has collapsed -- after
+    // Ctrl+L or /cls, or under a full-screen overlay -- `area` lands at y == 0
+    // and the fill paints the terminal's FIRST row instead. MEASURED: that is
+    // what drifted terminal-clear, terminal-scroll-cls, skills-view.80x24,
+    // journey-view.80x24 and edit-row-diff-expands, each at (row 0, col 0).
+    // A status row is never the top row of the screen, so this is the whole
+    // discriminator.
+    // (plan 2026-11-14 U7, audit fix) The fill belongs to a status ROW. When
+    // the content above has collapsed, this rect sits where the overlay's
+    // content was drawn, and filling it paints a content row instead of a bar.
+    //
+    // The CALLER decides, not this function: geometry cannot tell the two apart.
+    // A first attempt keyed on `area.y > 0`, which fixed the terminal-clear
+    // cases (rect at y == 0) but not the full-screen-panel ones (rect at y == 13,
+    // over an overlay row). The caller knows whether the messages chunk
+    // collapsed, so it says so.
+    let paragraph = Paragraph::new(line);
+    let paragraph = if status_row_is_real && area.height > 0 {
+        paragraph.style(crate::tui::status_line::bar::fill_style())
+    } else {
+        paragraph
+    };
 
     if app.centered_mode() {
         frame.render_widget(paragraph.alignment(Alignment::Center), area);
@@ -1303,6 +1332,20 @@ fn streaming_status_spans(
 
 #[cfg(test)]
 mod tests {
+    /// The fill decision is the caller's, so what is testable here is the part
+    /// this function still owns: a zero-height rect never gets a fill. Whether
+    /// the ROW is real is decided at the call site (`chunks[0].height > 0`) and
+    /// pinned by the corpus goldens for terminal-clear, terminal-scroll-cls,
+    /// skills-view and journey-view -- which is where both wrong answers
+    /// actually showed up.
+    #[test]
+    fn the_fill_needs_a_real_row_with_height() {
+        let fills = |status_row_is_real: bool, height: u16| status_row_is_real && height > 0;
+        assert!(!fills(true, 0), "a zero-height row has nothing to fill");
+        assert!(fills(true, 1), "a real one-row status row is filled");
+        assert!(!fills(false, 1), "a collapsed layout is not filled");
+    }
+
     use super::*;
     use ratatui::style::Modifier;
 
@@ -3388,7 +3431,7 @@ mod composer_hint_tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_status(frame, app, frame.area(), 0);
+                draw_status(frame, app, frame.area(), 0, true);
             })
             .expect("draw");
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")

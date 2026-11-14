@@ -93,30 +93,20 @@ pub fn render_context_viz(
             .add_modifier(Modifier::BOLD),
     )]));
 
-    // (plan 2026-11-14 U9) The cell COUNT comes from the shared meter, so this
+    // (plan 2026-11-14 U9) The cell COUNTS come from the shared meter, so this
     // bar and the two others agree on rounding. The spans below still colour the
-    // two halves separately -- that per-cell colouring is this widget's point.
-    let bar = crate::tui::status_line::meter::meter(
-        ctx_pct,
-        bar_width,
-        crate::tui::status_line::meter::MeterStyle::BLOCK,
-    );
-    let filled = bar
-        .chars()
-        .filter(|c| *c == crate::tui::status_line::meter::MeterStyle::BLOCK.filled)
-        .count();
-    let empty = bar_width - filled;
+    // two halves separately -- that per-cell colouring is this widget's point,
+    // which is why this takes the counts rather than the rendered string.
+    let style = crate::tui::status_line::meter::MeterStyle::BLOCK;
+    let (filled, empty) = crate::tui::status_line::meter::meter_cells(ctx_pct, bar_width);
     lines.push(Line::from(vec![
         Span::styled(" [", Style::default().fg(theme_colors::muted())),
         Span::styled(
-            crate::tui::status_line::meter::MeterStyle::BLOCK
-                .filled
-                .to_string()
-                .repeat(filled),
+            std::iter::repeat_n(style.filled, filled).collect::<String>(),
             Style::default().fg(ctx_color),
         ),
         Span::styled(
-            "\u{2591}".repeat(empty),
+            std::iter::repeat_n(style.empty, empty).collect::<String>(),
             Style::default().fg(theme_colors::muted()),
         ),
         Span::styled(
@@ -151,14 +141,21 @@ pub fn render_context_viz(
                 } else {
                     theme_colors::success()
                 };
-                let f = ((p * bar_width as f32) as usize).min(bar_width);
-                let e = bar_width - f;
+                // (plan 2026-11-14 U9) This was the FOURTH hand-written meter:
+                // it truncated while the shared meter rounds, so the two halves
+                // of the same overlay disagreed about how many cells a fraction
+                // earns.
+                let style = crate::tui::status_line::meter::MeterStyle::BLOCK;
+                let (f, e) = crate::tui::status_line::meter::meter_cells(p, bar_width);
                 lines.push(Line::from(vec![
                     Span::styled(label.to_string(), Style::default().fg(theme_colors::text())),
                     Span::styled("  [", Style::default().fg(theme_colors::muted())),
-                    Span::styled("\u{2588}".repeat(f), Style::default().fg(color)),
                     Span::styled(
-                        "\u{2591}".repeat(e),
+                        std::iter::repeat_n(style.filled, f).collect::<String>(),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(
+                        std::iter::repeat_n(style.empty, e).collect::<String>(),
                         Style::default().fg(theme_colors::muted()),
                     ),
                     Span::styled(format!("]  {:.0}%", p * 100.0), Style::default().fg(color)),

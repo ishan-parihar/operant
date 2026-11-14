@@ -513,6 +513,9 @@ const SYNTAX_SELECTORS: &[(Role, &str)] = &[
         Role::SyntaxType,
         "storage.type, entity.name.type, support.type",
     ),
+    // `pub` / `priv` are modifiers, not types: without this entry they matched
+    // nothing and kept syntect's own colour, which is most of a Rust signature.
+    (Role::SyntaxKeyword, "storage.modifier"),
     (Role::SyntaxKeyword, "keyword"),
     (
         Role::SyntaxVariable,
@@ -532,13 +535,27 @@ const SYNTAX_SELECTORS: &[(Role, &str)] = &[
 fn role_for_scope_stack(scopes: &[Scope]) -> Option<Role> {
     use std::sync::LazyLock;
     use syntect::parsing::ScopeStack;
+    /// One entry per (role, alternative), in table order.
+    ///
+    /// MEASURED 2026-11-14, and the reason this is not a plain `.map`: syntect
+    /// has no alternation syntax. `ScopeStack::from_str("a, b, c")` parses the
+    /// WHOLE string as one three-atom sequence whose first two atoms are the
+    /// literal `"a,"` and `"b,"` — commas included — so it matches no real
+    /// scope stack at all. Four of the nine categories were written that way and
+    /// matched nothing: 26 of 49 tokens in a realistic Rust function kept
+    /// syntect's own colour, including `pub`, `fn`, `let`, `u16`, every type
+    /// name and every variable. Splitting on `", "` is the whole fix; the
+    /// alternatives must be tried in order, which is why this is a flat Vec
+    /// rather than a map.
     static SELECTORS: LazyLock<Vec<(Role, ScopeStack)>> = LazyLock::new(|| {
         SYNTAX_SELECTORS
             .iter()
-            .filter_map(|(role, selector)| {
-                ScopeStack::from_str(selector)
-                    .ok()
-                    .map(|stack| (*role, stack))
+            .flat_map(|(role, selector)| {
+                selector
+                    .split(", ")
+                    .filter(|part| !part.is_empty())
+                    .filter_map(|part| ScopeStack::from_str(part).ok().map(|s| (*role, s)))
+                    .collect::<Vec<_>>()
             })
             .collect()
     });
@@ -767,5 +784,92 @@ mod syntax_theme_tests {
                 .as_slice(),
         );
         assert_eq!(comment, Some(Role::SyntaxComment));
+    }
+
+    /// The guard the first draft of this unit needed, and the one that would
+    /// have caught the comma-join defect.
+    ///
+    /// The test above hand-writes the scope strings it asserts on, so it passes
+    /// whatever the selector table does to a real parse — it only ever checked
+    /// the ONE entry that was not comma-joined. This walks a REAL Rust function
+    /// and requires every category to be reached by at least one token, which
+    /// fails if any table entry silently matches nothing.
+    #[test]
+    fn every_syntax_category_is_reached_by_a_real_rust_token() {
+        use syntect::parsing::{ParseState, ScopeStackOp};
+
+        let code = "pub fn serve(port: u16) -> Result<(), Error> {\n    let n = 42;\n    // a note\n    \"a string\"\n    if n > 0 { return Ok(()); }\n}\n";
+        let syntax = SYNTAX_SET
+            .find_syntax_by_token("rs")
+            .expect("the Rust grammar is loaded");
+
+        // Every role the table names, with the token text that must reach it.
+        //
+        // The expectations follow the TABLE, which is the design: `fn` and
+        // `let` carry `storage.type` in syntect's Rust grammar and so are
+        // deliberately SyntaxType, not SyntaxKeyword (see SYNTAX_SELECTORS).
+        // What matters for this guard is that each token reaches SOME role --
+        // a token that reaches none is the defect this replaces.
+        let required: &[(Role, &[&str])] = &[
+            (Role::SyntaxKeyword, &["pub", "if", "return"]),
+            (Role::SyntaxType, &["fn", "let", "u16", "Ok"]),
+            (Role::SyntaxFunction, &["serve"]),
+            (Role::SyntaxVariable, &["port"]),
+            (Role::SyntaxOperator, &[":", "->"]),
+            (Role::SyntaxComment, &["//"]),
+            (Role::SyntaxString, &["a string"]),
+            (Role::SyntaxNumber, &["42"]),
+            (Role::SyntaxPunctuation, &["("]),
+        ];
+
+        let mut reached: Vec<(Role, String)> = Vec::new();
+        for line in code.lines() {
+            let mut parse_state = ParseState::new(syntax);
+            let ops = match parse_state.parse_line(line, &SYNTAX_SET) {
+                Ok(ops) => ops,
+                Err(_) => continue,
+            };
+            let mut stack = ScopeStack::new();
+            let mut pos = 0usize;
+            for (at, op) in ops {
+                if at > pos {
+                    let text = &line[pos..at];
+                    if !text.trim().is_empty()
+                        && let Some(role) = role_for_scope_stack(stack.as_slice())
+                    {
+                        reached.push((role, text.to_string()));
+                    }
+                }
+                match op {
+                    ScopeStackOp::Push(scope) => stack.push(scope),
+                    ScopeStackOp::Pop(count) => {
+                        for _ in 0..count {
+                            stack.pop();
+                        }
+                    }
+                    _ => {}
+                }
+                pos = at;
+            }
+            if pos < line.len() {
+                let text = &line[pos..];
+                if !text.trim().is_empty()
+                    && let Some(role) = role_for_scope_stack(stack.as_slice())
+                {
+                    reached.push((role, text.to_string()));
+                }
+            }
+        }
+
+        for (role, needles) in required {
+            for needle in *needles {
+                assert!(
+                    reached
+                        .iter()
+                        .any(|(r, text)| r == role && text.contains(needle)),
+                    "{needle:?} never resolved to {role:?}; the tokens that did resolve: {reached:?}"
+                );
+            }
+        }
     }
 }

@@ -2311,12 +2311,27 @@ fn render_overnight_progress_line(
         6
     }
     .min(inner_width.saturating_sub(fixed_width).max(1));
-    let filled = ((percent / 100.0) * bar_width as f32).round() as usize;
-    let filled = filled.min(bar_width);
-    let empty = bar_width.saturating_sub(filled);
+    // (plan 2026-11-14 U9) The shared meter. These two sites already rounded, so
+    // they agreed with it by coincidence rather than by construction -- and a
+    // third site in context_viz truncated.
+    let (filled, empty) = crate::tui::status_line::meter::meter_cells(percent / 100.0, bar_width);
     let line = Line::from(vec![
-        Span::styled("█".repeat(filled), filled_style),
-        Span::styled("░".repeat(empty), empty_style),
+        Span::styled(
+            std::iter::repeat_n(
+                crate::tui::status_line::meter::MeterStyle::BLOCK.filled,
+                filled,
+            )
+            .collect::<String>(),
+            filled_style,
+        ),
+        Span::styled(
+            std::iter::repeat_n(
+                crate::tui::status_line::meter::MeterStyle::BLOCK.empty,
+                empty,
+            )
+            .collect::<String>(),
+            empty_style,
+        ),
         Span::styled(" ", label_style),
         Span::styled(label, label_style),
         Span::styled(separator, label_style),
@@ -3099,13 +3114,28 @@ fn render_compact_progress_line(
         6
     }
     .min(inner_width.saturating_sub(fixed_width).max(1));
-    let filled = ((percent / 100.0) * bar_width as f32).round() as usize;
-    let filled = filled.min(bar_width);
-    let empty = bar_width.saturating_sub(filled);
+    // (plan 2026-11-14 U9) The shared meter. These two sites already rounded, so
+    // they agreed with it by coincidence rather than by construction -- and a
+    // third site in context_viz truncated.
+    let (filled, empty) = crate::tui::status_line::meter::meter_cells(percent / 100.0, bar_width);
 
     let line = Line::from(vec![
-        Span::styled("█".repeat(filled), filled_style),
-        Span::styled("░".repeat(empty), empty_style),
+        Span::styled(
+            std::iter::repeat_n(
+                crate::tui::status_line::meter::MeterStyle::BLOCK.filled,
+                filled,
+            )
+            .collect::<String>(),
+            filled_style,
+        ),
+        Span::styled(
+            std::iter::repeat_n(
+                crate::tui::status_line::meter::MeterStyle::BLOCK.empty,
+                empty,
+            )
+            .collect::<String>(),
+            empty_style,
+        ),
         Span::styled(" ", label_style),
         Span::styled(label, label_style),
         Span::styled(separator, label_style),
