@@ -3584,6 +3584,61 @@ mod tests {
         );
     }
 
+    /// A skill in an operator-configured `extra_roots` entry must be BOTH
+    /// listed and loadable by the in-loop tools.
+    ///
+    /// `main.rs` hands these tools the pool plus a root list; if that list
+    /// omits `[skills] extra_roots`, the frozen prefix advertises a skill the
+    /// model is then told to "use the skills tool" for -- and the tool cannot
+    /// see it. The two halves are one contract, so they are pinned together.
+    #[tokio::test]
+    async fn a_skill_in_an_extra_root_is_listed_and_loadable() {
+        let home = TempDir::new().unwrap();
+        let pool = home.path().join("pool");
+        let extra = home.path().join("extra");
+        std::fs::create_dir_all(&pool).unwrap();
+        std::fs::create_dir_all(extra.join("extra-skill")).unwrap();
+        std::fs::write(
+            extra.join("extra-skill").join("SKILL.md"),
+            "---\nname: extra-skill\ndescription: From extra_roots\n---\n\nEXTRA BODY\n",
+        )
+        .unwrap();
+
+        // The list main.rs passes: pool + vendor roots + extra roots.
+        let roots = vec![extra.clone()];
+
+        let list = SkillsTool::new(pool.clone())
+            .with_vendor_roots(roots.clone())
+            .execute(serde_json::json!({}), ToolContext::default())
+            .await;
+        let view = SkillViewTool::new(pool.clone())
+            .with_vendor_roots(roots)
+            .execute(
+                serde_json::json!({ "name": "extra-skill" }),
+                ToolContext::default(),
+            )
+            .await;
+
+        assert!(list.success, "skills_list failed: {}", list.content);
+        assert!(view.success, "skill_view failed: {}", view.content);
+        let listed: serde_json::Value = serde_json::from_str(&list.content).unwrap();
+        let names: Vec<&str> = listed["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"extra-skill"),
+            "a skill in extra_roots is not listed: {names:?}"
+        );
+        let viewed: serde_json::Value = serde_json::from_str(&view.content).unwrap();
+        assert!(
+            viewed["content"].as_str().unwrap().contains("EXTRA BODY"),
+            "skill_view did not load the extra-root skill: {viewed}"
+        );
+    }
+
     /// The operator's own pool still wins a name collision — a vendor skill
     /// of the same name is shadowed, never the other way round.
     #[tokio::test]

@@ -1308,15 +1308,23 @@ pub(crate) async fn build_registry(
     let sub_agent_disabled_tools = config.tools.disabled_tools.iter().cloned().collect();
     let sub_agent_disabled_toolsets = config.tools.disabled_toolsets.iter().cloned().collect();
 
-    // The vendor roots the skills tools may read: the same list the
+    // The roots the skills tools may read: the SAME resolved list the
     // SkillManager gets, so a skill the agent advertises is always a skill
     // `skills_list`/`skill_view` can load (iter-2159).
-    let vendor_skill_roots = crate::skill_roots::vendor_skill_roots(config);
+    //
+    // Derived from the resolver rather than assembled here. Assembling it was
+    // the defect: `vendor_skill_roots(config)` omits `[skills] extra_roots`, so
+    // a skill the operator configured was advertised in the frozen prefix and
+    // then UNREADABLE by the one tool the model is told to use for it -- "N
+    // skills advertised, use the skills tool to list them" pointing at a tool
+    // that could not list them. Reading the resolver's own output makes that
+    // impossible: there is no second list to forget a root from.
+    let skill_tool_roots = crate::skill_roots::skill_roots(config).as_paths();
     operant_core::tools::register_builtin_tools_with_sub_agent(
         &registry,
         &config.skills.root_dir,
         memory_dir,
-        &vendor_skill_roots,
+        &skill_tool_roots,
         client,
         model,
         database.clone(),
