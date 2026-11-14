@@ -122,19 +122,6 @@ impl EffortLevel {
         }
     }
 
-    /// The rung below, wrapping past the bottom to `Max`.
-    pub fn next_down(self) -> Self {
-        match self {
-            Self::Off => Self::Max,
-            Self::Minimal => Self::Off,
-            Self::Low => Self::Minimal,
-            Self::Medium => Self::Low,
-            Self::High => Self::Medium,
-            Self::XHigh => Self::High,
-            Self::Max => Self::XHigh,
-        }
-    }
-
     /// A filling-circle glyph, ordered the same way the ladder is, so the shape
     /// of the symbol says where the rung sits.
     pub fn symbol(self) -> &'static str {
@@ -162,3 +149,77 @@ impl EffortLevel {
 // ---------------------------------------------------------------------------
 // Model capability helpers
 // ---------------------------------------------------------------------------
+
+/// What a model can do with a reasoning effort.
+///
+/// (2026-11-15, model plan M3) The three states matter separately. oh-my-pi
+/// answers this with a boolean because it ships a generated catalogue of every
+/// model; operant resolves capabilities from models.dev's cache, which covers
+/// mapped providers only. So a model nobody has metadata for is `Unknown`, and
+/// `Unknown` must NOT block — a control that refuses to open for a model it
+/// simply has no data on is worse than one that offers a level the provider may
+/// ignore.
+///
+/// `None` is the only blocking state, and it means the metadata was found and
+/// says `reasoning: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortSupport {
+    /// Metadata was found and the model does not reason.
+    None,
+    /// Metadata was found and the model reasons, so every rung is offered.
+    ///
+    /// The per-model rung LIST is the second half of M3 and is not in this
+    /// tranche: it needs models.dev's `thinking` payload, whose shape has not
+    /// been verified against a live response, and a guessed schema would parse
+    /// to an empty ladder on every model. The gate and the capability check are
+    /// what the verified data supports.
+    Full,
+    /// No metadata for this model. Nothing is blocked.
+    Unknown,
+}
+
+impl EffortSupport {
+    /// Whether the effort controls should open at all.
+    pub fn allows_effort(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The one-line reason to show the operator when effort is refused.
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            Self::None => Some("this model does not reason, so there is no effort to set"),
+            _ => None,
+        }
+    }
+}
+
+/// What `model` can do with effort, at `provider`.
+///
+/// `provider` is the OPERANT provider name (the caller resolves it from the live
+/// base URL); models.dev keys its capability rows by provider and operant's model
+/// ids are bare, so the provider has to be supplied rather than inferred here.
+pub fn effort_support(provider: &str, model: &str) -> EffortSupport {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || provider.trim().is_empty() {
+        return EffortSupport::Unknown;
+    }
+    match operant_core::models_dev::cached_capabilities(provider, trimmed) {
+        Some(caps) if caps.supports_reasoning => EffortSupport::Full,
+        Some(_) => EffortSupport::None,
+        None => EffortSupport::Unknown,
+    }
+}
+
+/// Clamp a requested level to what a model can do.
+///
+/// `None` means the model is known not to reason: the caller refuses and says why
+/// rather than sending a field the provider will reject. Every other case passes
+/// the request through unchanged — without a per-model rung list there is nothing
+/// narrower to clamp to, and inventing one would clamp the operator's choice on
+/// no evidence.
+pub fn clamp_effort(provider: &str, model: &str, requested: EffortLevel) -> Option<EffortLevel> {
+    match effort_support(provider, model) {
+        EffortSupport::None => None,
+        EffortSupport::Full | EffortSupport::Unknown => Some(requested),
+    }
+}

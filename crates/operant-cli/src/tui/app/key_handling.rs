@@ -25,7 +25,13 @@ impl App {
     /// the operator ruled that `Shift+Tab` becomes the agent-identity switch and
     /// effort moves to the models page (model plan M1-M3).
     pub(crate) fn cycle_effort(&mut self) {
-        use crate::tui::model_effort::EffortLevel;
+        // (2026-11-15, model plan M3) A model that does not reason has no effort
+        // to cycle. Refuse and say why rather than sending a field the provider
+        // will reject on the next request.
+        if let Some(why) = self.effort_support_for_current_model().refusal() {
+            self.set_status_notice(why.to_string());
+            return;
+        }
         let next_level = self.effort_level.next_up();
         self.effort_level = next_level;
         // `wire()` is the only producer of the string; `Off` is the empty one.

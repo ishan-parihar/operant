@@ -689,6 +689,21 @@ pub(super) fn inline_model_row(
 }
 
 impl super::App {
+    /// What the CURRENT model can do with a reasoning effort.
+    ///
+    /// (2026-11-15, model plan M3) One place resolves the pair the capability
+    /// lookup needs — the operant provider name behind the live base URL, and the
+    /// configured model id — so the command, the ladder and the picker cannot
+    /// disagree about which model they are asking about.
+    pub(super) fn effort_support_for_current_model(
+        &self,
+    ) -> crate::tui::model_effort::EffortSupport {
+        let provider = provider_from_url(self.config.client.base_url.trim_end_matches('/'))
+            .map(|p| p.name)
+            .unwrap_or_default();
+        crate::tui::model_effort::effort_support(provider, &self.config.agent.model)
+    }
+
     /// (plan 05B) The effort rows in the unified inline picker: one row per
     /// wire level, the current level flagged and preselected. Enter routes
     /// through the plan-03 `pending_effort` drain (the agent applies it to
@@ -708,6 +723,15 @@ impl super::App {
     /// the apply step cannot mistake it for a model choice.
     pub(super) fn open_effort_picker_inline(&mut self, filter: &str) {
         use crate::tui::model_effort::EffortLevel;
+        // (2026-11-15, model plan M3) Do not open a picker whose every rung would
+        // be refused. oh-my-pi gates the same way: `/effort` with no argument
+        // opens its selector only when `model?.reasoning`, else it prints "no
+        // thinking". A model with no metadata is NOT blocked — see
+        // `EffortSupport::Unknown`.
+        if let Some(why) = self.effort_support_for_current_model().refusal() {
+            self.set_status_notice(why.to_string());
+            return;
+        }
         let current = self.effort_level;
         // (2026-11-15, model plan M2) The rows are DERIVED from the type's own
         // list, so a new rung cannot be added to `EffortLevel` and forgotten
