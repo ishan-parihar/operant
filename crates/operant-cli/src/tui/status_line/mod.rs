@@ -11,6 +11,9 @@
 //!   (`packages/tui/src/status-line/separators.ts`), plus the cap glyphs.
 //! - [`bar`] — the fill: one background colour behind the whole row, from
 //!   `Role::StatusLineBg` (OMP's `statusLineBg`).
+//! - [`segments`] — the segment model, the presets, and the ordered overflow
+//!   degrade `draw_status` is being moved onto.
 
 pub mod bar;
+pub mod segments;
 pub mod separators;
