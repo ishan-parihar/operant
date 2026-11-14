@@ -1344,7 +1344,7 @@ pub(crate) async fn build_registry(
         // is headless, so without this it re-derived the approval decision from
         // an empty set and had gated calls refused with advice it cannot follow
         // (audit finding 2).
-        config.command_allowlist.clone(),
+        config.command_allowlist.clone().into_iter().collect(),
         Some(operant_core::platform::operant_home().join("approval_allowlist.json")),
     )
     .await?;
