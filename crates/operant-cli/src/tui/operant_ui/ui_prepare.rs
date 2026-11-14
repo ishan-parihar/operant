@@ -205,17 +205,6 @@ fn content_prefers_display_as_logical_lines(content: &str) -> bool {
     })
 }
 
-fn semantic_swarm_line_text(plain: &str) -> (String, usize) {
-    let trimmed = plain.trim_start_matches(' ');
-    if let Some(rest) = trimmed.strip_prefix("│ ") {
-        let prefix_width = unicode_width::UnicodeWidthStr::width(plain)
-            .saturating_sub(unicode_width::UnicodeWidthStr::width(rest));
-        (rest.to_string(), prefix_width)
-    } else {
-        (plain.to_string(), 0)
-    }
-}
-
 fn map_display_lines_to_logical_lines(
     display_lines: &[Line<'static>],
     logical_plain_lines: &[String],
@@ -1928,32 +1917,6 @@ fn render_message_into(
             );
             for line in cached {
                 acc.push_auto(align_if_unset(line, align));
-            }
-        }
-        "swarm" => {
-            let content_width = width.saturating_sub(4);
-            let cached = get_cached_message_lines(
-                msg,
-                content_width,
-                app.diff_mode(),
-                // Not a tool row.
-                false,
-                render_swarm_message,
-            );
-            for line in cached {
-                let line = align_if_unset(line, align);
-                let plain = ui::line_plain_text(&line);
-                let (semantic, prefix_width) = semantic_swarm_line_text(plain.as_str());
-                let raw_line = acc.raw_plain_lines.len();
-                let raw_width = unicode_width::UnicodeWidthStr::width(semantic.as_str());
-                acc.raw_plain_lines.push(semantic);
-                acc.lines.push(line);
-                acc.line_raw_overrides.push(Some(WrappedLineMap {
-                    raw_line,
-                    start_col: 0,
-                    end_col: raw_width,
-                }));
-                acc.line_copy_offsets.push(prefix_width);
             }
         }
         "memory" => {

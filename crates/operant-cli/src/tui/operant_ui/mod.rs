@@ -135,7 +135,7 @@ use memory_ui::{group_into_tiles, render_memory_tiles, split_by_display_width};
 use messages::get_cached_message_lines;
 pub(crate) use messages::{
     render_assistant_message, render_background_task_message, render_reasoning_message,
-    render_swarm_message, render_system_message, render_tool_message, render_usage_message,
+    render_system_message, render_tool_message, render_usage_message,
 };
 pub(crate) use pinned_ui::clear_side_panel_debug_snapshot;
 use pinned_ui::draw_side_panel_markdown;

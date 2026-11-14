@@ -35,7 +35,6 @@ pub mod swarm_collapse;
 pub mod transcription;
 pub use swarm_collapse::parse_collapsible_swarm_content;
 #[cfg(test)]
-pub use swarm_collapse::{encode_collapsible_swarm_content, toggle_collapsible_swarm_content};
 pub(crate) mod tool_display;
 pub(crate) mod vendor_types;
 mod wrapped_line_map;

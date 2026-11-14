@@ -2380,98 +2380,8 @@ fn render_system_message_uses_connection_card_for_reconnect_status() {
 }
 
 #[test]
-fn render_swarm_message_centered_mode_caps_wrap_width_for_long_notifications() {
-    let saved = crate::tui::operant_app::markdown::center_code_blocks();
-    crate::tui::operant_app::markdown::set_center_code_blocks(true);
-    let msg = DisplayMessage::swarm(
-        "File activity",
-        "/home/jeremy/jcode/src/tui/ui_messages.rs - moss just edited this file while you were working nearby, so the notification should still read as centered in wide layouts.",
-    );
-
-    let lines = render_swarm_message(
-        &msg,
-        120,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
-    let first_pad = rendered[0].chars().take_while(|c| *c == ' ').count();
-
-    assert!(
-        first_pad >= 8,
-        "centered swarm notification should keep a clearly visible left gutter: {rendered:?}"
-    );
-    assert!(
-        rendered
-            .iter()
-            .all(|line| line.is_empty() || line.starts_with(&" ".repeat(first_pad))),
-        "centered swarm notification should share one left pad across wrapped lines: {rendered:?}"
-    );
-
-    crate::tui::operant_app::markdown::set_center_code_blocks(saved);
-}
-
 #[test]
-fn render_swarm_message_collapsed_shows_tldr_and_expand_badge_only() {
-    let saved = crate::tui::operant_app::markdown::center_code_blocks();
-    crate::tui::operant_app::markdown::set_center_code_blocks(false);
-    let content = crate::tui::operant_model::encode_collapsible_swarm_content(
-        "fixed the flaky test",
-        "The flaky test was caused by a race in the setup helper.\n\nI rewrote it to use a barrier.",
-    );
-    let msg = DisplayMessage::swarm("DM from sheep", content);
-
-    let lines = render_swarm_message(
-        &msg,
-        100,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    let plain = lines
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(plain.contains("fixed the flaky test"), "{plain}");
-    assert!(plain.contains(super::SWARM_EXPAND_BADGE), "{plain}");
-    assert!(
-        !plain.contains("race in the setup helper"),
-        "collapsed card must hide the full body: {plain}"
-    );
-    crate::tui::operant_app::markdown::set_center_code_blocks(saved);
-}
-
 #[test]
-fn render_swarm_message_expanded_shows_body_and_collapse_badge() {
-    let saved = crate::tui::operant_app::markdown::center_code_blocks();
-    crate::tui::operant_app::markdown::set_center_code_blocks(false);
-    let collapsed = crate::tui::operant_model::encode_collapsible_swarm_content(
-        "fixed the flaky test",
-        "The flaky test was caused by a race in the setup helper.",
-    );
-    let expanded =
-        crate::tui::operant_model::toggle_collapsible_swarm_content(&collapsed).expect("toggle");
-    let msg = DisplayMessage::swarm("DM from sheep", expanded);
-
-    let lines = render_swarm_message(
-        &msg,
-        100,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    let plain = lines
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(plain.contains("fixed the flaky test"), "{plain}");
-    assert!(plain.contains(super::SWARM_COLLAPSE_BADGE), "{plain}");
-    assert!(plain.contains("race in the setup helper"), "{plain}");
-    crate::tui::operant_app::markdown::set_center_code_blocks(saved);
-}
-
 #[test]
 fn render_tool_message_prefers_subagent_title_with_model() {
     let msg = DisplayMessage {
@@ -3893,89 +3803,7 @@ fn render_tool_message_memory_store_centered_mode_left_aligns_with_padding() {
 }
 
 #[test]
-fn render_tool_message_shows_swarm_spawn_prompt_summary() {
-    let msg = DisplayMessage {
-        role: "tool".to_string(),
-        content: "spawned".to_string(),
-        tool_calls: Vec::new(),
-        duration_secs: None,
-        title: None,
-        tool_data: Some(crate::tui::operant_model::vendor_types::ToolCall {
-            id: "call_swarm_spawn".to_string(),
-            name: "swarm".to_string(),
-            input: serde_json::json!({
-                "action": "spawn",
-                "prompt": "Extract the restart command cluster from cli commands and validate it"
-            }),
-            intent: None,
-            thought_signature: None,
-        }),
-    };
-
-    let lines = render_tool_message(
-        &msg,
-        120,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    let rendered: String = lines[0]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-
-    assert!(rendered.contains("swarm spawn"), "rendered={rendered}");
-    assert!(
-        rendered.contains("Extract the restart command cluster"),
-        "rendered={rendered}"
-    );
-}
-
 #[test]
-fn render_tool_message_batch_subcall_shows_swarm_dm_details() {
-    let msg = DisplayMessage {
-        role: "tool".to_string(),
-        content: "--- [1] swarm ---\nDone\n\nCompleted: 1 succeeded, 0 failed".to_string(),
-        tool_calls: Vec::new(),
-        duration_secs: None,
-        title: None,
-        tool_data: Some(crate::tui::operant_model::vendor_types::ToolCall {
-            id: "call_batch_swarm".to_string(),
-            name: "batch".to_string(),
-            input: serde_json::json!({
-                "tool_calls": [
-                    {
-                        "tool": "swarm",
-                        "action": "dm",
-                        "to_session": "shark",
-                        "message": "Please validate the restart extraction and report back"
-                    }
-                ]
-            }),
-            intent: None,
-            thought_signature: None,
-        }),
-    };
-
-    let lines = render_tool_message(
-        &msg,
-        120,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    let rendered = lines
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(rendered.contains("swarm dm → shark"), "rendered={rendered}");
-    assert!(
-        rendered.contains("Please validate the restart"),
-        "rendered={rendered}"
-    );
-}
-
 #[test]
 fn render_agentgrep_output_body_borders_each_line() {
     let content = "crates/foo.rs\n  symbols: 1 matched\n    - fn bar @ 1-5";
@@ -4068,50 +3896,6 @@ fn render_assistant_message_plan_card_wraps_instead_of_truncating() {
 }
 
 #[test]
-fn render_swarm_message_preserves_inline_image_placeholder_lines() {
-    let saved = crate::tui::operant_app::markdown::center_code_blocks();
-    crate::tui::operant_app::markdown::set_center_code_blocks(false);
-
-    // Simulate a rendered mermaid diagram inside a swarm message body: the
-    // marker line plus its blank fill rows must survive rendering without a
-    // rail prefix or blank-line cleanup so the image draws at full height.
-    let placeholder =
-        crate::tui::operant_app::mermaid::inline_image_placeholder_lines(0xabcd1234, 4, 20);
-    assert_eq!(placeholder.len(), 4);
-    let marker_text = placeholder[0]
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
-        .collect::<String>();
-
-    let msg = DisplayMessage::swarm(
-        "Plan graph · v3",
-        "```mermaid\nflowchart TD\n    a --> b\n```",
-    );
-    // Rendering the real message goes through the markdown pipeline; whether a
-    // real image materializes depends on protocol availability, so test the
-    // line-preservation path directly through render_swarm_message with a body
-    // the markdown renderer maps to placeholder lines is not deterministic in
-    // tests. Instead assert the parser round-trips the marker we emit.
-    let parsed = crate::tui::operant_app::mermaid::parse_inline_image_placeholder(&placeholder[0]);
-    assert_eq!(parsed, Some((0xabcd1234, 4, 20)));
-    assert!(
-        marker_text.starts_with('\u{0}'),
-        "marker must keep its sentinel prefix"
-    );
-
-    // And the swarm renderer must not panic or drop content for a mermaid body.
-    let lines = render_swarm_message(
-        &msg,
-        100,
-        crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
-        false,
-    );
-    assert!(!lines.is_empty());
-
-    crate::tui::operant_app::markdown::set_center_code_blocks(saved);
-}
-
 #[test]
 fn render_empty_todo_tool_result_collapses_to_compact_line() {
     let msg = DisplayMessage {
