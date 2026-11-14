@@ -1632,6 +1632,36 @@ fn preview_pane(
         .collect()
 }
 
+/// The preview's HEADER is pinned: it survives a scroll to the very bottom.
+///
+/// (2026-11-14, plan iteration 1) The preview used to render one Paragraph for
+/// the header AND the transcript, and `.scroll((scroll, 0))` moved both. Once
+/// the pane began following the BOTTOM (iter-1906b4db) the "first:" prompt —
+/// whose whole purpose is to surface a prompt that scrolled off the head —
+/// became unreachable on any transcript longer than the viewport. This is the
+/// exact case iter-2338 had to record as open.
+#[test]
+fn the_preview_header_is_pinned_while_the_transcript_scrolls() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", Some("work"), Some("analyst"))]);
+    hub.set_first_prompt("s1", Some("the opening question".to_string()));
+    let mut msgs = vec![msg("user", "the opening question")];
+    msgs.extend((0..PREVIEW_MESSAGE_LIMIT).map(|i| msg("assistant", &format!("reply {i}"))));
+    hub.apply_preview("s1", msgs, 1);
+    assert!(hub.preview_follow_bottom, "the pane follows the bottom");
+
+    let pane = preview_pane(vec![row("s1", Some("work"), Some("analyst"))], 0, &mut hub);
+    let joined = pane.join("\n");
+    assert!(
+        joined.contains("first: the opening question"),
+        "the pinned header must show the prompt the window dropped: {joined}"
+    );
+    assert!(
+        joined.contains("employee: analyst"),
+        "the identity lines are pinned too: {joined}"
+    );
+}
+
 /// The `t` clause in the preview's footer must say what the key does NOW.
 ///
 /// (audit finding 7) It read "t hides tool calls" unconditionally — directly
@@ -1736,18 +1766,16 @@ fn the_first_prompt_still_appears_when_the_window_dropped_it() {
     msgs.extend((0..PREVIEW_MESSAGE_LIMIT).map(|i| msg("assistant", &format!("reply {i}"))));
     hub.set_first_prompt("s1", Some("the opening question".to_string()));
     hub.apply_preview("s1", msgs, 1);
-    // The GATE is what this pins: the prompt is not in the window (hidden=1),
-    // so the line must be emitted. The line is the first line of the
-    // SCROLLING transcript, and the preview is anchored to its END, so on a
-    // long transcript it is scrolled out of the viewport — a real interaction
-    // recorded as the open item in iter-2328 (the fix is a fixed, non-scrolling
-    // header strip, which is a layout change, not a text change).
+    // The FULL contract is asserted again (2026-11-14, plan iteration 1).
+    //
+    // iter-2338 had to weaken this to "the transcript rendered" plus a state
+    // check, because the "first:" line was the first line of the SCROLLING
+    // transcript and the pane follows the BOTTOM, so the line could not reach
+    // the viewport. The pinned header strip makes the original assertion true.
     let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
-    assert!(pane.contains("agent:"), "the transcript rendered: {pane}");
-    assert_eq!(
-        hub.first_prompt_for("s1"),
-        Some("the opening question"),
-        "the prompt the window dropped is still recoverable from the state"
+    assert!(
+        pane.contains("first: the opening question"),
+        "the pinned header must show the prompt the window dropped: {pane}"
     );
 }
 

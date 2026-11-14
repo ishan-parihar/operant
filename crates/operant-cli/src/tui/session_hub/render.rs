@@ -1311,6 +1311,10 @@ fn render_preview(
         return;
     };
 
+    // (2026-11-14, plan iteration 1) Where the header ends, so the transcript
+    // below can scroll under a PINNED header. Declared out here because the
+    // match arms build their own `lines` locally.
+    let mut header_len = 0usize;
     let lines: Vec<Line> = match (&row.kind, state.focused_subagent.as_deref()) {
         // iter-C focus view: the subagent row's own detail replaces the
         // message preview (omp's chat view — goal/status/result inline).
@@ -1457,6 +1461,8 @@ fn render_preview(
             // silently looking empty — the two states that read as "the
             // preview is broken" are "still loading" and "no content", and
             // naming both is what makes a slow load legible.
+            // (2026-11-14, plan iteration 1) Everything above this index is
+            // pinned; the rest scrolls.
             match &state.preview {
                 Some((id, msgs, hidden)) if id == &row.id && !msgs.is_empty() => {
                     if *hidden > 0 {
@@ -1547,6 +1553,8 @@ fn render_preview(
                         spans.push(Span::raw(first_line(&msg.content)));
                         lines.push(Line::from(spans));
                     }
+                    // The banners above are header; the messages are body.
+                    header_len = header_len.max(lines.len() - msgs.len().min(lines.len()));
                 }
                 Some((id, _, _)) if id == &row.id => {
                     lines.push(Line::from(""));
@@ -1633,8 +1641,37 @@ fn render_preview(
     } else {
         state.preview_scroll.min(max_scroll)
     };
-    let paragraph = Paragraph::new(lines)
+
+    // (2026-11-14, plan iteration 1) The header is PINNED; only the transcript
+    // scrolls.
+    //
+    // Measured before this change: the preview built one `Vec<Line>` holding
+    // the header and the transcript and rendered it as a single Paragraph with
+    // `.scroll((scroll, 0))`, so every header line scrolled away with the
+    // transcript. That made the "first:" prompt — whose entire purpose is to
+    // surface a prompt that scrolled off the head — unreachable on any
+    // transcript longer than the viewport once the pane began following the
+    // bottom (iter-1906b4db).
+    //
+    // The split is by INDEX, captured where the header ends, not by counting
+    // lines: a session with a long `project:` path must not be able to change
+    // where the transcript starts.
+    let body_at = header_len.min(lines.len());
+    let mut lines = lines;
+    let body = lines.split_off(body_at);
+    let header = lines;
+    let header_h = header.len() as u16;
+    // The body keeps whatever is left; at the smallest realistic terminal that
+    // is the transcript, and a header taller than the pane would otherwise
+    // leave the operator with none. Cap the header at half the pane.
+    let header_h = header_h.min(inner.height.saturating_sub(2) / 2);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_h), Constraint::Min(1)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), chunks[0]);
+    let paragraph = Paragraph::new(body)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, chunks[1]);
 }
