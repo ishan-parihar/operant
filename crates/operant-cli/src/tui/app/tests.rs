@@ -16490,23 +16490,46 @@ fn probe_ctrl_p_claims_a_history_meaning_somewhere() {
 // their wire values, which the `/effort-set` validator rejects.
 //
 // These pin the two halves: the surface declares itself, and the wire value is a
-// real one.
+// real one. Model plan M2 widened the ladder from four rungs to seven; the row
+// list is DERIVED from `EffortLevel::ALL` so this test cannot lag the type, while
+// the vocabulary below stays hand-written, because the defect was a drift between
+// two lists and a shared constant would hide the next one.
 mod effort_picker_surface {
     use super::*;
+    use crate::tui::model_effort::EffortLevel;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    /// The wire vocabulary `/effort-set` validates against (`commands.rs`). The
-    /// test spells it out rather than importing it, because the defect was a
-    /// DRIFT between two lists — a shared constant would hide the next one.
-    const WIRE: &[&str] = &["", "minimal", "low", "medium", "high", "xhigh"];
+    /// The wire vocabulary the agent accepts. Spelled out on purpose.
+    const WIRE: &[&str] = &["", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+    /// Every rung as (symbol, wire) — what the row carries and the apply path
+    /// sends. Taken from the type's own list so this cannot lag it.
     fn rows() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("\u{25cb}", "low"),
-            ("\u{25d0}", "medium"),
-            ("\u{25d5}", "high"),
-            ("\u{25cf}", "xhigh"),
-        ]
+        EffortLevel::ALL
+            .iter()
+            .map(|l| (l.symbol(), l.wire()))
+            .collect()
+    }
+
+    #[test]
+    fn the_ladder_covers_the_whole_wire_vocabulary() {
+        // The M2 contract: one rung per wire value, no gaps and no extras. If a
+        // rung is added to `EffortLevel` without a `wire()`, this fails here
+        // rather than sending an empty string to the agent.
+        let from_type: Vec<&str> = EffortLevel::ALL.iter().map(|l| l.wire()).collect();
+        assert_eq!(
+            from_type, WIRE,
+            "EffortLevel::ALL must be exactly the wire vocabulary, in order"
+        );
+        // And the parser must round-trip every rung, or a persisted value would
+        // come back as something else.
+        for level in EffortLevel::ALL {
+            assert_eq!(
+                EffortLevel::from_wire(level.wire()),
+                Some(level),
+                "{level:?} must round-trip through its own wire value"
+            );
+        }
     }
 
     #[test]
@@ -16580,10 +16603,10 @@ mod effort_picker_surface {
         let mut app = make_app();
         app.open_effort_picker_inline("");
         let picker = app.inline_interactive.as_ref().expect("picker");
-        // The label carries the wire level, not the display word, so what the
-        // operator reads is what will be sent.
-        for (symbol, wire) in rows() {
-            let want = format!("{symbol} {wire}");
+        // The label carries the level's own name, so what the operator reads is
+        // the rung that will be sent — `off` rather than an empty cell.
+        for level in EffortLevel::ALL {
+            let want = format!("{} {}", level.symbol(), level.label());
             assert!(
                 picker.entries.iter().any(|e| e.name == want),
                 "the row {want:?} must be offered; got {:?}",
@@ -16618,6 +16641,81 @@ mod effort_picker_surface {
             crate::tui::operant_app::tui_fns::PickerKind::Effort,
             "the height calculation returns 0 for Model and Effort; any other kind \
              reserves rows above the composer"
+        );
+    }
+
+    // ── the ladder itself (model plan M2) ────────────────────────────────────
+
+    #[test]
+    fn cycling_past_the_top_turns_reasoning_off_and_says_so() {
+        // The M1 defect, exactly: the old top arm was `Max => (Low, "")`, so the
+        // operator pressed the key once more to turn reasoning off and the display
+        // said "low". The level and the wire must now agree.
+        let mut app = make_app();
+        app.effort_level = EffortLevel::Max;
+        app.cycle_effort();
+        assert_eq!(
+            app.effort_level,
+            EffortLevel::Off,
+            "cycling past the top must land on Off, not on Low"
+        );
+        assert_eq!(
+            app.pending_effort.as_deref(),
+            Some(""),
+            "Off must send the empty wire value, which the drain reads as 'clear it'"
+        );
+    }
+
+    #[test]
+    fn the_cycle_visits_every_rung_before_repeating() {
+        let mut seen = Vec::new();
+        let mut level = EffortLevel::Off;
+        for _ in 0..EffortLevel::ALL.len() {
+            seen.push(level.wire());
+            level = level.next_up();
+        }
+        assert_eq!(
+            seen, WIRE,
+            "one full turn of the ladder must visit every rung once, in order"
+        );
+        assert_eq!(
+            level,
+            EffortLevel::Off,
+            "a full turn must return to the rung it started on"
+        );
+    }
+
+    #[test]
+    fn effort_set_accepts_every_rung_and_refuses_anything_else() {
+        for wire in WIRE {
+            let mut app = make_app();
+            app.handle_tui_command("effort-set", wire);
+            assert_eq!(
+                app.pending_effort.as_deref(),
+                Some(*wire),
+                "/effort-set {wire:?} must apply exactly that wire value"
+            );
+            assert_eq!(
+                app.effort_level.wire(),
+                *wire,
+                "/effort-set {wire:?} must leave the level and the wire agreeing"
+            );
+        }
+
+        // A value the vocabulary does not hold must change nothing. The TOML path
+        // used to substitute `High` for a typo — the most expensive rung.
+        let mut app = make_app();
+        app.effort_level = EffortLevel::Medium;
+        app.pending_effort = None;
+        app.handle_tui_command("effort-set", "ultra");
+        assert!(
+            app.pending_effort.is_none(),
+            "an unknown effort must not be forwarded to the agent"
+        );
+        assert_eq!(
+            app.effort_level,
+            EffortLevel::Medium,
+            "an unknown effort must leave the level untouched"
         );
     }
 }

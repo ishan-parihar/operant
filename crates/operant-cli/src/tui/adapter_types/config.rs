@@ -67,8 +67,16 @@ pub struct Settings {
     pub permission_mode: PermissionMode,
     pub max_output_tokens: usize,
     pub output_style: Option<String>,
-    /// Reasoning effort level: "low" | "normal" | "high" | "max".
-    /// Mirrors EffortLevel in model_picker.rs. Set by `operant tui effort set`.
+    /// Reasoning effort level, as a wire string.
+    ///
+    /// (2026-11-15, model plan M2) This doc used to say `"low" | "normal" |
+    /// "high" | "max"` and to point at `model_picker.rs` — a file that no longer
+    /// exists. It was the fourth spelling of the vocabulary in the tree, and the
+    /// parser in `init.rs` accepted none of the names it listed. The list is
+    /// `EffortLevel::ALL` now; this comment names the type instead of repeating
+    /// it, so there is one place to edit.
+    ///
+    /// Set by `operant tui effort set`.
     pub effort_level: Option<String>,
     /// Whether vim keybindings are enabled in the TUI prompt input.
     /// Set by `operant tui vim on|off`.
