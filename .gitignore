@@ -133,3 +133,15 @@ local/onnxruntime*.tgz
 *.genome-lock
 *.genome-tmp
 .genome/
+
+# Linked worktrees and audit scratch that live INSIDE the main checkout
+# (2026-11-14, MEASURED: `git clean -ndff` listed .wt-2096/ .wt-skillroots/
+# .wt-theme/ .wt-tmp/ .wt-tui-fix/ — five live worktrees, each a peer's
+# possibly-uncommitted leg. Untracked is exactly what `git clean -fdx` removes,
+# and rule 2's fleet-hold protection is a hand-typed command no tool runs. The
+# ignore entry is the cheap half of the guard; the sweep must still intersect
+# `git worktree list --porcelain` before it removes anything.)
+.wt-*/
+.wt*/
+.audit-*/
+.audit-tmp/
