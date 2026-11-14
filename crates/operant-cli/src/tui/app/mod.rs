@@ -1312,13 +1312,12 @@ impl App {
     ) -> impl Iterator<Item = crate::tui::operant_app::protocol::SwarmMemberStatus> + '_ {
         use crate::tui::operant_app::protocol::{SwarmMemberRuntime, SwarmMemberStatus};
 
-        // `now_secs` is private to the registry module, and the age it would
-        // give is derived from the same dispatch_time the record carries — so
-        // read the clock here rather than exporting a second time source.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        // The registry's own clock, not a fourth copy of the epoch arithmetic
+        // (audit 2026-11-15, finding 9). The ages below are derived from the
+        // `dispatch_time` the record carries, and the foreground rows are aged
+        // from `started_at` by the same function — so reading one clock here is
+        // what keeps the two sources of one pane agreeing.
+        let now = operant_core::tools::async_delegation::now_secs();
 
         // Pick the source by what the caller can actually use. The live path
         // only ever wanted pending rows and used to clone every finished child's

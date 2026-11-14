@@ -52,11 +52,15 @@ fn live() -> &'static Mutex<Vec<Row>> {
     LIVE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// The one clock, shared with the delegation registry.
+///
+/// MEASURED 2026-11-15 (third-pass audit, finding 9): this was a third copy of
+/// an identical body. Both registries age the same kind of row from the same
+/// kind of timestamp, and the hub reads both in one pass — a clock that
+/// disagreed between them would make one pane's ages inconsistent with the
+/// other's.
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    crate::tools::async_delegation::now_secs()
 }
 
 /// Record a worker starting. Called before its stream begins, so the pane can show

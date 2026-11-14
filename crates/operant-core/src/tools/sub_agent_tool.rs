@@ -940,8 +940,12 @@ impl SubAgentTool {
         // text (hermes parity: delegation = one tool line + result).
         let agent = OperantAgent::new(config, client, registry, self.database.clone());
 
-        // Run with timeout
-        let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
+        // Run with timeout. The floor is the shared constant, not a second `30`
+        // (audit 2026-11-15, finding 11): the other three sites clamp with
+        // `MIN_WORKER_TIMEOUT_SECONDS`, and this one restated it as a literal —
+        // so raising the floor would have changed three call sites and silently
+        // left the fourth behind.
+        let timeout_duration = Duration::from_secs(timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS));
         let subagent_id = next_subagent_id();
         // The lifecycle pair is closed by a guard, not by the happy path: the
         // tool future races the interrupt flag (agent/stream.rs) and the outer

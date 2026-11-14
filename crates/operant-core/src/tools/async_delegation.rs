@@ -246,7 +246,17 @@ fn settle_interrupted(records: Vec<AsyncDelegationRecord>) -> (Vec<AsyncDelegati
     (recovered, settled)
 }
 
-fn now_secs() -> u64 {
+/// Seconds since the Unix epoch, or 0 if the clock is before it.
+///
+/// MEASURED 2026-11-15 (third-pass audit, finding 9): this was written three
+/// times in one surface — here, in `foreground_swarm`, and inline in
+/// `App::swarm_gallery_members`, whose own comment apologised for the copy
+/// ("`now_secs` is private to the registry module ... so read the clock here
+/// rather than exporting a second time source"). All three bodies were
+/// identical, and all three age the SAME records from the SAME `dispatch_time`
+/// / `started_at`, so a clock that disagreed between them would make the hub's
+/// ages inconsistent with the registry's. One export, three callers.
+pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -493,32 +503,19 @@ pub fn get_record(id: &str) -> Option<AsyncDelegationRecord> {
     registry().lock().ok()?.get(id).cloned()
 }
 
-/// All records, newest dispatch first.
-pub fn list_records() -> Vec<AsyncDelegationRecord> {
-    let mut records: Vec<AsyncDelegationRecord> = registry()
-        .lock()
-        .map(|map| map.values().cloned().collect())
-        .unwrap_or_default();
-    records.sort_by(|a, b| {
-        b.dispatch_time
-            .cmp(&a.dispatch_time)
-            .then_with(|| b.delegation_id.cmp(&a.delegation_id))
-    });
-    records
-}
-
-/// Only the records still pending, newest dispatch first.
+/// Records newest dispatch first, optionally only the pending ones.
 ///
-/// The per-frame callers (`App::swarm_gallery_members(live_only)`, the hub's
-/// `Working` count) ask for live rows and used to clone EVERY record first —
-/// including each finished child's full answer — then throw the finished ones
-/// away (audit finding 13). Filtering before the clone is the whole fix.
-pub fn live_records() -> Vec<AsyncDelegationRecord> {
+/// One implementation, not two. MEASURED 2026-11-15 (third-pass audit, finding
+/// 10): `list_records` and `live_records` had byte-identical bodies except for
+/// a single `.filter()`, and the 4-line `sort_by` was copied verbatim — so a
+/// change to the ordering had to be made twice and would silently diverge if it
+/// was made once.
+fn records_filtered(live_only: bool) -> Vec<AsyncDelegationRecord> {
     let mut records: Vec<AsyncDelegationRecord> = registry()
         .lock()
         .map(|map| {
             map.values()
-                .filter(|r| r.status == AsyncDelegationStatus::Pending)
+                .filter(|r| !live_only || r.status == AsyncDelegationStatus::Pending)
                 .cloned()
                 .collect()
         })
@@ -529,6 +526,21 @@ pub fn live_records() -> Vec<AsyncDelegationRecord> {
             .then_with(|| b.delegation_id.cmp(&a.delegation_id))
     });
     records
+}
+
+/// All records, newest dispatch first.
+pub fn list_records() -> Vec<AsyncDelegationRecord> {
+    records_filtered(false)
+}
+
+/// Only the records still pending, newest dispatch first.
+///
+/// The per-frame callers (`App::swarm_gallery_members(live_only)`, the hub's
+/// `Working` count) ask for live rows and used to clone EVERY record first —
+/// including each finished child's full answer — then throw the finished ones
+/// away (audit finding 13). Filtering before the clone is the whole fix.
+pub fn live_records() -> Vec<AsyncDelegationRecord> {
+    records_filtered(true)
 }
 
 /// The registry as `SessionEntryV2` subagent rows — the unified listing's
@@ -740,6 +752,76 @@ mod tests {
         // cleanup so other tests' count assertions stay isolated
         mark_completed(&first, "done");
         mark_completed(&second, "done");
+    }
+
+    /// The two listers are one implementation with a filter, so they must agree
+    /// on membership and ordering.
+    ///
+    /// MEASURED 2026-11-15 (third-pass audit, finding 10): `list_records` and
+    /// `live_records` were byte-identical but for one `.filter()`, with the sort
+    /// copied verbatim. A change to the ordering made once would have silently
+    /// diverged the two. This pins the shared property: live rows are a subset of
+    /// all rows, in the same relative order.
+    #[test]
+    fn the_live_list_is_the_all_list_filtered_not_a_second_ordering() {
+        let _guard = test_lock().lock().unwrap();
+        let a = create_record("live-a", "m");
+        let b = create_record("live-b", "m");
+        let c = create_record("live-c", "m");
+        let d = create_record("live-d", "m");
+
+        // Force DISTINCT dispatch times. `create_record` stamps `now_secs()`, so
+        // three records created in the same second share one timestamp and a
+        // reversed sort is indistinguishable from the real one — which is exactly
+        // how a divergent copy would hide.
+        if let Ok(mut map) = registry().lock() {
+            if let Some(r) = map.get_mut(&a) {
+                r.dispatch_time = 100;
+            }
+            if let Some(r) = map.get_mut(&b) {
+                r.dispatch_time = 200;
+            }
+            if let Some(r) = map.get_mut(&c) {
+                r.dispatch_time = 300;
+            }
+            if let Some(r) = map.get_mut(&d) {
+                r.dispatch_time = 400;
+            }
+        }
+
+        // Two finish; TWO stay pending, so the live list has an observable
+        // order rather than a single row that any sort would leave alone.
+        mark_completed(&a, "done");
+        mark_failed(&b, "boom");
+
+        let all = list_records();
+        let live = live_records();
+
+        assert_eq!(all.len(), 4, "all four records: {all:?}");
+        assert_eq!(live.len(), 2, "the two pending ones: {live:?}");
+        assert_eq!(
+            live[0].delegation_id, d,
+            "newest first: d (400) before c (300): {live:?}"
+        );
+        assert_eq!(live[1].delegation_id, c);
+
+        // Relative order is preserved: filtering must not reorder.
+        let order = |rows: &[AsyncDelegationRecord]| -> Vec<String> {
+            rows.iter().map(|r| r.delegation_id.clone()).collect()
+        };
+        let all_ids = order(&all);
+        let live_ids = order(&live);
+        let expected: Vec<String> = all_ids
+            .iter()
+            .filter(|id| live_ids.contains(id))
+            .cloned()
+            .collect();
+        assert_eq!(
+            live_ids, expected,
+            "the live list must be the all list filtered in place, not re-sorted"
+        );
+
+        __test_reset_registry();
     }
 
     /// Audit finding 3: a restart used to forget every delegation, and a record
