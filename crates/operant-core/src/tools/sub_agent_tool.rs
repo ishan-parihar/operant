@@ -357,6 +357,15 @@ struct WorkerSpec {
     working_dir: Option<String>,
     /// Stable id for this worker, also the id an operator surface shows.
     id: String,
+    /// The other workers in this fan-out, as `(id, goal)` pairs, already clipped.
+    ///
+    /// MEASURED 2026-11-14 (audit finding 6): siblings could not see each other
+    /// at all, and they all share ONE working directory, so two workers editing
+    /// the same file had no way to notice — the collision surfaced only when the
+    /// parent read two reports that disagreed. This is not a channel (a live one
+    /// is a subsystem); it is the minimum that lets a worker NAME the conflict in
+    /// the report the parent already reads.
+    siblings: Vec<(String, String)>,
 }
 
 /// One child's finished turn: the text the parent reads, plus the session the
@@ -599,6 +608,7 @@ impl SubAgentTool {
             SpawnPermit::reserve(1, child_depth).map_err(|refusal| refusal.to_string())?;
 
         self.call_unguarded(WorkerSpec {
+            siblings: Vec::new(),
             id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
@@ -668,6 +678,9 @@ impl SubAgentTool {
             Err(error) => return Err(error.into()),
         };
         let context: Option<String> = worker.context;
+        // Taken before the loop: `worker` is partly moved above, and the prompt
+        // is rebuilt on every schema retry, so the list has to outlive one turn.
+        let worker_siblings: Vec<(String, String)> = worker.siblings.clone();
 
         let mut retry_errors: Vec<String> = Vec::new();
         let mut attempts: usize = 0;
@@ -680,6 +693,7 @@ impl SubAgentTool {
                 child_depth,
                 max_depth,
                 &cwd,
+                &worker_siblings,
             );
             // Append the full OUTPUT CONTRACT only on the first attempt — the
             // retry message explicitly tells the child NOT to re-read the
@@ -1316,6 +1330,7 @@ fn build_child_system_prompt(
     child_depth: u32,
     max_spawn_depth: u32,
     working_dir: &Path,
+    siblings: &[(String, String)],
 ) -> String {
     let mut parts = vec![
         "You are a focused subagent working on a specific delegated task.".to_string(),
@@ -1330,6 +1345,24 @@ fn build_child_system_prompt(
             working_dir.display()
         ),
     ];
+
+    // Siblings share this working directory, so the one thing a worker can do
+    // about a collision is say so in its report. Absent for a single child, and
+    // for an orchestrator's own children the list is empty (they fan out from
+    // their own parent, not from this one).
+    if !siblings.is_empty() {
+        let listed: Vec<String> = siblings
+            .iter()
+            .map(|(id, goal)| format!("- {id}: {goal}"))
+            .collect();
+        parts.push(format!(
+            "\nOTHER WORKERS IN THIS FAN-OUT (you share ONE working directory with them):\n{}\
+             \nThey cannot see your work and you cannot see theirs. If your task touches a file \
+             another worker's task also names, SAY SO in your answer — name the file and the \
+             other worker's id — rather than editing it silently.",
+            listed.join("\n")
+        ));
+    }
 
     if let Some(ctx) = context
         && !ctx.trim().is_empty()
@@ -1397,6 +1430,13 @@ fn build_child_system_prompt(
 /// worker 1 and part of worker 2). jcode parity: a completion report is capped
 /// and summarised before it is injected into the parent.
 const MAX_WORKER_REPORT_CHARS: usize = 4000;
+
+/// How much of a sibling's goal a worker is told.
+///
+/// The list exists so a worker can NAME a collision, not so it can read every
+/// sibling's brief: the full goals are already in the parent's request, and this
+/// text is replicated into every child's prompt (audit finding 6).
+const SIBLING_GOAL_CHARS: usize = 80;
 
 /// Cap one worker's report on a character boundary, keeping its own text.
 ///
@@ -1619,10 +1659,24 @@ impl SubAgentTool {
         let timeout = parsed
             .timeout_seconds
             .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+        // Ids and goals first, so every worker can be told about the others
+        // (audit finding 6). Clipped per sibling: the list is context the parent
+        // pays for once per worker, so a 100-task fan-out must not put 100 full
+        // goals into every child's prompt.
+        let roster: Vec<(String, String)> = tasks
+            .iter()
+            .map(|task| {
+                (
+                    next_subagent_id(),
+                    preview_of(task.goal.trim(), SIBLING_GOAL_CHARS),
+                )
+            })
+            .collect();
         let workers: Vec<WorkerSpec> = tasks
             .into_iter()
-            .map(|task| WorkerSpec {
-                id: next_subagent_id(),
+            .zip(roster.iter().cloned())
+            .map(|(task, (id, _))| WorkerSpec {
+                id,
                 goal: task.goal,
                 context: task.context,
                 role,
@@ -1632,6 +1686,18 @@ impl SubAgentTool {
                 // A task's own request wins over the top-level one.
                 toolsets: task.toolsets.or_else(|| parsed.toolsets.clone()),
                 working_dir: parsed.working_dir.clone(),
+                siblings: Vec::new(), // filled below, once every id exists
+            })
+            .collect();
+        let workers: Vec<WorkerSpec> = workers
+            .into_iter()
+            .map(|worker| {
+                let siblings = roster
+                    .iter()
+                    .filter(|(other, _)| *other != worker.id)
+                    .cloned()
+                    .collect();
+                WorkerSpec { siblings, ..worker }
             })
             .collect();
 
@@ -2094,6 +2160,7 @@ mod tests {
             1,
             2,
             Path::new("/tmp"),
+            &[],
         );
         assert!(prompt.contains("Analyze this"));
         assert!(prompt.contains("context"));
@@ -2109,6 +2176,7 @@ mod tests {
             1,
             2,
             Path::new("/tmp"),
+            &[],
         );
         assert!(prompt.contains("Orchestrator Role"));
         assert!(prompt.contains("delegate_task"));
@@ -2451,6 +2519,7 @@ mod tests {
             1,
             2,
             Path::new("/srv/work/thing"),
+            &[],
         );
         assert!(prompt.contains("WORKING DIRECTORY"), "{prompt}");
         assert!(prompt.contains("/srv/work/thing"), "{prompt}");
@@ -2527,6 +2596,48 @@ mod tests {
             text: text.into(),
             session_id: None,
         })
+    }
+
+    /// Audit finding 6: siblings share ONE working directory and could not see
+    /// each other, so a collision surfaced only when the parent read two
+    /// disagreeing reports. The prompt now names them.
+    #[test]
+    fn a_worker_is_told_which_siblings_share_its_directory() {
+        let prompt = build_child_system_prompt(
+            "edit the parser",
+            None,
+            SubAgentRole::Leaf,
+            1,
+            2,
+            Path::new("/repo"),
+            &[
+                ("sub-1".to_string(), "edit the lexer".to_string()),
+                ("sub-2".to_string(), "touch the same file".to_string()),
+            ],
+        );
+        assert!(prompt.contains("sub-1"), "{prompt}");
+        assert!(prompt.contains("edit the lexer"), "{prompt}");
+        assert!(prompt.contains("share ONE working directory"), "{prompt}");
+        assert!(
+            prompt.contains("SAY SO in your answer"),
+            "the worker must be told the report is where a conflict goes: {prompt}"
+        );
+    }
+
+    /// A lone child has no siblings, and an empty list must not add a section:
+    /// a single delegation's prompt is unchanged by this feature.
+    #[test]
+    fn a_lone_worker_gets_no_sibling_block() {
+        let prompt = build_child_system_prompt(
+            "solo",
+            None,
+            SubAgentRole::Leaf,
+            1,
+            2,
+            Path::new("/repo"),
+            &[],
+        );
+        assert!(!prompt.contains("OTHER WORKERS"), "{prompt}");
     }
 
     #[test]
@@ -2662,6 +2773,7 @@ mod tests {
 
     fn spec(goal: &str, timeout_secs: u64) -> WorkerSpec {
         WorkerSpec {
+            siblings: Vec::new(),
             id: next_subagent_id(),
             working_dir: None,
             goal: goal.to_string(),
@@ -3019,13 +3131,11 @@ mod approval_inheritance_tests {
         // allowlist for every worker while the single path kept it.
         let worker = parent.clone_for_task();
         assert_eq!(
-            worker.parent_approval_allowlist,
-            parent.parent_approval_allowlist,
+            worker.parent_approval_allowlist, parent.parent_approval_allowlist,
             "a swarm worker must inherit the parent's allowlist"
         );
         assert_eq!(
-            worker.parent_approval_allowlist_path,
-            parent.parent_approval_allowlist_path,
+            worker.parent_approval_allowlist_path, parent.parent_approval_allowlist_path,
             "and the file it persists to"
         );
     }
@@ -3035,9 +3145,8 @@ mod approval_inheritance_tests {
     #[test]
     fn a_parent_with_no_allowlist_passes_an_empty_one() {
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
-        let db = Arc::new(
-            Database::init(std::env::temp_dir().join("test_approval_empty.db")).unwrap(),
-        );
+        let db =
+            Arc::new(Database::init(std::env::temp_dir().join("test_approval_empty.db")).unwrap());
         let tool = SubAgentTool::with_parent_tool_policy(
             &client,
             "gpt-4.1",
