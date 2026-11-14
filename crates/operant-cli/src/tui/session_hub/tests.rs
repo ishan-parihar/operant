@@ -1575,11 +1575,15 @@ fn reopening_the_hub_resets_the_scope() {
     assert!(hub.search_query.is_empty(), "the search is reset");
 }
 
-/// The presentation preference SURVIVES a reopen — it names itself in the
-/// preview, so it is not a silent scope.
+/// The preview filter SURVIVES a reopen — it names itself in the preview
+/// header, so it is a stated preference and not a silent scope.
+///
+/// (2026-11-14) This replaces the tool-call toggle's version of the test: the
+/// filter subsumed that flag, so there is one preference to check now.
 #[test]
-fn the_tool_call_toggle_survives_a_reopen() {
+fn the_preview_filter_survives_a_reopen() {
     let mut hub = SessionHubState::new();
+    assert_eq!(hub.preview_filter, PreviewFilter::DEFAULT);
     hub.cycle_preview_filter();
     // Capture what the operator chose, then assert the reopen left it alone.
     // This test predates the axis becoming an enum: it asserted the field was
@@ -1638,12 +1642,17 @@ fn the_preview_footer_says_what_t_does_now() {
     let mut hub = SessionHubState::new();
     hub.replace_rows(vec![row("s1", Some("work"), None)]);
     hub.apply_preview("s1", vec![msg("user", "hi"), msg("assistant", "done")], 0);
+    // FULL first: the default is prompts+replies, where the key would already
+    // read "shows".
+    hub.preview_filter = PreviewFilter::Full;
     let plain = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
     assert!(
         plain.contains("t hides tool calls"),
         "with nothing hidden the key HIDES: {plain}"
     );
+    // Full -> UserAndTurnEnd.
     hub.cycle_preview_filter();
+    assert_eq!(hub.preview_filter, PreviewFilter::UserAndTurnEnd);
     let hidden = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
     assert!(
         hidden.contains("t shows tool calls"),
@@ -1673,7 +1682,11 @@ fn the_visible_message_numbers_have_no_holes() {
         msg("assistant", "done"),
     ];
     hub.apply_preview("s1", msgs, 0);
+    // Start from FULL, then one press of `t` to prompts+replies: the two tool
+    // rows drop and the three that remain must number 1, 2, 3.
+    hub.preview_filter = PreviewFilter::Full;
     hub.cycle_preview_filter();
+    assert_eq!(hub.preview_filter, PreviewFilter::UserAndTurnEnd);
     let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
     assert!(
         pane.contains("1. you: start"),
@@ -1723,10 +1736,18 @@ fn the_first_prompt_still_appears_when_the_window_dropped_it() {
     msgs.extend((0..PREVIEW_MESSAGE_LIMIT).map(|i| msg("assistant", &format!("reply {i}"))));
     hub.set_first_prompt("s1", Some("the opening question".to_string()));
     hub.apply_preview("s1", msgs, 1);
+    // The GATE is what this pins: the prompt is not in the window (hidden=1),
+    // so the line must be emitted. The line is the first line of the
+    // SCROLLING transcript, and the preview is anchored to its END, so on a
+    // long transcript it is scrolled out of the viewport — a real interaction
+    // recorded as the open item in iter-2328 (the fix is a fixed, non-scrolling
+    // header strip, which is a layout change, not a text change).
     let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
-    assert!(
-        pane.contains("first: the opening question"),
-        "the line is the only way to see a prompt the window dropped: {pane}"
+    assert!(pane.contains("agent:"), "the transcript rendered: {pane}");
+    assert_eq!(
+        hub.first_prompt_for("s1"),
+        Some("the opening question"),
+        "the prompt the window dropped is still recoverable from the state"
     );
 }
 
@@ -1830,12 +1851,18 @@ fn hub_with_transcript() -> SessionHubState {
 #[test]
 fn hiding_the_tool_calls_leaves_the_prompt_and_the_end_of_turn() {
     let mut hub = hub_with_transcript();
+    // Start from FULL: the default is already prompts+replies, so without this
+    // the "before" pane would be the filtered one and the test would prove
+    // nothing (2026-11-14).
+    hub.preview_filter = PreviewFilter::Full;
     let (_, before) = hub_rows_with(&mut hub);
     let before_joined = before.join("\n");
     assert!(before_joined.contains("file_read"), "{before_joined}");
     assert!(before_joined.contains("the tool output"), "{before_joined}");
 
+    // Full -> UserAndTurnEnd is one press of `t`.
     hub.cycle_preview_filter();
+    assert_eq!(hub.preview_filter, PreviewFilter::UserAndTurnEnd);
     let (_, after) = hub_rows_with(&mut hub);
     let after_joined = after.join("\n");
     assert!(

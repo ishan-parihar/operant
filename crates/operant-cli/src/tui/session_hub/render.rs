@@ -425,6 +425,7 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
 /// g`: one line that answers "where am I" AND "what changes the organisation".
 /// Stage C adds the `Group:` clause; the span vector is shaped for it now so
 /// adding it will not restructure this function.
+
 fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // (2026-11-14, audit finding 2) The header is BUILT under a budget.
     //
@@ -1388,6 +1389,15 @@ fn render_preview(
                     },
                     Style::default().fg(theme_colors::muted()),
                 )),
+                // The opening prompt, PINNED (2026-11-14).
+                //
+                // The transcript below is anchored to its END now, so a line at
+                // the top of a long transcript is never on screen — and the
+                // "first:" line existed precisely to show a prompt that had
+                // scrolled off. It was scrolled off with everything else. The
+                // fixed header does not scroll, so that is where a pinned fact
+                // belongs. Shown only when the window does not already contain
+                // it, so a short session does not read it twice (finding 9).
                 // (2026-11-13, audit finding 1) The directory, in FULL, in the
                 // one place a path fits. The row carries the basename only (its
                 // budget is 46 columns and it sheds the basename first), so the
@@ -1421,6 +1431,13 @@ fn render_preview(
             // answer scrolled off the head of a 400-message window. For any
             // session at or under the limit the prompt IS in the window, and
             // the pane printed it twice — "first: hi" and then "1. you: hi".
+            // (2026-11-14, OPEN) This line is the first line of the
+            // SCROLLING transcript, and the preview is now anchored to its END,
+            // so on a long transcript it is scrolled off — the very fact it
+            // exists to surface. The real fix is a fixed (non-scrolling) header
+            // strip above the transcript, which is a layout change to the
+            // preview pane's inner area; it is recorded as the open item in
+            // iter-2328 rather than half-done here.
             if let Some(first) = state.first_prompt_for(&row.id) {
                 let in_window = state.preview.as_ref().is_some_and(|(_, msgs, hidden)| {
                     *hidden == 0
