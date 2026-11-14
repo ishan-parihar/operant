@@ -9,6 +9,8 @@ fn row(id: &str, title: Option<&str>, emp: Option<&str>) -> SessionEntryV2 {
         parent_id: None,
         title: title.map(str::to_string),
         updated_at: chrono::Utc::now(),
+        started_at: None,
+        ended_at: None,
         employee_id: emp.map(str::to_string),
         source: "local".to_string(),
         message_count: 3,
@@ -26,6 +28,8 @@ fn subagent_row(id: &str, goal: &str, status: &'static str) -> SessionEntryV2 {
         parent_id: None,
         title: None,
         updated_at: chrono::Utc::now(),
+        started_at: None,
+        ended_at: None,
         employee_id: None,
         source: "subagent".to_string(),
         message_count: 0,
@@ -1297,6 +1301,57 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     hub.replace_rows(vec![row("s1", Some("work"), None)]);
     hub.set_first_prompt("s-other", Some("someone else's prompt".to_string()));
     assert_eq!(hub.first_prompt_for("s1"), None);
+}
+
+/// The runtime is reported for a finished session, derived from the clock for a
+/// live one, and ABSENT when it cannot be known.
+///
+/// (2026-11-14, plan iteration 3b) The operator: "runtime (the time the session
+/// has spent executing)". Three cases, and the third is the one that matters for
+/// the live store: 3,308 of 3,314 rows have no `started_at`, so the honest
+/// rendering is an absent field rather than a fabricated `0s`.
+#[test]
+fn the_runtime_is_measured_not_faked() {
+    use chrono::{Duration, Utc};
+    let now = Utc::now();
+
+    // A finished session: exactly the span between its two columns.
+    let start = now - Duration::seconds(3725);
+    let end = now - Duration::seconds(5);
+    assert_eq!(
+        super::render::runtime(Some(start), Some(end)).as_deref(),
+        Some("1h 2m"),
+        "3720s is one hour and two minutes"
+    );
+
+    // A live session: derived from the clock, so it ADVANCES between frames.
+    let live_start = now - Duration::seconds(90);
+    let first = super::render::runtime(Some(live_start), None);
+    assert_eq!(first.as_deref(), Some("1m 30s"));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let second = super::render::runtime(Some(live_start), None);
+    assert_ne!(
+        first, second,
+        "a live runtime must advance: {first:?} then {second:?}"
+    );
+
+    // Sub-minute, and the sub-hour shapes.
+    assert_eq!(
+        super::render::runtime(Some(now - Duration::seconds(45)), Some(now)).as_deref(),
+        Some("45s")
+    );
+    assert_eq!(
+        super::render::runtime(Some(now - Duration::seconds(7200)), Some(now)).as_deref(),
+        Some("2h 0m")
+    );
+
+    // No start: no runtime. Not "0s" — that would be a claim.
+    assert_eq!(super::render::runtime(None, Some(now)), None);
+    // A negative span (a clock skew) is also not a runtime.
+    assert_eq!(
+        super::render::runtime(Some(now), Some(now - Duration::seconds(10))),
+        None
+    );
 }
 
 /// The row shows the DATE, not a relative phrase.

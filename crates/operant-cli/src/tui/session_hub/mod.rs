@@ -41,6 +41,8 @@ pub fn probe_rows(n: usize) -> Vec<SessionEntryV2> {
             parent_id: None,
             title: Some(format!("session {i}")),
             updated_at: chrono::Utc::now(),
+            started_at: None,
+            ended_at: None,
             employee_id: None,
             source: "local".to_string(),
             message_count: 1,

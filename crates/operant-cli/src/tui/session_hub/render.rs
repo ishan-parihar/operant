@@ -202,6 +202,39 @@ fn group_heading_row(key: &str, count: usize, inner_width: u16) -> ListItem<'sta
 ///
 /// The date, not the instant: the row is scanned, not read. The preview header
 /// keeps the relative phrase beside it, where there is width.
+/// The session's runtime, or nothing when it cannot be known.
+///
+/// (2026-11-14, plan iteration 3b) "runtime (the time the session has spent
+/// executing)" — the second half of the operator's date-and-runtime item.
+///
+/// A finished session reports `ended_at - started_at`. A live one reports
+/// `now - started_at`, computed AT THE READ SITE: a duration written once at
+/// load is frozen at its first value, which for a running session is the one
+/// number that must move.
+///
+/// Returns None when either bound is missing. 3,308 of 3,314 live rows have no
+/// `started_at`, and the honest rendering for those is an ABSENT field — not
+/// `0s`, and not a duration guessed from `updated_at`, which is a different
+/// fact (it is `COALESCE(ended_at, started_at)`, so for a live session it is
+/// the start and for a finished one the end).
+pub fn runtime(
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<String> {
+    let start = started_at?;
+    let end = ended_at.unwrap_or_else(chrono::Utc::now);
+    let secs = end.signed_duration_since(start).num_seconds();
+    if secs < 0 {
+        return None;
+    }
+    Some(match () {
+        _ if secs < 60 => format!("{secs}s"),
+        _ if secs < 3600 => format!("{}m {}s", secs / 60, secs % 60),
+        _ if secs < 86_400 => format!("{}h {}m", secs / 3600, (secs % 3600) / 60),
+        _ => format!("{}d {}h", secs / 86_400, (secs % 86_400) / 3600),
+    })
+}
+
 pub fn absolute_date(updated_at: chrono::DateTime<chrono::Utc>) -> String {
     updated_at.format("%Y-%m-%d").to_string()
 }
@@ -1375,12 +1408,18 @@ fn render_preview(
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
+                    // (plan iteration 3b) The runtime rides here: this line is
+                    // in the PINNED header, so a live duration is on screen
+                    // while the transcript scrolls under it.
                     format!(
-                        "id: {} · {} · ${:.4} · {} msg",
+                        "id: {} · {} · ${:.4} · {} msg{}",
                         row.id,
                         relative_time(row.updated_at),
                         row.cost_usd,
-                        row.message_count
+                        row.message_count,
+                        runtime(row.started_at, row.ended_at)
+                            .map(|d| format!(" · ran {d}"))
+                            .unwrap_or_default()
                     ),
                     Style::default().fg(theme_colors::muted()),
                 )),

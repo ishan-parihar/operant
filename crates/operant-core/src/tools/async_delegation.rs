@@ -419,6 +419,16 @@ pub fn records_snapshot() -> Vec<crate::session::listing::SessionEntryV2> {
                 parent_id: None,
                 title: None,
                 updated_at,
+                // A delegation's runtime is dispatch -> completion. The registry
+                // is process-local and prunes with its worker, so these are the
+                // live values rather than persisted ones.
+                started_at: Some(
+                    chrono::DateTime::from_timestamp(r.dispatch_time as i64, 0)
+                        .unwrap_or_else(chrono::Utc::now),
+                ),
+                ended_at: r.completed_time.map(|t| {
+                    chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now)
+                }),
                 employee_id: None,
                 source: "subagent".to_string(),
                 message_count: 0,

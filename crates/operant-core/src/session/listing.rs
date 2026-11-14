@@ -82,6 +82,13 @@ pub struct SessionEntryV2 {
     /// ended). The DB stores RFC3339 strings; the picker formats relative
     /// time from the typed value.
     pub updated_at: DateTime<Utc>,
+    /// The two columns `updated_at` stands in for (2026-11-14, plan iteration
+    /// 3b). The runtime is `ended_at - started_at`, and `updated_at` alone
+    /// cannot answer it: it is `COALESCE(ended_at, started_at)`, so it says
+    /// when the session last changed, not how long it ran. Either may be None on
+    /// a legacy row — 3,308 of 3,314 live rows have no `started_at`.
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
     /// The operator's "who is executing" tag. None = personal mode, or a
     /// row that predates the column (no backfill lie).
     pub employee_id: Option<String>,

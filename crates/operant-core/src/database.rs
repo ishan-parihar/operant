@@ -1793,6 +1793,7 @@ impl Database {
         let sql = format!(
                 "SELECT s.id, s.title, s.parent_session_id, s.employee_id, s.source,
                         COALESCE(s.ended_at, s.started_at) AS updated_at,
+                        s.started_at, s.ended_at,
                         s.cwd, s.archived,
                         s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens AS tokens,
                         COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0.0) AS cost_usd,
@@ -1838,12 +1839,14 @@ impl Database {
                         employee_id: row.get(3)?,
                         source: row.get(4)?,
                         updated_at: row.get(5)?,
-                        cwd: row.get(6)?,
-                        archived: row.get::<_, i64>(7)? != 0,
-                        tokens: row.get::<_, i64>(8)?.max(0) as u64,
-                        cost_usd: row.get(9)?,
-                        message_count: row.get::<_, i64>(10)?.max(0) as usize,
-                        interrupted: row.get::<_, i64>(11)?.max(0) != 0,
+                        started_at: row.get(6)?,
+                        ended_at: row.get(7)?,
+                        cwd: row.get(8)?,
+                        archived: row.get::<_, i64>(9)? != 0,
+                        tokens: row.get::<_, i64>(10)?.max(0) as u64,
+                        cost_usd: row.get(11)?,
+                        message_count: row.get::<_, i64>(12)?.max(0) as usize,
+                        interrupted: row.get::<_, i64>(13)?.max(0) != 0,
                     })
                 },
             )
@@ -1873,11 +1876,18 @@ impl Database {
             } else {
                 crate::session::listing::RowKind::Session
             };
+            let parse = |v: &Option<String>| -> Option<DateTime<Utc>> {
+                v.as_deref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&Utc))
+            };
             out.push(crate::session::listing::SessionEntryV2 {
                 id: row.id,
                 parent_id: row.parent_id,
                 title: row.title,
                 updated_at,
+                started_at: parse(&row.started_at),
+                ended_at: parse(&row.ended_at),
                 employee_id: row.employee_id,
                 source: row.source,
                 message_count: row.message_count,
@@ -3683,6 +3693,12 @@ struct RichSessionRow {
     employee_id: Option<String>,
     source: String,
     updated_at: String,
+    /// The two real columns `updated_at` stands in for (2026-11-14, plan
+    /// iteration 3b). A runtime needs both: `updated_at` alone answers "when did
+    /// it last change", not "how long did it run". Either may be NULL on a legacy
+    /// row — 3,308 of 3,314 live rows have no `started_at`.
+    started_at: Option<String>,
+    ended_at: Option<String>,
     cwd: Option<String>,
     archived: bool,
     tokens: u64,
