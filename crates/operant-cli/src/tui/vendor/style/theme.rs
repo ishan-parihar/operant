@@ -91,6 +91,11 @@ pub fn diff_removed_color() -> Color {
     super::palette::role_color(super::palette::Role::ToolDiffRemoved)
 }
 
+/// Status-line bar fill (plan 2026-11-14 U7).
+pub fn status_line_bg() -> Color {
+    super::palette::role_color(super::palette::Role::StatusLineBg)
+}
+
 /// Foreground for one syntax category (plan 2026-11-14 U5).
 ///
 /// Every `syntax_*` role resolves through here so the highlighter has a single

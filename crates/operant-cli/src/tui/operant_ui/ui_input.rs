@@ -1232,11 +1232,18 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
 
     crate::tui::operant_app::memory::check_staleness();
 
+    // (plan 2026-11-14 U7) The bar's fill. OMP paints one `statusLineBg` behind
+    // the whole row and every segment sits on it; operant had no fill at all, so
+    // there was nothing for a separator to be drawn against. The style is
+    // applied to the ROW, not to each span, so a span that carries its own
+    // background (a warning chip, say) still wins.
+    let paragraph = Paragraph::new(line).style(crate::tui::status_line::bar::fill_style());
+
     if app.centered_mode() {
-        frame.render_widget(Paragraph::new(line.alignment(Alignment::Center)), area);
+        frame.render_widget(paragraph.alignment(Alignment::Center), area);
         return;
     }
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(paragraph, area);
 }
 
 fn running_tool_header_spans(
