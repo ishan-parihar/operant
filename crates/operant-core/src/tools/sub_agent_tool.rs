@@ -699,7 +699,7 @@ impl SubAgentTool {
         );
         let client: Box<dyn ModelClient> = Box::new(OpenAIModelClient::new(raw_client));
 
-        let max_iters: usize = max_iterations.unwrap_or(50) as usize;
+        let max_iters: usize = max_iterations.unwrap_or_else(default_child_max_iterations) as usize;
         let config = AgentConfig {
             model: self.model.clone(),
             stream: false,
@@ -1640,6 +1640,24 @@ pub fn set_orchestrator_enabled(enabled: bool) {
     ORCHESTRATOR_ENABLED.store(if enabled { 1 } else { 0 }, Ordering::Relaxed);
 }
 
+/// Fallback iteration budget for a child when the caller sets none.
+///
+/// This used to be a literal 50 inside `run_child`, so the operator's configured
+/// `delegation.max_iterations` was read by nobody: three different defaults
+/// existed for one number (the README's 20 for the agent, the setup wizard's 90,
+/// and this 50), and the one an operator tuned had no effect on delegated work.
+static DEFAULT_CHILD_MAX_ITERATIONS: AtomicU32 = AtomicU32::new(50);
+
+/// The child iteration budget when the caller does not set one.
+fn default_child_max_iterations() -> u32 {
+    DEFAULT_CHILD_MAX_ITERATIONS.load(Ordering::Relaxed)
+}
+
+/// Set the child iteration budget used when the caller sets none.
+pub fn set_default_child_max_iterations(iterations: u32) {
+    DEFAULT_CHILD_MAX_ITERATIONS.store(iterations.max(1), Ordering::Relaxed);
+}
+
 /// Set maximum concurrent children
 pub fn set_max_concurrent_children(count: usize) {
     MAX_CONCURRENT_CHILDREN.store(count.clamp(1, 10) as u32, Ordering::Relaxed);
@@ -2069,6 +2087,18 @@ mod tests {
             }
             other => panic!("expected a cancelled stop, got {other:?}"),
         }
+    }
+
+    /// The configured child budget is the fallback, and it is a real control.
+    #[test]
+    fn the_child_iteration_budget_follows_the_configured_value() {
+        let before = default_child_max_iterations();
+        set_default_child_max_iterations(7);
+        assert_eq!(default_child_max_iterations(), 7);
+        // A zero is a ceiling of nothing, not a licence to spin: it floors at 1.
+        set_default_child_max_iterations(0);
+        assert_eq!(default_child_max_iterations(), 1);
+        set_default_child_max_iterations(before);
     }
 
     /// The breadth peek is the decision a dispatch makes BEFORE it creates a

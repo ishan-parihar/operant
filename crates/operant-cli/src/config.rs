@@ -648,29 +648,23 @@ impl Default for MemoryConfigV2 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DelegationConfig {
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
+    /// Iteration budget for a delegated child when the caller does not set one.
     pub max_iterations: Option<u32>,
-    pub reasoning_effort: Option<String>,
     pub max_concurrent_children: Option<u32>,
     pub max_spawn_depth: Option<u32>,
     pub orchestrator_enabled: Option<bool>,
+    /// Process-wide ceiling on live child workers — the number that bounds spend.
+    pub max_global_workers: Option<usize>,
 }
 
 impl Default for DelegationConfig {
     fn default() -> Self {
         Self {
-            model: Some(String::new()),
-            provider: Some(String::new()),
-            base_url: Some(String::new()),
-            api_key: Some(String::new()),
-            max_iterations: Some(90),
-            reasoning_effort: Some(String::new()),
+            max_iterations: Some(50),
             max_concurrent_children: Some(3),
             max_spawn_depth: Some(2),
             orchestrator_enabled: Some(true),
+            max_global_workers: Some(6),
         }
     }
 }

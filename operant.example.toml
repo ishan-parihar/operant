@@ -45,6 +45,22 @@ model_request_timeouts = {}
 # Applies to OpenRouter-compatible endpoints and the Anthropic adapter.
 # prompt_cache_ttl = "5m"
 
+# Delegated children (delegate_task). Every key here is read at startup; a key
+# that is not listed here does not exist.
+[delegation]
+# Iteration budget for a child when the caller sets none.
+max_iterations = 50
+# One batch's in-flight children.
+max_concurrent_children = 3
+# How deep a child may itself delegate (1 = parent -> child only).
+max_spawn_depth = 2
+# Whether the orchestrator role may spawn children of its own.
+orchestrator_enabled = true
+# Process-wide ceiling on live child workers. This is the number that bounds
+# spend: max_concurrent_children bounds ONE batch, so without this, N parents
+# each fanning out M children reach N*M live model streams.
+max_global_workers = 6
+
 [client.rate_limit]
 # Maximum retries after a 429 or transient server error (0 = no retries)
 max_retries = 3
