@@ -610,6 +610,70 @@ mod tests {
         assert_eq!(empty["count"], 0);
     }
 
+    /// Every multi-word field parses in BOTH spellings — by construction.
+    ///
+    /// MEASURED 2026-11-15 (fourth-pass audit, finding 2): the alias set covers
+    /// five fields, but the guard above only exercised `session_id` and
+    /// `around_message_id`. A new multi-word field added without an alias would
+    /// fail the same silent way serde already failed once — the key is dropped,
+    /// the field becomes `None`, and the call silently takes a different branch.
+    /// That is how finding 3a happened in the first place.
+    ///
+    /// This test drives the ARG PARSER directly rather than through `execute`,
+    /// so it covers every field at once instead of one per behaviour. A new
+    /// multi-word field with no alias fails here immediately.
+    ///
+    /// MUTATION PROVEN: removing any one `#[serde(alias)]` fails this test with
+    /// the field named and `left: None, right: Some(..)`.
+    #[test]
+    fn every_multi_word_field_parses_in_both_spellings() {
+        // (snake_case, camelCase, a value that satisfies the field's type)
+        let cases: &[(&str, &str, serde_json::Value)] = &[
+            ("role_filter", "roleFilter", serde_json::json!("user")),
+            ("limit", "limit", serde_json::json!(2)),
+            ("session_id", "sessionId", serde_json::json!("s1")),
+            ("around_message_id", "aroundMessageId", serde_json::json!(7i64)),
+            ("window", "window", serde_json::json!(4)),
+        ];
+
+        for (snake, camel, value) in cases.iter() {
+            // snake_case
+            let body = serde_json::json!({ *snake: value.clone() });
+            let parsed: SessionSearchArgs = serde_json::from_value(body.clone())
+                .unwrap_or_else(|e| panic!("{snake} must parse: {e}"));
+            assert!(
+                field_is_set(&parsed, snake),
+                "snake_case {snake} was silently dropped: {parsed:?}"
+            );
+
+            // camelCase — identical only when the two spellings coincide
+            // (single-word fields), which is exactly the case the seam leaves
+            // untouched and serde already accepts.
+            let body = serde_json::json!({ *camel: value.clone() });
+            let parsed: SessionSearchArgs = serde_json::from_value(body.clone())
+                .unwrap_or_else(|e| panic!("{camel} must parse: {e}"));
+            assert!(
+                field_is_set(&parsed, snake),
+                "camelCase {camel} was silently dropped for field {snake}: {parsed:?}"
+            );
+        }
+    }
+
+    /// Whether the named field of a parsed struct holds a value.
+    ///
+    /// A hand-written reader rather than `Debug` matching, so the failure names
+    /// the field that lost its value instead of dumping the whole struct.
+    fn field_is_set(args: &SessionSearchArgs, field: &str) -> bool {
+        match field {
+            "role_filter" => args.role_filter.is_some(),
+            "limit" => args.limit.is_some(),
+            "session_id" => args.session_id.is_some(),
+            "around_message_id" => args.around_message_id.is_some(),
+            "window" => args.window.is_some(),
+            other => panic!("no such field: {other}"),
+        }
+    }
+
     /// Both key spellings parse.
     ///
     /// The dispatch seam (`tools::normalize_arg_keys`) adds a snake_case twin for
