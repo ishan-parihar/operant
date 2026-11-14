@@ -587,7 +587,23 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
     // over-counted by `sep - 1`, which is conservative for overflow — it never
     // let the bar overflow — but it rejected rungs that fit by exactly one
     // cell and made the "fits exactly" claim in the comment below wrong.
-    let total_width = |tier: LabelTier, sep: u16, with_sort: bool, counts_on_all: bool| -> u16 {
+    // (2026-11-14, live defect: "filters are still garbled like `n 30 w 0 r
+    // 3292`") The counts are now a THREE-way choice, and the missing rung was
+    // the whole bug.
+    //
+    // Measured against the operator's real terminal: the list pane is 40% of
+    // the frame, so a 100-column terminal gives 38 inner cells. There, the
+    // shortest readable form — the short labels with counts only on the active
+    // pill — measures 43 cells and is rejected; and the next candidate, the
+    // same labels with NO counts, measured 39 because the formula charged a
+    // space per pill ON TOP of the separator. Both were rejected, so the
+    // ladder fell through to the one-letter tier: "a 3292 n 30 w 0 r 3292".
+    //
+    // With no counts the separator IS the gap, so the words measure 32 cells
+    // and fit with room to spare. Readable words now always beat single
+    // letters; the letters are the last resort before the single-pill
+    // collapse, not the first thing that fits.
+    let total_width = |tier: LabelTier, sep: u16, with_sort: bool, counts_mode: Counts| -> u16 {
         let mut tabs = 0u16;
         for (i, (m, n)) in counts.iter().enumerate() {
             let label = match tier {
@@ -595,16 +611,12 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
                 LabelTier::Short => m.short_label(),
                 LabelTier::Min => m.min_label(),
             };
-            // A pill is "label<space><count>". The count is only rendered
-            // on the pill when `counts_on_all` or it is the active one —
-            // that is the rung's escape hatch when the labels alone fit but
-            // the labels plus seven counts do not.
-            let with_count = counts_on_all || *m == state.filter_mode;
             tabs += label.chars().count() as u16;
-            tabs += n.to_string().len() as u16;
-            tabs += 1;
-            if !with_count {
-                tabs -= n.to_string().len() as u16;
+            match counts_mode {
+                Counts::All => tabs += 1 + n.to_string().len() as u16,
+                Counts::Active if *m == state.filter_mode => tabs += 1 + n.to_string().len() as u16,
+                // No count: the separator below is the only gap, so no +1.
+                Counts::Active | Counts::None => {}
             }
             if i + 1 < counts.len() {
                 tabs += sep;
@@ -628,6 +640,15 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
         Short,
         Min,
     }
+    /// How many pills carry a count. (2026-11-14) The third state is the fix
+    /// for the garbled tags: below ~110 columns even the words with one count
+    /// do not fit, and the words without counts do.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Counts {
+        All,
+        Active,
+        None,
+    }
 
     // The ladder's rungs, richest first: the label spelling degrades, then the
     // counts, and the sort clause is dropped with the labels as it always was.
@@ -635,40 +656,31 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
     // answers a less useful question — "how many are in the filter I am on" —
     // while the min tier keeps every count, which is "which filter even has
     // anything in it": the operator's question when they open the hub.
-    let (tier, sep, show_sort, counts_on_all) =
-        if total_width(LabelTier::Long, SEP, true, true) <= width {
-            (LabelTier::Long, SEP, true, true)
-        } else if total_width(LabelTier::Short, SEP, true, true) <= width {
-            (LabelTier::Short, SEP, true, true)
-        } else if total_width(LabelTier::Short, 1, true, true) <= width {
-            (LabelTier::Short, 1, true, true)
-        } else if total_width(LabelTier::Short, 1, false, true) <= width {
-            (LabelTier::Short, 1, false, true)
-        } else if total_width(LabelTier::Short, 1, false, false) <= width {
-            // (2026-11-14, live defect: "garbled text for its filter tags")
-            //
-            // The SHORT labels with counts on the ACTIVE pill only, BEFORE the
-            // one-letter tier. The first ladder put the letters first, and at
-            // the operator's 120-column frame the bar rendered
-            // "a 500 n 0 w 0 r 500 i 0 c 0 b 500" — seven single letters,
-            // which reads as garbled text, not as filter names. This rung
-            // measures 41 cells against the pane's 46 and shows real words:
-            // "all 500 need work ready idle cur br".
-            (LabelTier::Short, 1, false, false)
-        } else if total_width(LabelTier::Min, 1, false, true) <= width {
-            // The last rung before the collapse: one-letter labels WITH their
-            // counts. Only reached on a pane too narrow for the words.
-            (LabelTier::Min, 1, false, true)
-        } else if total_width(LabelTier::Min, 1, false, false) <= width {
-            // The seven labels with counts on the ACTIVE pill only. This comes
-            // before collapsing to a single pill, and that order is the fix:
-            // the earlier ladder fell straight from "seven pills" to "one
-            // pill", and that last step is where the operator lost the ability
-            // to see what the filters were without cycling through them.
-            (LabelTier::Min, 1, false, false)
+    let (tier, sep, show_sort, counts_mode) =
+        if total_width(LabelTier::Long, SEP, true, Counts::All) <= width {
+            (LabelTier::Long, SEP, true, Counts::All)
+        } else if total_width(LabelTier::Short, SEP, true, Counts::All) <= width {
+            (LabelTier::Short, SEP, true, Counts::All)
+        } else if total_width(LabelTier::Short, 1, true, Counts::All) <= width {
+            (LabelTier::Short, 1, true, Counts::All)
+        } else if total_width(LabelTier::Short, 1, false, Counts::All) <= width {
+            (LabelTier::Short, 1, false, Counts::All)
+        } else if total_width(LabelTier::Short, 1, false, Counts::Active) <= width {
+            // Real words, the active filter's count, every other filter named
+            // without one. This is the operator's rung: "all 500 need work ready
+            // idle cur br" — measured 43 cells against a 46-cell pane.
+            (LabelTier::Short, 1, false, Counts::Active)
+        } else if total_width(LabelTier::Short, 1, false, Counts::None) <= width {
+            // The rung that was MISSING (2026-11-14). Below ~110 columns even the
+            // words with one count overflow, and the ladder used to fall straight
+            // from there to single letters. The words with no counts measure 32
+            // cells, so they fit a 38-cell pane and stay readable.
+            (LabelTier::Short, 1, false, Counts::None)
+        } else if total_width(LabelTier::Min, 1, false, Counts::All) <= width {
+            // The last resort before the collapse: one-letter labels WITH counts.
+            (LabelTier::Min, 1, false, Counts::All)
         } else {
-            // Degrade to the active filter alone; a count nobody can read is
-            // decoration, and the header above still names the filter.
+            // Degrade to the active filter alone.
             let active = counts
                 .iter()
                 .find(|(m, _)| *m == state.filter_mode)
@@ -698,10 +710,10 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
         };
         // On the rung where only the ACTIVE pill carries a count, the others
         // render the label alone — the label is what lets the operator aim.
-        let text = if counts_on_all || *mode == state.filter_mode {
-            format!("{label} {n}")
-        } else {
-            label.clone()
+        let text = match counts_mode {
+            Counts::All => format!("{label} {n}"),
+            Counts::Active if *mode == state.filter_mode => format!("{label} {n}"),
+            Counts::Active | Counts::None => label.clone(),
         };
         let style = if *mode == state.filter_mode {
             Style::default()

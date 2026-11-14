@@ -1295,6 +1295,41 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     assert_eq!(hub.first_prompt_for("s1"), None);
 }
 
+/// The filter tags must stay readable at the width the operator actually has.
+///
+/// (2026-11-14, live defect: "filters are still garbled like `n 30 w 0 r
+/// 3292`") The list pane is 40% of the frame, so a 100-column terminal gives 38
+/// inner cells. The words with the active count measure 43 there and are
+/// rejected; the words with NO counts measure 32 and fit. Before the no-counts
+/// rung existed the ladder fell from "words that do not fit" straight to single
+/// letters, which is exactly what the operator saw.
+#[test]
+fn the_filter_tags_stay_readable_on_a_narrow_terminal() {
+    for width in [100u16, 110, 120] {
+        let mut hub = SessionHubState::new();
+        hub.replace_rows(realistic_rows());
+        let (list, _) = hub_rows_at(width, realistic_rows());
+        let joined = list.join("\n");
+        let lines: Vec<&str> = joined.lines().collect();
+        let tab_line = lines
+            .iter()
+            .position(|l| l.contains("Sessions"))
+            .and_then(|i| lines.get(i + 1))
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            !tab_line.contains(" 500 n ") && !tab_line.contains("n 0 w"),
+            "single-letter tags must never reach the screen at {width} cols: {tab_line:?}"
+        );
+        for label in ["all", "need", "work", "ready", "idle", "cur", "br"] {
+            assert!(
+                tab_line.contains(label),
+                "the `{label}` filter must be readable at {width} cols: {tab_line:?}"
+            );
+        }
+    }
+}
+
 /// The filter tags must read as WORDS, not as single letters.
 ///
 /// (2026-11-14, live defect: "the session-picker showing up garbled text for
