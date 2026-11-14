@@ -294,6 +294,15 @@ fn max_global_workers() -> usize {
     MAX_GLOBAL_WORKERS.load(Ordering::Relaxed)
 }
 
+/// Whether the process-wide worker budget has no headroom at all.
+///
+/// A peek for callers that must decide BEFORE they create something the child
+/// would need a slot for (a background delegation record, a UI row). It is never
+/// a substitute for [`SpawnPermit::reserve`], which is the atomic claim.
+fn breadth_is_exhausted() -> bool {
+    live_worker_count() >= max_global_workers()
+}
+
 fn next_subagent_id() -> String {
     format!("sub-{}", SUBAGENT_SEQ.fetch_add(1, Ordering::Relaxed))
 }
@@ -753,6 +762,15 @@ impl SubAgentTool {
 
         // ── Spawn guard, enforced BEFORE spawning ──
         let child_depth = self.parent_depth + 1;
+        // Snapshot the budget BEFORE the reservation. `reserve` adds this
+        // swarm's own slots to LIVE_WORKERS, so a shortfall reason built from a
+        // later read tells the operator the budget was already full on entry —
+        // MEASURED 2026-11-14: "only 3 of 5 fit (4 live of 4 allowed)" when one
+        // slot had in fact been free. The same condition then read two different
+        // ways in one turn, because a nested delegate_task reports the honest
+        // pre-reservation count.
+        let live_before = live_worker_count();
+        let max_allowed = max_global_workers();
         let reservation = SpawnPermit::reserve(tasks.len(), child_depth);
         let admitted_slots = reservation.as_ref().map_or(0, SpawnPermit::slots);
         let refusal_text = reservation.as_ref().err().map(SpawnRefusal::to_string);
@@ -769,9 +787,8 @@ impl SubAgentTool {
                 let reason = refusal_text.clone().unwrap_or_else(|| {
                     format!(
                         "Swarm breadth cap reached: only {admitted_slots} of the requested \
-                         workers fit in the process-wide budget ({} live of {} allowed).",
-                        live_worker_count(),
-                        max_global_workers(),
+                         workers fit in the process-wide budget ({live_before} live of \
+                         {max_allowed} allowed before this swarm)."
                     )
                 });
                 outcomes.push(WorkerOutcome {
@@ -848,6 +865,23 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
     ) -> std::result::Result<String, BoxedToolError> {
+        // Refuse BEFORE the handle exists when there is no breadth headroom at
+        // all. MEASURED 2026-11-14: with the process-wide cap already full, this
+        // returned {"status":"dispatched"} for a child that could not reserve a
+        // slot — the parent spent a turn on a handle for work that never
+        // started, and learned of it only by polling. This is a PEEK, not the
+        // claim (the atomic reservation still happens inside `call`); a child
+        // that loses the race anyway is marked Failed, never Pending.
+        if breadth_is_exhausted() {
+            return Err(format!(
+                "Spawn refused: {}/{} worker slots are already live. Wait for one \
+                 to finish, or run this synchronously.",
+                live_worker_count(),
+                max_global_workers()
+            )
+            .into());
+        }
+
         let Some(delegation_id) = async_delegation::try_create_record(
             &goal,
             &self.model,
@@ -1907,6 +1941,25 @@ mod tests {
     fn format_swarm_outcomes_handles_empty() {
         let result = format_swarm_outcomes(&[]);
         assert_eq!(result, "No results");
+    }
+
+    /// The breadth peek is what a dispatch checks BEFORE it creates a record: no
+    /// headroom must read as exhausted, and a held slot must flip it.
+    ///
+    /// Written against the CAP, not the live count: this module's other tests
+    /// hold and release permits on parallel threads, so any assertion that
+    /// depends on the live count reaching a particular value is a flake.
+    #[test]
+    fn the_breadth_peek_follows_the_live_count() {
+        let held = SpawnPermit::reserve(1, 1).expect("a slot must be reservable");
+        // With this slot held, a cap of one is exhausted whatever else is live.
+        set_max_global_workers(1);
+        assert!(breadth_is_exhausted(), "a held last slot is not headroom");
+        // A generous cap is not exhausted.
+        set_max_global_workers(MAX_GLOBAL_WORKERS_CAP);
+        assert!(!breadth_is_exhausted(), "32 slots is headroom");
+        drop(held);
+        set_max_global_workers(DEFAULT_MAX_GLOBAL_WORKERS);
     }
 
     /// A zero-tool child's answer must be marked as such; an ordinary child's
