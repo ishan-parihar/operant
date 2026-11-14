@@ -104,6 +104,89 @@ impl App {
     /// picker opens ALREADY FILTERED, so the argument narrows the list
     /// instead of being dropped. The filter survives the endpoint fetch
     /// (the drain re-applies it).
+    /// Apply a resolved selector: set the model, the effort, or both.
+    ///
+    /// (2026-11-15, model plan M4) A ROLE selector names the slot's CURRENT model
+    /// and an optional level — it reads, it does not assign. Assigning a model to a
+    /// slot is the Roles view, which is M6; doing half of it here would be a second
+    /// writer for one config key.
+    pub(super) fn apply_resolved_selector(
+        &mut self,
+        sel: crate::tui::model_selector::ResolvedSelector,
+    ) {
+        let model = match sel.role {
+            Some(slot) => match slot.assigned_models(&self.config).into_iter().next() {
+                Some(model) => Some(model),
+                None => {
+                    self.set_status_notice(format!(
+                        "{} slot has no model assigned — set it in operant.toml.",
+                        slot.name()
+                    ));
+                    return;
+                }
+            },
+            None => sel.model.clone(),
+        };
+
+        if let Some(model) = model {
+            // The same clamp `/effort-set` uses: a model the catalogue says cannot
+            // reason refuses the level rather than sending it.
+            let level = sel.effort.unwrap_or(self.effort_level);
+            let provider = crate::provider::provider_from_url(
+                self.config.client.base_url.trim_end_matches('/'),
+            )
+            .map(|p| p.name)
+            .unwrap_or_default();
+            match crate::tui::model_effort::clamp_effort(provider, &model, level) {
+                Some(level) => {
+                    self.effort_level = level;
+                    self.pending_effort = Some(level.wire().to_string());
+                }
+                None => {
+                    // The model is fine; only the level is impossible. Apply the
+                    // model and say the level was dropped, rather than refusing
+                    // the whole selector.
+                    if let Some(why) =
+                        crate::tui::model_effort::effort_support(provider, &model).refusal()
+                    {
+                        self.set_status_notice(format!("{model}: {why}"));
+                    }
+                }
+            }
+            self.pending_model = Some(model.clone());
+            self.set_status_notice(format!("Model: {model} (applying…)"));
+            return;
+        }
+
+        // Effort only: `/model xhigh` and `/effort xhigh` are the same request.
+        if let Some(level) = sel.effort {
+            if let Some(why) = self.effort_support_for_current_model().refusal() {
+                self.set_status_notice(why.to_string());
+                return;
+            }
+            self.effort_level = level;
+            self.pending_effort = Some(level.wire().to_string());
+            self.set_status_notice(format!("Effort: {} (applying…)", level.label()));
+        }
+    }
+
+    /// The models the operator can pick right now: the configured `[agent] model`
+    /// and `fallback_models`.
+    ///
+    /// (2026-11-15, model plan M4) This is the list the selector grammar validates
+    /// a bare word against. It is deliberately the CONFIGURED list and not the
+    /// fetched endpoint catalogue: the fetch is asynchronous and usually has not
+    /// resolved when a command runs, and the resolver treats an empty list as "no
+    /// evidence" rather than as "nothing exists".
+    pub(super) fn configured_model_ids(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::iter::once(self.config.agent.model.clone())
+            .chain(self.config.agent.fallback_models.iter().cloned())
+            .filter(|m| !m.trim().is_empty())
+            .collect();
+        names.dedup();
+        names
+    }
+
     pub(super) fn open_model_picker_inline(&mut self, filter: &str) {
         let base_url = self
             .config

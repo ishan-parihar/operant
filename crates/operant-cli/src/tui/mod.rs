@@ -54,6 +54,7 @@ pub mod keyboard_enhancement;
 pub mod mcp_view;
 pub mod messages;
 pub mod model_effort;
+pub mod model_selector;
 pub mod notifications;
 pub mod operant_anim;
 #[cfg_attr(
