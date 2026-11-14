@@ -231,8 +231,12 @@ incident happened.
 3. **Never `git add -A`.** Stage explicit paths. Overlap-check before push:
    `git status --porcelain -- <your paths>` must show nothing of the
    peer's; `git log <your-base>..origin/main --oneline` + diff-name-only vs
-   your staged set must show zero file overlap, or coordinate first
-   (peers message via `agent://<name>` when slices share files).
+   your staged set must show zero file overlap, or coordinate first.
+   The channel for that is the agent feed — `kb post "<msg>" --wf <workflow>
+   --to <agent>`, read with `kb feed --to <you> --since <F####>`
+   (`docs/kb/feed.md`) — NOT `agent://<name>`, which this rule named until
+   2026-11-14 and which exists nowhere in this tree or in any reference
+   implementation (measured: 5 tracked hits, all documentation, 0 executable).
 4. **Integration happens in the SHARED main tree** (owner order 2026-10-05:
    per-worktree `target/` caches measured 6–62 GB and the box is
    storage-critical — the fleet now builds against ONE shared `target/`):
@@ -1729,7 +1733,8 @@ were adopted without moving files this repo already owns.
 ### Fleet notes (this repo specifically)
 
 - The per-workflow boards are the collision guard between concurrent agents —
-  the same job the `agent://<name>` channel and the iteration-label lookup do.
+  the same job the agent feed (`kb post` / `kb feed`, `docs/kb/feed.md`) and
+  the iteration-label lookup do.
   `genome claim` refuses a double-claim with exit 2; that, not politeness, is what
   stops two agents editing one board.
 - The register keeps `TODO.md`'s native `## Implemented` / `## Pending` /
