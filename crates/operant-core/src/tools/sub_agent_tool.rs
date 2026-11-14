@@ -294,13 +294,23 @@ fn max_global_workers() -> usize {
     MAX_GLOBAL_WORKERS.load(Ordering::Relaxed)
 }
 
+/// Whether `live` of `max` worker slots leaves no headroom.
+///
+/// Split from the caller so the DECISION is testable without the process-global
+/// counters: this module's tests hold and release permits on parallel threads and
+/// several of them set the global cap, so a test that drives the real counters
+/// races them.
+fn breadth_is_exhausted_at(live: usize, max: usize) -> bool {
+    live >= max
+}
+
 /// Whether the process-wide worker budget has no headroom at all.
 ///
 /// A peek for callers that must decide BEFORE they create something the child
 /// would need a slot for (a background delegation record, a UI row). It is never
 /// a substitute for [`SpawnPermit::reserve`], which is the atomic claim.
 fn breadth_is_exhausted() -> bool {
-    live_worker_count() >= max_global_workers()
+    breadth_is_exhausted_at(live_worker_count(), max_global_workers())
 }
 
 fn next_subagent_id() -> String {
@@ -719,6 +729,13 @@ impl SubAgentTool {
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
         let subagent_id = next_subagent_id();
+        // The lifecycle pair is closed by a guard, not by the happy path: the
+        // tool future races the interrupt flag (agent/stream.rs) and the outer
+        // tool timeout, so a cancelled or timed-out parent drops this future
+        // mid-await and a plain `emit` after the await never runs — the operator
+        // is left with a subagent that started and never ended (MEASURED
+        // 2026-11-14).
+        let mut lifecycle = SubagentLifecycle::new(self, subagent_id.clone());
         self.emit_subagent(&AgentEvent::SubagentStarted {
             subagent_id: subagent_id.clone(),
             role: format!("{role:?}").to_lowercase(),
@@ -731,11 +748,7 @@ impl SubAgentTool {
             Ok(Err(error)) => ("failed", preview_of(&error.to_string(), 200)),
             Err(_) => ("timeout", format!("timed out after {timeout_seconds}s")),
         };
-        self.emit_subagent(&AgentEvent::SubagentStopped {
-            subagent_id,
-            status: status.to_string(),
-            summary,
-        });
+        lifecycle.finish(status, summary);
 
         // Same flag for the parent: the answer carries the banner, so a parent
         // that ignores the NOTE still cannot mistake a guess for a read.
@@ -1521,6 +1534,55 @@ fn flag_no_tools(zero_tools: bool, answer: String) -> String {
     }
 }
 
+/// Closes the `SubagentStarted` / `SubagentStopped` pair on EVERY exit.
+///
+/// `run_child` emits Started, awaits the child, then emitted Stopped — with no
+/// guard, dropping the future at that await (the parent's interrupt flag, the
+/// outer tool timeout, a turn teardown) skipped the stop entirely, so the TUI
+/// printed "Subagent sub-7 started" and never printed an exit. The operator read
+/// that as a subagent running forever.
+struct SubagentLifecycle<'a> {
+    tool: &'a SubAgentTool,
+    id: String,
+    finished: bool,
+}
+
+impl<'a> SubagentLifecycle<'a> {
+    fn new(tool: &'a SubAgentTool, id: String) -> Self {
+        Self {
+            tool,
+            id,
+            finished: false,
+        }
+    }
+
+    /// Record the real outcome. Calling this twice is a bug; the second call is
+    /// ignored so a double-finish cannot emit two stops.
+    fn finish(&mut self, status: &str, summary: String) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.tool.emit_subagent(&AgentEvent::SubagentStopped {
+            subagent_id: self.id.clone(),
+            status: status.to_string(),
+            summary,
+        });
+    }
+}
+
+impl Drop for SubagentLifecycle<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.tool.emit_subagent(&AgentEvent::SubagentStopped {
+                subagent_id: self.id.clone(),
+                status: "cancelled".to_string(),
+                summary: "the parent's turn ended before this child finished".to_string(),
+            });
+        }
+    }
+}
+
 /// Await a child turn, turning a panic into an ordinary failure.
 ///
 /// The swarm path has contained panics since iter-1612 (`run_swarm`, :392);
@@ -1943,23 +2005,89 @@ mod tests {
         assert_eq!(result, "No results");
     }
 
-    /// The breadth peek is what a dispatch checks BEFORE it creates a record: no
-    /// headroom must read as exhausted, and a held slot must flip it.
+    /// A child that is dropped mid-run must still get its Stopped event.
     ///
-    /// Written against the CAP, not the live count: this module's other tests
-    /// hold and release permits on parallel threads, so any assertion that
-    /// depends on the live count reaching a particular value is a flake.
+    /// MEASURED defect (2026-11-14): run_child emitted Started, awaited, then
+    /// emitted Stopped, so dropping the future at the await (the parent's
+    /// interrupt flag, the outer tool timeout, a turn teardown) left the operator
+    /// with a subagent that started and never ended.
+    #[tokio::test]
+    async fn a_dropped_child_still_reports_a_stopped_event() {
+        use crate::tools::ToolRegistry;
+
+        let client = OpenAIClient::new(crate::client::ClientConfig::default());
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_lifecycle.db")).unwrap());
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let tool = SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            database,
+            Some(tx),
+        );
+        let _ = ToolRegistry::new(Duration::from_secs(5)); // the tool builds its own
+
+        // Finish path: one stop, with the real status.
+        let mut lifecycle = SubagentLifecycle::new(&tool, "sub-done".to_string());
+        lifecycle.finish("completed", "all good".to_string());
+        drop(lifecycle);
+        match rx.try_recv() {
+            Ok(AgentEvent::SubagentStopped {
+                subagent_id,
+                status,
+                ..
+            }) => {
+                assert_eq!(subagent_id, "sub-done");
+                assert_eq!(status, "completed");
+            }
+            other => panic!("expected one stop, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a finished child must not emit twice"
+        );
+
+        // Drop path: the guard closes the pair by itself.
+        {
+            let _lifecycle = SubagentLifecycle::new(&tool, "sub-dropped".to_string());
+        }
+        match rx.try_recv() {
+            Ok(AgentEvent::SubagentStopped {
+                subagent_id,
+                status,
+                ..
+            }) => {
+                assert_eq!(subagent_id, "sub-dropped");
+                assert_eq!(status, "cancelled");
+            }
+            other => panic!("expected a cancelled stop, got {other:?}"),
+        }
+    }
+
+    /// The breadth peek is the decision a dispatch makes BEFORE it creates a
+    /// record. Tested as a pure function: driving the process-global counters
+    /// here would race the other tests in this module, which hold permits and set
+    /// the cap on parallel threads.
     #[test]
-    fn the_breadth_peek_follows_the_live_count() {
-        let held = SpawnPermit::reserve(1, 1).expect("a slot must be reservable");
-        // With this slot held, a cap of one is exhausted whatever else is live.
-        set_max_global_workers(1);
-        assert!(breadth_is_exhausted(), "a held last slot is not headroom");
-        // A generous cap is not exhausted.
-        set_max_global_workers(MAX_GLOBAL_WORKERS_CAP);
-        assert!(!breadth_is_exhausted(), "32 slots is headroom");
-        drop(held);
-        set_max_global_workers(DEFAULT_MAX_GLOBAL_WORKERS);
+    fn the_breadth_peek_is_live_against_max() {
+        assert!(
+            !breadth_is_exhausted_at(0, 6),
+            "an idle process has headroom"
+        );
+        assert!(!breadth_is_exhausted_at(5, 6), "one free slot is headroom");
+        assert!(
+            breadth_is_exhausted_at(6, 6),
+            "the last slot is not headroom"
+        );
+        assert!(
+            breadth_is_exhausted_at(7, 6),
+            "an over-cap count is not headroom"
+        );
+        assert!(breadth_is_exhausted_at(0, 0), "a zero cap admits nothing");
     }
 
     /// A zero-tool child's answer must be marked as such; an ordinary child's
