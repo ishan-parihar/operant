@@ -128,6 +128,11 @@ pub struct AgentConfig {
     /// Threaded from `BehaviorSettings::advertised_skills_token_budget`; 0
     /// means the built-in default.
     pub advertised_skills_token_budget: usize,
+    /// The token ceiling on the recalled-memory block (`<memory_context>`) in
+    /// the turn tail. Threaded from
+    /// `BehaviorSettings::memory_injection_budget_tokens`; 0 means the
+    /// built-in default (audit iter-2345).
+    pub memory_injection_budget_tokens: usize,
 
     /// The share of the assembled context that tool RESULTS may hold, in
     /// aggregate. See `BehaviorSettings::max_tool_result_total_share`.
@@ -252,6 +257,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             context_window: settings.context_window,
             max_tool_result_share: settings.max_tool_result_share,
             advertised_skills_token_budget: settings.advertised_skills_token_budget,
+            memory_injection_budget_tokens: settings.memory_injection_budget_tokens,
             max_tool_result_total_share: settings.max_tool_result_total_share,
             max_healing_attempts: settings.max_healing_attempts,
             max_trajectories: settings.max_trajectories,
@@ -2505,6 +2511,7 @@ mod tests {
                 // the wrap-up notice instead. The disclosure's arithmetic is
                 // what this test pins; the window is fixture state.
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 128_000,
                 ..AgentConfig::default()
             },
@@ -2722,6 +2729,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 50_000,
                 ..AgentConfig::default()
             },
@@ -2779,6 +2787,7 @@ mod tests {
         let agent2 = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 50_000,
                 ..AgentConfig::default()
             },
@@ -2812,6 +2821,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: window,
                 ..AgentConfig::default()
             },
@@ -3137,6 +3147,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 200_000,
                 ..AgentConfig::default()
             },
@@ -3208,6 +3219,7 @@ mod tests {
             AgentConfig {
                 // A large CONFIGURED window: the history below fits it.
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 200_000,
                 ..AgentConfig::default()
             },
@@ -3346,6 +3358,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 200_000,
                 stream: false,
                 ..AgentConfig::default()
@@ -3391,6 +3404,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 200_000,
                 stream: true,
                 ..AgentConfig::default()
@@ -3444,6 +3458,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 10_000,
                 ..AgentConfig::default()
             },
@@ -3563,6 +3578,7 @@ mod tests {
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
+                memory_injection_budget_tokens: 0,
                 context_window: 10_000,
                 ..AgentConfig::default()
             },
@@ -3767,6 +3783,7 @@ mod tests {
         // and inject the stored rollup.
         let agent_cfg = AgentConfig {
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             context_window: 8_000,
             ..AgentConfig::default()
         };
@@ -4375,6 +4392,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:
@@ -4434,6 +4452,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:
@@ -4559,6 +4578,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             context_window: 8000,
             max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_tool_result_total_share:

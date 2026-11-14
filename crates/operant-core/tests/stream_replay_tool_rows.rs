@@ -153,6 +153,7 @@ async fn a_replayed_stream_re_announces_its_tool_call() {
     let agent = OperantAgent::with_events(
         AgentConfig {
             advertised_skills_token_budget: 0,
+            memory_injection_budget_tokens: 0,
             model: "demo-replay".to_string(),
             max_iterations: 4,
             stream: true,

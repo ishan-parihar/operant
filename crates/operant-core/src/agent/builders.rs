@@ -733,6 +733,10 @@ impl OperantAgent {
             .clone()
             .unwrap_or_default();
         let rx = bus.subscribe();
+        // The response-shape knob (audit iter-2345): carried on the same
+        // config section as the model slot, so `[recap] instructions` reaches
+        // the prompt without a second parameter or a rebuild.
+        let recap_instructions = slot.instructions.clone();
         // SMOL slot resolution (omp model-roles parity, same shape as
         // [`Self::attach_advisor`]): a pinned base_url/api_key gets a
         // dedicated client seeded from `base`; a pinned model name rides
@@ -773,6 +777,7 @@ impl OperantAgent {
             client,
             model,
             idle,
+            recap_instructions,
             rx,
             move || {
                 // Snapshot under the read lock; the engine calls this only

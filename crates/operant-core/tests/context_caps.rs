@@ -195,6 +195,7 @@ fn test_config(model: &str) -> AgentConfig {
     AgentConfig {
         retry: Default::default(),
         advertised_skills_token_budget: 0,
+        memory_injection_budget_tokens: 0,
         reasoning_effort: String::new(),
         reasoning_effort_param: Default::default(),
         context_semantic_compaction: false,

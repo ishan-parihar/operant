@@ -45,29 +45,35 @@ model_request_timeouts = {}
 # Applies to OpenRouter-compatible endpoints and the Anthropic adapter.
 # prompt_cache_ttl = "5m"
 
-# Delegated children (delegate_task). Every key here is read at startup; a key
-# that is not listed here does not exist.
+# Delegated children (delegate_task) are NOT configured here.
 #
-# THREE OF THESE ARE SILENTLY CLAMPED (measured 2026-11-14). The setters refuse
-# to store a value outside a hard range and log nothing, so a number above the
-# ceiling reads as accepted and is not. The ceilings are:
-#   max_concurrent_children  1..=10
-#   max_spawn_depth          1..=3
-#   max_global_workers       1..=32
-[delegation]
-# Iteration budget for a child when the caller does not set one. Floor 1.
-max_iterations = 50
-# One batch's in-flight children. Clamped to 1..=10.
-max_concurrent_children = 3
-# How deep a child may itself delegate (1 = parent -> child only). Clamped to
-# 1..=3, so 3 is the deepest tree this binary can build.
-max_spawn_depth = 2
-# Whether the orchestrator role may spawn children of its own.
-orchestrator_enabled = true
-# Process-wide ceiling on live child workers. This is the number that bounds
-# spend: max_concurrent_children bounds ONE batch, so without this, N parents
-# each fanning out M children reach N*M live model streams. Clamped to 1..=32.
-max_global_workers = 6
+# This section used to sit in this file ACTIVE, and that was a defect with two
+# halves (audit iter-2345):
+#
+#   1. `AppConfig` has no `delegation` field, so the file did not parse
+#      strictly — the shipped example was invalid as written.
+#   2. Worse, the runtime does not FAIL on that: it takes the upgrade-parking
+#      path (`config_heal::split_unknown`), re-walks the whole file against a
+#      hand-maintained key list, and parks what that walk does not recognise.
+#      That walk was missing 23 live keys, so an operator who copied this
+#      example lost `[advisor]`, `[agent.ponytail]`, `[bylaws.budget]`,
+#      `[cli]`, `terminal_backend` and `observability.backend` — silently, with
+#      a warning that named the wrong keys. See `KNOWN_KEYS` in
+#      crates/operant-core/src/config_registry.rs, and the guard test
+#      `every_active_example_key_is_known_to_the_parking_walk`.
+#
+# The live home for these five knobs is the YAML CLI config
+# (`HERMES_CONFIG`, default <home>/config.yaml), which is where
+# `DelegationConfig` is read (crates/operant-cli/src/config.rs). They are
+# deliberately NOT duplicated here: a second file that appears to own them is
+# how the example came to advertise settings it cannot deliver.
+#
+#   delegation:
+#     max_iterations: 50            # floor 1
+#     max_concurrent_children: 3    # silently clamped to 1..=10
+#     max_spawn_depth: 2            # silently clamped to 1..=3
+#     orchestrator_enabled: true
+#     max_global_workers: 6         # silently clamped to 1..=32; bounds spend
 
 [client.rate_limit]
 # Maximum retries after a 429 or transient server error (0 = no retries)
@@ -105,6 +111,20 @@ context_window = 0
 # every turn can run at all. The skills that fit are advertised; the rest are
 # dropped and the drop is stated in the block. 0 = the built-in default (4000).
 advertised_skills_token_budget = 0
+# The token ceiling on the RECALLED-MEMORY block (`<memory_context>`) that the
+# memory provider's prefetch injects into the turn tail each turn. It was the
+# one injected context with no ceiling at all: skills have the knob above, the
+# kernel feed-forward block is built at 1200 chars, memory had nothing.
+#
+# The recall is bounded by COUNT, not size (5 hits, plus up to 8 queued
+# queries at 3 hits each = 29 blocks, none truncated), and the session fold
+# caps each message but not the message count. So a long session's folded
+# transcript can be recalled whole. That matters more than the skills case:
+# the TAIL is charged against the window but is never EVICTABLE (the ladder
+# only shrinks the conversation), so an oversized recall does not degrade the
+# request — it FAILS it typed ("the protected context alone exceeds it").
+# 0 = the built-in default (4000). The truncation is stated in the block.
+memory_injection_budget_tokens = 0
 # Context caps — BOTH axes bind, and the SMALLER one wins.
 #
 # The soft cap is the turn-boundary compaction trigger: crossing it compacts
@@ -332,15 +352,21 @@ enabled = false
 # review, never an error into the primary's path).
 # timeout_secs = 120
 
-# [recap] — the idle-recap engine's MODEL slot (omp `recap.*` + the `smol`
-# role parity). The idle window is `agent.recap_idle_seconds` above; this
-# section lets the ~40-word status line ride a CHEAP, FAST model instead of
-# the primary. Empty (default) = the primary model on the primary route.
+# [recap] — the idle-recap engine (omp `recap.*` + the `smol` role parity).
+# The idle window is `agent.recap_idle_seconds` above; this section lets the
+# ~40-word status line ride a CHEAP, FAST model instead of the primary, and
+# lets you change WHAT it says. Empty (default) = the primary model on the
+# primary route, and the built-in prompt unchanged.
 [recap]
 # [recap.model]
 # model = ""
 # base_url = ""
 # api_key = ""
+# Freeform extra instructions appended to the recap prompt. The built-in
+# contract asks for ~40 words leading with the goal, then the current task,
+# then one next action; adding text here extends that, it does not replace
+# it. Empty (default) reproduces the historical prompt byte for byte.
+# instructions = ""
 
 [autonomous]
 interval_secs = 300

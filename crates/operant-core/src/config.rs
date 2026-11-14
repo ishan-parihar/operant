@@ -821,6 +821,20 @@ pub struct BehaviorSettings {
     #[serde(default = "default_advertised_skills_token_budget")]
     pub advertised_skills_token_budget: usize,
 
+    /// The token ceiling on the recalled-memory block (`<memory_context>`)
+    /// injected into the turn tail each turn (audit iter-2345).
+    ///
+    /// The recalled block was the only injected context with NO ceiling —
+    /// skills have the knob above, the kernel block is built at 1,200 chars.
+    /// It matters more than the skills case because the block rides the TAIL:
+    /// the tail is charged against the window but is never evictable (the
+    /// ladder only shrinks `messages`), so an oversized recall does not
+    /// degrade the request, it FAILS it typed.
+    ///
+    /// 0 means the built-in default (4,000 tokens).
+    #[serde(default = "default_memory_injection_budget")]
+    pub memory_injection_budget_tokens: usize,
+
     #[serde(default = "default_max_tool_result_share")]
     pub max_tool_result_share: f64,
 
@@ -1048,6 +1062,13 @@ fn default_advertised_skills_token_budget() -> usize {
     crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
 }
 
+/// The recalled-memory block's default ceiling (audit iter-2345). Same value as
+/// the advertised-skills ceiling: both are injected context the model is TOLD,
+/// not context it can retrieve on demand.
+fn default_memory_injection_budget() -> usize {
+    crate::context_management::MEMORY_INJECTION_TOKEN_BUDGET
+}
+
 fn default_max_tool_result_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
 }
@@ -1147,6 +1168,7 @@ impl Default for BehaviorSettings {
             context_hard_cap_percent: default_context_hard_cap_percent(),
             context_compression_summary_max_chars: default_summary_max_chars(),
             advertised_skills_token_budget: default_advertised_skills_token_budget(),
+            memory_injection_budget_tokens: default_memory_injection_budget(),
             max_tool_result_share: default_max_tool_result_share(),
             max_tool_result_total_share: default_max_tool_result_total_share(),
             max_consecutive_tool_only: 90,
@@ -2328,6 +2350,28 @@ pub struct MemorySettings {
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
+    /// Token ceiling on the recalled-memory block injected each turn as
+    /// `<memory_context>` (audit iter-2345).
+    ///
+    /// Every OTHER injected context has a ceiling: the advertised-skills
+    /// block has `agent.advertised_skills_token_budget` (4,000) and the
+    /// kernel feed-forward block is built at 1,200 chars. Memory had none,
+    /// and the recall is bounded by COUNT, not by size: `recall_text(query,
+    /// 5)` plus up to `PREFETCH_QUEUE_CAP`(8) queued queries at 3 hits each
+    /// — 29 recalled blocks, none truncated.
+    ///
+    /// The session fold made that unbounded in practice. It caps each
+    /// message (300 user / 700 assistant chars) but not the message COUNT,
+    /// so a 500-turn session stores one ~125k-token document that is then
+    /// recalled whole. The tail is charged against the window but is never
+    /// evictable (the ladder only shrinks `messages`), so past the hard cap
+    /// the turn fails TYPED — "the protected context alone exceeds it" —
+    /// and one oversized recalled document can make a session permanently
+    /// unusable, with no knob to trim it.
+    ///
+    /// 0 = the built-in default (4,000), matching the skills ceiling.
+    #[serde(default = "default_memory_injection_budget_tokens")]
+    pub injection_budget_tokens: usize,
     /// (retired, plan 08) agentmemory server base URL — accepted, ignored.
     pub agentmemory_url: Option<String>,
     /// (retired, plan 08) agentmemory REST secret — accepted, ignored.
@@ -2415,6 +2459,7 @@ impl Default for MemorySettings {
         Self {
             provider: "memory-wire".to_string(),
             enabled: true,
+            injection_budget_tokens: default_memory_injection_budget_tokens(),
             agentmemory_url: None,
             agentmemory_secret: None,
             agentmemory_auto_spawn: None,
@@ -2423,6 +2468,12 @@ impl Default for MemorySettings {
             response_cache_enabled: None,
         }
     }
+}
+
+/// The recalled-memory block's default ceiling, mirroring the advertised-skills
+/// ceiling it sits beside in the same request (audit iter-2345).
+fn default_memory_injection_budget_tokens() -> usize {
+    crate::context_management::MEMORY_INJECTION_TOKEN_BUDGET
 }
 
 /// Browser provider configuration.
@@ -4326,6 +4377,92 @@ show_turn_attribution = false
         );
     }
 
+    /// The upgrade-parking guard (audit iter-2345).
+    ///
+    /// `KNOWN_KEYS` is the list the parking path re-walks a config against
+    /// when a strict parse fails on a key this build does not know
+    /// (`config_heal::split_unknown`). It is hand-maintained, so it drifts:
+    /// measured at iter-2344 it was missing 23 LIVE keys — all seven
+    /// `[advisor]` fields, `[recap].model`, the four `[agent.ponytail]`
+    /// keys, the four `[bylaws.budget]` keys, the four `[cli]` keys, plus
+    /// `terminal_backend`, `observability.backend` and
+    /// `integrations.herdr.enabled`.
+    ///
+    /// The consequence was not a warning. A config carrying ONE unknown key
+    /// took the parking path, and the re-walk then classified those valid
+    /// keys as unknown too and PARKED them — reproduced live: `[delegation]`
+    /// plus `[advisor] enabled = true` parked `advisor.enabled`, and the
+    /// operator's advisor silently never turned on.
+    ///
+    /// So this test walks every ACTIVE dotted key in the shipped example and
+    /// requires the registry to know it. A key the build genuinely does not
+    /// accept must not be active in the example (the other half of the same
+    /// defect — see `the_example_config_parses`).
+    #[test]
+    fn every_active_example_key_is_known_to_the_parking_walk() {
+        let example = include_str!("../../../operant.example.toml");
+        // Read as DATA, not as TOML: a dotted-key walk is what
+        // `split_unknown` sees, and it is the shape that drifted. Array-of-
+        // table entries (`[[mcp.servers]]`) are skipped — their leaves are
+        // not top-level dotted keys.
+        let mut section = String::new();
+        let mut in_array_table = false;
+        let mut active: Vec<String> = Vec::new();
+        for line in example.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(name) = trimmed.strip_prefix("[[") {
+                in_array_table = true;
+                section = name.strip_suffix("]]").unwrap_or(name).to_string();
+                continue;
+            }
+            if let Some(name) = trimmed.strip_prefix('[') {
+                in_array_table = false;
+                section = name.strip_suffix(']').unwrap_or(name).to_string();
+                continue;
+            }
+            if in_array_table {
+                continue;
+            }
+            let Some((leaf, _)) = trimmed.split_once('=') else {
+                continue;
+            };
+            let leaf = leaf.trim();
+            if leaf.is_empty() || !leaf.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            active.push(if section.is_empty() {
+                leaf.to_string()
+            } else {
+                format!("{section}.{leaf}")
+            });
+        }
+        assert!(
+            active.len() > 100,
+            "the walk found only {} keys -- the parser is broken, not the registry",
+            active.len()
+        );
+        let unknown: Vec<&String> = active
+            .iter()
+            .filter(|k| !crate::config_registry::KNOWN_KEYS.contains(&k.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "{} active key(s) in operant.example.toml are absent from KNOWN_KEYS. The \
+             parking walk would silently discard them for any operator whose config \
+             also carries a key this build does not know. Add each to \
+             config_registry::KNOWN_KEYS, or make it inactive in the example:\n  {}",
+            unknown.len(),
+            unknown
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+    }
+
     /// The 2026-10-26 context-management fixes (audit G2/G5/G6 follow-ups):
     /// every new knob must PARSE from TOML and default to the documented
     /// value — a key that silently fails to deserialize is a knob that
@@ -4946,10 +5083,20 @@ base_url = "https://api.openai.com/v1"
 enabled = true
 wonderful_unknown_key = 42
 "#;
-        let err = parse_config_str(bogus, std::path::Path::new("bogus.toml"));
+        // The parking contract (plan 2026-11-14 L2): an unknown key is PARKED
+        // and the rest loads, rather than failing the whole file. What must
+        // still hold is that the unknown key does NOT take effect — a stale
+        // key that silently bound is the defect these tests were written for.
+        let cfg = parse_config_str(bogus, std::path::Path::new("bogus.toml"))
+            .expect("an unknown key is parked, not fatal");
+        assert!(cfg.harness.enabled, "the known key beside it still binds");
+        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(
+            std::path::Path::new("bogus.toml"),
+        ))
+        .expect("the unknown key is recorded for the operator");
         assert!(
-            err.is_err(),
-            "deny_unknown_fields must reject unknown [harness] keys"
+            parked.contains("wonderful_unknown_key"),
+            "the parked key is named: {parked}"
         );
     }
 
@@ -5042,11 +5189,15 @@ base_url = "https://api.openai.com/v1"
 enabled = true
 wonderful_unknown_key = 42
 "#;
-        let err = parse_config_str(bogus, std::path::Path::new("bogus.toml"));
-        assert!(
-            err.is_err(),
-            "deny_unknown_fields must reject unknown [pk] keys"
-        );
+        // Parking contract: parked, not fatal — but never effective.
+        let cfg = parse_config_str(bogus, std::path::Path::new("bogus.toml"))
+            .expect("an unknown key is parked, not fatal");
+        assert!(cfg.pk.enabled, "the known key beside it still binds");
+        let parked = crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(
+            std::path::Path::new("bogus.toml"),
+        ))
+        .expect("the parked key is recorded for the operator");
+        assert!(parked.contains("wonderful_unknown_key"), "named: {parked}");
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -5177,7 +5328,13 @@ wonderful_unknown_key = 42
             "[ponytail]\nenabled = true\n",
             Path::new("memory://ponytail-scope-bad"),
         );
-        assert!(wrong_scope.is_err(), "top-level [ponytail] must not bind");
+        // Parking contract: the misplaced section is dropped, so it cannot
+        // bind. Asserting `is_err` here was the pre-parking contract.
+        let not_bound = wrong_scope.expect("a misplaced key is parked, not fatal");
+        assert_eq!(
+            not_bound.agent.ponytail.enabled, false,
+            "top-level [ponytail] must not bind the agent-scoped setting"
+        );
     }
 
     /// The `[bylaws]` block (wave-2 slice F2) maps onto the real fields —
@@ -5431,12 +5588,29 @@ wonderful_unknown_key = 42
         // a typo'd security knob silently falling back to defaults is the
         // worse failure mode, so the schema stays strict and removal is a
         // documented break.
+        // Parking contract (plan 2026-11-14 L2): the removed key is PARKED
+        // and the file still loads. The security intent is unchanged — a typo'd
+        // security knob must not silently take effect — and parking satisfies
+        // it by dropping the key from the effective config and RECORDING it,
+        // where the old contract satisfied it by refusing the whole file.
         let stale = "[bylaws]\nqueued_cron_jobs_resolve_grants = true\n";
-        let err = parse_config_str(stale, Path::new("memory://bylaws-stale"));
-        assert!(
-            err.is_err(),
-            "removed bylaws key must hard-fail config load"
+        let path =
+            std::env::temp_dir().join(format!("operant-bylaws-stale-{}.toml", std::process::id()));
+        let parked_cfg =
+            parse_config_str(stale, &path).expect("a removed key is parked, not fatal");
+        assert_eq!(
+            parked_cfg.bylaws.grant_ttl_days,
+            AppConfig::default().bylaws.grant_ttl_days,
+            "the parked key must not have bound to anything"
         );
+        let parked =
+            crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+                .expect("the removed key is recorded for the operator");
+        assert!(
+            parked.contains("queued_cron_jobs_resolve_grants"),
+            "named: {parked}"
+        );
+        let _ = std::fs::remove_file(crate::config_heal::unknown_sidecar_for(&path));
         // The field is still ACCEPTED (a config carrying it loads), but the
         // TTL it names governs nothing since the grant ledger went away
         // (RT-136) — so the example must not ASSIGN it (it may explain the
@@ -5476,11 +5650,27 @@ wonderful_unknown_key = 42
         );
         // And a config that still carries it is now rejected rather than
         // silently accepted-and-ignored, which is the point of removing it.
+        // Parking contract: the stale key is parked rather than fatal, and it
+        // must not silently bind — the field it names is gone, so there is
+        // nothing for it to bind to. What this guards is that the key is
+        // RECORDED, not swallowed.
         let with_key = "[tools]\nlifeos_enabled = true\n";
+        // A REAL path, not `memory://`: the sidecar's parent is the config's
+        // own parent, so every `memory://` test would share one sidecar and
+        // read each other's parked keys.
+        let path =
+            std::env::temp_dir().join(format!("operant-lifeos-probe-{}.toml", std::process::id()));
+        let cfg = parse_config_str(with_key, &path).expect("a stale key is parked, not fatal");
         assert!(
-            parse_config_str(with_key, Path::new("memory://lifeos-probe")).is_err(),
-            "a stale lifeos_enabled must not parse silently into a field that gates nothing"
+            !crate::redaction::redact_sensitive_text(&format!("{:?}", cfg.tools))
+                .contains("lifeos"),
+            "the retired key has no field to bind to"
         );
+        let parked =
+            crate::config_heal::read_parked(&crate::config_heal::unknown_sidecar_for(&path))
+                .expect("the retired key is recorded for the operator");
+        assert!(parked.contains("lifeos_enabled"), "named: {parked}");
+        let _ = std::fs::remove_file(crate::config_heal::unknown_sidecar_for(&path));
     }
 
     /// Pins the `[browser]` block of `operant.example.toml` to the code.
@@ -5595,6 +5785,7 @@ wonderful_unknown_key = 42
         let loud = MemorySettings {
             provider: "agentmemory".to_string(),
             enabled: true,
+            injection_budget_tokens: 0,
             agentmemory_url: None,
             agentmemory_secret: None,
             agentmemory_auto_spawn: Some(true),
@@ -5650,6 +5841,7 @@ wonderful_unknown_key = 42
             let s = MemorySettings {
                 provider: name.to_string(),
                 enabled: true,
+                injection_budget_tokens: 0,
                 agentmemory_url: None,
                 agentmemory_secret: None,
                 agentmemory_auto_spawn: None,
@@ -5672,6 +5864,7 @@ wonderful_unknown_key = 42
             let s = MemorySettings {
                 provider: name.to_string(),
                 enabled: true,
+                injection_budget_tokens: 0,
                 agentmemory_url: None,
                 agentmemory_secret: None,
                 agentmemory_auto_spawn: None,

@@ -230,6 +230,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
         retry: Default::default(),
         advertised_skills_token_budget: 0,
+        memory_injection_budget_tokens: 0,
         model: "demo".to_string(),
         max_iterations,
         tool_timeout: Duration::from_secs(5),
