@@ -446,11 +446,26 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // the employee chip (it names the axis that is filtering the list), and
     // the grouping itself.
     let budget = inner_width as usize;
+    // (2026-11-14, audit finding 15) The numerator counts SESSIONS.
+    //
+    // `rows.len()` includes the process-local delegation rows the App appends
+    // after the DB load, and the denominator is `count_sessions()` — a DB
+    // count that does not include them. With three pending delegations the
+    // header read "503 of 3,314", and 503 is not a session count.
+    //
+    // Counted here rather than carried on the row-load channel: the count is a
+    // property of the rows the hub already holds, so a second field on a
+    // channel three other writers are editing would buy nothing.
+    let session_rows = state
+        .rows
+        .iter()
+        .filter(|r| !matches!(r.kind, RowKind::Subagent { .. }))
+        .count();
     let count_clause = match state.store_total() {
-        Some(total) if total > state.rows.len() => {
-            format!("  {} of {} rows", state.rows.len(), total)
+        Some(total) if total > session_rows => {
+            format!("  {session_rows} of {total} rows")
         }
-        _ => format!("  {} rows", state.rows.len()),
+        _ => format!("  {session_rows} rows"),
     };
     let mut spans = vec![
         Span::styled(

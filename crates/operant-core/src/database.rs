@@ -1999,7 +1999,28 @@ impl Database {
     pub fn set_session_cwd(&self, session_id: &str, cwd: &str) -> Result<()> {
         let conn = self.lock_conn()?;
         conn.execute(
-            "UPDATE sessions SET cwd = ?2 WHERE id = ?1",
+            // (2026-11-14, audit finding 14) A turn that changes nothing
+            // writes nothing.
+            //
+            // The stamp runs once per turn with the process's current
+            // directory, which is the same value on every turn after the
+            // first. SQLite reports changes()=1 for an identical UPDATE, so
+            // the row was rewritten — a dirty page and a WAL frame, plus one
+            // acquisition of the process-wide connection lock — for a value
+            // that never changes. The largest live session has 950 turns:
+            // 950 rewrites of one string. The guard makes a same-value turn
+            // match no row, which is the same "a miss is a silent no-op"
+            // contract the row-missing case already has.
+            //
+            // Last-turn-wins is KEPT, deliberately: the hub's current-dir
+            // filter and its Directory grouping both compare this value to the
+            // process's cwd, so first-write-wins would hide a session from the
+            // directory the operator is standing in. Audit finding 19 (a
+            // resumed session is re-attributed) is the price of that choice,
+            // and the one-line change if the operator prefers the session's
+            // home directory is `AND cwd IS NULL`.
+            "UPDATE sessions SET cwd = ?2
+             WHERE id = ?1 AND (cwd IS NULL OR cwd <> ?2)",
             params![session_id, cwd],
         )
         .map_err(|e| Error::Agent(format!("Failed to stamp session cwd: {}", e)))?;
@@ -6320,6 +6341,40 @@ mod tests {
 
     /// The store count is a separate number from the page length — that
     /// distinction IS finding 3's fix, because the header prints both.
+    /// The cwd stamp writes a change, not a rewrite.
+    ///
+    /// (2026-11-14, audit finding 14) The stamp runs on every turn with the
+    /// process's current directory, which is the same value after the first
+    /// turn. SQLite reports changes()=1 for an identical UPDATE, so the row was
+    /// rewritten on every turn — 950 rewrites of one string on the largest live
+    /// session. The guard makes the repeat a no-op.
+    ///
+    /// What this pins is the CONTRACT the guard must keep: a NULL cwd is
+    /// stamped (the guard must not treat "not yet written" as "already
+    /// correct"), a repeat leaves the value alone, and a genuine change lands.
+    #[test]
+    fn the_cwd_stamp_is_a_no_op_when_the_value_has_not_changed() {
+        let db = test_db();
+        let at = "2026-11-13T16:00:00+00:00";
+        db.save_session("cwd-1", None, "agent", at, at)
+            .expect("save");
+        let read = |db: &Database| -> Option<String> {
+            let conn = db.lock_conn().unwrap();
+            conn.query_row("SELECT cwd FROM sessions WHERE id = 'cwd-1'", [], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten()
+        };
+        assert_eq!(read(&db), None, "a new session carries no cwd");
+        db.set_session_cwd("cwd-1", "/home/u/proj").expect("stamp");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/proj"));
+        db.set_session_cwd("cwd-1", "/home/u/proj").expect("repeat");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/proj"));
+        db.set_session_cwd("cwd-1", "/home/u/other").expect("move");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/other"));
+    }
+
     #[test]
     fn count_sessions_reports_the_store_not_the_page() {
         let db = test_db();

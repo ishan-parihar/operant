@@ -1308,9 +1308,14 @@ fn the_filter_tags_are_readable_words_at_120_columns() {
     hub.replace_rows(realistic_rows());
     let (list, _) = hub_rows_at(120, realistic_rows());
     let joined = list.join("\n");
-    let tab_line = joined
-        .lines()
-        .find(|l| l.contains("all") || l.contains(" a "))
+    // The tab bar is the row BELOW the header (the header also holds "all",
+    // in its "Group: all" clause).
+    let lines: Vec<&str> = joined.lines().collect();
+    let tab_line = lines
+        .iter()
+        .position(|l| l.contains("Sessions"))
+        .and_then(|i| lines.get(i + 1))
+        .copied()
         .unwrap_or_default();
     assert!(
         !tab_line.contains("a 500 n 0 w"),
@@ -1364,14 +1369,22 @@ fn the_tab_bar_survives_three_digit_counts_at_120_columns() {
         .unwrap_or_default();
     let bar_inner = bar.trim().trim_matches('\u{2502}').trim();
     let pills: Vec<&str> = bar_inner.split_whitespace().collect();
+    // Seven labels plus the ACTIVE tab's count: the readable rung keeps the
+    // words and spends its budget on one count rather than seven.
     assert_eq!(
         pills.len(),
-        14,
-        "seven label/count pairs must survive: {bar:?} (in {joined})"
+        8,
+        "seven labels plus the active count must survive: {bar:?} (in {joined})"
     );
+    for label in ["all", "need", "work", "ready", "idle", "cur", "br"] {
+        assert!(
+            pills.contains(&label),
+            "the `{label}` filter must be named: {bar:?}"
+        );
+    }
     assert!(
         bar.contains("500"),
-        "the count must be real, not dropped: {bar:?}"
+        "the active count must be real, not dropped: {bar:?}"
     );
     assert!(
         joined.contains("Group: all  g"),
