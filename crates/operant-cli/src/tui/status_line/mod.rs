@@ -12,6 +12,7 @@
 //! - [`meter`] — the one `█`/`░` meter the five hand-written copies now share.
 //! - [`separator`] — the one boundary drawn between two segments (U10), and the
 //!   record of which ` · ` sites are boundaries rather than prose.
+//! - [`style`] — which glyph draws that boundary (U11), from `[tui] bar_style`.
 //!
 //! A segment model and an earlier separator vocabulary were built here at U7/U8
 //! and then DELETED: they had no production caller, because converting `draw_status`'s
@@ -24,3 +25,4 @@
 pub mod bar;
 pub mod meter;
 pub mod separator;
+pub mod style;

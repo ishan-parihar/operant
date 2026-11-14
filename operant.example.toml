@@ -433,6 +433,18 @@ theme = "default"
 # accent = "#febc38"
 # ai_text = "#e5e5e7"
 # border = "#3d424a"
+# Which glyph draws the boundary between two status-line segments
+# (plan 2026-11-15). One of:
+#   dot            " · "  -- the DEFAULT, and the historical look
+#   powerline      U+E0B0  -- needs a patched (Nerd) font
+#   powerline-thin U+E0B1  -- needs a patched (Nerd) font
+#   slash          " / "
+#   pipe           " | "
+#   block          "█"
+#   none           " "     -- segments touch, no visible rule
+#   ascii          "|"     -- for a terminal with no powerline glyphs
+# An unknown value warns at startup and falls back to `dot`.
+#bar_style = "dot"
 rich_output = true
 show_tool_calls = true
 # `show_iterations`, `landing_title`, `prompt_placeholder`, `compact_width`,

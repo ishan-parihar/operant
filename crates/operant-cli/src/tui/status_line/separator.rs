@@ -40,11 +40,11 @@ use ratatui::prelude::*;
 
 /// The separator drawn between two status-line segments.
 ///
-/// One definition, so a style key can reach every boundary at once. U11 turns
-/// this into a lookup; until then it is the literal both functions already used,
-/// byte for byte.
+/// The glyph is the configured [`crate::tui::status_line::style::SeparatorStyle`], whose default is
+/// the `" · "` both functions used before this became a lookup. Installing the key
+/// therefore moves nothing on screen until an operator picks a style.
 pub fn separator() -> &'static str {
-    " · "
+    crate::tui::status_line::style::style().glyph()
 }
 
 /// The separator as a styled span, in the dim ink every boundary used.
@@ -78,11 +78,43 @@ pub fn push_separator(spans: &mut Vec<Span<'static>>) {
 mod tests {
     use super::*;
 
-    /// The separator must be the byte-identical literal both functions used, or
-    /// U10 is not behaviour-preserving and every golden moves for no reason.
+    /// Restores the process-global style so one test cannot poison the next.
+    struct Restore(crate::tui::status_line::style::SeparatorStyle);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::tui::status_line::style::set_style(Some(self.0));
+        }
+    }
+
+    /// The default style must still render the byte-identical literal both
+    /// functions used, or installing the style key would move every golden in the
+    /// corpus for no reason.
+    ///
+    /// Asserts on `SeparatorStyle::Dot.glyph()` rather than on `separator()`: the
+    /// cell is process-global and these tests run in parallel with
+    /// `a_configured_style_reaches_the_boundary`, so a `separator()` assertion here
+    /// would be a race. `style::the_default_is_the_historical_dot` pins the
+    /// unconfigured cell separately, where it can be serialized against the setter.
     #[test]
-    fn the_separator_is_the_literal_both_functions_used() {
-        assert_eq!(separator(), " · ");
+    fn the_default_separator_is_the_literal_both_functions_used() {
+        assert_eq!(
+            crate::tui::status_line::style::SeparatorStyle::Dot.glyph(),
+            " · "
+        );
+    }
+
+    /// The style key actually reaches the boundary — the whole point of U11. A
+    /// `separator()` that read the literal while the cell changed would type-check
+    /// and paint nothing.
+    #[test]
+    fn a_configured_style_reaches_the_boundary() {
+        let _restore = Restore(crate::tui::status_line::style::SeparatorStyle::default());
+        crate::tui::status_line::style::set_style(Some(
+            crate::tui::status_line::style::SeparatorStyle::Slash,
+        ));
+        assert_eq!(separator(), " / ");
+        assert_eq!(separator_span().content.as_ref(), " / ");
     }
 
     /// Nothing precedes the first segment.
@@ -94,14 +126,20 @@ mod tests {
     }
 
     /// Every later segment gets exactly one.
+    ///
+    /// Pins the placement (one span per boundary, in order), not the glyph: the
+    /// glyph is the configured style's, and which style is in force is another
+    /// test's business. Asserting a literal here made this test fail whenever the
+    /// style-setting test ran first — a parallel-test race, not a defect.
     #[test]
     fn a_separator_is_pushed_before_every_later_segment() {
+        let glyph = crate::tui::status_line::style::style().glyph();
         let mut spans = vec![Span::raw("one")];
         push_separator(&mut spans);
         push_separator(&mut spans);
         assert_eq!(spans.len(), 3);
-        assert_eq!(spans[1].content.as_ref(), " · ");
-        assert_eq!(spans[2].content.as_ref(), " · ");
+        assert_eq!(spans[1].content.as_ref(), glyph);
+        assert_eq!(spans[2].content.as_ref(), glyph);
     }
 
     /// The separator is dim, which is what makes it read as a rule between

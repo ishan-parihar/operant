@@ -1416,6 +1416,24 @@ pub struct TuiSettings {
     /// look because the role palette already defaults to it.
     #[serde(default)]
     pub colors: std::collections::BTreeMap<String, String>,
+    /// Which glyph draws the boundary between two status-line segments
+    /// (plan 2026-11-15 U11). One of the `SeparatorStyle::key()` names:
+    /// `dot` (the default, and the historical look), `powerline`,
+    /// `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`.
+    ///
+    /// An unknown value warns at startup and falls back to `dot` rather than
+    /// to a style that renders nothing — see
+    /// `tui::status_line::style::SeparatorStyle::from_key` for why that is
+    /// NOT OMP's `powerline-thin` fallback.
+    ///
+    /// The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1);
+    /// without one the terminal draws tofu. `ascii` exists for that case.
+    #[serde(default = "default_bar_style")]
+    pub bar_style: String,
+}
+
+fn default_bar_style() -> String {
+    "dot".to_string()
 }
 
 fn default_word_completion() -> String {
@@ -1455,6 +1473,7 @@ impl Default for TuiSettings {
             model_favorites: Vec::new(),
             model_default: None,
             colors: std::collections::BTreeMap::new(),
+            bar_style: default_bar_style(),
         }
     }
 }
