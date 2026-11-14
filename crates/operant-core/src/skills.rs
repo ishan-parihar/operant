@@ -436,21 +436,36 @@ fn find_skill_recursive(current_dir: &Path, name: &str) -> Option<PathBuf> {
             continue;
         }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.')
-            || dir_name == "node_modules"
-            || dir_name == ".archive"
-            || dir_name == ".hub"
-        {
+        if is_skipped_walk_name(dir_name) {
             continue;
         }
-        if dir_name == name && path.join("SKILL.md").exists() {
-            return Some(path);
+        if path.join("SKILL.md").exists() {
+            // Match the DIRECTORY name first (cheap, no read), then the
+            // frontmatter `name:`. The frontmatter is what the listing
+            // advertises and what the `$` popup offers, so a resolver that
+            // matched only the directory made an advertised skill
+            // uninvocable: `mlops/training/fine-tuning-with-trl` carries
+            // `name: trl-fine-tuning`, was listed and offered as
+            // `trl-fine-tuning`, and resolved to nothing. Two real skills on
+            // this host had that shape.
+            if dir_name == name || skill_frontmatter_name(&path).as_deref() == Some(name) {
+                return Some(path);
+            }
         }
         if let Some(found) = find_skill_recursive(&path, name) {
             return Some(found);
         }
     }
     None
+}
+
+/// The `name:` a skill's `SKILL.md` declares, or `None` when it declares none
+/// (or cannot be read). A malformed frontmatter is a non-match, never an error:
+/// the resolver's job is to answer "is there such a skill", and the loader is
+/// what reports a broken one.
+fn skill_frontmatter_name(skill_dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(skill_dir.join("SKILL.md")).ok()?;
+    parse_front_matter(&raw).ok()?.name
 }
 
 /// A skill name is a plain relative path: never absolute, and never
@@ -609,21 +624,32 @@ impl SkillManager {
                         .ok()
                         .map(|rel| rel.to_string_lossy().replace('\\', "/"))
                         .filter(|rel| rel.contains('/'));
-                    let shadowed =
-                        self.skills.contains_key(&skill.name) || self.skills.contains_key(&dir_key);
-                    if !shadowed {
-                        self.skills.insert(skill.name.clone(), skill.clone());
-                        if dir_key != skill.name {
-                            self.skills.insert(dir_key, skill.clone());
-                        }
-                        if let Some(qualified) = qualified
-                            && qualified != skill.name
-                            && !self.skills.contains_key(&qualified)
-                        {
-                            self.skills.insert(qualified, skill.clone());
-                        }
-                        loaded.push(skill);
+                    // SHADOWING IS BY SKILL NAME, NOT BY DIRECTORY NAME.
+                    // The operator pool is scanned before extra roots, so an
+                    // operator's same-NAMED skill shadows an integration's --
+                    // but a shared DIRECTORY name must only cost the alias, not
+                    // the skill. Measuring the old rule (skip when either the
+                    // name OR the dir key was already present): a pool skill
+                    // at `a/shared` named `alpha` and an integration skill at
+                    // `b/shared` named `beta` left `beta` unlisted AND
+                    // unresolvable, because `shared` was already taken by
+                    // `alpha`'s alias.
+                    if self.skills.contains_key(&skill.name) {
+                        continue;
                     }
+                    self.skills.insert(skill.name.clone(), skill.clone());
+                    // The directory alias is best-effort: an existing entry
+                    // (the operator's own alias, or another root's) wins.
+                    if dir_key != skill.name {
+                        self.skills.entry(dir_key).or_insert_with(|| skill.clone());
+                    }
+                    if let Some(qualified) = qualified
+                        && qualified != skill.name
+                        && !self.skills.contains_key(&qualified)
+                    {
+                        self.skills.insert(qualified, skill.clone());
+                    }
+                    loaded.push(skill);
                 }
                 Err(_) => {
                     // Skip skills that fail to parse
@@ -1546,6 +1572,115 @@ mod tests {
         assert_eq!(
             by_leaf, by_path,
             "the leaf and the qualified path must resolve to the same skill"
+        );
+
+        cleanup(&tmp);
+    }
+
+    /// A skill whose DIRECTORY name differs from its frontmatter `name:` is
+    /// resolvable by the name the listing advertises.
+    ///
+    /// The listing and the `$` popup both key on the frontmatter name, but
+    /// `find_skill_recursive` matched only the directory name, so the name
+    /// offered to the operator could not be invoked. Two real skills on the
+    /// dev host had that shape (`mlops/training/fine-tuning-with-trl` carrying
+    /// `name: trl-fine-tuning`; `skill-snapshot` carrying
+    /// `name: harness-service-management`), and `operant skills inspect <name>`
+    /// answered "not found" for both.
+    ///
+    /// MUTATION-PROOF: matching only the directory name in
+    /// `find_skill_recursive` fails the resolution assertion below.
+    #[test]
+    fn a_skill_resolves_by_the_frontmatter_name_the_listing_advertises() {
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        let nested = pool
+            .join("mlops")
+            .join("training")
+            .join("fine-tuning-with-trl");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("SKILL.md"),
+            "---\nname: trl-fine-tuning\ndescription: TRL fine-tuning\n---\nBody\n",
+        )
+        .unwrap();
+
+        let cfg = settings_with(&pool, vec![], "off");
+        let roots = SkillRoots::resolve(&cfg, &[], None, None);
+
+        // What the operator is shown...
+        let listed: Vec<String> = crate::skill_mentions::loadable_skills_in(&roots)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            listed,
+            vec!["trl-fine-tuning".to_string()],
+            "the frontmatter name is what gets advertised: {listed:?}"
+        );
+
+        // ...must be exactly what resolves. Before the fix this returned None
+        // and the expansion reported the name as unresolved.
+        assert!(
+            find_skill_in_roots(&roots.roots, "trl-fine-tuning").is_some(),
+            "the advertised name must resolve"
+        );
+        // The directory name keeps working too -- nothing that worked before
+        // may stop working.
+        assert!(
+            find_skill_in_roots(&roots.roots, "fine-tuning-with-trl").is_some(),
+            "the directory name must still resolve"
+        );
+
+        cleanup(&tmp);
+    }
+
+    /// A shared DIRECTORY name across roots costs the alias, not the skill.
+    ///
+    /// The old rule skipped a skill when EITHER its name OR its directory alias
+    /// was already taken, so a pool skill at `a/shared` named `alpha` made an
+    /// integration skill at `b/shared` named `beta` disappear entirely: not
+    /// listed, and not resolvable. Shadowing is by SKILL name; the directory
+    /// is only an alias.
+    ///
+    /// MUTATION-PROOF: restoring `shadowed = name_taken || dir_key_taken` fails
+    /// the listing assertion.
+    #[test]
+    fn a_shared_directory_name_across_roots_does_not_swallow_a_skill() {
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        let integ = tmp.join("integ");
+        // Same LEAF directory name in both roots, different skill names.
+        let a = pool.join("a").join("shared");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(
+            a.join("SKILL.md"),
+            "---\nname: alpha\ndescription: pool skill\n---\nBody\n",
+        )
+        .unwrap();
+        let b = integ.join("b").join("shared");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(
+            b.join("SKILL.md"),
+            "---\nname: beta\ndescription: vendor skill\n---\nBody\n",
+        )
+        .unwrap();
+
+        let cfg = settings_with(&pool, vec![integ.clone()], "off");
+        let roots = SkillRoots::resolve(&cfg, &[], None, None);
+
+        let listed: Vec<String> = crate::skill_mentions::loadable_skills_in(&roots)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            listed,
+            vec!["alpha".to_string(), "beta".to_string()],
+            "both skills must be listed; the second root's skill is not the first's alias: {listed:?}"
+        );
+        assert!(
+            find_skill_in_roots(&roots.roots, "beta").is_some(),
+            "the vendor skill must resolve by its own name"
         );
 
         cleanup(&tmp);
