@@ -657,6 +657,24 @@ impl SubAgentTool {
         // Determine effective toolsets based on role, the parent's toolsets
         // and the subset the caller asked for.
         let child_toolsets = self.compute_child_toolsets(role, toolsets.as_deref());
+        // A child whose toolset resolved to NOTHING still starts (the hermes
+        // "all supplied toolsets were stripped" case is deliberate — see
+        // `compute_child_toolsets`), but it must not quietly answer as if it had
+        // read the repository. MEASURED 2026-11-14: the parent received an
+        // ordinary successful tool result, indistinguishable from a real read,
+        // and its "I had no tools" was indistinguishable from "I chose not to
+        // act". Tell the child so, and tell the parent so.
+        let zero_tools = child_toolsets.is_empty();
+        let system_prompt = if zero_tools {
+            format!(
+                "{system_prompt}\n\nNOTE: this delegation grants you NO tools. You \
+                 cannot read files, run commands or look anything up; answer from \
+                 your own knowledge and say plainly in your answer that you had no \
+                 tools."
+            )
+        } else {
+            system_prompt
+        };
 
         let raw_client = OpenAIClient::from_shared_http_client(
             self.client_config.clone(),
@@ -707,7 +725,10 @@ impl SubAgentTool {
             summary,
         });
 
-        child_outcome(result, timeout_seconds)
+        // Same flag for the parent: the answer carries the banner, so a parent
+        // that ignores the NOTE still cannot mistake a guess for a read.
+        let answer = child_outcome(result, timeout_seconds)?;
+        Ok(flag_no_tools(zero_tools, answer))
     }
 
     /// Fan out a **swarm**: run every task as a real worker session and
@@ -1445,6 +1466,24 @@ fn preview_of(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Prepend the "no tools were granted" banner to a child's answer.
+///
+/// A child whose toolset resolved to nothing is legal (a parent may narrow every
+/// toolset away — see `compute_child_toolsets`), and until now its answer reached
+/// the parent as an ordinary successful tool result: indistinguishable from a
+/// child that read the repository. The banner is how the parent can tell. The
+/// full text is in the session store; the parent needs the fact, not the file.
+const NO_TOOLS_BANNER: &str =
+    "[no tools were granted to this delegation — this answer came from the model alone]\n";
+
+fn flag_no_tools(zero_tools: bool, answer: String) -> String {
+    if zero_tools {
+        format!("{NO_TOOLS_BANNER}{answer}")
+    } else {
+        answer
+    }
+}
+
 /// Await a child turn, turning a panic into an ordinary failure.
 ///
 /// The swarm path has contained panics since iter-1612 (`run_swarm`, :392);
@@ -1865,6 +1904,21 @@ mod tests {
     fn format_swarm_outcomes_handles_empty() {
         let result = format_swarm_outcomes(&[]);
         assert_eq!(result, "No results");
+    }
+
+    /// A zero-tool child's answer must be marked as such; an ordinary child's
+    /// answer is passed through byte for byte.
+    #[test]
+    fn a_zero_tool_child_answer_carries_the_banner() {
+        let flagged = flag_no_tools(true, "config.toml sets model = 'gpt-5.4'".to_string());
+        assert!(flagged.starts_with(NO_TOOLS_BANNER), "{flagged}");
+        assert!(
+            flagged.contains("config.toml sets model = 'gpt-5.4'"),
+            "{flagged}"
+        );
+
+        let ordinary = flag_no_tools(false, "all good".to_string());
+        assert_eq!(ordinary, "all good");
     }
 
     /// A background child that panics must end as a FAILED record, not as a
