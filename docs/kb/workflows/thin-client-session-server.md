@@ -39,7 +39,7 @@ lies), RT-551 (no published session cost), RT-552 (the read-only session API).
 | thin-client-session-server-002 | done | I2: the session protocol as data (client command, server event, versioned envelope) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-003 | done | I3: the gateway serves a client socket (two clients, one process, one child set) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-004 | done | I4: a session on the server that a client can drive (two clients share one live session) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
-| thin-client-session-server-005 | open | I5: the TUI can attach (--attach; an attached client builds no registry) | — | — |
+| thin-client-session-server-005 | done | I5: the TUI can attach (--attach; an attached client builds no registry) | — | [2026-11-14] docs/plans/2026-11-13-thin-client-session-server-plan.md |
 | thin-client-session-server-006 | open | I6: approve, deny and cancel cross the socket (cancel really cancels) | — | — |
 | thin-client-session-server-007 | open | I7: the client dies, the session lives (grace window, a new client joins it) | — | — |
 | thin-client-session-server-008 | open | I8: one server, one child fleet (merge the three runtime builders; the ACP daemon folds in) | — | — |

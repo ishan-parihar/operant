@@ -129,6 +129,7 @@ pub mod runtime_metrics;
 pub mod schema;
 pub mod security;
 pub mod session;
+pub mod session_client;
 pub mod session_interrupted;
 pub mod session_protocol;
 pub mod session_recap;

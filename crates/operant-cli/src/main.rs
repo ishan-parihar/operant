@@ -237,6 +237,15 @@ enum Commands {
     Chat {
         #[arg(short, long)]
         system: Option<String>,
+        /// Attach to a RUNNING server's session socket instead of building a
+        /// runtime of your own (RT-542).
+        ///
+        /// The attached client opens the socket, sends what you type and
+        /// renders the events the server sends back. It builds no tool
+        /// registry, no database handles, no MCP child servers and no AFT
+        /// bridge — which is the whole point of the server.
+        #[arg(long, value_name = "PATH")]
+        attach: Option<std::path::PathBuf>,
     },
     Test {
         #[arg()]
@@ -3029,6 +3038,57 @@ fn read_line_or_eof(reader: &mut impl std::io::BufRead) -> std::io::Result<Optio
     Ok(Some(buf))
 }
 
+/// Attach to a running server's session socket (RT-542).
+///
+/// This process builds no runtime: it opens the socket, says hello, sends the
+/// prompt and prints the events the server sends back. The agent, the registry,
+/// the MCP children and the AFT bridge all live in the server.
+async fn cmd_chat_attach(socket: &std::path::Path, prompt: Option<&str>) -> anyhow::Result<()> {
+    let mut client = operant_core::session_client::SessionClient::connect(socket).await?;
+    if client.sessions.is_empty() {
+        println!("attached to the server (no live sessions yet)");
+    } else {
+        println!(
+            "attached to the server; live sessions: {}",
+            client.sessions.join(", ")
+        );
+    }
+
+    let Some(text) = prompt.map(str::trim).filter(|t| !t.is_empty()) else {
+        // No prompt: say what this is and leave the socket open until the
+        // server closes it.
+        println!("nothing to send (pass a prompt: operant chat --attach <socket> \"hello\")");
+        while client.recv().await?.is_some() {}
+        return Ok(());
+    };
+
+    // The session the prompt belongs to: the first live one, or a fresh id.
+    let session_id = client
+        .sessions
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "attached".to_string());
+    client
+        .send(&operant_core::session_protocol::WireMessage::Prompt {
+            session_id,
+            text: text.to_string(),
+        })
+        .await?;
+
+    while let Some(message) = client.recv().await? {
+        match message {
+            operant_core::session_protocol::WireMessage::Event { event, .. } => {
+                println!("{event:?}");
+            }
+            operant_core::session_protocol::WireMessage::Error { message, .. } => {
+                eprintln!("the server reported: {message}");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
     let mcp_manager = McpManager::new();
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
@@ -3506,11 +3566,18 @@ async fn run(
                 .await?;
             }
         }
-        Some(Commands::Chat { system }) => {
+        Some(Commands::Chat { system, attach }) => {
             // Long-lived session: a child that closes its pipe must be a
             // reportable error, not the death of the process (see
             // `ignore_sigpipe_disposition`).
             ignore_sigpipe_disposition();
+            // RT-542: with --attach this process builds NO runtime. It opens the
+            // server's socket, sends what the operator typed and renders the
+            // events the server sends back — no tool registry, no database
+            // handles, no MCP child servers, no AFT bridge.
+            if let Some(socket) = attach {
+                return cmd_chat_attach(&socket, system.as_deref()).await;
+            }
             if loaded.config.tui.rich_output && tui_available() {
                 TuiApp::enter(
                     loaded.config.clone(),
