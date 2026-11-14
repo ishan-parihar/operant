@@ -211,19 +211,6 @@ pub fn get_record(id: &str) -> Option<AsyncDelegationRecord> {
     registry().lock().ok()?.get(id).cloned()
 }
 
-/// Number of currently in-flight (pending) delegations — used to enforce
-/// the concurrency cap at dispatch time.
-pub fn pending_count() -> usize {
-    registry()
-        .lock()
-        .map(|map| {
-            map.values()
-                .filter(|r| r.status == AsyncDelegationStatus::Pending)
-                .count()
-        })
-        .unwrap_or(0)
-}
-
 /// All records, newest dispatch first.
 pub fn list_records() -> Vec<AsyncDelegationRecord> {
     let mut records: Vec<AsyncDelegationRecord> = registry()
@@ -370,16 +357,6 @@ mod tests {
         assert_eq!(rec.status, AsyncDelegationStatus::Failed);
         assert_eq!(rec.error.as_deref(), Some("child timed out"));
         assert!(rec.result.is_none());
-    }
-
-    #[test]
-    fn pending_count_reflects_in_flight() {
-        let _guard = test_lock().lock().unwrap();
-        let before = pending_count();
-        let id = create_record("task", "gpt-4.1");
-        assert!(pending_count() > before);
-        mark_completed(&id, "ok");
-        assert_eq!(pending_count(), before);
     }
 
     #[test]

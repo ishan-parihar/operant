@@ -85,7 +85,7 @@ pub mod home_assistant_tool;
 pub use aft_tools::register_aft_tools;
 pub use async_delegation::{
     AsyncDelegationRecord, AsyncDelegationStatus, DEFAULT_MAX_ASYNC_CHILDREN, create_record,
-    get_record, list_records, pending_count, try_create_record,
+    get_record, list_records, try_create_record,
 };
 pub use browser_cdp_tool::BrowserCdpTool;
 pub use browser_dialog_tool::BrowserDialogTool;
