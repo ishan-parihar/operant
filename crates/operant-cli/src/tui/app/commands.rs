@@ -773,10 +773,14 @@ impl App {
             // audit R1 2026-10-28: was the session_branching overlay, now
             // the same pane as /session with CurrentBranch preselected).
             "branch" => {
+                // (2026-11-14, audit finding 10) open() first, then the
+                // scope — open() resets the filter, the search and the
+                // employee axis, so a scope chosen BEFORE the open would be
+                // wiped by it.
+                self.session_hub.open(None);
                 self.session_hub.branch_root = None;
                 self.session_hub.filter_mode =
                     crate::tui::session_hub::HubFilterMode::CurrentBranch;
-                self.session_hub.open(None);
                 self.session_list_pending = true;
                 true
             }

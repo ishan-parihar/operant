@@ -157,7 +157,7 @@ impl App {
             return false;
         };
         match rx.try_recv() {
-            Ok((rows, total)) => {
+            Ok((rows, total, roster)) => {
                 self.debug_hub
                     .publish(crate::tui::debug::TuiEvent::SessionList {
                         count: rows.len(),
@@ -180,6 +180,10 @@ impl App {
                 // The store total, so the header can say "500 of 3,302"
                 // instead of a bare "500" that reads as everything.
                 self.session_hub.set_store_total(total);
+                // The roster, so the employee axis can reach every seat the
+                // store knows about — not only the ones with a session inside
+                // the loaded page (audit finding 3).
+                self.session_hub.set_employee_roster(roster);
                 self.session_hub.replace_rows(rows);
                 self.session_list_rx = None;
                 if std::mem::take(&mut self.rename_on_list_load) {

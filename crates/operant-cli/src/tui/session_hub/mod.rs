@@ -484,6 +484,21 @@ pub struct SessionHubState {
     /// operator typed and the assistant's end-of-turn output — which is
     /// exactly the pair the operator named.
     pub hide_tool_calls: bool,
+    /// The EMPLOYEE ROSTER: every employee the store knows about, by id and
+    /// by label.
+    ///
+    /// (2026-11-14, audit finding 3) The axis used to derive its cycle from
+    /// the employee tags on the LOADED PAGE, and the two sets are disjoint on
+    /// the live store: the roster holds nine named seats, the page holds three
+    /// cron tags, and no session carries a roster seat id. The operator asked
+    /// for a filter "based on the employee/agent identity", and the axis
+    /// offered three cron job ids instead of the nine employees.
+    ///
+    /// The roster is the authority on who the employees ARE; the tags are the
+    /// authority on which of them have run something. The axis now offers the
+    /// roster, and an employee with no session still appears — "this seat has
+    /// run nothing" is a fact the operator wants.
+    employee_roster: Vec<(String, String)>,
     /// How many sessions the STORE holds, with no limit — the header's
     /// "N of M" (audit finding 3: the hub's own count read as the whole
     /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
@@ -537,6 +552,7 @@ impl SessionHubState {
             live_session_id: None,
             employee_filter: None,
             hide_tool_calls: false,
+            employee_roster: Vec::new(),
             preview_first_prompt: None,
             store_total: None,
             filter_counts_cache: Vec::new(),
@@ -551,6 +567,22 @@ impl SessionHubState {
         self.loading = true;
         self.selected = 0;
         self.search_active = false;
+        // (2026-11-14, audit finding 10) The scope is RESET here.
+        //
+        // `open()` reset the selection and the focus but not the FILTERS, so
+        // the hub reopened into a scope the operator did not choose: type
+        // `/branch`, press Esc, then `/session` and the list still showed only
+        // the branch tree; type a search, close, reopen, and the fresh page
+        // was still filtered by it; and an engaged employee whose rows were
+        // not on the new page opened the hub EMPTY, with all seven tab counts
+        // reading 0.
+        //
+        // `hide_tool_calls` and `store_total` deliberately SURVIVE: the first
+        // is a stated presentation preference and it names itself in the
+        // preview, and the second is re-set by the next load.
+        self.filter_mode = HubFilterMode::All;
+        self.search_query.clear();
+        self.employee_filter = None;
         self.preview_scroll = 0;
         self.focus = PaneFocus::Sessions;
         self.focused_subagent = None;
@@ -695,15 +727,27 @@ impl SessionHubState {
     /// One employee is `None`-filtered back to "all", and "all" is always the
     /// first stop — an axis the operator cannot step onto without knowing its
     /// shape is an axis they will avoid.
+    /// The roster, for the axis's cycle.
+    pub fn set_employee_roster(&mut self, roster: Vec<(String, String)>) {
+        self.employee_roster = roster;
+    }
+
+    /// Cycle the EMPLOYEE filter (`e`): every employee → each in turn → back.
+    ///
+    /// The list is the ROSTER, not the loaded rows (audit finding 3): an
+    /// employee whose sessions are all older than the hub's 500-row page
+    /// would otherwise never appear in the cycle, and — because nothing asks
+    /// the store for the next page — would be unreachable for good.
+    ///
+    /// One employee is `None`-filtered back to "all", and "all" is always the
+    /// first stop — an axis the operator cannot step onto without knowing its
+    /// shape is an axis they will avoid.
     pub fn cycle_employee(&mut self) {
-        let mut employees: Vec<String> = self
-            .rows
+        let employees: Vec<String> = self
+            .employee_roster
             .iter()
-            .filter_map(|r| r.employee_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
+            .map(|(id, _)| id.clone())
             .collect();
-        employees.sort();
         self.employee_filter = match self.employee_filter.take() {
             None => employees.first().cloned(),
             Some(current) => {
@@ -730,6 +774,18 @@ impl SessionHubState {
     /// The employee this list is restricted to, for the header's chip.
     pub fn employee_filter(&self) -> Option<&str> {
         self.employee_filter.as_deref()
+    }
+
+    /// The LABEL of the engaged employee — the operator's roster names them
+    /// ("Premiere"), and the chip should too. Falls back to the id when the
+    /// roster has no label for it (a cron tag, which has no name).
+    pub fn employee_filter_label(&self) -> Option<&str> {
+        let id = self.employee_filter.as_deref()?;
+        self.employee_roster
+            .iter()
+            .find(|(eid, _)| eid == id)
+            .map(|(_, label)| label.as_str())
+            .or(Some(id))
     }
 
     pub fn set_live_session_id(&mut self, id: Option<String>) {
@@ -955,7 +1011,10 @@ impl SessionHubState {
                     // so the employee axis has to be in them too: a count that
                     // ignored the axis would promise 22 rows and deliver 0.
                     .filter(|r| match self.employee_filter.as_deref() {
-                        Some(emp) => r.employee_id.as_deref() == Some(emp),
+                        Some(emp) => {
+                            r.employee_id.as_deref() == Some(emp)
+                                || matches!(r.kind, RowKind::Subagent { .. })
+                        }
                         None => true,
                     })
                     .count();
@@ -1020,7 +1079,18 @@ impl SessionHubState {
                 // feeds both the visible set and the tab counts so they can
                 // never disagree.
                 match self.employee_filter.as_deref() {
-                    Some(emp) => r.employee_id.as_deref() == Some(emp),
+                    // A delegation row carries no employee_id, so the filter
+                    // used to drop it — and with it every piece of running
+                    // background work, from EVERY tab including All. The
+                    // operator asked "what is running" and the hub answered
+                    // "nothing" while work ran (audit finding 6).
+                    //
+                    // A delegation is the agent's own work, not another seat's,
+                    // so it belongs in every employee's view.
+                    Some(emp) => {
+                        r.employee_id.as_deref() == Some(emp)
+                            || matches!(r.kind, RowKind::Subagent { .. })
+                    }
                     None => true,
                 }
             })

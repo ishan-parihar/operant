@@ -466,7 +466,7 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // The employee chip: the axis that is filtering the list, named. It comes
     // before the hint because it is the one thing on this line that changes
     // what the operator is looking at.
-    if let Some(emp) = state.employee_filter() {
+    if let Some(emp) = state.employee_filter_label() {
         spans.push(Span::styled(
             format!("  e:{emp}"),
             Style::default().fg(theme_colors::accent()),

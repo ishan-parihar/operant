@@ -1613,6 +1613,13 @@ impl App {
                 // "this branch's tree" listed every session in the store
                 // (`[all]` = 19 and `[this branch's tree]` = the identical 19,
                 // same ids).
+                // (2026-11-14, audit finding 10) `open()` now RESETS the
+                // scope — a hub that reopens into the filter, search and
+                // employee axis the operator left behind is a hub that shows
+                // them something they did not ask for. So the branch view is
+                // opened FIRST and its scope is set after, which is the order
+                // "open, then choose" needs.
+                self.session_hub.open(None);
                 self.session_hub.branch_root = self
                     .core_session_switch
                     .as_ref()
@@ -1620,7 +1627,6 @@ impl App {
                     .or_else(|| self.current_session.clone());
                 self.session_hub.filter_mode =
                     crate::tui::session_hub::HubFilterMode::CurrentBranch;
-                self.session_hub.open(None);
                 self.session_list_pending = true;
             }
 

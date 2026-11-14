@@ -768,6 +768,9 @@ pub struct App {
             // a page (500), so without this the header's row count is the
             // page size and reads as the whole truth (audit finding 3).
             Option<usize>,
+            // The EMPLOYEE ROSTER: every employee the store knows about, by
+            // id and by label (audit finding 3).
+            Vec<(String, String)>,
         )>,
     >,
     /// Receiver for the hub's per-session PREVIEW load (the right pane's
@@ -2040,6 +2043,15 @@ impl App {
                     let loaded = tokio::task::spawn_blocking(move || {
                         let db = operant_core::database::Database::init(db_path).ok();
                         let total = db.as_ref().and_then(|d| d.count_sessions().ok());
+                        // The EMPLOYEE ROSTER (audit finding 3): the axis's
+                        // cycle comes from the roster, not from the employee
+                        // tags on the loaded page — on the live store those
+                        // two sets are disjoint, so the axis could not reach
+                        // any of the operator's nine named seats.
+                        let roster = db
+                            .as_ref()
+                            .and_then(|d| d.list_session_employees().ok())
+                            .unwrap_or_default();
                         let mut rows = db
                             .as_ref()
                             .and_then(|d| d.list_sessions_rich(500).ok())
@@ -2047,10 +2059,10 @@ impl App {
                         // iter-C: subagent rows are process-local registry
                         // state, appended (not joined) to the DB rows.
                         rows.extend(operant_core::tools::async_delegation::records_snapshot());
-                        (rows, total)
+                        (rows, total, roster)
                     })
                     .await
-                    .unwrap_or_else(|_| (Vec::new(), None));
+                    .unwrap_or_else(|_| (Vec::new(), None, Vec::new()));
                     let _ = tx.send(loaded).await;
                 });
             }

@@ -1792,6 +1792,58 @@ impl Database {
     /// "Sessions" next to 500 when the store holds 3,302 is the silent lie
     /// audit finding 3 is about. One `COUNT(*)` over the same table is the
     /// whole truth and costs no join.
+    /// The EMPLOYEE ROSTER, one label per employee that has a session OR a
+    /// seat row.
+    ///
+    /// (2026-11-14, audit finding 3) The hub's employee axis used to derive
+    /// its cycle from `sessions.employee_id` on the LOADED PAGE — the newest
+    /// 500 rows. On the live store the two sets are disjoint: the roster
+    /// holds nine named seats (premiere, chief-of-staff, governor, …), the
+    /// page holds three `emp-cron_*` cron tags, and zero sessions carry a
+    /// roster seat id. So the axis offered three cron jobs and not one of the
+    /// operator's employees, which is the question the axis exists to answer.
+    ///
+    /// The roster is the authority on who the employees ARE; the session tags
+    /// are the authority on which of them have run something. Both sides are
+    /// needed, and the rows are sorted so the cycle's order is stable.
+    ///
+    /// Employees with no session are still listed — "this seat has run
+    /// nothing" is a fact the operator wants, and hiding the seat makes it
+    /// indistinguishable from a seat that does not exist.
+    pub fn list_session_employees(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT employee_id,
+                        CASE WHEN e.name IS NULL OR e.name = '' THEN employee_id
+                             ELSE e.name END AS label
+                 FROM (
+                     SELECT employee_id FROM sessions
+                     WHERE employee_id IS NOT NULL AND employee_id <> ''
+                     UNION
+                     SELECT employee_id FROM employees
+                     WHERE employee_id IS NOT NULL AND employee_id <> ''
+                 ) s
+                 LEFT JOIN employees e ON e.employee_id = s.employee_id
+                 ORDER BY label COLLATE NOCASE",
+            )
+            .map_err(|e| {
+                Error::Agent(format!("Failed to prepare list_session_employees: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| Error::Agent(format!("Failed to list session employees: {}", e)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(
+                r.map_err(|e| Error::Agent(format!("Failed to read session employees: {}", e)))?,
+            );
+        }
+        Ok(out)
+    }
+
     pub fn count_sessions(&self) -> Result<usize> {
         let conn = self.lock_conn()?;
         let n: i64 = conn

@@ -1046,6 +1046,10 @@ fn the_header_without_a_total_still_counts_the_rows() {
 #[test]
 fn the_tab_counts_follow_the_rows_and_the_filters() {
     let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("analyst".to_string(), "Analyst".to_string()),
+        ("premiere".to_string(), "Premiere".to_string()),
+    ]);
     hub.replace_rows(vec![
         row("s1", None, Some("premiere")),
         row("s2", None, Some("analyst")),
@@ -1257,6 +1261,98 @@ fn a_heavy_row_keeps_its_age_and_cost() {
     );
 }
 
+// ---- (2026-11-14, audit findings 3, 6, 10) the employee axis ----
+
+/// The axis must offer the ROSTER, not the employee tags on the loaded page.
+///
+/// (audit finding 3) On the live store the two sets are disjoint: the roster
+/// holds nine named seats (premiere, chief-of-staff, governor, …), the page
+/// holds three `emp-cron_*` cron tags, and ZERO sessions carry a roster seat
+/// id. The axis derived from the page could therefore never select an
+/// employee — the question it exists to answer.
+#[test]
+fn the_employee_axis_offers_the_roster() {
+    let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("premiere".to_string(), "Premiere".to_string()),
+        ("governor".to_string(), "Governor".to_string()),
+    ]);
+    // A page that carries NO roster seat at all — the live shape.
+    hub.replace_rows(vec![row("s1", None, Some("emp-cron_abc123"))]);
+    hub.cycle_employee();
+    assert_eq!(
+        hub.employee_filter(),
+        Some("premiere"),
+        "the roster's first employee must be selectable"
+    );
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), Some("governor"));
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter(), None, "the cycle closes");
+}
+
+/// The chip names the employee the way the roster does.
+#[test]
+fn the_employee_chip_names_the_employee_not_the_id() {
+    let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.replace_rows(vec![row("s1", None, None)]);
+    hub.cycle_employee();
+    assert_eq!(hub.employee_filter_label(), Some("Premiere"));
+}
+
+/// A delegation is the agent's own work, not another seat's: it must stay
+/// visible under an engaged employee filter.
+///
+/// (audit finding 6) It used to be dropped from EVERY tab, including All, so
+/// the operator asked "what is running" and the hub answered "nothing" while
+/// background work ran.
+#[test]
+fn a_running_delegation_survives_the_employee_filter() {
+    let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.replace_rows(vec![
+        row("s1", None, Some("premiere")),
+        subagent_row("dlg-1", "audit the tests", "pending"),
+    ]);
+    hub.cycle_employee();
+    let ids: Vec<&str> = hub.visible_rows().iter().map(|r| r.id.as_str()).collect();
+    assert!(
+        ids.contains(&"dlg-1"),
+        "the pending delegation must survive the employee filter: {ids:?}"
+    );
+}
+
+/// Reopening the hub must not restore a scope the operator did not choose.
+///
+/// (audit finding 10) `open()` reset the selection but not the filters: type
+/// `/branch`, press Esc, then `/session` and the list still showed only the
+/// branch tree; and an engaged employee whose rows were not on the new page
+/// opened the hub EMPTY.
+#[test]
+fn reopening_the_hub_resets_the_scope() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", None, None), row("s2", None, None)]);
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.cycle_employee();
+    hub.filter_mode = HubFilterMode::CurrentBranch;
+    hub.search_query = "old".to_string();
+    hub.open(None);
+    assert_eq!(hub.filter_mode, HubFilterMode::All, "the filter is reset");
+    assert_eq!(hub.employee_filter(), None, "the employee axis is reset");
+    assert!(hub.search_query.is_empty(), "the search is reset");
+}
+
+/// The presentation preference SURVIVES a reopen — it names itself in the
+/// preview, so it is not a silent scope.
+#[test]
+fn the_tool_call_toggle_survives_a_reopen() {
+    let mut hub = SessionHubState::new();
+    hub.toggle_tool_calls();
+    hub.open(None);
+    assert!(hub.hide_tool_calls, "a stated preference is not a scope");
+}
+
 // ---- (2026-11-14, audit finding 4) the search highlight must not panic or drift ----
 
 /// A multi-byte token used to panic the render thread: the scan advanced by
@@ -1416,6 +1512,14 @@ fn the_tool_calls_come_back_with_another_keypress() {
 #[test]
 fn the_employee_filter_selects_one_employee_by_identity() {
     let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("analyst".to_string(), "Analyst".to_string()),
+        ("premiere".to_string(), "Premiere".to_string()),
+    ]);
+    hub.set_employee_roster(vec![
+        ("analyst".to_string(), "Analyst".to_string()),
+        ("premiere".to_string(), "Premiere".to_string()),
+    ]);
     hub.replace_rows(vec![
         row("s1", Some("premiere work"), Some("premiere")),
         row("s2", Some("analyst work"), Some("analyst")),
@@ -1437,6 +1541,10 @@ fn the_employee_filter_selects_one_employee_by_identity() {
 #[test]
 fn the_employee_cycle_returns_to_every_employee() {
     let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("analyst".to_string(), "Analyst".to_string()),
+        ("premiere".to_string(), "Premiere".to_string()),
+    ]);
     hub.replace_rows(vec![
         row("s1", None, Some("premiere")),
         row("s2", None, Some("analyst")),
@@ -1456,16 +1564,36 @@ fn the_employee_cycle_returns_to_every_employee() {
     assert_eq!(hub.visible_rows().len(), 2, "every employee is back");
 }
 
-/// An employee with no loaded session is not in the cycle: selecting it would
-/// show nothing, which reads as a broken filter rather than an empty one.
+/// The ROSTER decides the cycle, not the loaded rows.
+///
+/// (2026-11-14, audit finding 3) It used to be the other way round, and that
+/// was the defect: an employee whose sessions were all older than the hub's
+/// 500-row page could not be selected at all. An employee with no session is
+/// still offered — "this seat has run nothing" is a fact the operator wants,
+/// and hiding the seat makes it indistinguishable from a seat that does not
+/// exist.
 #[test]
-fn the_employee_cycle_only_lists_employees_that_are_present() {
+fn the_employee_cycle_lists_the_roster_not_the_page() {
     let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("premiere".to_string(), "Premiere".to_string()),
+        ("quiet".to_string(), "Quiet Seat".to_string()),
+    ]);
     hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
     hub.cycle_employee();
     assert_eq!(hub.employee_filter(), Some("premiere"));
     hub.cycle_employee();
-    assert_eq!(hub.employee_filter(), None, "no phantom employees");
+    assert_eq!(
+        hub.employee_filter(),
+        Some("quiet"),
+        "a seat with no session is still offered"
+    );
+    hub.rebuild_visible();
+    assert_eq!(
+        hub.visible_rows().len(),
+        0,
+        "and selecting it shows nothing, which is the truth"
+    );
 }
 
 /// The tab counts must answer "how many rows would this tab show", so they
@@ -1475,6 +1603,7 @@ fn the_tab_counts_honour_the_employee_axis() {
     let mut hub = SessionHubState::new();
     let mut live = row("s1", None, Some("premiere"));
     live.status = RowStatus::Live;
+    hub.set_employee_roster(vec![("analyst".to_string(), "Analyst".to_string())]);
     hub.replace_rows(vec![live, row("s2", None, Some("analyst"))]);
     hub.cycle_employee();
     assert_eq!(hub.employee_filter(), Some("analyst"));
@@ -1496,6 +1625,7 @@ fn the_tab_counts_honour_the_employee_axis() {
 #[test]
 fn the_header_names_the_engaged_employee() {
     let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
     hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
     let (list, _) = hub_rows_with(&mut hub);
     assert!(
@@ -1506,7 +1636,7 @@ fn the_header_names_the_engaged_employee() {
     let (list, _) = hub_rows_with(&mut hub);
     let joined = list.join("\n");
     assert!(
-        joined.contains("e:premiere"),
+        joined.contains("e:Premiere"),
         "the engaged axis must be named in the header: {joined}"
     );
 }
