@@ -3779,3 +3779,126 @@ fn search_finds_ids_and_employees_regardless_of_case() {
         "employee search stays case-insensitive"
     );
 }
+
+// ---- (2026-11-14, audit finding 9) the SQL filter and the row predicate ----
+
+/// The two definitions of "what this filter means" must agree.
+///
+/// `list_sessions_rich_filtered_page` pushes the status / cwd / employee /
+/// branch axes into SQL; `row_matches_filter` re-checks them for the visible
+/// set, which also holds live rows the SQL never saw. Two definitions of one
+/// question is the divergence the audit named, and nothing pinned it: change how
+/// `RowStatus` is derived and the tab counts silently stop matching the list.
+///
+/// This is the binding, not a second implementation: for every axis SQL can
+/// express, the predicate must accept EXACTLY the rows the page returned.
+/// `Working` is the documented exception — Live and pending subagent rows exist
+/// only in the process, so SQL returns a superset and the predicate narrows it.
+#[test]
+fn the_sql_filter_and_the_row_predicate_agree_on_every_axis() {
+    use operant_core::database::{Database, SessionRowFilter, SessionStatusFilter};
+
+    let dir = std::env::temp_dir().join(format!("hub-axis-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let db = Database::init(dir.join("axis.db")).expect("db");
+
+    for (i, id) in ["ax-0", "ax-1", "ax-2", "ax-3", "ax-4", "ax-5"]
+        .iter()
+        .enumerate()
+    {
+        let started = (chrono::Utc::now() - chrono::Duration::seconds(i as i64)).to_rfc3339();
+        db.save_session(id, None, "agent", &started, &started)
+            .expect("save");
+        db.set_session_cwd(id, if i % 2 == 0 { "/srv/a" } else { "/srv/b" })
+            .expect("cwd");
+        db.set_session_employee(id, if i % 3 == 0 { "ann" } else { "bo" })
+            .expect("employee");
+    }
+    db.mark_session_interrupted("ax-0").expect("interrupted");
+    db.archive_session("ax-1").expect("archived");
+
+    let cases: Vec<(HubFilterMode, SessionRowFilter)> = vec![
+        (HubFilterMode::All, SessionRowFilter::default()),
+        (
+            HubFilterMode::NeedsYou,
+            SessionRowFilter {
+                status: Some(SessionStatusFilter::Interrupted),
+                ..Default::default()
+            },
+        ),
+        (
+            HubFilterMode::Ready,
+            SessionRowFilter {
+                status: Some(SessionStatusFilter::Idle),
+                ..Default::default()
+            },
+        ),
+        (
+            HubFilterMode::Inactive,
+            SessionRowFilter {
+                status: Some(SessionStatusFilter::Archived),
+                ..Default::default()
+            },
+        ),
+        (
+            HubFilterMode::CurrentDir,
+            SessionRowFilter {
+                cwd: Some("/srv/a".to_string()),
+                ..Default::default()
+            },
+        ),
+        (
+            HubFilterMode::CurrentBranch,
+            SessionRowFilter {
+                branch_root: Some("ax-2".to_string()),
+                ..Default::default()
+            },
+        ),
+    ];
+
+    // The predicate is checked over the WHOLE corpus, not over the page the SQL
+    // returned. Comparing it to the page can only catch a predicate that is too
+    // NARROW: the rows a too-wide predicate would add are not in that page, so a
+    // mutation widening `Ready` to accept `Interrupted` passed the first version
+    // of this test. The corpus catches both directions.
+    let corpus = db
+        .list_sessions_rich_filtered_page(500, None, None, &SessionRowFilter::default())
+        .expect("corpus");
+
+    for (mode, filter) in cases {
+        let page = db
+            .list_sessions_rich_filtered_page(500, None, None, &filter)
+            .expect("page");
+        let from_sql: std::collections::BTreeSet<String> =
+            page.iter().map(|r| r.id.clone()).collect();
+        let from_predicate: std::collections::BTreeSet<String> = corpus
+            .iter()
+            // The same process context the SQL was given: `None` for the branch
+            // root means "no branch scope", which the predicate reads as accept
+            // everything — passing it would have compared two different filters.
+            .filter(|r| row_matches_filter(mode, r, Some("ax-2"), Some("/srv/a")))
+            .map(|r| r.id.clone())
+            .collect();
+        assert_eq!(
+            from_predicate, from_sql,
+            "{mode:?}: the predicate and the SQL disagree about this axis, so the tab count and the list would lie to each other"
+        );
+    }
+
+    // The documented asymmetry: Working is process state, so SQL cannot narrow
+    // it. The predicate may only REMOVE rows from what the SQL returned.
+    let all = db
+        .list_sessions_rich_filtered_page(500, None, None, &SessionRowFilter::default())
+        .expect("page");
+    let working: Vec<&SessionEntryV2> = all
+        .iter()
+        .filter(|r| row_matches_filter(HubFilterMode::Working, r, Some("ax-2"), Some("/srv/a")))
+        .collect();
+    assert!(
+        working.iter().all(|r| r.status == RowStatus::Live),
+        "on a store with no live rows, Working is empty — and empty is the honest answer"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
