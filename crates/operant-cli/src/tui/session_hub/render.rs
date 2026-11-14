@@ -446,11 +446,14 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // the employee chip (it names the axis that is filtering the list), and
     // the grouping itself.
     let budget = inner_width as usize;
+    // The numerator is the SESSION count, not `rows.len()`: the delegations
+    // appended after the load are not in `count_sessions()`, so counting them
+    // here compared two populations (audit finding 15).
     let count_clause = match state.store_total() {
-        Some(total) if total > state.rows.len() => {
-            format!("  {} of {} rows", state.rows.len(), total)
+        Some(total) if total > state.session_rows() => {
+            format!("  {} of {} rows", state.session_rows(), total)
         }
-        _ => format!("  {} rows", state.rows.len()),
+        _ => format!("  {} rows", state.session_rows()),
     };
     let mut spans = vec![
         Span::styled(

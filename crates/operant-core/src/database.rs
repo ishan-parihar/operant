@@ -1698,7 +1698,7 @@ impl Database {
         &self,
         limit: usize,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
-        self.list_sessions_rich_page(limit, None)
+        self.list_sessions_rich_page(limit, None, None)
     }
 
     /// One page of the unified row, older than `before`.
@@ -1723,6 +1723,7 @@ impl Database {
         &self,
         limit: usize,
         before: Option<&str>,
+        before_id: Option<&str>,
     ) -> Result<Vec<crate::session::listing::SessionEntryV2>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
@@ -1736,9 +1737,10 @@ impl Database {
                        CASE WHEN s.end_reason = 'interrupted' THEN 1 ELSE 0 END AS interrupted
                   FROM sessions s
                   LEFT JOIN messages m ON s.id = m.session_id
-                  WHERE COALESCE(s.ended_at, s.started_at) < ?2
+                  WHERE (COALESCE(s.ended_at, s.started_at) < ?2
+                         OR (COALESCE(s.ended_at, s.started_at) = ?2 AND s.id < ?3))
                   GROUP BY s.id
-                  ORDER BY updated_at DESC
+                  ORDER BY updated_at DESC, s.id DESC
                   LIMIT ?1",
             )
             .map_err(|e| {
@@ -1751,9 +1753,13 @@ impl Database {
         // for — a second SQL string is how the shapes drift apart again.
         const NO_CURSOR: &str = "9999-12-31T23:59:59.999999999+00:00";
         let cursor = before.unwrap_or(NO_CURSOR);
+        // The tiebreaker's id: the last row of the previous page. With the
+        // no-cursor sentinel no row's key equals it, so the tiebreak arm never
+        // fires and the first page is the plain newest-`limit` window.
+        let last_id = before_id.unwrap_or("");
 
         let rows = stmt
-            .query_map(params![limit, cursor], |row| {
+            .query_map(params![limit, cursor, last_id], |row| {
                 Ok(RichSessionRow {
                     id: row.get(0)?,
                     title: row.get(1)?,
@@ -1919,9 +1925,21 @@ impl Database {
     /// recorded, so they stay NULL and the hub labels them `(no cwd)` rather
     /// than guessing.
     pub fn set_session_cwd(&self, session_id: &str, cwd: &str) -> Result<()> {
+        // (2026-11-14, audit finding 14) A turn that changes nothing writes
+        // nothing.
+        //
+        // The stamp runs once per turn with the process's current directory,
+        // which is the same value on every turn after the first. SQLite reports
+        // changes()=1 for an identical UPDATE, so the row was rewritten — a
+        // dirty page and a WAL frame, plus one acquisition of the process-wide
+        // connection lock — for a value that never changes. The largest live
+        // session has 950 turns: 950 rewrites of one string. The guard makes
+        // the same-value turn match no row, which is the same "a miss is a
+        // silent no-op" contract the row-missing case already has.
         let conn = self.lock_conn()?;
         conn.execute(
-            "UPDATE sessions SET cwd = ?2 WHERE id = ?1",
+            "UPDATE sessions SET cwd = ?2
+             WHERE id = ?1 AND (cwd IS NULL OR cwd <> ?2)",
             params![session_id, cwd],
         )
         .map_err(|e| Error::Agent(format!("Failed to stamp session cwd: {}", e)))?;
@@ -6067,11 +6085,14 @@ mod tests {
             db.save_session(&id, None, "agent", &at, &at).expect("save");
         }
 
-        let first = db.list_sessions_rich_page(3, None).expect("first page");
+        let first = db
+            .list_sessions_rich_page(3, None, None)
+            .expect("first page");
         assert_eq!(first.len(), 3, "the page honours its limit");
         let cursor = first.last().map(|r| r.updated_at.to_rfc3339());
+        let last_id = first.last().map(|r| r.id.clone());
         let second = db
-            .list_sessions_rich_page(3, cursor.as_deref())
+            .list_sessions_rich_page(3, cursor.as_deref(), last_id.as_deref())
             .expect("second page");
 
         let first_ids: Vec<&str> = first.iter().map(|r| r.id.as_str()).collect();
@@ -6084,6 +6105,91 @@ mod tests {
             first_ids.len() + second_ids.len(),
             6,
             "the two pages cover the store exactly: {first_ids:?} + {second_ids:?}"
+        );
+    }
+
+    /// The cwd stamp writes a change, not a rewrite.
+    ///
+    /// (2026-11-14, audit finding 14) The stamp runs on every turn with the
+    /// process's current directory, which is the same value after the first
+    /// turn. SQLite reports changes()=1 for an identical UPDATE, so the row was
+    /// rewritten on every turn of a long session — 950 rewrites of one string
+    /// on the largest live session. The guard makes the repeat a no-op.
+    ///
+    /// What this pins is the CONTRACT the guard must keep: a NULL cwd is
+    /// stamped (the guard must not treat "not yet written" as "already
+    /// correct"), a repeat leaves the value alone, and a genuine change lands.
+    #[test]
+    fn the_cwd_stamp_is_a_no_op_when_the_value_has_not_changed() {
+        let db = test_db();
+        let at = "2026-11-13T16:00:00+00:00";
+        db.save_session("cwd-1", None, "agent", at, at)
+            .expect("save");
+        let read = |db: &Database| -> Option<String> {
+            let conn = db.lock_conn().unwrap();
+            conn.query_row("SELECT cwd FROM sessions WHERE id = 'cwd-1'", [], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten()
+        };
+        assert_eq!(read(&db), None, "a new session carries no cwd");
+        db.set_session_cwd("cwd-1", "/home/u/proj").expect("stamp");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/proj"));
+        // The same value on every later turn: still there, and a no-op.
+        db.set_session_cwd("cwd-1", "/home/u/proj").expect("repeat");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/proj"));
+        // A genuine move is written.
+        db.set_session_cwd("cwd-1", "/home/u/other").expect("move");
+        assert_eq!(read(&db).as_deref(), Some("/home/u/other"));
+    }
+
+    /// Two rows that share an ordering key must not swallow each other.
+    ///
+    /// (2026-11-14, audit finding 12) A keyset page is only lossless when the
+    /// (key, tiebreak) pair is unique. The ORDER BY had no tiebreaker, so with
+    /// two rows at the same instant the second could never appear on any page:
+    /// page 1 took one of them and the cursor was that shared key, which the
+    /// strict `<` excluded forever. The tiebreaker is the id, and the cursor
+    /// now carries it.
+    #[test]
+    fn two_rows_sharing_an_ordering_key_are_not_dropped() {
+        let db = test_db();
+        // Six rows, all at the SAME instant: the worst case for a keyset.
+        let at = "2026-11-13T16:00:00+00:00";
+        for i in 0..6 {
+            let id = format!("tie-{i}");
+            db.save_session(&id, None, "agent", at, at).expect("save");
+        }
+        let first = db.list_sessions_rich_page(2, None, None).expect("first");
+        let cursor = first.last().map(|r| r.updated_at.to_rfc3339());
+        let last_id = first.last().map(|r| r.id.clone());
+        let second = db
+            .list_sessions_rich_page(2, cursor.as_deref(), last_id.as_deref())
+            .expect("second");
+        let cursor = second.last().map(|r| r.updated_at.to_rfc3339());
+        let last_id = second.last().map(|r| r.id.clone());
+        let third = db
+            .list_sessions_rich_page(2, cursor.as_deref(), last_id.as_deref())
+            .expect("third");
+
+        let mut ids: Vec<String> = first
+            .iter()
+            .chain(second.iter())
+            .chain(third.iter())
+            .map(|r| r.id.clone())
+            .collect();
+        let total = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            total,
+            "no row is repeated across the page boundaries: {ids:?}"
+        );
+        assert_eq!(
+            total, 6,
+            "all six rows are reachable, none is skipped: {ids:?}"
         );
     }
 

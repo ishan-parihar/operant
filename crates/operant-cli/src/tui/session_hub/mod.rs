@@ -504,6 +504,9 @@ pub struct SessionHubState {
     /// roster, and an employee with no session still appears — "this seat has
     /// run nothing" is a fact the operator wants.
     employee_roster: Vec<(String, String)>,
+    /// How many of `rows` are sessions (not process-local delegations). The
+    /// header's numerator, so its ratio compares one population to another.
+    session_rows: usize,
     /// How many sessions the STORE holds, with no limit — the header's
     /// "N of M" (audit finding 3: the hub's own count read as the whole
     /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
@@ -570,6 +573,7 @@ impl SessionHubState {
             employee_filter: None,
             hide_tool_calls: false,
             employee_roster: Vec::new(),
+            session_rows: 0,
             preview_first_prompt: None,
             store_total: None,
             has_more: false,
@@ -1378,6 +1382,26 @@ impl SessionHubState {
     /// The store's session count, for the header's "N of M".
     pub fn store_total(&self) -> Option<usize> {
         self.store_total
+    }
+
+    /// How many of the loaded rows are SESSIONS, not delegations.
+    ///
+    /// (2026-11-14, audit finding 15) The header's ratio needs a numerator
+    /// from the same population as its denominator. `rows.len()` includes the
+    /// process-local delegation rows, and `count_sessions()` does not, so the
+    /// two ends of "503 of 3,314" were counting different things.
+    pub fn set_session_rows(&mut self, n: usize) {
+        self.session_rows = n;
+    }
+
+    /// The numerator the header prints. Falls back to `rows.len()` before the
+    /// first load has reported it, which is the honest number in that state.
+    pub fn session_rows(&self) -> usize {
+        if self.session_rows == 0 {
+            self.rows.len()
+        } else {
+            self.session_rows
+        }
     }
 
     pub fn set_store_total(&mut self, total: Option<usize>) {

@@ -2688,6 +2688,8 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     app.session_list_pending = false;
     let (tx, rx) = tokio::sync::mpsc::channel::<(
         Vec<operant_core::session::listing::SessionEntryV2>,
+        // iter-2234's session-row count, for the header's numerator.
+        usize,
         Option<usize>,
         Vec<(String, String)>,
         Option<operant_core::database::SessionFilterCounts>,
@@ -2696,7 +2698,7 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     // Deliver the rows a few frames late, exactly like the real blocking load.
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let _ = tx.send((hub_rows(3), None, Vec::new(), None)).await;
+        let _ = tx.send((hub_rows(3), 3, None, Vec::new(), None)).await;
     });
 
     app.simulated_keys = vec![press_key(KeyCode::Down, KeyModifiers::NONE)];
@@ -2756,6 +2758,7 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     app.session_list_pending = false;
     let (tx, rx) = tokio::sync::mpsc::channel::<(
         Vec<operant_core::session::listing::SessionEntryV2>,
+        usize,
         Option<usize>,
         Vec<(String, String)>,
         Option<operant_core::database::SessionFilterCounts>,
@@ -2763,6 +2766,7 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     app.session_list_rx = Some(rx);
     tx.send((
         crate::tui::session_hub::probe_rows(2),
+        2,
         None,
         Vec::new(),
         None,
@@ -10572,6 +10576,7 @@ mod rename_on_load_tests {
         app.session_list_rx = Some(rx);
         tx.try_send((
             Vec::<operant_core::session::listing::SessionEntryV2>::new(),
+            0,
             None,
             Vec::new(),
             None,

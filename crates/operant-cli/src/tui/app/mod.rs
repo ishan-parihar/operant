@@ -764,6 +764,11 @@ pub struct App {
     pub session_list_rx: Option<
         tokio::sync::mpsc::Receiver<(
             Vec<operant_core::session::listing::SessionEntryV2>,
+            // How many of those rows are SESSIONS (before the process-local
+            // delegation rows were appended). The header's numerator: with
+            // them in it, the ratio compared two different populations (audit
+            // finding 15).
+            usize,
             // How many sessions the STORE holds, with no limit. The hub loads
             // a page (500), so without this the header's row count is the
             // page size and reads as the whole truth (audit finding 3).
@@ -2063,6 +2068,14 @@ impl App {
                 } else {
                     None
                 };
+                // The tiebreaker (iter-2234): a keyset page is only lossless
+                // when the (key, id) pair is unique, so the cursor carries the
+                // last row's id as well as its timestamp.
+                let page_cursor_id = if load_more {
+                    self.session_hub.rows.last().map(|r| r.id.clone())
+                } else {
+                    None
+                };
                 // The store-wide counts need the same axes the hub filters
                 // by, so they are read here and carried with the rows (F4):
                 // a count that ignored the employee axis would promise rows
@@ -2092,12 +2105,22 @@ impl App {
                         let mut rows = db
                             .as_ref()
                             .and_then(|d| match page_cursor.as_deref() {
-                                Some(cursor) => {
-                                    d.list_sessions_rich_page(HUB_PAGE, Some(cursor)).ok()
-                                }
+                                Some(cursor) => d
+                                    .list_sessions_rich_page(
+                                        HUB_PAGE,
+                                        Some(cursor),
+                                        page_cursor_id.as_deref(),
+                                    )
+                                    .ok(),
                                 None => d.list_sessions_rich(HUB_PAGE).ok(),
                             })
                             .unwrap_or_default();
+                        // The peer's iter-2233 counts and iter-2234's session
+                        // count are both carried: the header needs the SESSION
+                        // numerator (audit finding 15 — `rows.len()` includes
+                        // the process-local delegation rows, which are not in
+                        // `count_sessions()`), and the tab bar needs the
+                        // store-wide filter counts.
                         let counts = db.as_ref().and_then(|d| {
                             d.count_sessions_by_filter(
                                 counts_cwd.as_deref(),
@@ -2107,6 +2130,9 @@ impl App {
                             )
                             .ok()
                         });
+                        // (2026-11-14, audit finding 15) How many of these rows
+                        // are SESSIONS, before the delegations are appended.
+                        //
                         // iter-C: subagent rows are process-local registry
                         // state, appended (not joined) to the DB rows. Only on
                         // a FRESH load: a `Show more` page must not append the
@@ -2114,10 +2140,16 @@ impl App {
                         if !load_more {
                             rows.extend(operant_core::tools::async_delegation::records_snapshot());
                         }
-                        (rows, total, roster, counts)
+                        // (2026-11-14, audit finding 15) The SESSION count,
+                        // captured before the process-local delegation rows
+                        // are appended: the header's numerator must count the
+                        // same population as `count_sessions()`, and the
+                        // delegations are not in that population at all.
+                        let session_rows = rows.len();
+                        (rows, session_rows, total, roster, counts)
                     })
                     .await
-                    .unwrap_or_else(|_| (Vec::new(), None, Vec::new(), None));
+                    .unwrap_or_else(|_| (Vec::new(), 0, None, Vec::new(), None));
                     let _ = tx.send(loaded).await;
                 });
             }

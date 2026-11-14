@@ -157,7 +157,7 @@ impl App {
             return false;
         };
         match rx.try_recv() {
-            Ok((rows, total, roster, counts)) => {
+            Ok((rows, session_rows, total, roster, counts)) => {
                 self.debug_hub
                     .publish(crate::tui::debug::TuiEvent::SessionList {
                         count: rows.len(),
@@ -179,6 +179,7 @@ impl App {
                 self.session_hub.set_live_session_id(live);
                 // The store total, so the header can say "500 of 3,302"
                 // instead of a bare "500" that reads as everything.
+                self.session_hub.set_session_rows(session_rows);
                 self.session_hub.set_store_total(total);
                 // J2: a FULL page means the store very likely has more, which
                 // is what draws the `Show more` row; a short page is the end

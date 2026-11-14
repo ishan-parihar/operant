@@ -1435,6 +1435,31 @@ fn the_tool_call_toggle_survives_a_reopen() {
     assert!(hub.hide_tool_calls, "a stated preference is not a scope");
 }
 
+// ---- (2026-11-14, audit finding 15) the header's ratio compares one population ----
+
+/// The header's numerator must be SESSIONS, not `rows.len()`.
+///
+/// (audit finding 15) The numerator included the process-local delegation rows
+/// appended after the load, and the denominator is `count_sessions()` — a DB
+/// count. With three pending delegations the header read "503 of 3,314" and
+/// 503 was not a session count.
+#[test]
+fn the_header_counts_sessions_not_delegations() {
+    let mut hub = SessionHubState::new();
+    let rows = vec![row("s1", Some("work"), None), row("s2", Some("work"), None)];
+    hub.replace_rows(rows.clone());
+    // The App reports the SESSION count before appending the delegations.
+    hub.set_session_rows(2);
+    // Then two delegation rows land (what `rows.extend(records_snapshot())` does).
+    hub.replace_rows(rows);
+    let (list, _) = hub_rows_with(&mut hub);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("2 rows"),
+        "the numerator is the session count, not rows.len(): {joined}"
+    );
+}
+
 // ---- (2026-11-14, audit findings 7, 8, 9) the preview pane ----
 
 /// Render the hub's preview pane for one row and return the lines.
