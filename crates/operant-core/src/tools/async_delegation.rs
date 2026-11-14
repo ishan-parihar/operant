@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// `_DEFAULT_MAX_ASYNC_CHILDREN = 3` parity).
 pub const DEFAULT_MAX_ASYNC_CHILDREN: usize = 3;
 /// How many terminal (completed/failed) records to retain before pruning.
-const MAX_RETAINED_TERMINAL: usize = 50;
+pub const MAX_RETAINED_TERMINAL: usize = 50;
 
 /// Lifecycle status of a background delegation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +305,12 @@ pub fn records_snapshot() -> Vec<crate::session::listing::SessionEntryV2> {
 /// Drop the oldest terminal records beyond the retention cap so a long-lived
 /// process doesn't accumulate unbounded delegation history (hermes
 /// `_MAX_RETAINED_COMPLETED = 50` parity).
+///
+/// Ordered by `completed_time`, with the id as tiebreak. `dispatch_time` has
+/// one-second resolution and several delegations routinely finish inside the same
+/// second, so a dispatch-time sort made the SURVIVOR of a prune nondeterministic —
+/// which handle stayed resolvable depended on HashMap iteration order. MEASURED
+/// 2026-11-14.
 fn prune() {
     if let Ok(mut map) = registry().lock() {
         let terminal: Vec<String> = map
@@ -315,9 +321,12 @@ fn prune() {
         if terminal.len() > MAX_RETAINED_TERMINAL {
             let mut sorted: Vec<(&String, u64)> = terminal
                 .iter()
-                .filter_map(|id| map.get(id).map(|r| (id, r.dispatch_time)))
+                .filter_map(|id| {
+                    map.get(id)
+                        .map(|r| (id, r.completed_time.unwrap_or(r.dispatch_time)))
+                })
                 .collect();
-            sorted.sort_by_key(|(_, time)| *time);
+            sorted.sort_by_key(|(id, time)| (*time, *id));
             for (id, _) in sorted.iter().take(terminal.len() - MAX_RETAINED_TERMINAL) {
                 map.remove(*id);
             }
@@ -377,6 +386,45 @@ mod tests {
     fn get_missing_record_returns_none() {
         let _guard = test_lock().lock().unwrap();
         assert!(get_record("dlg-does-not-exist").is_none());
+    }
+
+    /// Pruning must keep exactly the newest records by the pruner's own key.
+    ///
+    /// The key is `(completed_time, id)` — a total order, so the result is
+    /// deterministic by construction (MEASURED 2026-11-14: the old sort keyed on
+    /// `dispatch_time` alone, and `completed_time` was not consulted at all, so
+    /// the survivor of a same-second prune depended on HashMap iteration order).
+    #[test]
+    fn prune_keeps_the_newest_by_completion_order() {
+        let _guard = test_lock().lock().unwrap();
+        // Start from an empty registry: records left by other tests would take
+        // slots under the cap and change which of OURS survive.
+        __test_reset_registry();
+        let mut all: Vec<(u64, String)> = Vec::new();
+        for i in 0..MAX_RETAINED_TERMINAL + 5 {
+            let id = create_record(&format!("job {i}"), "m");
+            mark_completed(&id, "ok");
+            let finished = get_record(&id).and_then(|r| r.completed_time).unwrap_or(0);
+            all.push((finished, id));
+        }
+        all.sort();
+
+        let mut expected: Vec<String> = all
+            .iter()
+            .skip(all.len() - MAX_RETAINED_TERMINAL)
+            .map(|(_, id)| id.clone())
+            .collect();
+        expected.sort();
+        let mut survivors: Vec<String> = list_records()
+            .into_iter()
+            .map(|r| r.delegation_id)
+            .collect();
+        survivors.sort();
+        assert_eq!(
+            survivors, expected,
+            "the newest {MAX_RETAINED_TERMINAL} must survive"
+        );
+        __test_reset_registry();
     }
 
     #[test]

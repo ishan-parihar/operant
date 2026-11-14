@@ -1352,7 +1352,15 @@ impl OperantTool for SubAgentTool {
                 }
                 None => ToolResult::error(
                     TOOL_NAME,
-                    format!("No background delegation found with id '{query_id}'"),
+                    format!(
+                        "No background delegation found with id '{query_id}'. It either never \
+                         existed or is gone: this process keeps the {} most recently FINISHED \
+                         delegations, and a restart forgets all of them. Do not re-dispatch the \
+                         work on this error alone — check the session store for the child's \
+                         output first; if the record was pending when the process restarted, its \
+                         child died with the process and the work must be re-run.",
+                        async_delegation::MAX_RETAINED_TERMINAL
+                    ),
                 ),
             };
         }
