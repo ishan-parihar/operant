@@ -204,10 +204,16 @@ impl std::fmt::Display for SpawnRefusal {
                 "Spawn refused: depth {requested} exceeds max_spawn_depth {max}. \
                  Workers cannot recurse past the configured delegation depth."
             ),
+            // MEASURED 2026-11-14 (audit finding 5): this told the parent to
+            // "wait for a worker to finish", but a refused SWARM has no handle
+            // to poll — `query=` resolves background delegations only — so the
+            // instruction could not be followed. The parent's real recourse is
+            // to retry the call, which is what this now says.
             Self::Breadth { live, max } => write!(
                 f,
                 "Spawn refused: {live}/{max} sub-agent worker slots are live \
-                 process-wide. Wait for a worker to finish, or lower the fan-out."
+                 process-wide. Slots free as the running workers finish — retry this \
+                 call, or lower the fan-out."
             ),
         }
     }
@@ -1068,8 +1074,8 @@ impl SubAgentTool {
         // that loses the race anyway is marked Failed, never Pending.
         if breadth_is_exhausted() {
             return Err(format!(
-                "Spawn refused: {}/{} worker slots are already live. Wait for one \
-                 to finish, or run this synchronously.",
+                "Spawn refused: {}/{} worker slots are already live. Slots free as \
+                 the running workers finish — retry, or run this synchronously.",
                 live_worker_count(),
                 max_global_workers()
             )
@@ -2630,6 +2636,27 @@ mod tests {
 
         let ordinary = flag_no_tools(false, "all good".to_string());
         assert_eq!(ordinary, "all good");
+    }
+
+    /// MEASURED 2026-11-14 (audit finding 5): the breadth refusal told the
+    /// parent to "wait for a worker to finish", but a refused swarm has no
+    /// handle to poll — `query=` resolves background delegations only — so the
+    /// instruction could not be followed. The recourse the parent actually has
+    /// is to retry the call. This pins that the message names it, and that it
+    /// no longer sends the model to a wait that does not exist.
+    #[test]
+    fn a_breadth_refusal_tells_the_parent_what_it_can_actually_do() {
+        let message = SpawnRefusal::Breadth { live: 6, max: 6 }.to_string();
+        assert!(
+            message.contains("retry this call"),
+            "the message must name the real recourse: {message}"
+        );
+        assert!(
+            !message.contains("Wait for a worker"),
+            "there is no wait to perform: a refused swarm has no handle to poll: {message}"
+        );
+        // The live/max pair is what makes the refusal actionable at all.
+        assert!(message.contains("6/6"), "{message}");
     }
 
     /// A background child that panics must end as a FAILED record, not as a
