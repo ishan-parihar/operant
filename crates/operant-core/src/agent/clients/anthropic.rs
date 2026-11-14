@@ -170,13 +170,11 @@ impl AnthropicModelClient {
         // to be absent while thinking is enabled.
         if let Some(effort) = &request.reasoning_effort {
             let max = request.max_tokens.unwrap_or(4096);
-            let mut budget = match effort.as_str() {
-                "minimal" => 1024,
-                "low" => 2048,
-                "medium" => 8192,
-                "xhigh" => 32_000,
-                _ => 16_384, // high
-            };
+            // (2026-11-15, model plan M2) This was a SECOND copy of the ladder in
+            // `client.rs::anthropic_budget_tokens`, and the two had already
+            // drifted: neither named `max`, which is the swarm default, so the
+            // highest rung drew high's budget. One table now, called from both.
+            let mut budget = crate::client::anthropic_budget_tokens(effort);
             if budget >= max {
                 budget = max.saturating_sub(1024).max(1024);
             }

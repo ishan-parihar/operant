@@ -123,15 +123,12 @@ impl App {
             .collect();
         names.dedup();
         let current = self.config.agent.model.clone();
-        let effort = {
-            use crate::tui::model_effort::EffortLevel;
-            match self.effort_level {
-                EffortLevel::Low => "low",
-                EffortLevel::Normal => "normal",
-                EffortLevel::High => "high",
-                EffortLevel::Max => "max",
-            }
-        };
+        // (2026-11-15, model plan M2) This was a THIRD hand-written spelling of
+        // the vocabulary: `Normal => "normal"` and `Max => "max"`, while the
+        // effort picker's own rows sent `medium` and `xhigh` for the same two
+        // levels. So the model picker labelled a row with one word and the
+        // effort picker applied another. `wire()` is the only spelling now.
+        let effort = self.effort_level.wire();
         let mut entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = names
             .iter()
             .map(|id| inline_model_row(id, "[agent] model / fallback_models", effort))
@@ -712,28 +709,40 @@ impl super::App {
     pub(super) fn open_effort_picker_inline(&mut self, filter: &str) {
         use crate::tui::model_effort::EffortLevel;
         let current = self.effort_level;
-        let rows: &[(EffortLevel, &str, &str)] = &[
-            (EffortLevel::Low, "low", "minimal reasoning effort"),
-            (EffortLevel::Normal, "medium", "balanced reasoning effort"),
-            (EffortLevel::High, "high", "deep reasoning effort"),
-            (EffortLevel::Max, "xhigh", "maximum reasoning effort"),
-        ];
-        let entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = rows
+        // (2026-11-15, model plan M2) The rows are DERIVED from the type's own
+        // list, so a new rung cannot be added to `EffortLevel` and forgotten
+        // here. The old list was a hand-written table of four for a seven-rung
+        // vocabulary, and it carried the DISPLAY names as wire values (`normal`,
+        // `max`) — which is how two of its four rows came to be rejected by the
+        // very command that applies them.
+        let detail = |level: EffortLevel| -> &'static str {
+            match level {
+                EffortLevel::Off => "send no reasoning at all",
+                EffortLevel::Minimal => "the cheapest reasoning the model offers",
+                EffortLevel::Low => "minimal reasoning effort",
+                EffortLevel::Medium => "balanced reasoning effort",
+                EffortLevel::High => "deep reasoning effort",
+                EffortLevel::XHigh => "deeper than high, where the model allows it",
+                EffortLevel::Max => "maximum reasoning effort",
+            }
+        };
+        let entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = EffortLevel::ALL
             .iter()
-            .map(
-                |(level, wire, detail)| crate::tui::operant_app::tui_fns::PickerEntry {
-                    name: format!("{} {}", level.symbol(), wire),
+            .map(|level| {
+                let wire = level.wire();
+                crate::tui::operant_app::tui_fns::PickerEntry {
+                    name: format!("{} {}", level.symbol(), level.label()),
                     options: vec![crate::tui::operant_app::tui_fns::PickerOption {
                         provider: "reasoning".to_string(),
                         api_method: "effort".to_string(),
                         available: true,
-                        detail: detail.to_string(),
+                        detail: detail(*level).to_string(),
                         estimated_reference_cost_micros: None,
                     }],
                     action: crate::tui::operant_app::tui_fns::PickerAction::Model,
                     selected_option: 0,
                     is_current: *level == current,
-                    is_default: *level == EffortLevel::Normal,
+                    is_default: *level == EffortLevel::DEFAULT,
                     is_favorite: false,
                     recommended: false,
                     recommendation_rank: 0,
@@ -742,10 +751,17 @@ impl super::App {
                     created_date: None,
                     // The apply step needs the WIRE value, not the display name.
                     effort: Some(wire.to_string()),
-                },
-            )
+                }
+            })
             .collect();
-        let selected = entries.iter().position(|e| e.is_current).unwrap_or(1);
+        let default_pos = EffortLevel::ALL
+            .iter()
+            .position(|l| *l == EffortLevel::DEFAULT)
+            .unwrap_or(0);
+        let selected = entries
+            .iter()
+            .position(|e| e.is_current)
+            .unwrap_or(default_pos);
         let mut picker = crate::tui::operant_app::tui_fns::InlineInteractiveState {
             kind: crate::tui::operant_app::tui_fns::PickerKind::Effort,
             entries,

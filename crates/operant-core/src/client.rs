@@ -1079,13 +1079,32 @@ fn clamp_effort_for_shape(effort: &str) -> String {
 }
 
 /// Anthropic thinking budgets per effort level (plan 03 design table).
-fn anthropic_budget_tokens(effort: &str) -> u32 {
+///
+/// (2026-11-15, model plan M2) Every rung of `EffortLevel` is now an explicit
+/// arm. The table used to be `minimal | low | medium | xhigh` plus a catch-all
+/// `_ => 16_384` labelled "high", so `max` silently received high's budget.
+/// That was not hypothetical: `config_shim::root_effort_for_swarm` DEFAULTS to
+/// `"max"`, so every swarm root asking for the most effort got 16,384 while
+/// `xhigh` got 32,000 — the ladder inverted at its top.
+///
+/// `max` takes `xhigh`'s budget because the wire has no higher Anthropic tier
+/// to name. When model plan M3 lands the per-model thinking ladder, this stops
+/// being a hand-written table and reads the model's own ceiling.
+///
+/// `off` is absent on purpose: `off` means "send no reasoning field", so
+/// `apply_reasoning_field` is never reached for it.
+pub(crate) fn anthropic_budget_tokens(effort: &str) -> u32 {
     match effort {
         "minimal" => 1024,
         "low" => 2048,
         "medium" => 8192,
-        "xhigh" => 32_000,
-        _ => 16_384, // high
+        "high" => 16_384,
+        "xhigh" | "max" => 32_000,
+        // An unrecognised value keeps the historical fallback rather than
+        // dropping to the smallest budget. The TUI and `/effort-set` both parse
+        // through `EffortLevel::from_wire`, so reaching here means a config file
+        // or a gateway path that bypasses them.
+        _ => 16_384,
     }
 }
 

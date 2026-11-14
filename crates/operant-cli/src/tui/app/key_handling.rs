@@ -12,23 +12,25 @@ const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 
 impl App {
     /// Shift+Tab (plan 03 decision 1; plan 10 cleared the permission cycle
-    /// off this key): cycle effort off → low → medium → high → xhigh → off,
-    /// forwarding each step to the agent via the pending-action channel.
+    /// off this key): cycle the reasoning ladder, forwarding each step to the
+    /// agent via the pending-action channel.
+    ///
+    /// (2026-11-15, model plan M2) The ladder is `EffortLevel::ALL` now, so this
+    /// is one call rather than a hand-written table. The old table had four arms
+    /// for a seven-rung vocabulary and its top arm was the defect: `Max => (Low,
+    /// "")` set the level to `Low` while sending the OFF wire value, so the
+    /// operator turned reasoning off and the display said "low".
+    ///
+    /// (2026-11-15, session plan T4) This is the last tranche that owns this key:
+    /// the operator ruled that `Shift+Tab` becomes the agent-identity switch and
+    /// effort moves to the models page (model plan M1-M3).
     pub(crate) fn cycle_effort(&mut self) {
-        use crate::tui::model_effort::EffortLevel;
-        let (next_level, wire) = match self.effort_level {
-            EffortLevel::Low => (EffortLevel::Normal, "medium".to_string()),
-            EffortLevel::Normal => (EffortLevel::High, "high".to_string()),
-            EffortLevel::High => (EffortLevel::Max, "xhigh".to_string()),
-            EffortLevel::Max => (EffortLevel::Low, String::new()),
-        };
+        let next_level = self.effort_level.next_up();
         self.effort_level = next_level;
+        // `wire()` is the only producer of the string; `Off` is the empty one.
+        let wire = next_level.wire().to_string();
+        let label = next_level.label().to_string();
         self.pending_effort = Some(wire);
-        let label = if self.pending_effort.as_deref().is_some_and(|w| w.is_empty()) {
-            "off".to_string()
-        } else {
-            next_level.label().to_string()
-        };
         self.set_status_notice(format!("Effort: {label}"));
     }
 }

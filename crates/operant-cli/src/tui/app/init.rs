@@ -39,24 +39,40 @@ impl App {
         // Read persisted TUI state from settings.json so CLI commands like
         // `operant tui effort set high` and `operant tui vim on` take effect
         // on the next TUI launch. (Closes parity gaps #5, #8, #10.)
-        let initial_effort = match settings.effort_level.as_deref() {
-            Some("low") => EffortLevel::Low,
-            Some("high") => EffortLevel::High,
-            Some("max") => EffortLevel::Max,
-            _ => EffortLevel::Normal,
+        //
+        // (2026-11-15, model plan M2) Both mappings are `from_wire` now. These
+        // two arms spelled the vocabulary differently from each other AND from
+        // `/effort-set`: settings.json accepted only `low | high | max` (so a
+        // stored `minimal` or `medium` silently became Normal), and the TOML arm
+        // folded `minimal` with `low` and `xhigh` with `max`, then turned
+        // ANYTHING unrecognised into `High` — the most expensive rung, as the
+        // fallback for a typo. An unparseable value is now ignored with a
+        // warning, and the default applies, which is the safe direction.
+        let initial_effort = match settings
+            .effort_level
+            .as_deref()
+            .and_then(EffortLevel::from_wire)
+        {
+            Some(level) => level,
+            None => EffortLevel::DEFAULT,
         };
         // (plan 03) the TOML value wins over the legacy settings.json shape;
         // the mapped string also seeds the agent's wire value.
         let toml_effort = config.agent.reasoning_effort.trim().to_string();
-        let initial_effort = if !toml_effort.is_empty() {
-            match toml_effort.as_str() {
-                "minimal" | "low" => EffortLevel::Low,
-                "medium" => EffortLevel::Normal,
-                "xhigh" | "max" => EffortLevel::Max,
-                _ => EffortLevel::High,
-            }
-        } else {
+        let initial_effort = if toml_effort.is_empty() {
             initial_effort
+        } else {
+            match EffortLevel::from_wire(&toml_effort) {
+                Some(level) => level,
+                None => {
+                    tracing::warn!(
+                        value = %toml_effort,
+                        "agent.reasoning_effort is not a known effort level; \
+                         falling back to the default rather than guessing"
+                    );
+                    initial_effort
+                }
+            }
         };
         let initial_vim = settings.vim_enabled;
 
@@ -340,7 +356,11 @@ impl App {
             expanded_tool_id: None,
             model_cycle: Vec::new(),
             pending_compact: false,
-            pending_effort: (!toml_effort.is_empty()).then(|| toml_effort.clone()),
+            // (2026-11-15, model plan M2) Seed the agent from the PARSED level,
+            // not from the raw TOML string. The raw string used to be forwarded
+            // verbatim, so an unparseable value reached the agent as-is while
+            // the enum silently fell back — two different answers to one config.
+            pending_effort: (!toml_effort.is_empty()).then(|| initial_effort.wire().to_string()),
             posture_override: None,
             pending_model: None,
             pending_endpoint: None,

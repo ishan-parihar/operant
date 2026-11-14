@@ -1346,22 +1346,34 @@ impl App {
                 // path funnels through: sets the wire value on the live agent
                 // via the pending-action channel (same seam as /compact).
                 // Args: the effort string ("" = off).
+                //
+                // (2026-11-15, model plan M2) The vocabulary and the mapping are
+                // `EffortLevel`'s now. This arm used to hold its OWN list —
+                // `["", minimal, low, medium, high, xhigh]`, no `max` — and its
+                // own match that folded `minimal` and `low` into one variant and
+                // left `""` unmapped. Two lists that must agree, and the picker
+                // was already sending a third spelling (`normal`, `max`). The
+                // error message is derived from the type so it cannot advertise
+                // a level the parser rejects.
                 let value = args.trim().to_ascii_lowercase();
-                let valid = ["", "minimal", "low", "medium", "high", "xhigh"];
-                if !valid.contains(&value.as_str()) {
-                    self.set_status_notice(format!(
-                        "Unknown effort '{value}' — use off|minimal|low|medium|high|xhigh"
-                    ));
-                    return true;
+                match crate::tui::model_effort::EffortLevel::from_wire(&value) {
+                    Some(level) => {
+                        self.effort_level = level;
+                        // Send the type's own spelling, not the operator's: a
+                        // trailing space or an odd case must not reach the agent.
+                        self.pending_effort = Some(level.wire().to_string());
+                    }
+                    None => {
+                        let options: Vec<&str> = crate::tui::model_effort::EffortLevel::ALL
+                            .iter()
+                            .map(|l| l.label())
+                            .collect();
+                        self.set_status_notice(format!(
+                            "Unknown effort '{value}' — use {}",
+                            options.join("|")
+                        ));
+                    }
                 }
-                self.pending_effort = Some(value.clone());
-                self.effort_level = match value.as_str() {
-                    "minimal" | "low" => crate::tui::model_effort::EffortLevel::Low,
-                    "medium" => crate::tui::model_effort::EffortLevel::Normal,
-                    "xhigh" => crate::tui::model_effort::EffortLevel::Max,
-                    "high" => crate::tui::model_effort::EffortLevel::High,
-                    _ => self.effort_level,
-                };
                 true
             }
             "permissions" => {
