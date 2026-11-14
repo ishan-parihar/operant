@@ -2991,6 +2991,7 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
     let handler = std::sync::Arc::new(GatewaySessionHandler {
         handler: None,
         bus: std::sync::Arc::new(SessionBus::new()),
+        running: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     let server = tokio::spawn(operant_core::session_server::run_session_socket(
         handler,
@@ -3112,4 +3113,104 @@ fn the_session_cap_and_the_slot_count_are_one_number() {
         MAX_AGENT_SLOT_COUNT,
         "the slot count is capped: a slot is a full agent"
     );
+}
+
+/// RT-550: a cancel STOPS the turn, it does not acknowledge and run on.
+///
+/// The session handler keeps the running turn's task handle; a cancel aborts
+/// it. Without the handle the client was told "cancelled" while the turn ran
+/// to completion.
+#[tokio::test]
+async fn a_cancel_stops_the_running_turn_and_says_which() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let agent = Arc::new(operant_core::agent::OperantAgent::new(
+        operant_core::agent::AgentConfig::default(),
+        Box::new(SlowEchoClient { delay_ms: 40 }),
+        operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+        Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        ),
+    ));
+    let handler = GatewaySessionHandler {
+        handler: Some(Arc::new(GatewayMessageHandler {
+            slots: slot_pool(agent),
+            admins: vec![],
+            gateway: tokio::sync::Mutex::new(None),
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            running_session: std::sync::Mutex::new(HashMap::new()),
+            next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            cancelled_queued: Default::default(),
+            mcp_manager: operant_core::mcp::McpManager::new(),
+            mcp_server_configs: Vec::new(),
+            skills_root_dir: dir.path().join("skills-absent"),
+            #[cfg(feature = "plugins-wasm")]
+            wasm_plugin_skill_roots: Vec::new(),
+            queue_waits: tokio::sync::Mutex::new(Default::default()),
+        })),
+        bus: Arc::new(SessionBus::new()),
+        running: std::sync::Mutex::new(HashMap::new()),
+    };
+
+    // A prompt starts a turn and records its task.
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Prompt {
+            session_id: "s1".to_string(),
+            text: "a slow turn".to_string(),
+        },
+    );
+    assert!(
+        replies.is_empty(),
+        "a prompt is answered by events, not a reply"
+    );
+    assert!(
+        handler.running.lock().expect("the lock").contains_key("s1"),
+        "the running turn must be recorded so a cancel can reach it"
+    );
+
+    // The cancel names the turn and reports that it stopped one.
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Cancel {
+            session_id: "s1".to_string(),
+            turn_id: None,
+        },
+    );
+    match replies.as_slice() {
+        [WireMessage::Error { message, .. }] => assert_eq!(
+            message, "the turn was cancelled",
+            "a cancel that stopped a turn must say so"
+        ),
+        other => panic!("a cancel must be answered with one error, got {other:?}"),
+    }
+    assert!(
+        !handler.running.lock().expect("the lock").contains_key("s1"),
+        "the cancelled turn must be forgotten"
+    );
+
+    // A second cancel has nothing to stop and says that instead of lying.
+    let replies = operant_core::session_server::SessionHandler::handle(
+        &handler,
+        WireMessage::Cancel {
+            session_id: "s1".to_string(),
+            turn_id: None,
+        },
+    );
+    match replies.as_slice() {
+        [WireMessage::Error { message, .. }] => assert_eq!(
+            message, "there was no turn to cancel",
+            "a cancel with nothing running must say so"
+        ),
+        other => panic!("the second cancel must be answered, got {other:?}"),
+    }
+
+    // Let the aborted task settle before the temp dir goes away.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 }

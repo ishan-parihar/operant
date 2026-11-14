@@ -2550,6 +2550,12 @@ struct GatewaySessionHandler {
     /// silent turn.
     handler: Option<std::sync::Arc<GatewayMessageHandler>>,
     bus: std::sync::Arc<SessionBus>,
+    /// The running turn per session (RT-550).
+    ///
+    /// A cancel has to reach the turn, so the handler keeps the task handle.
+    /// Without it a cancel was an acknowledgement and nothing more: the client
+    /// was told "cancelled" while the turn ran on.
+    running: std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
 impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
@@ -2577,9 +2583,10 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     }];
                 };
                 let bus = std::sync::Arc::clone(&self.bus);
-                tokio::spawn(async move {
-                    let index = handler.slots.index_for(&session_id);
-                    let slot = handler.slots.slot_for(&session_id);
+                let session_for_turn = session_id.clone();
+                let task = tokio::spawn(async move {
+                    let index = handler.slots.index_for(&session_for_turn);
+                    let slot = handler.slots.slot_for(&session_for_turn);
                     // ONE turn at a time in this slot (the same lock every
                     // other gateway turn takes).
                     let _guard = slot.lock.lock().await;
@@ -2587,14 +2594,37 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     // events under, so it is set before the turn runs.
                     if let Some(cell) = slot.session_cell.as_ref() {
                         if let Ok(mut held) = cell.lock() {
-                            *held = Some(session_id.clone());
+                            *held = Some(session_for_turn.clone());
                         }
                     }
                     let agent = std::sync::Arc::clone(&slot.agent);
                     let _ = agent.run(text).await;
                     let _ = index;
                 });
+                if let Ok(mut running) = self.running.lock() {
+                    running.insert(session_id, task);
+                }
                 vec![]
+            }
+            // RT-550: a cancel STOPS the turn. The abort drops the task at
+            // its next await point, the slot's lock is released by the guard,
+            // and no further events are published for that session.
+            WireMessage::Cancel { session_id, .. } => {
+                let stopped = self
+                    .running
+                    .lock()
+                    .ok()
+                    .and_then(|mut running| running.remove(&session_id))
+                    .map(|task| task.abort())
+                    .is_some();
+                vec![WireMessage::Error {
+                    session_id: Some(session_id),
+                    message: if stopped {
+                        "the turn was cancelled".to_string()
+                    } else {
+                        "there was no turn to cancel".to_string()
+                    },
+                }]
             }
             other => vec![WireMessage::Error {
                 session_id: None,
@@ -5036,6 +5066,7 @@ pub async fn start_gateway(
         let session_handler = std::sync::Arc::new(GatewaySessionHandler {
             handler: Some(std::sync::Arc::clone(&handler)),
             bus: std::sync::Arc::clone(&session_bus),
+            running: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         tokio::spawn(async move {
             if let Err(e) =
