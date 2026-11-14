@@ -35,6 +35,24 @@ pub enum ConfigSubcommand {
         #[arg(long)]
         apply: bool,
     },
+    /// List and restore the saved copies of the config file.
+    Backups {
+        /// What to do with the saved copies.
+        #[command(subcommand)]
+        action: BackupAction,
+    },
+}
+
+/// What `operant config backups` does.
+#[derive(Debug, Clone, Subcommand)]
+pub enum BackupAction {
+    /// List the saved copies, newest first.
+    List,
+    /// Restore one saved copy over the live config.
+    Restore {
+        /// The saved copy, as printed by `operant config backups list`.
+        snapshot: PathBuf,
+    },
 }
 
 /// Dispatch and execute a config subcommand.
@@ -50,6 +68,7 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
         ConfigSubcommand::Edit => handle_edit(),
         ConfigSubcommand::EnvPath => handle_env_path(),
         ConfigSubcommand::Migrate { apply } => handle_migrate(apply),
+        ConfigSubcommand::Backups { action } => handle_backups(action),
     }
 }
 
@@ -365,6 +384,67 @@ fn handle_env_path() -> Result<()> {
     Ok(())
 }
 
+/// `operant config backups list|restore`.
+///
+/// The saved copies are the last-known-good versions the writers keep before
+/// each change (`operant_core::config_backup`). Listing prints the path to
+/// pass to `restore`; restore re-validates the copy through the real loader
+/// before it replaces anything, and snapshots the live file first, so a
+/// restore is itself undoable.
+fn handle_backups(action: BackupAction) -> Result<()> {
+    let config_path = operant_core::config::loaded_config_path()
+        .or_else(|| {
+            operant_core::config::default_config_paths()
+                .into_iter()
+                .next()
+        })
+        .ok_or_else(|| anyhow::anyhow!("no config file path is known"))?;
+
+    match action {
+        BackupAction::List => {
+            let snapshots = operant_core::config_backup::list(&config_path);
+            if snapshots.is_empty() {
+                println!("No saved copies of {} yet.", config_path.display());
+                println!(
+                    "One is written before each change, so this fills in the first time \
+                     operant changes a setting."
+                );
+                return Ok(());
+            }
+            println!("Saved copies of {} (newest first):", config_path.display());
+            for snapshot in &snapshots {
+                let when = std::fs::metadata(snapshot)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|since_epoch| {
+                        let secs = since_epoch.as_secs();
+                        format!("{}s ago", secs)
+                    })
+                    .unwrap_or_else(|| "unknown age".to_string());
+                println!("  {}  ({when})", snapshot.display());
+            }
+            println!();
+            println!("Restore one with: operant config backups restore <path>");
+            Ok(())
+        }
+        BackupAction::Restore { snapshot } => {
+            let restored = operant_core::config_backup::restore(&snapshot, &config_path)
+                .map_err(|error| anyhow::anyhow!(error))?;
+            println!(
+                "Restored {} over {}.",
+                snapshot.display(),
+                restored.display()
+            );
+            println!(
+                "The file you replaced is itself saved as a copy, so this is undoable \
+                 with the same command."
+            );
+            Ok(())
+        }
+    }
+}
+
 fn handle_migrate(apply: bool) -> Result<()> {
     let config_path = if let Ok(path) = std::env::var("HERMES_CONFIG") {
         PathBuf::from(&path)
@@ -417,23 +497,15 @@ fn handle_migrate(apply: bool) -> Result<()> {
             );
         } else if apply {
             println!("Applying migration from v{} to v{}...", v, target_version);
-            // Parse TOML, set version field, write back
-            let mut value: toml::Value =
-                content.parse().context("Failed to parse config as TOML")?;
-            if let Some(table) = value.as_table_mut() {
-                table.insert(
-                    "version".to_string(),
-                    toml::Value::Integer(target_version as i64),
-                );
-            }
-            let new_content =
-                toml::to_string(&value).context("Failed to serialize migrated config")?;
-            std::fs::write(&config_path, &new_content).with_context(|| {
-                format!(
-                    "Failed to write migrated config to '{}'",
-                    config_path.display()
-                )
-            })?;
+            // The surgical writer keeps comments, validates through the real
+            // loader, and snapshots the pre-migration bytes — the old body
+            // re-serialized the whole document and dropped every comment.
+            operant_core::config::persist_config_key_at(
+                &config_path,
+                "version",
+                &target_version.to_string(),
+            )
+            .with_context(|| format!("Failed to migrate config to '{}'", config_path.display()))?;
             println!(
                 "  Migration complete. Config updated to v{}.",
                 target_version
@@ -446,21 +518,14 @@ fn handle_migrate(apply: bool) -> Result<()> {
         }
     } else if apply {
         println!("Applying migration from v0 to v{}...", target_version);
-        // Parse TOML, set version field, write back
-        let mut value: toml::Value = content.parse().context("Failed to parse config as TOML")?;
-        if let Some(table) = value.as_table_mut() {
-            table.insert(
-                "version".to_string(),
-                toml::Value::Integer(target_version as i64),
-            );
-        }
-        let new_content = toml::to_string(&value).context("Failed to serialize migrated config")?;
-        std::fs::write(&config_path, &new_content).with_context(|| {
-            format!(
-                "Failed to write migrated config to '{}'",
-                config_path.display()
-            )
-        })?;
+        // The surgical writer keeps comments, validates through the real
+        // loader, and snapshots the pre-migration bytes.
+        operant_core::config::persist_config_key_at(
+            &config_path,
+            "version",
+            &target_version.to_string(),
+        )
+        .with_context(|| format!("Failed to migrate config to '{}'", config_path.display()))?;
         println!(
             "  Migration complete. Config updated to v{}.",
             target_version

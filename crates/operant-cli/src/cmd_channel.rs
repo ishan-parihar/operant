@@ -235,8 +235,9 @@ pub async fn handle_channel_command(
             let channel_type = normalize_channel_type(&channel_type)?;
             let token =
                 resolve_channel_token(&channel_type, token.as_deref(), config_json.as_deref())?;
+            let before = config.clone();
             set_channel_enabled(config, &channel_type, true, token.as_deref())?;
-            persist_config(config, config_path)?;
+            persist_config(&before, config, config_path)?;
             let saved_at = config_path
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| "<in-memory>".to_string());
@@ -272,8 +273,9 @@ pub async fn handle_channel_command(
         }
         ChannelSubcommand::Remove { name } => {
             let name = normalize_channel_type(&name)?;
+            let before = config.clone();
             set_channel_enabled(config, &name, false, None)?;
-            persist_config(config, config_path)?;
+            persist_config(&before, config, config_path)?;
             let saved_at = config_path
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| "<in-memory>".to_string());
@@ -524,14 +526,105 @@ fn set_channel_enabled(
 }
 
 /// Persist the mutated config back to the file that was loaded (requires -c).
-fn persist_config(config: &AppConfig, config_path: Option<&Path>) -> Result<()> {
+///
+/// Only the keys this command actually changed are written, through the one
+/// surgical writer. The old body re-serialized the whole `AppConfig`
+/// (`toml::to_string`) straight over the file, which dropped every comment and
+/// wrote struct defaults over keys the operator had removed — the same defect
+/// the setup wizard was fixed for (plan 09). It also bypassed the snapshot
+/// seam, so a channel change was the one config write with no way back.
+///
+/// The diff base is the config as it was BEFORE this command mutated it, so a
+/// field the file does not carry is not a change and is never written.
+fn persist_config(
+    before: &AppConfig,
+    config: &AppConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     let Some(path) = config_path else {
         bail!("No config file to persist to. Pass -c/--config <PATH> so the change can be saved.")
     };
-    let content = toml::to_string(config).context("Failed to serialize config")?;
-    std::fs::write(path, content)
-        .with_context(|| format!("Failed to write config to {}", path.display()))?;
+    let old: toml::Value =
+        toml::Value::try_from(before).context("Failed to read the old config")?;
+    let new: toml::Value =
+        toml::Value::try_from(config).context("Failed to read the new config")?;
+    for (dotted, value) in changed_leaves(&old, &new) {
+        // The writer takes a TOML LITERAL and falls back to its own scalar
+        // coercion for a plain string. Serializing a bare scalar instead would
+        // emit `telegram_enabled = "\"true\""`, which the loader rejects — a
+        // boolean has to reach the writer as the text `true`.
+        let raw = match &value {
+            toml::Value::String(text) => quote_string(text),
+            toml::Value::Boolean(flag) => flag.to_string(),
+            toml::Value::Integer(number) => number.to_string(),
+            toml::Value::Float(number) => number.to_string(),
+            other => toml::to_string(other)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        };
+        operant_core::config::persist_config_key_at(path, &dotted, &raw)
+            .with_context(|| format!("Failed to write '{}' to {}", dotted, path.display()))?;
+    }
     Ok(())
+}
+
+/// Render a string as a TOML string literal.
+///
+/// `toml::to_string` cannot serialize a bare scalar (its root must be a
+/// table), so the value is wrapped in one and the `value = ` prefix is
+/// stripped. Returning the quoted form matters: the writer's scalar coercion
+/// would otherwise store an unquoted string verbatim.
+fn quote_string(text: &str) -> String {
+    let mut table = toml::value::Table::new();
+    table.insert("v".to_string(), toml::Value::String(text.to_string()));
+    toml::to_string(&table)
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| line.strip_prefix("v = "))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Every leaf whose value differs between two configs, as dotted keys.
+fn changed_leaves(old: &toml::Value, new: &toml::Value) -> Vec<(String, toml::Value)> {
+    let mut out = Vec::new();
+    let mut prefix = String::new();
+    collect_changes(old, new, &mut prefix, &mut out);
+    out
+}
+
+fn collect_changes(
+    old: &toml::Value,
+    new: &toml::Value,
+    prefix: &mut String,
+    out: &mut Vec<(String, toml::Value)>,
+) {
+    if old == new {
+        return;
+    }
+    match (old, new) {
+        (toml::Value::Table(before), toml::Value::Table(after)) => {
+            let base = prefix.len();
+            for (key, value) in after {
+                if !prefix.is_empty() {
+                    prefix.push('.');
+                }
+                prefix.push_str(key);
+                match before.get(key) {
+                    Some(previous) => collect_changes(previous, value, prefix, out),
+                    // A key the old config did not carry is still a change.
+                    None => out.push((prefix.clone(), value.clone())),
+                }
+                prefix.truncate(base);
+            }
+        }
+        // A removed key cannot be expressed as a value write; leaving it in
+        // place is the safer half of the trade (the old writer would have
+        // deleted it as a side effect of re-serializing).
+        (toml::Value::Table(_), _) => {}
+        _ => out.push((prefix.clone(), new.clone())),
+    }
 }
 
 /// Build a list of (channel_name, is_enabled) from config.
@@ -661,5 +754,102 @@ mod tests {
             config.gateway.webhooks_enabled,
             "the webhook switch must set webhooks_enabled"
         );
+    }
+
+    /// The channel write used to re-serialize the WHOLE struct over the file,
+    /// which deleted every comment and wrote defaults over keys the operator
+    /// had removed. Only the changed leaf may be touched now, and the
+    /// pre-write bytes must be recoverable.
+    #[test]
+    fn a_channel_change_keeps_comments_and_snapshots_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(
+            &path,
+            "# operator note: do not touch\n[agent]\nmodel = \"keep-me\"\n",
+        )
+        .expect("fixture");
+
+        let loaded = operant_core::config::load_app_config(Some(&path)).expect("load");
+        let before = loaded.config.clone();
+        let mut config = loaded.config;
+        set_channel_enabled(&mut config, "telegram", true, Some("123:abc")).expect("enable");
+
+        persist_config(&before, &config, Some(&path)).expect("persist");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            text.contains("# operator note: do not touch"),
+            "a comment the operator wrote must survive: {text}"
+        );
+        assert!(text.contains("keep-me"), "the untouched key stays: {text}");
+        assert!(
+            text.contains("telegram_enabled = true"),
+            "the changed key is written: {text}"
+        );
+        assert!(
+            !operant_core::config_backup::list(&path).is_empty(),
+            "the pre-write bytes are recoverable"
+        );
+    }
+
+    /// Only leaves that actually changed are written. Writing every field the
+    /// struct defaults would resurrect keys the operator deliberately removed.
+    #[test]
+    fn a_channel_change_writes_only_the_changed_leaf() {
+        let old: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("old");
+        let new: toml::Value = toml::from_str("[agent]\nmodel = \"b\"\n").expect("new");
+
+        let changes = changed_leaves(&old, &new);
+
+        assert_eq!(changes.len(), 1, "one leaf changed: {changes:?}");
+        assert_eq!(changes[0].0, "agent.model");
+    }
+
+    /// A value the old config did not carry IS a change, or a first-time
+    /// channel enable would be silently dropped.
+    #[test]
+    fn a_channel_change_writes_a_leaf_the_file_never_had() {
+        let old: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("old");
+        let mut new: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("new");
+        new["gateway"]
+            .as_table_mut()
+            .expect("table")
+            .insert("telegram_enabled".to_string(), toml::Value::Boolean(true));
+
+        let changes = changed_leaves(&old, &new);
+
+        assert_eq!(changes.len(), 1, "one leaf changed: {changes:?}");
+        assert_eq!(changes[0].0, "gateway.telegram_enabled");
+    }
+
+    /// A boolean has to reach the writer as the TEXT `true`. Serializing the
+    /// bare value rendered `telegram_enabled = "\"true\""`, which the loader
+    /// rejected — found by running the command, not by reading it, so this
+    /// pins the rendering itself and not just the diff.
+    #[test]
+    fn a_boolean_leaf_reaches_the_writer_as_a_bare_literal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, "[agent]\nmodel = \"m\"\n").expect("fixture");
+        let loaded = operant_core::config::load_app_config(Some(&path)).expect("load");
+        let before = loaded.config.clone();
+        let mut config = loaded.config;
+        config.gateway.telegram_enabled = true;
+        config.gateway.telegram_token = Some("123:abc".to_string());
+
+        persist_config(&before, &config, Some(&path)).expect("persist");
+
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            text.contains("telegram_enabled = true"),
+            "a boolean must not be written quoted: {text}"
+        );
+        assert!(
+            text.contains("telegram_token = \"123:abc\""),
+            "a string keeps its quotes: {text}"
+        );
+        operant_core::config::load_app_config(Some(&path))
+            .expect("the written file must still load");
     }
 }

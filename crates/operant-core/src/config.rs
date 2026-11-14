@@ -3189,9 +3189,30 @@ pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Resu
             path.display()
         )));
     }
+    // The pre-write bytes become recoverable only once the new contents are
+    // known good. A snapshot taken before validation would offer a rejected
+    // write as a restorable "known good" version of a file that never changed.
+    crate::config_backup::snapshot_before_write(path, &original);
     std::fs::rename(&tmp, path)
         .map_err(|e| crate::error::Error::Config(format!("rename {}: {e}", path.display())))?;
     Ok(path.to_path_buf())
+}
+
+/// Publish an already-written, already-validated file over a config path.
+///
+/// The restore seam for [`crate::config_backup`]: the caller stages the
+/// replacement beside the target, and this renames it over with the same
+/// contract the surgical writer uses — a reader never sees a half-written
+/// config, and the target's own mode is carried across.
+pub(crate) fn persist_restored_file(staged: &Path, target: &Path) -> Result<PathBuf> {
+    if let Ok(mode) = std::fs::metadata(target).map(|meta| meta.permissions()) {
+        let _ = std::fs::set_permissions(staged, mode);
+    }
+    std::fs::rename(staged, target).map_err(|error| {
+        let _ = std::fs::remove_file(staged);
+        Error::Config(format!("rename {}: {error}", target.display()))
+    })?;
+    Ok(target.to_path_buf())
 }
 
 /// Best-effort coercion of a CLI string argument into a typed JSON value.
@@ -4179,6 +4200,57 @@ model = "anthropic/claude-opus-4-20250514"
             reloaded.client.base_url, "http://localhost:20129/v1",
             "base_url must survive the persist unchanged"
         );
+    }
+
+    /// The surgical writer's whole promise is that a write can be undone.
+    /// A writer that changed the file and left no copy behind is exactly the
+    /// outage this mechanism exists to prevent: an operator with one bad
+    /// `config set` and no way back.
+    #[test]
+    #[serial]
+    fn persist_config_key_snapshots_the_previous_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cfg_guard = config_path_test_guard();
+
+        let path = write_plan09_fixture(dir.path());
+        let before = std::fs::read(&path).expect("read fixture");
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        install_runtime_config(loaded.config);
+
+        persist_config_key("agent.model", "next-stack").expect("persist");
+
+        let snapshots = crate::config_backup::list(&path);
+        assert_eq!(snapshots.len(), 1, "the pre-write bytes are recoverable");
+        assert_eq!(
+            std::fs::read(&snapshots[0]).expect("read snapshot"),
+            before,
+            "the snapshot holds the version the operator had, not the new one"
+        );
+    }
+
+    /// A rejected write must leave NOTHING behind. A snapshot of a write that
+    /// never happened would be offered by the restore command as a known-good
+    /// version of a file that never changed, and it would push a real
+    /// snapshot out of the retention window.
+    #[test]
+    #[serial]
+    fn a_rejected_write_leaves_no_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cfg_guard = config_path_test_guard();
+
+        let path = write_plan09_fixture(dir.path());
+        let before = std::fs::read(&path).expect("read fixture");
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        install_runtime_config(loaded.config);
+
+        let error = persist_config_key("agent.model.leaf", "x").expect_err("collision");
+        assert!(error.to_string().contains("not a table"), "got: {error}");
+
+        assert!(
+            crate::config_backup::list(&path).is_empty(),
+            "a rejected write must not leave a snapshot claiming to be known-good"
+        );
+        assert_eq!(std::fs::read(&path).expect("read after"), before);
     }
 
     #[test]
@@ -5502,9 +5574,20 @@ fn write_plugin_disabled(
     plugins["disabled"] = toml_edit::value(list);
 
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string())
-        .and_then(|()| std::fs::rename(&tmp, path))
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+    let original =
+        std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let rendered = doc.to_string();
+    crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    if parse_config_file_without_recording(&tmp).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "the plugin change produced an unloadable config; {} left unchanged",
+            path.display()
+        ));
+    }
+    crate::config_backup::snapshot_before_write(path, &original);
+    std::fs::rename(&tmp, path).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 #[cfg(test)]

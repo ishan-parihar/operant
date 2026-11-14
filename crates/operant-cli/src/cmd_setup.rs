@@ -18,7 +18,6 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use chrono::Local;
 use console::style;
 use operant_core::config::{
     AppConfig, AuxiliaryModelConfig, GatewaySettings, TerminalBackend, ToolProgressMode,
@@ -292,19 +291,22 @@ pub async fn run_setup_wizard(
         .cloned()
         .unwrap_or_else(|| PathBuf::from("operant.toml"));
 
+    // The wizard used its own `operant.toml.bak.<timestamp>` beside the
+    // config: a second, unbounded scheme nobody else reads, which on the live
+    // home had grown to 22 copies. One scheme now — the shared, bounded,
+    // restoreable one — and the operator is told the command that restores.
     if config_path.exists() {
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-        let backup = config_path.with_extension(format!("toml.bak.{}", timestamp));
-        fs::copy(&config_path, &backup).ok();
-        print_info(&format!(
-            "Previous config backed up to: {}",
-            backup.display()
-        ));
-        print_info(&format!(
-            "Restore with: cp {} {}",
-            backup.display(),
-            config_path.display()
-        ));
+        if let Ok(bytes) = fs::read(&config_path) {
+            operant_core::config_backup::snapshot_before_write(&config_path, &bytes);
+        }
+        let snapshots = operant_core::config_backup::list(&config_path);
+        if let Some(newest) = snapshots.first() {
+            print_info(&format!("Previous config saved to: {}", newest.display()));
+            print_info(&format!(
+                "Restore with: operant config backups restore {}",
+                newest.display()
+            ));
+        }
     }
 
     match section {
@@ -375,7 +377,6 @@ pub async fn run_setup_wizard(
 
                 // Step 5b: Browser & Skills setup
                 step_browser_and_skills(&mut updated).await?;
-
 
                 // Step 6: Agent behaviour settings
                 step_agent_settings(&mut updated, false).await?;
@@ -1124,7 +1125,11 @@ async fn step_integrations(_config: &mut AppConfig, ask: bool) -> Result<()> {
     } else {
         print_warning(&format!(
             "Herdr is installed but the Operant plugin is not wired yet{}",
-            if herdr.linked { "" } else { " (not registered)" }
+            if herdr.linked {
+                ""
+            } else {
+                " (not registered)"
+            }
         ));
     }
 

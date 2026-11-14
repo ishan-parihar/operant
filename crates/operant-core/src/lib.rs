@@ -63,6 +63,7 @@ pub mod blast_radius;
 pub mod browser_provider;
 pub mod client;
 pub mod config;
+pub mod config_backup;
 pub mod context;
 pub mod context_budget;
 pub mod context_files;
