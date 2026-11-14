@@ -773,7 +773,18 @@ pub struct BehaviorSettings {
     /// value is reported by `AppConfig::unused_setting_warnings` so it stops
     /// looking like a live policy. The setup wizard no longer offers it.
     pub session_reset: SessionResetMode,
+    /// Whether LLM summarisation of the conversation is armed at all.
+    /// When false the summariser never runs and the threshold below is moot.
     pub context_compression: bool,
+    /// Fraction of the context window above which the summariser runs.
+    ///
+    /// Known defect (audit iter-2364 follow-up): the fraction is currently
+    /// applied to the window captured at PROCESS START, not to the window the
+    /// runtime resolves per request. With `agent.context_window = 0`
+    /// (AUTOMATIC) that start-time value is the 128,000 fallback, so on a
+    /// 32k model the trigger never fires although the operator armed it. The
+    /// fix is to resolve the window per request; until then, set
+    /// `agent.context_window` explicitly to the model's real window.
     pub context_compression_threshold: f64,
     /// Absolute soft-compaction limit in tokens. Whichever of this and
     /// `context_soft_cap_percent` is smaller binds first. `0` (the default)
@@ -801,13 +812,6 @@ pub struct BehaviorSettings {
     /// Set a number to bound the bill.
     #[serde(default = "default_summary_max_chars")]
     pub context_compression_summary_max_chars: u32,
-    /// Maximum share of `context_window` that a SINGLE tool result may occupy
-    /// before operant withholds the bulk of it. Expressed as a fraction
-    /// (0.0-1.0) rather than an absolute token count so the bound tracks the
-    /// configured model's window instead of assuming one. When the ceiling is
-    /// exceeded the model is told the result's size, its share of the window
-    /// and its estimated input price, and only a marked prefix is inlined.
-    /// Set to 0.0 to disable the guard.
     /// The token ceiling on the advertised-skills block in the frozen prefix.
     ///
     /// The block rides every request inside the system message, which is
@@ -841,6 +845,13 @@ pub struct BehaviorSettings {
     #[serde(default = "default_memory_injection_budget")]
     pub memory_injection_budget_tokens: usize,
 
+    /// Maximum share of `context_window` that a SINGLE tool result may occupy
+    /// before operant withholds the bulk of it. Expressed as a fraction
+    /// (0.0-1.0) rather than an absolute token count so the bound tracks the
+    /// configured model's window instead of assuming one. When the ceiling is
+    /// exceeded the model is told the result's size, its share of the window
+    /// and its estimated input price, and only a marked prefix is inlined.
+    /// Set to 0.0 to disable the guard.
     #[serde(default = "default_max_tool_result_share")]
     pub max_tool_result_share: f64,
 
@@ -1057,8 +1068,6 @@ fn default_lcm_rollup_interval_minutes() -> u64 {
     0
 }
 
-/// Default for `max_tool_result_share` — 5% of the context window. See
-/// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE` for the rationale.
 /// Default for `max_tool_result_total_share` — 40 % of the assembled context.
 fn default_max_tool_result_total_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE
@@ -1694,8 +1703,17 @@ impl Default for CliSettings {
 pub struct SkillsSettings {
     pub root_dir: PathBuf,
     pub memory_dir: PathBuf,
+    /// Load and advertise skills at agent construction (README: "autoload at
+    /// boot"). `false` builds an EMPTY skill manager, so no skill is loaded,
+    /// advertised in the frozen prefix, or offered as a tool — the operator's
+    /// off switch for the whole skill surface. The parse-only surfaces
+    /// (`operant skills`, the popups) still read the roots from config.
     pub autoload: bool,
+    /// Accepted but UNREAD (RT-136) — the scaffolding template is not driven
+    /// from config. Kept so `deny_unknown_fields` does not reject an
+    /// `operant.toml` that sets them; `operant.example.toml` says the same.
     pub template_name: String,
+    /// Accepted but UNREAD (RT-136). See `template_name`.
     pub template_description: String,
     /// Substitute `${OPERANT_SKILL_DIR}` / `${OPERANT_SESSION_ID}` in
     /// SKILL.md before injection (hermes `template_vars`, default true).

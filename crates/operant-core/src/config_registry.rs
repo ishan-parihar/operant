@@ -69,20 +69,28 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "agent.advertised_skills_token_budget",
         "default_advertised_skills_token_budget()",
-        "Maximum share of `context_window` that a SINGLE tool result may occupy before operant withholds the bulk of it. Expressed as a fraction (0.0-1.0) rather than an absolute token count so the bound tracks the configured model's window instead of assuming one. When the ceiling is exceeded the model is told the result's size, its share of the window and its estimated input price, and only a marked prefix is inlined. Set to 0.0 to disable the guard. The token ceiling on the advertised-skills block in the frozen prefix. The block rides every request inside the system message, which is PROTECTED: it can never be evicted. Without a ceiling the installed skill count decides whether every turn can run at all — 99 skills cost ~7,000 tokens here, and a 500-skill install would put the protected floor above a 32,000-token window. The skills that fit are advertised; the rest are dropped and the drop is stated in the block. 0 means the built-in default (4,000 tokens).",
+        "The token ceiling on the advertised-skills block in the frozen prefix. The block rides every request inside the system message, which is PROTECTED: it can never be evicted. Without a ceiling the installed skill count decides whether every turn can run at all — 99 skills cost ~7,000 tokens here, and a 500-skill install would put the protected floor above a 32,000-token window. The skills that fit are advertised; the rest are dropped and the drop is stated in the block. 0 means the built-in default (4,000 tokens).",
     ),
     (
         "agent.context_budget_tokens",
         "0",
         "Target total tokens the tool SURFACES (builtin schemas + each enabled MCP server + each granted CLI) may add per request. 0 (the default) means unset: `operant context budget` still reports the numbers, but `operant context optimize` proposes nothing, because silently trimming capability the operator never asked to optimize is worse than doing nothing. A different axis from `seat_budgets`: that governs what a seat may DO, this governs what the agent PAYS on every turn.",
     ),
-    ("agent.context_compression", "false", "<no note>"),
+    (
+        "agent.context_compression",
+        "false",
+        "Whether LLM summarisation of the conversation is armed at all. When false the summariser never runs and the threshold below is moot.",
+    ),
     (
         "agent.context_compression_summary_max_chars",
         "default_summary_max_chars()",
         "Char ceiling for one LLM compaction summary. `u32::MAX` (the default) = the summarizer's own output bound (historically unbounded on the gateway path). u32 not usize: the value serialises to TOML, whose integers are i64 — `usize::MAX` overflows it and made the whole config file unwritable (the setup wizard's persist test caught it). Set a number to bound the bill.",
     ),
-    ("agent.context_compression_threshold", "0.5", "<no note>"),
+    (
+        "agent.context_compression_threshold",
+        "0.5",
+        "Fraction of the context window above which the summariser runs. Known defect (audit iter-2364 follow-up): the fraction is currently applied to the window captured at PROCESS START, not to the window the runtime resolves per request. With `agent.context_window = 0` (AUTOMATIC) that start-time value is the 128,000 fallback, so on a 32k model the trigger never fires although the operator armed it. The fix is to resolve the window per request; until then, set `agent.context_window` explicitly to the model's real window.",
+    ),
     (
         "agent.context_engine",
         "\"compact\".to_string()",
@@ -213,7 +221,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "agent.max_tool_result_share",
         "default_max_tool_result_share()",
-        "<no note>",
+        "Maximum share of `context_window` that a SINGLE tool result may occupy before operant withholds the bulk of it. Expressed as a fraction (0.0-1.0) rather than an absolute token count so the bound tracks the configured model's window instead of assuming one. When the ceiling is exceeded the model is told the result's size, its share of the window and its estimated input price, and only a marked prefix is inlined. Set to 0.0 to disable the guard.",
     ),
     (
         "agent.max_tool_result_total_share",
@@ -1223,7 +1231,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "<AuxiliaryModelConfig::default()>",
         "<no note>",
     ),
-    ("skills.autoload", "true", "<no note>"),
+    (
+        "skills.autoload",
+        "true",
+        "Load and advertise skills at agent construction (README: \"autoload at boot\"). `false` builds an EMPTY skill manager, so no skill is loaded, advertised in the frozen prefix, or offered as a tool — the operator's off switch for the whole skill surface. The parse-only surfaces (`operant skills`, the popups) still read the roots from config.",
+    ),
     (
         "skills.extra_roots",
         "Vec::new()",
@@ -1257,12 +1269,12 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "skills.template_description",
         "\"Describe what this skill does.\".to_string()",
-        "<no note>",
+        "Accepted but UNREAD (RT-136). See `template_name`.",
     ),
     (
         "skills.template_name",
         "\"new-skill\".to_string()",
-        "<no note>",
+        "Accepted but UNREAD (RT-136) — the scaffolding template is not driven from config. Kept so `deny_unknown_fields` does not reject an `operant.toml` that sets them; `operant.example.toml` says the same.",
     ),
     (
         "skills.template_vars",

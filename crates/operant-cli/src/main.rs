@@ -1748,6 +1748,15 @@ struct AgentCore {
 /// construct the pair once and thread it through
 /// [`build_agent_core_with_memory`] so both agents share one memory
 /// backend (BUGS.md D-5).
+/// Whether the agent loads and advertises skills at construction.
+///
+/// `[skills] autoload = false` is the operator's off switch (README: "autoload
+/// at boot"). A Holon run always loads, because its skills come from the
+/// brief's library rather than the operator's roots.
+fn skills_autoload_enabled(config: &AppConfig, is_holon_run: bool) -> bool {
+    is_holon_run || config.skills.autoload
+}
+
 async fn build_agent_core(
     config: &AppConfig,
     system_prompt: Option<&str>,
@@ -1844,12 +1853,25 @@ async fn build_agent_core_with_memory(
     // A Holon run resolves to the brief's library only (`holon_override`), so
     // its `skills_dir` above is passed through unchanged and no personal or
     // vendor root rides along.
-    let mut skill_manager = if holon_skills.is_some() {
-        SkillManager::new(skills_dir.to_path_buf())
-    } else {
+    //
+    // `[skills] autoload` is the operator's off switch for the skill surface
+    // (README: "autoload at boot"). The key had NO reader at all, so setting
+    // it to false changed nothing: every skill in every root was still
+    // loaded, advertised in the frozen prefix, and offered as tools, and the
+    // only way to suppress the block was to delete the directories.
+    //
+    // An EMPTY manager is the honest reading of "do not autoload": nothing
+    // loaded, so nothing advertised and no skill tools. A Holon run keeps its
+    // existing rule (the brief's library only, no personal or vendor roots).
+    // The parse-only surfaces (`operant skills`, the popups) build their own
+    // managers from config and are unaffected.
+    let autoload_skills = skills_autoload_enabled(config, holon_skills.is_some());
+    let mut skill_manager = if autoload_skills && holon_skills.is_none() {
         crate::skill_roots::skill_manager(config)
+    } else {
+        SkillManager::new(skills_dir.to_path_buf())
     };
-    if let Err(e) = skill_manager.load_all() {
+    if autoload_skills && let Err(e) = skill_manager.load_all() {
         warn!(
             error = %e,
             "Failed to load skills from {}",
@@ -3950,6 +3972,32 @@ mod tests {
 
     use super::*;
     use std::io::Cursor;
+
+    /// `[skills] autoload = false` must actually disable the skill surface.
+    ///
+    /// The key was documented (operant.example.toml, README's "autoload at
+    /// boot") and registered, but had NO reader: every skill in every root was
+    /// still loaded and advertised in the frozen prefix, so the operator's only
+    /// way to suppress the block was to delete the directories.
+    #[test]
+    fn skills_autoload_is_theoperators_off_switch() {
+        let mut config = AppConfig::default();
+        assert!(
+            config.skills.autoload,
+            "the default must stay ON — wiring the knob must not change behaviour              until someone sets it"
+        );
+        assert!(skills_autoload_enabled(&config, false));
+        assert!(
+            skills_autoload_enabled(&config, true),
+            "a Holon run loads its brief's library regardless of the operator flag"
+        );
+
+        config.skills.autoload = false;
+        assert!(
+            !skills_autoload_enabled(&config, false),
+            "autoload = false must reach the builder as \"do not load\""
+        );
+    }
 
     #[test]
     fn an_impossible_cli_context_window_is_rejected() {

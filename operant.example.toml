@@ -541,6 +541,11 @@ enabled = false
 # the defaults (the operant-home resolver), or write an absolute path.
 # root_dir = "$HOME/.operant/skills"
 # memory_dir = "$HOME/.operant/memory"
+# Load and advertise skills at agent construction. `false` builds an EMPTY
+# skill manager: nothing is loaded, nothing is advertised in the frozen prefix,
+# and no skill tools are offered. The parse-only surfaces (`operant skills`,
+# the popups) still read the roots below. This is the off switch for the
+# ~4,000-token `<available_skills>` block.
 autoload = true
 # `template_name` / `template_description` are accepted but UNREAD (RT-136).
 
