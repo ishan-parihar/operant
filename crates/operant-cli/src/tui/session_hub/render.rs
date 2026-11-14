@@ -1341,11 +1341,26 @@ fn render_preview(
             // by the load. It is shown as one line, truncated, because a
             // prompt can be a paragraph and the pane is the operator's
             // reading space, not a transcript viewer.
+            // (2026-11-14, audit finding 9) Only when the TAIL WINDOW does not
+            // already contain the prompt.
+            //
+            // The line exists to answer "how did this session open" when the
+            // answer scrolled off the head of a 400-message window. For any
+            // session at or under the limit the prompt IS in the window, and
+            // the pane printed it twice — "first: hi" and then "1. you: hi".
             if let Some(first) = state.first_prompt_for(&row.id) {
-                lines.push(Line::from(Span::styled(
-                    format!("first: {}", first_line(first)),
-                    Style::default().fg(theme_colors::muted()),
-                )));
+                let in_window = state.preview.as_ref().is_some_and(|(_, msgs, hidden)| {
+                    *hidden == 0
+                        && msgs
+                            .iter()
+                            .any(|m| m.role == "user" && m.content.trim() == first.trim())
+                });
+                if !in_window {
+                    lines.push(Line::from(Span::styled(
+                        format!("first: {}", first_line(first)),
+                        Style::default().fg(theme_colors::muted()),
+                    )));
+                }
             }
             // The transcript itself (jcode's preview body). The load is
             // asynchronous, so the pane shows an explicit state rather than
@@ -1371,6 +1386,9 @@ fn render_preview(
                         )));
                     }
                     lines.push(Line::from(""));
+                    // The count of messages the operator can see, incremented
+                    // only for the rows that render (audit finding 8).
+                    let mut visible_n: usize = 0;
                     for (i, msg) in msgs.iter().enumerate() {
                         // A tool RESULT is the tool call's output — hiding the
                         // call but keeping its result would leave the operator
@@ -1384,20 +1402,34 @@ fn render_preview(
                             "system" => ("system", theme_colors::muted()),
                             other => (other, theme_colors::muted()),
                         };
+                        // (2026-11-14, audit finding 8) The number counts the
+                        // messages the operator can actually SEE, not the
+                        // index in the unfiltered list.
+                        //
+                        // The old numbering skipped tool rows, so with the
+                        // toggle on a session rendered "1. you / 2. agent /
+                        // 4. agent" — a gap that is indistinguishable from a
+                        // dropped message, in the column whose whole job is to
+                        // identify messages. The visible count is the honest
+                        // number; the prompt number keeps its own meaning for
+                        // user rows, because that is the number the operator
+                        // typed.
+                        visible_n += 1;
                         let mut spans = vec![Span::styled(
                             format!(
                                 "{}. {label}: ",
-                                // Global prompt numbering: the hidden prompts
-                                // above offset the window's own index, so the
-                                // operator can match a preview row to the
-                                // prompt number they typed (jcode's
-                                // `hidden_prompts` reasoning).
                                 if msg.role == "user" {
+                                    // Global prompt numbering: the hidden
+                                    // prompts above offset the window's own
+                                    // index, so the operator can match a
+                                    // preview row to the prompt number they
+                                    // typed (jcode's `hidden_prompts`
+                                    // reasoning).
                                     *hidden
                                         + msgs[..i].iter().filter(|m| m.role == "user").count()
                                         + 1
                                 } else {
-                                    i + 1
+                                    visible_n
                                 }
                             ),
                             Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -1450,7 +1482,16 @@ fn render_preview(
                 // that exists only in a key reference is decoration the
                 // operator cannot find. `e` names itself in the header the
                 // moment it is engaged ("e:premiere").
-                "Enter switches to this session · t hides tool calls",
+                // (2026-11-14, audit finding 7) The clause says what the key
+                // does NOW. It used to read "t hides tool calls" unconditionally
+                // — directly beneath a banner reading "tool calls hidden (t
+                // shows them)", so the pane contradicted itself about the same
+                // key at the same time.
+                if state.hide_tool_calls {
+                    "Enter switches to this session · t shows tool calls"
+                } else {
+                    "Enter switches to this session · t hides tool calls"
+                },
                 Style::default().fg(theme_colors::accent()),
             )));
             // The scroll bound must count WRAPPED rows, not source lines: the

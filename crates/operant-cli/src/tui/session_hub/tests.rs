@@ -1353,6 +1353,143 @@ fn the_tool_call_toggle_survives_a_reopen() {
     assert!(hub.hide_tool_calls, "a stated preference is not a scope");
 }
 
+// ---- (2026-11-14, audit findings 7, 8, 9) the preview pane ----
+
+/// Render the hub's preview pane for one row and return the lines.
+fn preview_pane(
+    _rows: Vec<SessionEntryV2>,
+    row_idx: usize,
+    hub: &mut SessionHubState,
+) -> Vec<String> {
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, 120, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    let h = hub;
+    h.selected = row_idx;
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &h, f.area(), &mut ctx);
+        })
+        .unwrap();
+    buffer_rows(terminal.backend().buffer())
+        .into_iter()
+        .map(|line| {
+            line.chars()
+                .skip((120usize * 2 / 5).min(120))
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// The `t` clause in the preview's footer must say what the key does NOW.
+///
+/// (audit finding 7) It read "t hides tool calls" unconditionally — directly
+/// beneath a banner reading "tool calls hidden (t shows them)", so the pane
+/// contradicted itself about the same key at the same time.
+#[test]
+fn the_preview_footer_says_what_t_does_now() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    hub.apply_preview("s1", vec![msg("user", "hi"), msg("assistant", "done")], 0);
+    let plain = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+    assert!(
+        plain.contains("t hides tool calls"),
+        "with nothing hidden the key HIDES: {plain}"
+    );
+    hub.toggle_tool_calls();
+    let hidden = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+    assert!(
+        hidden.contains("t shows tool calls"),
+        "with them hidden the key SHOWS: {hidden}"
+    );
+    assert!(
+        !hidden.contains("hides tool calls"),
+        "the pane must not contradict itself: {hidden}"
+    );
+}
+
+/// Hiding the tool rows must not leave holes in the visible numbering.
+///
+/// (audit finding 8) The old numbering used the index in the UNFILTERED list,
+/// so a session rendered "1. you / 2. agent / 4. agent" — a gap that is
+/// indistinguishable from a dropped message, in the column whose job is to
+/// identify messages.
+#[test]
+fn the_visible_message_numbers_have_no_holes() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    let msgs = vec![
+        msg("user", "start"),
+        msg("assistant", "working"),
+        msg("tool", "result"),
+        msg("tool", "result 2"),
+        msg("assistant", "done"),
+    ];
+    hub.apply_preview("s1", msgs, 0);
+    hub.toggle_tool_calls();
+    let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+    assert!(
+        pane.contains("1. you: start"),
+        "the first visible line is 1: {pane}"
+    );
+    assert!(
+        pane.contains("2. agent: working"),
+        "the second visible line is 2: {pane}"
+    );
+    assert!(
+        pane.contains("3. agent: done"),
+        "the third visible line is 3, not 5: {pane}"
+    );
+    assert!(
+        !pane.contains("4. agent"),
+        "a gap in the numbering reads as a missing message: {pane}"
+    );
+}
+
+/// The "first:" line must not repeat the prompt the window already shows.
+///
+/// (audit finding 9) The line exists to answer "how did this session open"
+/// when the answer scrolled off the head. For a short session the prompt IS
+/// in the window, and the pane printed it twice.
+#[test]
+fn the_first_prompt_is_not_printed_twice_for_a_short_session() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    let msgs = vec![msg("user", "how do i start"), msg("assistant", "like this")];
+    hub.set_first_prompt("s1", Some("how do i start".to_string()));
+    hub.apply_preview("s1", msgs, 0);
+    let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+    let count = pane.matches("how do i start").count();
+    assert_eq!(
+        count, 1,
+        "the prompt must appear once, not twice, in a short session: {pane}"
+    );
+}
+
+/// The line DOES appear when the prompt has scrolled off the head — that is
+/// the whole point of it.
+#[test]
+fn the_first_prompt_still_appears_when_the_window_dropped_it() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![row("s1", Some("work"), None)]);
+    let mut msgs = vec![msg("user", "the opening question")];
+    msgs.extend((0..PREVIEW_MESSAGE_LIMIT).map(|i| msg("assistant", &format!("reply {i}"))));
+    hub.set_first_prompt("s1", Some("the opening question".to_string()));
+    hub.apply_preview("s1", msgs, 1);
+    let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+    assert!(
+        pane.contains("first: the opening question"),
+        "the line is the only way to see a prompt the window dropped: {pane}"
+    );
+}
+
 // ---- (2026-11-14, audit finding 4) the search highlight must not panic or drift ----
 
 /// A multi-byte token used to panic the render thread: the scan advanced by
