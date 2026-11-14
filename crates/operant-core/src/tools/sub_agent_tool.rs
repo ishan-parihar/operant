@@ -416,6 +416,13 @@ enum WorkerStatus {
     /// The spawn guard refused this worker; it was never built, so it cost
     /// no model stream.
     Refused(String),
+    /// The swarm's own result deadline expired while this worker was still
+    /// running, so its future was dropped (audit finding 7).
+    ///
+    /// NOT "still running": dropping the stream cancels the worker. Reporting
+    /// it as running would be a lie, and detaching it to keep it alive would
+    /// free the spawn reservation while a model stream was still live.
+    CutOff { after_secs: u64 },
 }
 
 /// A worker's goal paired with its outcome, so the parent can attribute each
@@ -449,7 +456,12 @@ type WorkerRun = Pin<Box<dyn Future<Output = crate::error::Result<ChildAnswer>> 
 ///
 /// None of these return `Err` — the swarm's only failure modes are the
 /// caller's to interpret.
-async fn run_swarm<F>(workers: Vec<WorkerSpec>, max_in_flight: usize, run: F) -> Vec<WorkerOutcome>
+async fn run_swarm<F>(
+    workers: Vec<WorkerSpec>,
+    max_in_flight: usize,
+    result_deadline: Duration,
+    run: F,
+) -> Vec<WorkerOutcome>
 where
     F: Fn(WorkerSpec) -> WorkerRun,
 {
@@ -461,6 +473,11 @@ where
     // second copy also carried an unreachable arm — the semaphore was never
     // closed, so "worker pool closed during shutdown" could not fire — and a
     // `collect::<Vec<_>>()` that only existed to hand `stream::iter` a Vec.
+    // The roster, kept before the workers are consumed: after the deadline the
+    // unreported workers have to be named, and their futures are gone.
+    let roster: Vec<(String, String)> =
+        workers.iter().map(|w| (w.id.clone(), w.goal.clone())).collect();
+
     let futures = workers.into_iter().map(|worker| {
         let run = &run;
         async move {
@@ -486,10 +503,50 @@ where
         }
     });
 
-    stream::iter(futures)
-        .buffer_unordered(in_flight)
-        .collect::<Vec<_>>()
-        .await
+    // Drain incrementally against a swarm-level deadline. `buffer_unordered`
+    // already yields in COMPLETION order, so the finished sections are available
+    // as they land — the old `.collect()` waited for all of them, which is what
+    // let one wedged worker hold every finished one hostage.
+    //
+    // On expiry the stream is dropped, which CANCELS the unfinished workers.
+    // That is deliberate: reporting them as still running would be a lie, and
+    // detaching them would free the caller's spawn reservation while model
+    // streams were still live. The permit has to cover exactly the work that is
+    // actually running.
+    let deadline = tokio::time::Instant::now() + result_deadline;
+    let mut stream = stream::iter(futures).buffer_unordered(in_flight);
+    let mut outcomes: Vec<WorkerOutcome> = Vec::with_capacity(roster.len());
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        match tokio::time::timeout_at(deadline, stream.next()).await {
+            Ok(Some(outcome)) => outcomes.push(outcome),
+            // Stream exhausted: every worker reported.
+            Ok(None) => break,
+            // Deadline expired: `stream` drops here, cancelling the rest.
+            Err(_) => break,
+        }
+    }
+    drop(stream);
+
+    // Name the workers that never reported, in roster order, so a cut-off swarm
+    // still accounts for every worker it admitted.
+    let reported: std::collections::HashSet<String> =
+        outcomes.iter().map(|o| o.id.clone()).collect();
+    for (id, goal) in roster {
+        if !reported.contains(&id) {
+            outcomes.push(WorkerOutcome {
+                id,
+                goal,
+                status: WorkerStatus::CutOff {
+                    after_secs: result_deadline.as_secs(),
+                },
+            });
+        }
+    }
+
+    outcomes
 }
 
 /// Tool that delegates a focused task to an isolated child OperantAgent.
@@ -1008,14 +1065,19 @@ impl SubAgentTool {
 
         let tool = self.clone_for_task();
         outcomes.extend(
-            run_swarm(admitted, max_in_flight, move |worker| -> WorkerRun {
+            run_swarm(
+                admitted,
+                max_in_flight,
+                Duration::from_secs(SWARM_RESULT_DEADLINE_SECS),
+                move |worker| -> WorkerRun {
                 let tool = tool.clone_for_task();
                 Box::pin(async move {
                     tool.call_unguarded(worker)
                         .await
                         .map_err(|error| crate::error::Error::Agent(error.to_string()))
                 })
-            })
+                },
+            )
             .await,
         );
 
@@ -1029,6 +1091,12 @@ impl SubAgentTool {
                 }
                 WorkerStatus::Panicked => ("panicked", Some("worker panicked".to_string())),
                 WorkerStatus::Refused(reason) => ("refused", Some(reason.clone())),
+                WorkerStatus::CutOff { after_secs } => (
+                    "cut_off",
+                    Some(format!(
+                        "cut off after {after_secs}s; the swarm returned without it"
+                    )),
+                ),
             };
             crate::tools::foreground_swarm::finish(&outcome.id, status, detail);
         }
@@ -1044,6 +1112,9 @@ impl SubAgentTool {
                 }
                 WorkerStatus::Panicked => errors.push("worker panicked".to_string()),
                 WorkerStatus::Refused(reason) => errors.push(reason.clone()),
+                // Not an error: the section above already reports the cut-off,
+                // and the swarm as a whole still produced its finished workers.
+                WorkerStatus::CutOff { .. } => {}
             }
         }
 
@@ -1526,6 +1597,20 @@ fn build_child_system_prompt(
 /// pulling. jcode parity: a completion report is capped before it is injected.
 const SWARM_REPORT_PREVIEW_CHARS: usize = 600;
 
+/// How long a swarm may hold the parent's result before the finished workers
+/// are returned and the rest are cut off.
+///
+/// MEASURED 2026-11-14 (audit finding 7): `run_swarm` collected EVERY outcome
+/// before returning, so one wedged worker held five finished ones hostage for
+/// the full per-worker timeout — 600 s by default — and an interrupted parent
+/// destroyed all of them, since the outcomes vec lived inside the dropped
+/// future. Both references deliver incrementally: codex's `wait_agent` returns
+/// on the FIRST final status and drains ready siblings with `now_or_never()`,
+/// jcode notifies per worker as each leaves the running state. 120 s is well
+/// under the 600 s worker timeout and far above the seconds a real worker takes,
+/// so it bounds the wait without cutting off work that was about to land.
+const SWARM_RESULT_DEADLINE_SECS: u64 = 120;
+
 /// How much of a sibling's goal a worker is told.
 ///
 /// The list exists so a worker can NAME a collision, not so it can read every
@@ -1616,6 +1701,12 @@ fn format_swarm_outcomes(outcomes: &[WorkerOutcome]) -> String {
             }
             WorkerStatus::Refused(reason) => {
                 output.push_str(&format!("### {heading}\n[not spawned] {reason}\n\n"));
+            }
+            WorkerStatus::CutOff { after_secs } => {
+                output.push_str(&format!(
+                    "### {heading}\n[cut off after {after_secs}s — this worker had not finished \
+                     when the swarm returned; re-dispatch it alone if it is still wanted]\n\n"
+                ));
             }
         }
     }
@@ -2972,7 +3063,7 @@ mod tests {
         let peak = std::sync::Arc::new(AtomicUsize::new(0));
 
         let workers: Vec<WorkerSpec> = goals.iter().map(|g| spec(g, 30)).collect();
-        let outcomes = run_swarm(workers, 2, {
+        let outcomes = run_swarm(workers, 2, Duration::from_secs(600), {
             let in_flight_now = in_flight_now.clone();
             let peak = peak.clone();
             move |worker| -> WorkerRun {
@@ -3106,6 +3197,7 @@ mod tests {
                 spec("d", 30),
             ],
             4,
+            Duration::from_secs(600),
             |worker| -> WorkerRun {
                 Box::pin(async move {
                     if worker.goal == "boom" {
@@ -3145,6 +3237,7 @@ mod tests {
         let outcomes = run_swarm(
             vec![spec("boom", 30), spec("ok", 30)],
             2,
+            Duration::from_secs(600),
             |worker| -> WorkerRun {
                 Box::pin(async move {
                     if worker.goal == "boom" {
@@ -3173,6 +3266,70 @@ mod tests {
         assert_eq!(survivor.status, completed("ok done"));
     }
 
+    /// MEASURED 2026-11-14 (audit finding 7): `run_swarm` collected EVERY
+    /// outcome before returning, so one wedged worker held every finished one
+    /// hostage for the full per-worker timeout, and an interrupted parent lost
+    /// all of them. The swarm now returns the finished sections at its own
+    /// deadline and reports the rest as cut off.
+    #[tokio::test]
+    async fn a_swarm_returns_its_finished_workers_at_its_own_deadline() {
+        let outcomes = run_swarm(
+            vec![
+                spec("quick-1", 30),
+                spec("quick-2", 30),
+                spec("wedged", 30),
+            ],
+            3,
+            // A deadline far shorter than the 30s per-worker budget, so the
+            // wedged worker is cut off rather than waited for.
+            Duration::from_millis(50),
+            |worker| -> WorkerRun {
+                Box::pin(async move {
+                    if worker.goal == "wedged" {
+                        // Never resolves; only the swarm deadline can end it.
+                        std::future::pending::<()>().await;
+                    }
+                    // Finish after the deadline for the wedged one but promptly
+                    // for the others.
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    Ok(ChildAnswer {
+                        text: format!("{} done", worker.goal),
+                        session_id: None,
+                    })
+                })
+            },
+        )
+        .await;
+
+        // Every admitted worker is accounted for.
+        assert_eq!(outcomes.len(), 3, "no worker may vanish: {outcomes:?}");
+        for goal in ["quick-1", "quick-2"] {
+            let done = outcomes.iter().find(|o| o.goal == goal).expect("reported");
+            assert_eq!(
+                done.status,
+                completed(format!("{goal} done")),
+                "{goal} finished before the deadline and must be delivered"
+            );
+        }
+        let wedged = outcomes
+            .iter()
+            .find(|o| o.goal == "wedged")
+            .expect("the wedged worker must still be reported");
+        assert_eq!(
+            wedged.status,
+            WorkerStatus::CutOff { after_secs: 0 },
+            "a worker still running at the deadline is cut off, not lost"
+        );
+
+        // And it is rendered as a section, not silently dropped.
+        let rendered = format_swarm_outcomes(&outcomes);
+        assert!(rendered.contains("quick-1 done"), "{rendered}");
+        assert!(
+            rendered.contains("cut off after"),
+            "the cut-off worker must be named in the output: {rendered}"
+        );
+    }
+
     #[tokio::test]
     async fn swarm_should_time_out_a_wedged_worker() {
         // A 1s budget (below the 30s floor a caller gets) proves the timeout
@@ -3180,6 +3337,7 @@ mod tests {
         let outcomes = run_swarm(
             vec![spec("wedged", 1), spec("ok", 1)],
             2,
+            Duration::from_secs(600),
             |worker| -> WorkerRun {
                 Box::pin(async move {
                     if worker.goal == "wedged" {
