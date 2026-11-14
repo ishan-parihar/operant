@@ -725,13 +725,25 @@ impl App {
                 // press r to load"). Works in both panes — an operator
                 // parked in the preview is the one most likely to need it.
                 KeyCode::Char('r') => self.session_hub.request_preview_reload(),
-                KeyCode::Char('s') => self.session_hub.cycle_filter(),
+                KeyCode::Char('s') => {
+                    self.session_hub.cycle_filter();
+                    // Re-query: the page and the count must read the SAME
+                    // population, and the page was loaded under the previous
+                    // mode (audit 2026-11-14, finding 4). The load reads the
+                    // current mode, so the next frame brings the filtered page.
+                    self.session_list_pending = true;
+                }
                 // The EMPLOYEE axis (2026-11-13): a separate filter, by
                 // identity, for the agentic-os employee sessions. `s` answers
                 // "which state is this work in"; `e` answers "whose is it".
                 // They are ANDed, never merged: one list of tabs for both
                 // makes neither readable.
-                KeyCode::Char('e') => self.session_hub.cycle_employee(),
+                KeyCode::Char('e') => {
+                    self.session_hub.cycle_employee();
+                    // Same reason as `s`: the counts were fetched with the
+                    // previous employee, and so was the page.
+                    self.session_list_pending = true;
+                }
                 // Hide the tool calls in the preview (2026-11-13): an operant
                 // feature, not a codex port. The operator wants the prompts
                 // and the end-of-turn output, with the machinery between them

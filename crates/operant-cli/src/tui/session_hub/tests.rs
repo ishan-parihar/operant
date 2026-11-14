@@ -1090,6 +1090,81 @@ fn the_tab_counts_follow_the_rows_and_the_filters() {
     );
 }
 
+/// (audit 2026-11-14, finding 3) the employee cycle drops the store counts.
+///
+/// They were fetched WITH the previous employee, so keeping them told the
+/// operator a number about a population the list no longer showed.
+#[test]
+fn the_employee_cycle_drops_the_store_counts() {
+    let mut hub = SessionHubState::new();
+    hub.set_employee_roster(vec![
+        ("ann".to_string(), "Ann".to_string()),
+        ("bo".to_string(), "Bo".to_string()),
+    ]);
+    hub.replace_rows(vec![
+        row("s1", None, Some("ann")),
+        row("s2", None, Some("bo")),
+    ]);
+    hub.set_store_counts(Some(operant_core::database::SessionFilterCounts {
+        all: 3_314,
+        needs_you: 25,
+        ready: 3_288,
+        inactive: 1,
+        current_dir: 6,
+        current_branch: 2,
+    }));
+    let count_of = |hub: &SessionHubState, mode: HubFilterMode| {
+        hub.filter_counts()
+            .iter()
+            .find(|(m, _)| *m == mode)
+            .map(|(_, n)| *n)
+            .expect("the mode is in the ladder")
+    };
+    assert_eq!(
+        count_of(&hub, HubFilterMode::All),
+        3_314,
+        "the store counts are in force"
+    );
+    hub.cycle_employee();
+    assert_eq!(
+        hub.employee_filter().map(str::to_string).as_deref(),
+        Some("ann"),
+        "the axis moved to the first seat"
+    );
+    assert_eq!(
+        count_of(&hub, HubFilterMode::All),
+        1,
+        "the store counts went with the axis: only the loaded rows answer now (finding 3)"
+    );
+}
+
+/// (audit 2026-11-14, finding 4) a filter cycle re-queries, so the page and
+/// the count read one population instead of the page keeping the old one.
+#[test]
+fn cycling_the_filter_asks_for_a_fresh_page() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::tui::app::tests::make_app();
+    app.session_hub.visible = true;
+    app.session_list_pending = false;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert_eq!(
+        app.session_hub.filter_mode,
+        HubFilterMode::NeedsYou,
+        "the mode moved"
+    );
+    assert!(
+        app.session_list_pending,
+        "the page must be re-read under the new mode (finding 4)"
+    );
+    app.session_list_pending = false;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    assert!(
+        app.session_list_pending,
+        "and so must the employee axis (finding 3's count and page)"
+    );
+}
+
 /// (J2) The `Show more` row is the one slot PAST the last row: the ladder
 /// can reach it, Enter on it asks for the next page, and with a short page
 /// (the end of the list) the slot does not exist at all.

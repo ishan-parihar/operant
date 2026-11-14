@@ -2060,7 +2060,11 @@ impl App {
                 // `before`): the last row's own timestamp, so a page boundary
                 // is never skipped or repeated. A fresh open pages from the
                 // top.
-                let load_more = std::mem::take(&mut self.session_load_more);
+                // READ, do not take: the drain is the one consumer (it
+                // decides append vs replace). Taking it here made the drain
+                // always read `false`, so `Show more` replaced the list
+                // instead of adding to it (audit 2026-11-14, finding 1).
+                let load_more = self.session_load_more;
                 let page_cursor = if load_more {
                     self.session_hub
                         .rows

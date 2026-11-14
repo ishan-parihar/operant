@@ -10562,6 +10562,46 @@ mod rename_on_load_tests {
     use super::*;
 
     #[test]
+    /// (audit 2026-11-14, finding 1) `Show more` APPENDS. The load flag is
+    /// read at the spawn and CONSUMED at the drain; when the spawn consumed it
+    /// too, the drain always saw `false` and the next page replaced the list
+    /// the operator was reading.
+    #[test]
+    fn show_more_appends_the_next_page_instead_of_replacing_the_list() {
+        let mut app = make_app();
+        app.session_hub.visible = true;
+        app.session_list_pending = false;
+        let (tx, rx) = tokio::sync::mpsc::channel::<(
+            Vec<operant_core::session::listing::SessionEntryV2>,
+            Option<usize>,
+            Vec<(String, String)>,
+            Option<operant_core::database::SessionFilterCounts>,
+        )>(1);
+        app.session_list_rx = Some(rx);
+        tx.try_send((hub_rows(3), None, Vec::new(), None)).unwrap();
+        assert!(app.drain_session_list(), "the first page lands");
+        assert_eq!(app.session_hub.rows.len(), 3, "page one is in the list");
+
+        // Enter on the `Show more` row: the flag is set, the next page
+        // arrives. The drain drops the receiver when a page lands, exactly as
+        // the real load does, so the second page gets a fresh channel.
+        app.session_load_more = true;
+        let (tx2, rx2) = tokio::sync::mpsc::channel::<(
+            Vec<operant_core::session::listing::SessionEntryV2>,
+            Option<usize>,
+            Vec<(String, String)>,
+            Option<operant_core::database::SessionFilterCounts>,
+        )>(1);
+        app.session_list_rx = Some(rx2);
+        tx2.try_send((hub_rows(2), None, Vec::new(), None)).unwrap();
+        assert!(app.drain_session_list(), "the second page lands");
+        assert_eq!(
+            app.session_hub.rows.len(),
+            5,
+            "the second page is APPENDED, not substituted (finding 1)"
+        );
+    }
+
     fn a_bare_rename_no_longer_opens_modal_state_but_hints() {
         // TUI-8 behavior under the hub (plan 2026-10-28 iter-B): the old
         // modal's inline rename arm is gone; a bare `/rename` surfaces the

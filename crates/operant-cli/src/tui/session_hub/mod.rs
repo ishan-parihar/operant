@@ -777,6 +777,11 @@ impl SessionHubState {
                 }
             }
         };
+        // The store counts were fetched WITH the previous employee axis, so
+        // they would describe a population the list no longer shows. Drop
+        // them and let the cache fall back to the rows until the next load
+        // re-fetches them with the new axis (audit 2026-11-14, finding 3).
+        self.store_counts = None;
         self.rebuild_visible();
     }
 
