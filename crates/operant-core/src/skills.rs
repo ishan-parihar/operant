@@ -649,11 +649,21 @@ impl SkillManager {
     /// a skill to a model must use [`Self::list_available`]; see the row-7 note
     /// on that method for why.
     pub fn list(&self) -> Vec<(String, String)> {
-        let mut pairs: Vec<_> = self
-            .skills
-            .values()
-            .map(|s| (s.name.clone(), s.description.clone()))
-            .collect();
+        // ONE row per SKILL, not per alias. The map is keyed by every spelling
+        // a skill answers to -- its frontmatter name, its directory name and,
+        // for a category-nested skill, its root-relative `category/skill` path
+        // -- and each key holds a CLONE of the same `Skill`. Iterating keys
+        // therefore listed one nested skill twice (measured: `["deep", "deep"]`)
+        // while the qualified spelling the listing is supposed to show appeared
+        // nowhere. Deduplicating on the skill's own name is what makes the
+        // inventory one row per skill again.
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for skill in self.skills.values() {
+            if pairs.iter().any(|(name, _)| name == &skill.name) {
+                continue;
+            }
+            pairs.push((skill.name.clone(), skill.description.clone()));
+        }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         pairs
     }
@@ -1467,6 +1477,53 @@ mod tests {
             .map(|(n, _)| n)
             .collect();
         assert_eq!(names, vec!["only-manual".to_string()]);
+
+        cleanup(&tmp);
+    }
+
+    /// A category-nested skill is LISTABLE and RESOLVABLE by both spellings.
+    ///
+    /// This is the disagreement the whole plan was written for: `load_root`
+    /// read immediate children while `find_skill_recursive` recursed, so six
+    /// pool skills were FINDABLE by `$name` and INVISIBLE to `/skills`,
+    /// `skills_list` and the popup. One walk fixed it; this pins that the fix
+    /// covers the qualified spelling the listing shows.
+    #[test]
+    fn a_nested_skill_is_listable_and_resolvable_by_its_qualified_path() {
+        let tmp = make_temp_dir();
+        let pool = tmp.join("pool");
+        // `mlops/eval/deep` -- two category levels, the shape the old
+        // one-level listing dropped.
+        skill_at(&pool.join("mlops").join("eval"), "deep");
+
+        let cfg = settings_with(&pool, vec![], "off");
+        let roots = SkillRoots::resolve(&cfg, &[], None, None);
+
+        // The listing is ONE row per skill, under the leaf name the operator
+        // types. Before the walk was unified the listing read immediate
+        // children only, so a nested skill was invisible here; and when the
+        // qualified alias was added, iterating the map's keys listed the same
+        // skill twice under its leaf and never under the path.
+        let listed: Vec<String> = crate::skill_mentions::loadable_skills_in(&roots)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            listed,
+            vec!["deep".to_string()],
+            "the nested skill is not listed exactly once under its leaf: {listed:?}"
+        );
+
+        // And both spellings resolve to the same directory.
+        let mut manager = SkillManager::from_roots(&roots);
+        manager.load_all().expect("load");
+        let by_leaf = manager.get("deep").map(|s| s.name.clone());
+        let by_path = manager.get("mlops/eval/deep").map(|s| s.name.clone());
+        assert!(by_leaf.is_some(), "the leaf name does not resolve");
+        assert_eq!(
+            by_leaf, by_path,
+            "the leaf and the qualified path must resolve to the same skill"
+        );
 
         cleanup(&tmp);
     }
