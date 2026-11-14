@@ -1,6 +1,6 @@
 # Plan — close the session-hub gaps the operator reported
 
-**Date:** 2026-11-14 (revision 3 — supersedes revisions 1 and 2)
+**Date:** 2026-11-14 (revision 4 — COMPLETE; supersedes revisions 1-3)
 **Base:** `origin/main` @ `4ec61e0e`
 **Status:** outline. Writing this file executes nothing.
 
@@ -13,12 +13,33 @@
 | 1 | Preview filters: full / user-only / user+end-turn (default) | **closed** — `iter-2328` + `iter-2338` |
 | — | Preview header pinned (found while executing 1) | **closed** — `iter-2341` |
 | 2 | Panes non-redundant; list shows only what identifies a session | **closed** — `iter-2343` |
-| 3 | Date and runtime in the data | open — **split into 3a and 3b, see below** |
-| 4 | Left list segregated by path/project, codex-style | open |
-| 5 | Left/right layout rebalance | open |
+| 3a | Absolute date in the data | **closed** — `iter-2346` |
+| 3b | Runtime in the data | **closed** — `iter-2348` |
+| 4 | Left list segregated by path/project, codex-style | **closed** — `iter-2350` |
+| 5 | Left/right layout rebalance | **closed** — `iter-2351` |
 
-Three items remain. One of them (3) has been measured into two halves that are
-no longer the same size of job, and that is the main change in this revision.
+**All seven items are closed.** The evidence, per iteration:
+
+| Item | Commit | Evidence |
+|---|---|---|
+| filter tags readable | `iter-2317` | rungs measured at 100/110/120/160; letters never chosen |
+| preview at the bottom | `iter-1906b4db` | `preview_follow_bottom` clamps to the measured bound |
+| preview filters | `iter-2328` + `iter-2338` | `PreviewFilter`, default `UserAndTurnEnd` |
+| pinned header | `iter-2341` | the case `iter-2338` could not express, now asserted |
+| panes non-redundant | `iter-2343` | row carries identity only; weight moved to the header |
+| date | `iter-2346` | `absolute_date` is a format over the existing `DateTime<Utc>` |
+| runtime | `iter-2348` | advances between frames; absent when `started_at` is NULL |
+| project sections | `iter-2350` | `auto_sections_by_project`, one predicate, three consumers |
+| rebalance | `iter-2351` | 45/55, and the tests now derive the pane from `SPLIT` |
+
+Final state: **139 session-hub tests pass**. `operant-core` is 3362 of 3368; the
+six failures are all `config::tests::*` and are a peer's committed breakage
+(`iter-2345` touched `config.rs`) — none of the five iterations above touches that
+file.
+
+What follows is the original analysis, kept because it records WHY each item was
+shaped as it was. The measured facts in it are still the ones the code now
+depends on.
 
 ## What iteration 2 changed about the budget
 
