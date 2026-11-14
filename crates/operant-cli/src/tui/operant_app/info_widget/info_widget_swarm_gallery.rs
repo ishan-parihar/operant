@@ -84,44 +84,6 @@ pub(crate) fn render_swarm_chat_card_lines(
     crate::tui::operant_render::swarm_gallery::render_swarm_chat_cards(&gallery_members, width)
 }
 
-/// Render the dedicated live swarm page: a nested, ownership-aware tree of every
-/// managed agent above the selected agent's detailed live card.
-///
-/// `[port-decision]` The live-card renderer behind it is the excised
-/// `swarm_tiles` surface (iter-591). Its gated verbatim body was deleted
-/// 2026-11-14 — 630 lines across 15 `#[cfg(any())]` items that could never
-/// compile, which is what made the file look like a live port of a surface that
-/// does not exist. The body is in git history if the strip surface is ported;
-/// until then the honest degraded answer is this early return, which is what the
-/// body itself produced for an empty member list.
-pub(crate) fn render_swarm_page_lines(
-    _members: &[SwarmMemberStatus],
-    _selected: usize,
-    _spinner_frame: usize,
-    _width: usize,
-    _max_height: usize,
-) -> Vec<Line<'static>> {
-    Vec::new()
-}
-
-/// Swarm strip band (upstream `swarm_tiles::render_swarm_strip[_vertical]`).
-///
-/// `[port-decision]` Same excision as above: the strip renderers and
-/// `SwarmStripHint` are out of port (iter-591), and their gated bodies were
-/// deleted 2026-11-14 with the other 630 gated lines. Empty is also the early
-/// return the body produced, so behaviour is unchanged.
-pub(crate) fn render_swarm_strip_lines(
-    _members: &[SwarmMemberStatus],
-    _selected: usize,
-    _focused: bool,
-    _focus_key: &str,
-    _spinner_frame: usize,
-    _width: usize,
-    _max_height: usize,
-) -> Vec<Line<'static>> {
-    Vec::new()
-}
-
 /// Render the inline swarm gallery for the given members into `area`-width lines.
 /// Render the list+detail swarm panel: a compact list of managed agents plus a
 /// detail viewport for the `selected` one. `focused` adds an interaction hint.

@@ -2442,12 +2442,6 @@ pub(crate) fn render_native_scrollbar(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-// constant, inlined because operant's operant_render/swarm_gallery.rs kept the
-// base const but excised this one (see that file's [port-excision] note: the
-// strip renderers are W7). Same formula, same base const.
-const STRIP_SPINNER_FPS: f32 =
-    1000.0 / crate::tui::operant_render::swarm_gallery::STRIP_SPINNER_FRAME_MS as f32;
-
 // [port-source] ui.rs:2659-3624 — the App-bound frame draw path, ported at the
 // cutover onto the `TuiState` seam. Upstream already takes `app: &dyn TuiState`
 // (post-W1 upstream refactor), so the bodies are verbatim modulo the re-root map
@@ -2614,7 +2608,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     let mut debug_capture: Option<FrameCaptureBuilder> = None;
 
     // Initialize visual debug capture if enabled
-    let swarm_page_active = app.swarm_panel_full_page();
 
     // Check diagram display mode and get active diagrams early so we can
     // determine the horizontal split before computing input width etc.
@@ -2633,18 +2626,17 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     };
     let pane_enabled = app.diagram_pane_enabled();
     let pane_position = app.diagram_pane_position();
-    let has_side_panel_content = !swarm_page_active && app.side_panel().focused_page().is_some();
+    let has_side_panel_content = app.side_panel().focused_page().is_some();
     let diff_mode = app.diff_mode();
-    let has_file_diff_edits =
-        !swarm_page_active && diff_mode.is_file() && app.has_display_edit_tool_messages();
+    let has_file_diff_edits = diff_mode.is_file() && app.has_display_edit_tool_messages();
     let has_right_side_pane_content = has_side_panel_content || has_file_diff_edits;
     // Fullscreen side panel replaces the transcript area; status line and input stay.
     let side_panel_fullscreen = has_side_panel_content && app.side_panel_fullscreen();
     // Regular side-panel pages and full-file diffs share the right-hand surface.
     // Suppress a separate diagram pane to avoid a triple-split layout.
     let suppress_side_diagram = has_right_side_pane_content;
-    let pinned_diagram = if !swarm_page_active
-        && diagram_mode == crate::tui::operant_app::config_shim::DiagramDisplayMode::Pinned
+    let pinned_diagram = if diagram_mode
+        == crate::tui::operant_app::config_shim::DiagramDisplayMode::Pinned
         && pane_enabled
         && !suppress_side_diagram
     {
@@ -2777,55 +2769,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         (chat_area, None)
     };
 
-    // Inline swarm strip: when `swarm_spawn_mode = inline` and this session
-    // manages agents, render a compact strip (vertical agent list by default,
-    // see `agents.swarm_strip_layout`) directly above the status line instead
-    // of a big gallery band. When the panel is focused (alt+n), the selected
-    // agent's row expands in place with its live transcript tail and todos;
-    // alt+↑/↓ select, alt+o pops out, alt+shift+p opens the swarm prompt,
-    // esc exits, and plain typing keeps flowing to the chat input. The strip stands
-    // down while the SwarmStatus dock widget (margin HUD) is showing the same
-    // agents, unless the panel is focused (keyboard interaction lives here).
-    // The stand-down is sticky (anchored blinks count as engaged, plus a short
-    // linger after disengagement) because each strip appearance adds a row to
-    // the bottom chrome and shoves the transcript up: reacting to raw
-    // frame-by-frame dock visibility made the strip pop in and out and the
-    // whole screen bounce (flicker).
-    let swarm_strip_lines: Vec<Line<'static>> = if !swarm_page_active
-        && app.inline_swarm_gallery_active()
-        && (app.swarm_panel_focused() || !info_widget::swarm_strip_stands_down_for_dock())
-    {
-        let members = app.inline_swarm_members();
-        if chat_area.width >= 24 {
-            // [port-decision] swarm_panel_focus_key_label: no operant equivalent —
-            //   operant's operant_app/keybind.rs exposes only side_panel_toggle_key_label
-            //   and diagram_pane_visibility_key_label; the swarm-panel binding is not
-            //   ported, so the strip's focus hint renders with an empty label —
-            //   wire at operant_app/keybind.rs.
-            let focus_key = String::new();
-            // Use the same smooth cadence as the primary status spinner.
-            let spinner_frame = (app.animation_elapsed() * STRIP_SPINNER_FPS) as usize;
-            // Focused budget: chips + hints + a ~14-line detail viewport, but
-            // never more than a third of the chat column so the transcript
-            // stays usable on short terminals.
-            let focused_budget = ((chat_area.height as usize) / 3).clamp(3, 16);
-            info_widget::swarm_gallery::render_swarm_strip_lines(
-                &members,
-                app.swarm_panel_selected(),
-                app.swarm_panel_focused(),
-                &focus_key,
-                spinner_frame,
-                chat_area.width as usize,
-                focused_budget,
-            )
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-    let swarm_strip_height = swarm_strip_lines.len() as u16;
-
     // Calculate pending messages (queued + interleave) for numbering and layout
     let pending_count = input_ui::pending_prompt_count(app);
     let queued_height = pending_count.min(3) as u16;
@@ -2903,13 +2846,12 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     let overscroll_height: u16 = 1;
     let fixed_height = 1
         + queued_height
-        + swarm_strip_height
         + notification_height
         + inline_block_height
         + inline_ui_gap_height
         + input_height
         + overscroll_height
-        + animation_height; // status + queued + swarm strip + notification + inline UI + gap + input + overscroll + idle animation
+        + animation_height; // status + queued + notification + inline UI + gap + input + overscroll + idle animation
     let available_height = chat_area.height;
     let stable_fixed_height = fixed_height;
     let overflows = |prepared: &PreparedChatFrame| {
@@ -2988,7 +2930,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     // after `clear`: the prompt sits at the top and the history is one scroll
     // away. Scrolling up, new output, or streaming all end the state (see
     // `terminal_clear_collapsed`) and restore the normal layout.
-    let terminal_clear_collapsed = !swarm_page_active && app.terminal_clear_collapsed();
+    let terminal_clear_collapsed = app.terminal_clear_collapsed();
     let content_height = if terminal_clear_collapsed {
         0
     } else {
@@ -2997,9 +2939,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
 
     // Use packed layout when content fits, scrolling layout otherwise
     let use_packed = terminal_clear_collapsed
-        || (!swarm_page_active
-            && !side_panel_fullscreen
-            && content_height + fixed_height <= available_height);
+        || (!side_panel_fullscreen && content_height + fixed_height <= available_height);
 
     // Layout: messages (includes header), queued, status, notification, inline UI, gap, input, idle animation
     // All vertical chunks are within the chat_area (left column).
@@ -3013,7 +2953,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                     content_height.max(1)
                 }), // 0 Messages (exact height; 0 when terminal-cleared)
                 Constraint::Length(queued_height), // 1 Queued messages (above status)
-                Constraint::Length(swarm_strip_height), // 2 Swarm strip (above status)
                 Constraint::Length(1),             // 3 Status line
                 Constraint::Length(notification_height), // 4 Notification line
                 Constraint::Length(inline_block_height), // 5 Inline UI
@@ -3026,7 +2965,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             vec![
                 Constraint::Min(3),                       // 0 Messages (scrollable)
                 Constraint::Length(queued_height),        // 1 Queued messages (above status)
-                Constraint::Length(swarm_strip_height),   // 2 Swarm strip (above status)
                 Constraint::Length(1),                    // 3 Status line
                 Constraint::Length(notification_height),  // 4 Notification line
                 Constraint::Length(inline_block_height),  // 5 Inline UI
@@ -3037,16 +2975,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             ]
         })
         .split(chat_area);
-    record_status_area(chunks[3]);
-
-    // Draw the inline swarm strip directly above the status line if present.
-    if swarm_strip_height > 0 {
-        clear_area(frame, chunks[2]);
-        frame.render_widget(Paragraph::new(swarm_strip_lines.clone()), chunks[2]);
-    }
+    record_status_area(chunks[2]);
 
     LAST_MESSAGE_AREA.with(|area| area.set(chunks[0]));
-    LAST_INPUT_AREA.with(|area| area.set(chunks[7]));
+    LAST_INPUT_AREA.with(|area| area.set(chunks[6]));
 
     // Capture layout info for visual debug
     if let Some(capture) = &mut debug_capture {
@@ -3056,8 +2988,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         if queued_height > 0 {
             capture.layout.queued_area = Some(chunks[1].into());
         }
-        capture.layout.status_area = Some(chunks[3].into());
-        capture.layout.input_area = Some(chunks[7].into());
+        capture.layout.status_area = Some(chunks[2].into());
+        capture.layout.input_area = Some(chunks[6].into());
         capture.layout.input_lines_raw = app.input().lines().count().max(1);
         capture.layout.input_lines_wrapped = base_input_height as usize;
 
@@ -3122,7 +3054,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     } else {
         diff_pane_area
     };
-    let _ = swarm_strip_height;
     note_chat_layout(ChatLayoutMetrics {
         chat_area,
         messages_area,
@@ -3138,27 +3069,9 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.layout.messages_area = Some(messages_area.into());
         capture.layout.diagram_area = diagram_area.map(|r| r.into());
     }
-    record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[7]));
+    record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[6]));
 
-    let margins = if swarm_page_active {
-        let members = app.inline_swarm_members();
-        let spinner_frame = (app.animation_elapsed() * STRIP_SPINNER_FPS) as usize;
-        let lines = info_widget::swarm_gallery::render_swarm_page_lines(
-            &members,
-            app.swarm_panel_selected(),
-            spinner_frame,
-            messages_area.width as usize,
-            messages_area.height as usize,
-        );
-        clear_area(frame, messages_area);
-        frame.render_widget(Paragraph::new(lines), messages_area);
-        info_widget::Margins {
-            right_widths: Vec::new(),
-            left_widths: Vec::new(),
-            centered: false,
-            ..Default::default()
-        }
-    } else if terminal_clear_collapsed || side_panel_fullscreen {
+    let margins = if terminal_clear_collapsed || side_panel_fullscreen {
         if side_panel_fullscreen {
             clear_area(frame, messages_area);
         }
@@ -3252,32 +3165,32 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     if let Some(capture) = &mut debug_capture {
         capture.render_order.push("draw_status".to_string());
     }
-    input_ui::draw_status(frame, app, chunks[3], pending_count);
+    input_ui::draw_status(frame, app, chunks[2], pending_count);
     if notification_height > 0 {
-        input_ui::draw_notification(frame, app, chunks[4]);
+        input_ui::draw_notification(frame, app, chunks[3]);
     }
     if let Some(capture) = &mut debug_capture {
         capture.render_order.push("draw_input".to_string());
     }
     // Draw inline UI if active
     if inline_block_height > 0 {
-        draw_inline_ui(frame, app, chunks[5]);
+        draw_inline_ui(frame, app, chunks[4]);
     }
 
     let _input_cursor = input_ui::draw_input(
         frame,
         app,
-        chunks[7],
+        chunks[6],
         user_count + pending_count + 1,
         &mut debug_capture,
     );
 
     if overscroll_height > 0 {
-        input_ui::draw_overscroll_status(frame, app, chunks[8]);
+        input_ui::draw_overscroll_status(frame, app, chunks[7]);
     }
 
     if animation_height > 0 {
-        animations::draw_idle_animation(frame, app, chunks[9]);
+        animations::draw_idle_animation(frame, app, chunks[8]);
     }
     let chrome_elapsed = chrome_start.elapsed();
 
@@ -3291,7 +3204,6 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     if app.info_widget_overlays_enabled()
         && !widget_data.is_empty()
         && !show_animation
-        && !swarm_page_active
         && !side_panel_fullscreen
     {
         if let Some(capture) = &mut debug_capture {
@@ -3335,11 +3247,11 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     // Command-suggestion popover: a late overlay pass so the palette floats
     // over existing rows (blank space, pinned footer, or the transcript tail)
     // instead of reserving layout height and shoving everything around.
-    input_ui::draw_command_suggestions_overlay(frame, app, chunks[7]);
+    input_ui::draw_command_suggestions_overlay(frame, app, chunks[6]);
 
     // Ctrl+R reverse prompt-history search overlay (drawn after the command
     // palette so it wins when both could be visible).
-    input_ui::draw_prompt_history_search_overlay(frame, app, chunks[7]);
+    input_ui::draw_prompt_history_search_overlay(frame, app, chunks[6]);
 
     // Observe the rendered messages area for the anchor-stability (smoothness)
     // report. Runs on the final buffer so it sees exactly what the user sees.
