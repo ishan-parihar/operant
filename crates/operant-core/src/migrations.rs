@@ -33,7 +33,8 @@
 //! `PRAGMA user_version` is **file-wide** in SQLite — there is no
 //! per-table or per-subsystem version. The runner therefore refuses
 //! to run when the file's version is already above the supplied
-//! family's length ("refusing to downgrade"). Consequence:
+//! family's length ("refusing to run an older schema against a newer
+//! database"). Consequence:
 //! **every subsystem that declares its own `MIGRATIONS` array MUST
 //! point at its own dedicated DB file.** Two families on one file
 //! hard-fail as soon as the other family bumps the shared version
@@ -216,7 +217,7 @@ mod tests {
         conn.pragma_update(None, "user_version", 5).unwrap();
         let err = migrate(&conn, "test", &["CREATE TABLE a (x);"]).unwrap_err();
         assert!(
-            format!("{err}").contains("refusing to downgrade"),
+            format!("{err}").contains("refusing to run an older schema"),
             "downgrade error should explain the refusal, got: {err}"
         );
     }
