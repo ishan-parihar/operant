@@ -957,9 +957,13 @@ fn a_subagent_row_says_usage_is_unmeasured_rather_than_printing_zeros() {
         .iter()
         .find(|r| r.contains("dlg-9"))
         .unwrap_or_else(|| panic!("the row must render: {list:?}"));
+    // (plan iteration 2) The row no longer reports usage for EITHER kind, so
+    // the "usage —" placeholder went with the numbers. What survives is the
+    // claim that mattered: no fabricated zeros on a row the registry cannot
+    // measure.
     assert!(
-        row.contains("usage —"),
-        "a subagent row must say usage — because the registry measures none: {row:?}"
+        !row.contains("usage"),
+        "the row reports no usage at all now: {row:?}"
     );
     assert!(
         !row.contains("$0.0000"),
@@ -1295,6 +1299,36 @@ fn a_first_prompt_for_another_session_is_not_shown() {
     assert_eq!(hub.first_prompt_for("s1"), None);
 }
 
+/// The row shows the DATE, not a relative phrase.
+///
+/// (2026-11-14, plan iteration 3a) The operator: "no date ... in the data". A
+/// session from three weeks ago and one from three days ago read alike as
+/// "21d ago" and "3d ago" only if you already know which is which; the date is
+/// what tells a row apart from its twin.
+#[test]
+fn the_row_shows_an_absolute_date_not_a_relative_phrase() {
+    let hub = SessionHubState::new();
+    let at = chrono::DateTime::parse_from_rfc3339("2026-03-04T10:00:00+00:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(super::render::absolute_date(at), "2026-03-04");
+
+    let mut old = row("s1", Some("work"), None);
+    old.updated_at = at;
+    let rows = vec![old];
+    let (list, _) = hub_rows_at(120, rows);
+    let joined = list.join("\n");
+    assert!(
+        joined.contains("2026-03-04"),
+        "the row must carry the date: {joined}"
+    );
+    assert!(
+        !joined.contains("d ago"),
+        "the relative phrase must not be the row's date: {joined}"
+    );
+    let _ = hub;
+}
+
 /// The filter tags must stay readable at the width the operator actually has.
 ///
 /// (2026-11-14, live defect: "filters are still garbled like `n 30 w 0 r
@@ -1476,20 +1510,43 @@ fn the_directory_qualifier_is_not_clipped_mid_word() {
     );
 }
 
-/// The age and the cost must survive a heavy row. (audit finding 17) The
-/// ladder ended at a 3-character id and let the List clip the rest, so the
-/// employee badge cost the row its age and its cost.
+/// A heavy row keeps its DATE, and the cost moved to the preview.
+///
+/// (audit finding 17, then plan iteration 2) The ladder ended at a 3-character
+/// id and let the List clip the rest, so the employee badge cost the row its age
+/// and its cost. Iteration 2 then removed cost from the row deliberately — it is
+/// WEIGHT, not identity — so the claim is now split: the row keeps the date, and
+/// the cost is asserted where it lives, the preview header.
 #[test]
-fn a_heavy_row_keeps_its_age_and_cost() {
+fn a_heavy_row_keeps_its_date_and_the_cost_lives_in_the_preview() {
     let mut r = row("s1", Some("work"), Some("premiere"));
     r.message_count = 120;
     r.tokens = 90000;
     r.cost_usd = 12.34;
-    let (list, _) = hub_rows(vec![r]);
+    let rows = vec![r];
+    let (list, _) = hub_rows(rows.clone());
     let joined = list.join("\n");
     assert!(
-        joined.contains("12.3400"),
-        "the cost must survive: {joined}"
+        !joined.contains("12.3400"),
+        "cost is not a row field any more: {joined}"
+    );
+    assert!(
+        !joined.contains("msg"),
+        "message count is not a row field any more: {joined}"
+    );
+    assert!(
+        joined.contains("premiere"),
+        "the employee badge survives the heavy row: {joined}"
+    );
+    // The weight is in the preview header.
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(rows);
+    hub.apply_preview("s1", vec![msg("user", "hi")], 0);
+    let (_, preview) = hub_rows_with(&mut hub);
+    let preview_joined = preview.join("\n");
+    assert!(
+        preview_joined.contains("12.3400"),
+        "the cost must live in the preview header: {preview_joined}"
     );
 }
 
@@ -2168,16 +2225,18 @@ fn the_directory_is_not_repeated_under_directory_grouping() {
     );
 }
 
-/// The fix must not leak: an ordinary session row keeps its REAL numbers,
-/// because for sessions those are measured and true.
+/// The row no longer carries usage at all — not the numbers, not the dash.
 ///
-/// The row is TWO lines (title + meta, one multi-line ListItem) and the meta
-/// is the line carrying the numbers, so the assertion targets the line that
-/// holds the row's id. An earlier version joined the whole list buffer and
-/// failed on a *correct* frame: "usage —" was present, in the subagent row two
-/// rows down. Per-row matching is the fix, not a looser assertion.
+/// (plan iteration 2) The row's question is "which session is this", and usage
+/// does not answer it. Both the numbers AND the "usage —" placeholder are gone:
+/// a subagent's unmeasured usage has nothing to be unmeasured ABOUT on a line
+/// that no longer reports usage.
+///
+/// The per-row matching this test introduced is kept: an earlier version joined
+/// the whole list buffer and failed on a *correct* frame because a sibling row
+/// held the text it was looking for.
 #[test]
-fn an_ordinary_session_row_keeps_its_real_usage_numbers() {
+fn a_session_row_carries_no_usage_at_all() {
     let (list, _preview) = hub_rows(vec![
         row("sess-a", Some("alpha"), None),
         subagent_row("dlg-9", "audit the tests", "pending"),
@@ -2187,16 +2246,16 @@ fn an_ordinary_session_row_keeps_its_real_usage_numbers() {
         .find(|r| r.contains("sess-a"))
         .unwrap_or_else(|| panic!("the session's meta row must render: {list:?}"));
     assert!(
-        !session_meta.contains("usage —"),
-        "a session's usage IS measured — it must not print the dash: {session_meta:?}"
+        !session_meta.contains("usage"),
+        "the row reports no usage: {session_meta:?}"
     );
     assert!(
-        session_meta.contains("3 msg"),
-        "the session's real message count must survive (the helper sets 3): {session_meta:?}"
+        !session_meta.contains("msg"),
+        "message count is not a row field: {session_meta:?}"
     );
     assert!(
-        session_meta.contains("$0.0100"),
-        "the session's real cost must survive (the helper sets 0.01): {session_meta:?}"
+        !session_meta.contains("$"),
+        "cost is not a row field: {session_meta:?}"
     );
 }
 
@@ -3710,22 +3769,27 @@ fn every_stages_claim_holds_on_one_drawn_hub() {
     // rather than the full id.
     let meta_row = screen
         .iter()
-        .find(|r| r.contains("premiere") && r.contains("120 msg"))
+        .find(|r| r.contains("premiere") && r.contains("Idle"))
         .unwrap_or_else(|| panic!("the row's meta line must render\n{joined}"));
-    // The AGE survives. That is the field the old truncation was eating
-    // mid-word (`Idle  jus`), and it is what the ladder now protects.
+    // (plan iteration 3a) The DATE survives — it is the field that tells a row
+    // apart from its twin, and the one the operator said was missing. The
+    // relative phrase is what it replaced.
     assert!(
-        meta_row.contains("just now"),
-        "the row's age must survive the loaded row: {meta_row:?}"
+        meta_row.contains("2026-"),
+        "the row's date must survive the loaded row: {meta_row:?}"
     );
-    // The row is not truncated mid-word: the last thing on it is a complete
-    // token count, and the id is a deliberate short handle rather than a cut.
     assert!(
-        meta_row.contains("90.0k"),
-        "the token count must survive: {meta_row:?}"
+        !meta_row.contains("just now"),
+        "the relative phrase must not be the row's date: {meta_row:?}"
     );
-    // The cost is unrecoverable AT THIS WIDTH (a 40% pane cannot carry id +
-    // employee + 120 msg + 90k + age + cost), but it is one Tab away.
+    // (plan iteration 2) Message count, token count and cost are no longer row
+    // fields: they are WEIGHT, not identity, and they are what pushed this very
+    // row to 61 cells against a 46-cell pane.
+    assert!(
+        !meta_row.contains("msg") && !meta_row.contains("90.0k"),
+        "usage is not a row field: {meta_row:?}"
+    );
+    // The weight is one Tab away, in the preview header.
     assert!(
         joined.contains("$12.3400"),
         "the cost must still be reachable in the preview pane even when the row \

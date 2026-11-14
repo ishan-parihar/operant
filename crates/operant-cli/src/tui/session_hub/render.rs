@@ -192,6 +192,20 @@ fn group_heading_row(key: &str, count: usize, inner_width: u16) -> ListItem<'sta
 
 /// The compact age form the TUI already uses (app/mod.rs's session-list
 /// drain) — moved here so the hub owns one formatter.
+/// The absolute date, for the row that has to be told apart from its twin.
+///
+/// (2026-11-14, plan iteration 3a) The operator's complaint: "no date ... in the
+/// data". The row carried only a relative phrase, so a session from three weeks
+/// ago and one from three days ago read alike. The value was already there —
+/// `SessionEntryV2.updated_at` is a parsed `DateTime<Utc>` — so this is a format,
+/// not a migration.
+///
+/// The date, not the instant: the row is scanned, not read. The preview header
+/// keeps the relative phrase beside it, where there is width.
+pub fn absolute_date(updated_at: chrono::DateTime<chrono::Utc>) -> String {
+    updated_at.format("%Y-%m-%d").to_string()
+}
+
 pub fn relative_time(updated_at: chrono::DateTime<chrono::Utc>) -> String {
     let age = chrono::Utc::now().signed_duration_since(updated_at);
     if age.num_minutes() < 1 {
@@ -1001,9 +1015,14 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // preview header (audit: the two panes printed id, age, cost
                 // and message count in BOTH). They did not help identify a
                 // session, and they were what pushed the row past its budget.
+                // (2026-11-14, plan iteration 3a) The row shows the DATE, not
+                // the relative phrase: a session from three weeks ago and one
+                // from three days ago read alike in relative form, and the date
+                // is what tells a row apart from its twin. The relative phrase
+                // stays in the preview header, where there is width.
                 let metrics_width = emp.chars().count()
                     + row.status.label().chars().count()
-                    + relative_time(row.updated_at).chars().count()
+                    + absolute_date(row.updated_at).chars().count()
                     + 8;
                 // Drop the status column BEFORE shrinking the id: the header
                 // above already names it (Stage B), so it is the one field here
@@ -1119,7 +1138,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                     ));
                 }
                 meta_spans.push(Span::styled(
-                    format!("  {}", relative_time(row.updated_at)),
+                    format!("  {}", absolute_date(row.updated_at)),
                     Style::default().fg(theme_colors::muted()),
                 ));
                 let meta_line = Line::from(meta_spans);
