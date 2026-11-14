@@ -264,6 +264,12 @@ impl App {
         } else {
             self.prompt_input.drop_missing_paste_placeholders();
         }
+        // One notice at a time: the collapse and the expand are mutually
+        // exclusive within one key, and the expand is the later event, so it
+        // wins if both somehow stand.
+        if let Some(notice) = self.prompt_input.paste_collapsed.take() {
+            self.set_status_notice(notice);
+        }
         if let Some(notice) = self.prompt_input.paste_expanded.take() {
             self.set_status_notice(notice);
         }

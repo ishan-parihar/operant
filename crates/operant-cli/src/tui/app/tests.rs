@@ -8025,7 +8025,10 @@ fn input_stash_should_hold_and_restore_contents() {
     assert!(!app.handle_key_event(stash));
     assert!(app.prompt_input.is_empty(), "stash must empty the composer");
     assert_eq!(
-        app.prompt_input.stash.as_deref(),
+        app.prompt_input
+            .stash
+            .as_ref()
+            .map(|(text, _)| text.as_str()),
         Some("half-written prompt")
     );
     assert_eq!(
@@ -8038,7 +8041,13 @@ fn input_stash_should_hold_and_restore_contents() {
     // chord itself restores when something is held, which is the toggle.)
     app.set_prompt_text("second draft".to_string());
     app.prompt_input.stash_input();
-    assert_eq!(app.prompt_input.stash.as_deref(), Some("second draft"));
+    assert_eq!(
+        app.prompt_input
+            .stash
+            .as_ref()
+            .map(|(text, _)| text.as_str()),
+        Some("second draft")
+    );
 
     // Same chord restores and clears the stash.
     app.handle_key_event(press_key(KeyCode::Char('s'), KeyModifiers::CONTROL));

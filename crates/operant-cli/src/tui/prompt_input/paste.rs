@@ -90,24 +90,26 @@ pub fn paste_placeholder(content: &str, store: &[(String, String)]) -> String {
     }
 }
 
-/// Substitute placeholders in a text where one label can be a PREFIX of another.
+/// Is `placeholder` present in `text` as a placeholder of its own?
 ///
-/// `[Pasted ~3 lines]` is a prefix of `[Pasted ~3 lines] #2`, so a plain
-/// `str::replace` over the whole store rewrites the numbered placeholder's head
-/// and leaves a doubled tail (`a\nb\nc y a\nb\nc #2`). Longest label first
-/// makes the two cases disjoint, and a placeholder with no payload left (a
-/// store the operator edited behind) is skipped rather than expanded to itself.
-fn replace_placeholders(text: &str, store: &[(String, String)]) -> String {
-    let mut labels: Vec<&(String, String)> = store
-        .iter()
-        .filter(|(placeholder, content)| placeholder != content && text.contains(placeholder))
-        .collect();
-    labels.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-    let mut out = text.to_string();
-    for (placeholder, content) in labels {
-        out = out.replace(placeholder.as_str(), content.as_str());
+/// ONE boundary rule, used by the drop rule and the expander both. The bare
+/// label (`[Pasted ~3 lines]`) is a PREFIX of the numbered one
+/// (`[Pasted ~3 lines] #2`), so a plain `contains` would call the bare token
+/// live for as long as the numbered one existed; the character that follows
+/// the candidate decides which one it is.
+pub fn is_live_placeholder(text: &str, placeholder: &str) -> bool {
+    if placeholder.is_empty() {
+        return false;
     }
-    out
+    text.match_indices(placeholder).any(|(at, _)| {
+        match text[at + placeholder.len()..].chars().next() {
+            // ` #2` (or a digit with no separator) belongs to the numbered
+            // placeholder, which is a longer label than this one.
+            Some('#') => false,
+            Some(c) if c.is_ascii_digit() => false,
+            _ => true,
+        }
+    })
 }
 
 /// Which placeholder a re-paste of `content` should expand.
@@ -136,7 +138,21 @@ pub fn expand_target(content: &str, store: &[(String, String)]) -> Option<String
 /// Swap every placeholder in `text` back for its stored content. The
 /// placeholder keeps the composer readable; the model must get the paste.
 pub fn expand_paste_placeholders(text: &str, store: &[(String, String)]) -> String {
-    replace_placeholders(text, store)
+    let mut labels: Vec<&(String, String)> = store
+        .iter()
+        .filter(|(placeholder, content)| {
+            placeholder != content && is_live_placeholder(text, placeholder)
+        })
+        .collect();
+    // Longest label first: the numbered token must be substituted before the
+    // bare one it contains, or the replacement rewrites the numbered token's
+    // head and leaves a doubled tail (`a\nb\nc y a\nb\nc #2`).
+    labels.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    let mut out = text.to_string();
+    for (placeholder, content) in labels {
+        out = out.replace(placeholder.as_str(), content.as_str());
+    }
+    out
 }
 
 /// Normalize a pasted string into a filesystem path if it looks like one.

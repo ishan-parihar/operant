@@ -2990,3 +2990,220 @@ fn a_horizontal_change_restarts_the_saved_column() {
     let (_, col) = s.cursor_visual_pos(width);
     assert_eq!(col, 0, "the next move starts from the caret's own column");
 }
+
+/// PROBE: does take() hand the MODEL a raw control byte? The composer never
+/// holds one (sanitize), but take() expands the payload from the store, which
+/// holds whatever the clipboard gave us.
+#[test]
+fn probe_take_can_hand_the_model_a_raw_control_byte() {
+    let mut s = PromptInputState::new();
+    s.paste("a\u{1b}b\nc\nd");
+    let sent = s.take();
+    eprintln!("PROBE sent={:?}", sent);
+    assert!(
+        !sent.contains('\u{1b}'),
+        "the model must never receive a raw ESC, got {sent:?}"
+    );
+}
+
+/// PROBE: the expand splice inserts RAW text, so the composer can hold a
+/// control byte after an expand (the composer's own invariant is broken).
+#[test]
+fn probe_expand_breaks_the_composer_invariant() {
+    let mut s = PromptInputState::new();
+    s.paste("a\u{1b}b\nc\nd");
+    s.paste("a\u{1b}b\nc\nd"); // expand
+    eprintln!("PROBE text={:?}", s.text);
+    assert!(
+        !s.text.contains('\u{1b}'),
+        "the composer must never hold a control byte"
+    );
+}
+
+// ---- red team of iter-2266 (audit 2026-11-14) ------------------------
+// Every test below was written as a probe against the shipped slice, failed,
+// and now pins the fix. See
+// docs/audit/2026-11-14-redteam-paste-collapse-expand-slice.md.
+
+/// (audit finding 1) The expand must not reintroduce a byte the paste path
+/// dropped. The store holds sanitised payloads, so a payload spliced back into
+/// the buffer cannot put a raw ESC into a cell — the RT-539 defect class.
+#[test]
+fn expanding_a_paste_never_puts_a_control_byte_in_the_composer() {
+    let mut s = PromptInputState::new();
+    s.paste("a\u{1b}[31mRED\u{1b}[0m\nb\nc");
+    let placeholder = s.pending_pastes[0].0.clone();
+    assert!(s.text.contains(&placeholder), "collapsed");
+    assert!(!s.text.contains('\u{1b}'), "the collapsed buffer is clean");
+    // The store's payload is what the buffer would hold, which is the contract
+    // the expand relies on. A payload that still carries the raw bytes is a
+    // payload that can put them back.
+    assert!(
+        !s.pending_pastes[0].1.contains('\u{1b}'),
+        "the stored payload must be sanitised, got {:?}",
+        s.pending_pastes[0].1
+    );
+
+    // A store written by something that did NOT sanitise (a future writer, a
+    // restore path) still cannot corrupt the buffer: the splice is guarded.
+    s.pending_pastes[0].1 = "x\u{1b}[31mY\u{1b}[0m\nz\nw".to_string();
+    s.expand_paste_placeholder(&placeholder);
+    assert!(
+        !s.text.contains('\u{1b}'),
+        "the expand must splice clean text even from a dirty store, got {:?}",
+        s.text
+    );
+    assert!(s.text.contains('Y'));
+}
+
+/// (audit finding 4) The store holds what the BUFFER holds: a tab is widened
+/// on the way in, so it is widened in the store too. Otherwise the store and
+/// the buffer disagree about the same fact.
+#[test]
+fn the_store_holds_the_sanitised_text_not_the_raw_clipboard() {
+    let mut s = PromptInputState::new();
+    s.paste("a\tb\nc\nd");
+    let (_, stored) = &s.pending_pastes[0];
+    assert_eq!(stored, "a    b\nc\nd", "the store carries the widened tab");
+    assert_eq!(s.text, s.pending_pastes[0].0, "buffer holds only the token");
+}
+
+/// (audit finding 5) The outgoing prompt never carries a control byte, even
+/// though the store could hold one if a future writer forgets to sanitise.
+#[test]
+fn the_prompt_the_model_receives_is_sanitised() {
+    let mut s = PromptInputState::new();
+    s.paste("a\u{1b}b\nc\nd");
+    let sent = s.take();
+    assert!(!sent.contains('\u{1b}'), "got {sent:?}");
+    assert!(sent.contains("a"), "the text itself survives");
+}
+
+/// (audit finding 2) Ctrl+S twice must bring back a composer whose tokens
+/// still have payloads behind them. This is the defect that sent the model a
+/// literal `[Pasted ~5 lines]`.
+#[test]
+fn stashing_and_restoring_keeps_the_payloads() {
+    let mut s = PromptInputState::new();
+    let big = "1\n2\n3\n4\n5\n";
+    s.paste(big);
+    s.cursor = s.text.len();
+    s.stash_input();
+    assert!(s.pending_pastes.is_empty(), "parking empties the composer");
+    assert!(s.restore_stash());
+    assert_eq!(
+        s.pending_pastes.len(),
+        1,
+        "the payload came back with the text"
+    );
+    let sent = s.take();
+    assert_eq!(sent, big, "the model must get the paste, not the token");
+}
+
+/// (audit finding 3) Undo restores text and store together: an undo back
+/// across a paste leaves no orphan payload behind.
+#[test]
+fn undoing_across_a_paste_leaves_no_orphan_payload() {
+    let mut s = PromptInputState::new();
+    s.text = "draft".to_string();
+    s.cursor = 5;
+    for _ in 0..8 {
+        s.record_edit();
+    }
+    s.paste("1\n2\n3\n4\n5\n");
+    // After EVERY undo step the store must hold only payloads whose token is in
+    // the text. That is the invariant; which draft the undo lands on is a
+    // separate question from whether the store lies.
+    let mut steps = 0;
+    while s.undo_burst() {
+        steps += 1;
+        for (placeholder, _) in &s.pending_pastes {
+            assert!(
+                s.text.contains(placeholder.as_str()),
+                "after undo #{steps} the text {:?} does not hold its own placeholder {:?}",
+                s.text,
+                placeholder
+            );
+        }
+        if steps > 8 {
+            break;
+        }
+    }
+    assert!(steps > 0, "undo must do something");
+}
+
+/// (audit finding 7) A clear ends every paste-scoped one-shot, so the next
+/// paste's payload is not dropped by a stale suppress flag.
+#[test]
+fn clearing_the_composer_disarms_the_expand_one_shot() {
+    let mut s = PromptInputState::new();
+    s.paste("1\n2\n3\n4\n5\n");
+    s.paste("1\n2\n3\n4\n5\n"); // expand: arms the one-shot
+    assert!(s.suppress_paste_expand);
+    s.clear();
+    assert!(!s.suppress_paste_expand, "clear must disarm the one-shot");
+    assert!(
+        s.paste_expanded.is_none(),
+        "and drop a pending expand notice"
+    );
+    assert!(s.paste_collapsed.is_none(), "and a pending collapse notice");
+}
+
+/// (audit finding 8) A paste is a non-vertical edit, so it ends the saved
+/// column the way every other non-vertical primitive does.
+#[test]
+fn a_paste_clears_the_saved_column() {
+    let text = "aaaaaaaaaa\nbb\ncccccccccc";
+    let mut s = PromptInputState::new();
+    s.text = text.to_string();
+    s.cursor = "aaaaaaaaaa\nbb\n".len() + 8;
+    let width = 10;
+    s.move_visual_up(width);
+    s.move_visual_up(width);
+    assert_eq!(s.preferred_col, Some(8));
+    s.paste("XY");
+    assert_eq!(s.preferred_col, None, "a paste ends the column run");
+}
+
+/// (audit finding 9) One boundary rule for both the drop and the expand. A
+/// hand-typed ` #2` after a bare token must read the same way to both.
+#[test]
+fn the_drop_and_expand_rules_agree_on_a_hand_typed_suffix() {
+    // The expander sees the bare token in "[Pasted ~3 lines] #2" as live text
+    // (the numbered token is a different, longer label); the drop rule must
+    // agree that the STORE's bare token is still live, because the text really
+    // does contain it as a token of its own.
+    let text = "[Pasted ~3 lines] #2";
+    assert!(
+        paste::is_live_placeholder(text, "[Pasted ~3 lines]"),
+        "the bare token IS present in that text"
+    );
+    assert!(
+        !paste::is_live_placeholder(text, "[Pasted ~3 lines] #2 trailing"),
+        "a token with trailing text is not a token"
+    );
+    // and the two entry points use the same predicate
+    let mut s = PromptInputState::new();
+    s.pending_pastes
+        .push(("[Pasted ~3 lines]".to_string(), "a\nb\nc".to_string()));
+    s.text = text.to_string();
+    s.drop_missing_paste_placeholders();
+    assert_eq!(
+        s.pending_pastes.len(),
+        1,
+        "the drop rule kept it, as the expand rule would"
+    );
+}
+
+/// (audit finding 6) The COLLAPSE announces itself, and says how to undo it.
+#[test]
+fn a_collapse_tells_the_operator_what_happened_and_how_to_expand() {
+    let mut s = PromptInputState::new();
+    s.paste("a\nb\nc\nd\ne\n");
+    let notice = s.paste_collapsed.take().expect("a collapse must report");
+    assert!(notice.contains("5 lines"), "got: {notice}");
+    assert!(
+        notice.contains("expand"),
+        "the notice must say how to get the text back, got: {notice}"
+    );
+}

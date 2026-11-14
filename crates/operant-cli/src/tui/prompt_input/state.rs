@@ -22,6 +22,7 @@ impl PromptInputState {
             pending_pastes: Vec::new(),
             suppress_paste_expand: false,
             paste_expanded: None,
+            paste_collapsed: None,
             history_recall: None,
             preferred_col: None,
             yank_buf: String::new(),
@@ -114,6 +115,12 @@ impl PromptInputState {
         self.history_recall = None;
         self.preferred_col = None;
         self.pending_pastes.clear();
+        // A clear ends every paste-scoped one-shot. Leaving the suppress flag
+        // armed made the NEXT paste's payload get dropped by a stale flag, and
+        // leaving a notice set popped it over an empty composer.
+        self.suppress_paste_expand = false;
+        self.paste_expanded = None;
+        self.paste_collapsed = None;
         self.token_estimate = 0;
         self.vim_pending = VimPendingState::None;
         self.visual_anchor = None;
@@ -127,6 +134,11 @@ impl PromptInputState {
     /// "[Pasted ~N lines #K]").
     pub fn take(&mut self) -> String {
         let text = expand_paste_placeholders(&self.text, &self.pending_pastes);
+        // The store holds sanitised payloads (see `paste`), so this is a guard:
+        // the composer's invariant is that it never holds a control byte, and
+        // the outgoing prompt is the last place to enforce it. A byte the
+        // provider's JSON would otherwise carry has no business leaving here.
+        let text = super::history::sanitize_pasted_text(&text);
         self.clear();
         text
     }
@@ -146,7 +158,7 @@ impl PromptInputState {
             return;
         }
         self.pending_pastes
-            .retain(|(placeholder, _)| placeholder_is_live(placeholder, &self.text));
+            .retain(|(placeholder, _)| paste::is_live_placeholder(&self.text, placeholder));
     }
 
     /// Is the history ladder LIVE right now?
@@ -202,15 +214,22 @@ impl PromptInputState {
     /// second Ctrl+S can never strand a prompt in a hidden stack. Moved out
     /// with `mem::take`, so parking costs no clone.
     pub fn stash_input(&mut self) {
-        self.stash = Some(std::mem::take(&mut self.text));
+        // The store rides with the text: `clear()` empties `pending_pastes`, and
+        // bringing back a composer full of placeholders with nothing behind them
+        // is how the model got `[Pasted ~5 lines]` instead of the paste.
+        self.stash = Some((
+            std::mem::take(&mut self.text),
+            std::mem::take(&mut self.pending_pastes),
+        ));
         self.clear();
     }
 
     /// Bring the held stash back and clear it. `false` when nothing is held.
     pub fn restore_stash(&mut self) -> bool {
         match self.stash.take() {
-            Some(text) => {
+            Some((text, pastes)) => {
                 self.text = text;
+                self.pending_pastes = pastes;
                 self.cursor = self.text.len();
                 self.history_pos = None;
                 self.suggestion_index = None;
@@ -286,27 +305,13 @@ impl PromptInputState {
         self.text = text;
         self.cursor = cursor.min(self.text.len());
         self.history_pos = None;
+        // An undo can restore a text with no placeholder in it while the store
+        // still holds the payload. Drop it here so the invariant ("every stored
+        // payload's placeholder is in the text") is true at every exit, not
+        // only after the next refresh.
+        self.drop_missing_paste_placeholders();
         self.update_token_estimate();
         self.burst_anchor = (self.text.clone(), self.cursor);
         self.burst_edits = 0;
     }
-}
-
-/// Is `placeholder` present in `text` on a boundary its own `#N` suffix cannot
-/// span?
-///
-/// The bare label (`[Pasted ~3 lines]`) is a PREFIX of the numbered one
-/// (`[Pasted ~3 lines] #2`), so a plain `contains` keeps the bare payload alive
-/// for as long as the numbered placeholder exists. The character that follows
-/// the candidate decides which one it is.
-fn placeholder_is_live(placeholder: &str, text: &str) -> bool {
-    text.match_indices(placeholder).any(|(at, _)| {
-        match text[at + placeholder.len()..].chars().next() {
-            // ` #2` (or a digit with no separator) belongs to the numbered
-            // placeholder, which is a longer label than this one.
-            Some('#') => false,
-            Some(c) if c.is_ascii_digit() => false,
-            _ => true,
-        }
-    })
 }

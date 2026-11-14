@@ -111,8 +111,12 @@ pub struct PromptInputState {
     /// Set by the expand hand and drained by the app, which owns the one
     /// status line. Codex's `FooterFlash` rides the composer itself; here the
     /// notice is the app's, so the composer reports "I expanded something" and
-    /// the app decides how it reads (RT-562: the collapse used to be silent).
+    /// the app decides how it reads.
     pub paste_expanded: Option<String>,
+    /// The same seam for the COLLAPSE: the operator pasted something big and the
+    /// composer shows a token, so say so and say how to get it back. Both
+    /// notices are drained at the one refresh choke point (RT-562).
+    pub paste_collapsed: Option<String>,
     /// The text of the history entry the operator last recalled AND has not
     /// edited since. `None` means "not browsing, or edited" — the Up/Down
     /// arms navigate the ladder only while the text still equals this
@@ -165,7 +169,12 @@ pub struct PromptInputState {
     pub kill_ring: KillRing,
     /// Contents parked by `stash_input` (Ctrl+S). One slot, not a stack: a
     /// second stash while one is held replaces it. `None` = nothing held.
-    pub stash: Option<String>,
+    ///
+    /// The paste store rides ALONG with the text: parking calls `clear()`, which
+    /// empties `pending_pastes`, so text-only parking used to bring back a
+    /// composer full of placeholders with nothing behind them and the model got
+    /// `[Pasted ~5 lines]` instead of the paste.
+    pub stash: Option<(String, Vec<(String, String)>)>,
     /// Coalesced composer snapshots for the burst undo (Ctrl+Z). Separate
     /// from `undo_stack` above, which is vim's per-operation `:undo`.
     pub burst_undo: Vec<(String, usize)>,

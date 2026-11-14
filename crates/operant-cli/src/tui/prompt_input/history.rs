@@ -93,18 +93,35 @@ impl PromptInputState {
     /// expands the placeholder it already holds (RT-562) instead of collapsing
     /// a second one.
     pub fn paste(&mut self, content: &str) {
-        if let Some(placeholder) = paste::expand_target(content, &self.pending_pastes) {
+        // Sanitise ONCE, here, before the content is matched, stored or
+        // inserted, so the store holds exactly what the buffer holds. A payload
+        // spliced back in by the expand then cannot reintroduce a byte the
+        // paste path would have dropped (that was a real defect: the expand
+        // wrote raw ESC bytes into the composer, reopening RT-539), and a
+        // re-paste of the same clipboard content matches the store by the value
+        // the buffer actually carries.
+        let content = sanitize_pasted_text(content);
+        if let Some(placeholder) = paste::expand_target(&content, &self.pending_pastes) {
             self.expand_paste_placeholder(&placeholder);
             return;
         }
-        match paste::PasteOutcome::of(content, &self.pending_pastes) {
-            paste::PasteOutcome::Inline => self.insert_pasted_text(content),
+        match paste::PasteOutcome::of(&content, &self.pending_pastes) {
+            paste::PasteOutcome::Inline => self.insert_text(&content),
             paste::PasteOutcome::Collapsed {
                 placeholder,
                 content: stored,
             } => {
-                self.insert_pasted_text(&placeholder);
+                // Counted before the move into the store: the notice has to
+                // name the size of what the token swallowed.
+                let lines = stored.lines().count();
+                self.insert_text(&placeholder);
                 self.pending_pastes.push((placeholder, stored));
+                // The operator pasted something big and the composer now shows
+                // a token instead of their text. Say so, and say how to get it
+                // back: the collapse used to be silent, which is half of what
+                // RT-562 asked for.
+                self.paste_collapsed =
+                    Some(format!("Pasted {lines} lines — paste it again to expand."));
             }
         }
     }
@@ -118,7 +135,7 @@ impl PromptInputState {
     ///
     /// The `suppress_paste_expand` flag is what keeps the refresh choke point
     /// from re-collapsing the payload this method just inserted.
-    fn expand_paste_placeholder(&mut self, placeholder: &str) {
+    pub(super) fn expand_paste_placeholder(&mut self, placeholder: &str) {
         let Some(index) = self
             .pending_pastes
             .iter()
@@ -127,6 +144,10 @@ impl PromptInputState {
             return;
         };
         let (_, content) = self.pending_pastes.remove(index);
+        // The store holds the SANITISED payload (see `paste`), so this is a
+        // guard rather than a second copy of the rule: if a future writer ever
+        // puts raw text in the store, the buffer still gets clean text.
+        let content = sanitize_pasted_text(&content);
         let lines = content.lines().count();
         let Some(at) = self.text.find(placeholder) else {
             // The store says the placeholder is live and the text disagrees:
@@ -142,17 +163,19 @@ impl PromptInputState {
         self.preferred_col = None;
         self.history_pos = None;
         self.suppress_paste_expand = true;
-        self.paste_expanded = Some(format!(
-            "Expanded the pasted {} lines (the placeholder is back in your clipboard's text).",
-            lines
-        ));
+        self.paste_expanded = Some(format!("Pasted {lines} lines expanded."));
         self.update_token_estimate();
     }
 
-    /// Insert pasted text: sanitize the control bytes out, keep the cursor at
-    /// the end of what went in.
-    fn insert_pasted_text(&mut self, text: &str) {
-        for c in sanitize_pasted_text(text).chars() {
+    /// Insert text at the caret and leave the caret at the end of what went in.
+    ///
+    /// Every paste path goes through here — the token, the expanded payload and
+    /// a small paste's verbatim text — and the caller has already sanitised, so
+    /// this does not sanitise again. A paste is a non-vertical edit, so it ends
+    /// any saved-column run (RT-561's rule; the paste path used to skip it).
+    fn insert_text(&mut self, text: &str) {
+        self.preferred_col = None;
+        for c in text.chars() {
             self.text.insert(self.cursor, c);
             self.cursor += c.len_utf8();
         }
@@ -199,7 +222,7 @@ impl PromptInputState {
 
 /// What a paste is allowed to put in the composer: printable text, newlines,
 /// and tabs widened to four spaces. See `paste` for why the rest is dropped.
-fn sanitize_pasted_text(text: &str) -> String {
+pub(super) fn sanitize_pasted_text(text: &str) -> String {
     // Whole sequences first, so `ESC[31m` leaves no `[31m` behind as visible
     // text — the renderer already uses this scanner for captured output.
     let text = crate::tui::operant_app::message::strip_ansi_escape_sequences(text);

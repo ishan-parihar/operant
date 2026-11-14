@@ -215,7 +215,7 @@ which is the wrong question for a completion engine — the hygiene gate (`MIN_P
 what keeps typos out of the learned model, and a dictionary suggestion can only ever fill a
 gap the learned vocabulary left (RT-557, iter-2209).
 
-## Outcome (iter-2255, 2026-11-14)
+## Outcome (iter-2266, 2026-11-14) — corrected by the red team (iter-2323)
 
 All four gates met. One paste owner now exists (`crates/operant-cli/src/tui/prompt_input/paste.rs`)
 and the composer's one refresh choke point enforces the store invariant, so no mutation
@@ -249,3 +249,31 @@ test target). The intended call is `telegram_bot_commands(&vendor)`. Fleet rule 
 fix a peer's in-flight subsystem; this is not in-flight — it is published, it breaks
 `cargo test -p operant-cli` for every agent, and the fix is the one line the truncated token
 was meant to be.
+
+## Red-team correction (iter-2323, audit `docs/audit/2026-11-14-redteam-paste-collapse-expand-slice.md`)
+
+The table above claims more than the first pass delivered. Ten of the twelve
+audit findings were real defects in the shipped slice, all found by probe tests
+rather than by reading. Fixed in iter-2323:
+
+| # | what was actually wrong | fix |
+|---|---|---|
+| 1 | the expand spliced RAW clipboard bytes into the composer (reopened RT-539) | sanitise once at the paste boundary; the splice is guarded too |
+| 2 | `Ctrl+S` → paste → `Ctrl+S` sent the model a literal `[Pasted ~5 lines]` | the stash carries the store as one tuple |
+| 3 | an undo back across a paste left an orphan payload | `restore_snapshot` enforces the drop invariant |
+| 4 | the store held the raw text, the buffer held the sanitised text | same fix as 1 — one sanitise, one value |
+| 5 | `take()` could hand the model a raw control byte | sanitise the expanded result on the way out |
+| 6 | the COLLAPSE notice (the operator's literal ask) did not exist | `paste_collapsed` at the collapse site |
+| 7 | `clear()` left the expand one-shot armed | two lines in `clear()` |
+| 8 | a paste did not clear the saved column | one line in the shared paste insert |
+| 9 | two different boundary rules for "is this token live" | one `is_live_placeholder`, used by both |
+| 10 | a one-line wrapper (`replace_placeholders`) | merged |
+| 12 | the expand notice's wording was nonsense | `Pasted N lines expanded.` |
+
+Each fix carries a test that fails when the fix is removed; four mutations were
+run to confirm the tests are load-bearing (the paste-boundary sanitise, the
+expand guard, the stash restore, the undo invariant).
+
+**The lesson for the next slice:** the ledger row was closed on a gate that
+checked the mechanism existed, not that it was reachable from every path that
+writes the composer. `Ctrl+S` and `Ctrl+Z` both write it.
