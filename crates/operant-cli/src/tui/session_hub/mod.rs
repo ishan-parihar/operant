@@ -165,11 +165,6 @@ impl HubFilterMode {
     }
 }
 
-/// How the visible rows are grouped, cycled with `g` (codex's `AgentsOverview`
-/// `Group:` control). Grouping is ORTHOGONAL to filtering: the filter decides
-/// which rows exist, grouping decides the order they are read in. Codex's four
-/// axes are Project/Directory/Status/Model; operant's are its own data's axes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// What the preview pane shows of a session's transcript.
 ///
 /// (2026-11-14, operator request) "the right session preview must also have the
@@ -237,6 +232,11 @@ impl PreviewFilter {
     }
 }
 
+/// How the visible rows are grouped, cycled with `g` (codex's `AgentsOverview`
+/// `Group:` control). Grouping is ORTHOGONAL to filtering: the filter decides
+/// which rows exist, grouping decides the order they are read in. Codex's four
+/// axes are Project/Directory/Status/Model; operant's are its own data's axes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HubGroupMode {
     /// The order the rows arrived in — the global `updated_at DESC` the load
     /// already applies. The default, and the only mode that is not a regrade.
