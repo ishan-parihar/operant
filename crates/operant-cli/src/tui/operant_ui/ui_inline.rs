@@ -14,7 +14,15 @@ pub(super) fn inline_ui_height(app: &dyn TuiState) -> u16 {
     match app.inline_ui_state() {
         Some(crate::tui::operant_app::tui_fns::InlineUiStateRef::Interactive(picker)) => {
             // Model choices replace the command suggestions, without reflowing chat.
-            if picker.kind == crate::tui::operant_app::tui_fns::PickerKind::Model {
+            // (2026-11-15, model plan M1) The effort picker does the same: it is
+            // the same surface shape with different rows, so it reserves no rows
+            // either. Left on the counted path it claimed a block of up to twenty
+            // rows above the composer for four levels.
+            if matches!(
+                picker.kind,
+                crate::tui::operant_app::tui_fns::PickerKind::Model
+                    | crate::tui::operant_app::tui_fns::PickerKind::Effort
+            ) {
                 return 0;
             }
             let visible_rows = picker.filtered.len() as u16;
@@ -32,8 +40,15 @@ pub(super) fn inline_ui_height(app: &dyn TuiState) -> u16 {
 
 pub(super) fn draw_inline_ui(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
     match app.inline_ui_state() {
+        // Both pickers draw through the command-palette surface rather than the
+        // bordered one; the kind now says which, instead of the effort picker
+        // having to impersonate the model picker to be drawn at all.
         Some(crate::tui::operant_app::tui_fns::InlineUiStateRef::Interactive(picker))
-            if picker.kind != crate::tui::operant_app::tui_fns::PickerKind::Model =>
+            if !matches!(
+                picker.kind,
+                crate::tui::operant_app::tui_fns::PickerKind::Model
+                    | crate::tui::operant_app::tui_fns::PickerKind::Effort
+            ) =>
         {
             super::inline_interactive_ui::draw_inline_interactive(frame, app, area)
         }

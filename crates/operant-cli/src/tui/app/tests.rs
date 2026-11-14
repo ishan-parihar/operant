@@ -16480,3 +16480,144 @@ fn probe_ctrl_p_claims_a_history_meaning_somewhere() {
         app.prompt_input.history_pos, app.prompt_input.text
     );
 }
+
+// ── the effort picker's own surface (model plan M1, 2026-11-15) ─────────────
+//
+// The effort picker used to be `PickerKind::Model` with effort-shaped rows, so
+// its rows ran the MODEL apply arm: choosing a level set `pending_model` to the
+// row's rendered LABEL — symbol and all — and the agent was asked to switch to a
+// model by that name. The rows also carried display names (`normal`, `max`) as
+// their wire values, which the `/effort-set` validator rejects.
+//
+// These pin the two halves: the surface declares itself, and the wire value is a
+// real one.
+mod effort_picker_surface {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    /// The wire vocabulary `/effort-set` validates against (`commands.rs`). The
+    /// test spells it out rather than importing it, because the defect was a
+    /// DRIFT between two lists — a shared constant would hide the next one.
+    const WIRE: &[&str] = &["", "minimal", "low", "medium", "high", "xhigh"];
+
+    fn rows() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("\u{25cb}", "low"),
+            ("\u{25d0}", "medium"),
+            ("\u{25d5}", "high"),
+            ("\u{25cf}", "xhigh"),
+        ]
+    }
+
+    #[test]
+    fn an_effort_row_sets_an_effort_and_never_a_model() {
+        for (symbol, wire) in rows() {
+            let mut app = make_app();
+            let model_before = app.model_name.clone();
+            let config_before = app.config.agent.model.clone();
+
+            app.open_effort_picker_inline("");
+            let kind = app
+                .inline_interactive
+                .as_ref()
+                .map(|p| p.kind)
+                .expect("the effort picker opens");
+            assert_eq!(
+                kind,
+                crate::tui::operant_app::tui_fns::PickerKind::Effort,
+                "the effort surface must declare its own kind, not the model one"
+            );
+
+            // Every row's wire value must be one the operator-facing validator
+            // accepts; `normal` and `max` were not.
+            for entry in &app.inline_interactive.as_ref().expect("picker").entries {
+                let wire = entry
+                    .effort
+                    .as_deref()
+                    .expect("an effort row carries a wire");
+                assert!(
+                    WIRE.contains(&wire),
+                    "{symbol}: wire value {wire:?} is not in the vocabulary {WIRE:?}"
+                );
+            }
+
+            // Select THIS row and press Enter, the real path.
+            let target = app
+                .inline_interactive
+                .as_ref()
+                .expect("picker")
+                .entries
+                .iter()
+                .position(|e| e.effort.as_deref() == Some(wire))
+                .expect("the row exists");
+            if let Some(picker) = app.inline_interactive.as_mut() {
+                picker.selected = target;
+            }
+            app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+            assert!(
+                app.pending_model.is_none(),
+                "{symbol} {wire}: an effort row must not set a model"
+            );
+            assert_eq!(
+                app.model_name, model_before,
+                "{symbol} {wire}: the displayed model must not move"
+            );
+            assert_eq!(
+                app.config.agent.model, config_before,
+                "{symbol} {wire}: the configured model must not move"
+            );
+            assert_eq!(
+                app.pending_effort.as_deref(),
+                Some(wire),
+                "{symbol} {wire}: the row's wire value must be the one applied"
+            );
+        }
+    }
+
+    #[test]
+    fn the_effort_rows_read_as_their_wire_levels() {
+        let mut app = make_app();
+        app.open_effort_picker_inline("");
+        let picker = app.inline_interactive.as_ref().expect("picker");
+        // The label carries the wire level, not the display word, so what the
+        // operator reads is what will be sent.
+        for (symbol, wire) in rows() {
+            let want = format!("{symbol} {wire}");
+            assert!(
+                picker.entries.iter().any(|e| e.name == want),
+                "the row {want:?} must be offered; got {:?}",
+                picker
+                    .entries
+                    .iter()
+                    .map(|e| e.name.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn the_effort_picker_reserves_no_layout_rows() {
+        // The model picker returns 0 from the height calculation because it
+        // replaces the command suggestions rather than reflowing chat. The effort
+        // picker is the same surface shape and must do the same; on the counted
+        // path it claimed a block of up to twenty rows for four levels.
+        //
+        // `inline_ui_height` is private to `operant_ui`, so this asserts the fact
+        // it is derived from — the kind it branches on — rather than reaching
+        // into that module for a test-only export.
+        let mut app = make_app();
+        app.open_effort_picker_inline("");
+        let kind = app
+            .inline_interactive
+            .as_ref()
+            .map(|p| p.kind)
+            .expect("the picker is open");
+        assert_eq!(
+            kind,
+            crate::tui::operant_app::tui_fns::PickerKind::Effort,
+            "the height calculation returns 0 for Model and Effort; any other kind \
+             reserves rows above the composer"
+        );
+    }
+}

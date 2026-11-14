@@ -3240,6 +3240,7 @@ impl App {
                     return true;
                 };
                 let entry = picker.entries[idx].clone();
+                let picker_kind = picker.kind;
                 // Column drill (jcode): a multi-option row steps into its
                 // options before applying; a one-option row applies at once.
                 if picker.column == 0 && entry.options.len() > 1 {
@@ -3251,7 +3252,14 @@ impl App {
                     return true;
                 }
                 self.inline_interactive = None;
-                self.apply_inline_picker_entry(&entry);
+                // (2026-11-15, model plan M1) The kind travels with the row.
+                // The apply step used to infer the surface from the ROW's action,
+                // which is how an effort row — an ordinary `PickerAction::Model`
+                // carrying an effort in a side field — set the conversation model
+                // to its own display label. The surface declares itself; the row
+                // no longer has to be shaped like a model for the surface to be
+                // reached.
+                self.apply_inline_picker_entry(picker_kind, &entry);
                 true
             }
             // (plan 2026-10-30) The three chords the picker's footer has
@@ -3314,8 +3322,39 @@ impl App {
     /// it and the config persists from there. A `ModelSlot` row ASSIGNS that
     /// slot's model (a role row never moves the conversation): it persists the
     /// slot's config key and reports, exactly the oh-my-pi rule.
-    fn apply_inline_picker_entry(&mut self, entry: &crate::tui::operant_app::tui_fns::PickerEntry) {
+    ///
+    /// (2026-11-15, model plan M1) The SURFACE decides which drain a row feeds,
+    /// not the row's action. An effort row is an ordinary `PickerAction::Model`
+    /// carrying its level in `PickerEntry::effort`, so keying on the action alone
+    /// sent `pending_model = Some("◕ high")` — the row's rendered label, symbol
+    /// and all — and `agent.set_model` was handed a string no provider can serve,
+    /// while `app.model_name` and `config.agent.model` were overwritten with it.
+    /// The kind is now the discriminator, so an effort row can never reach the
+    /// model drain and a model row can never be mistaken for a level.
+    fn apply_inline_picker_entry(
+        &mut self,
+        kind: crate::tui::operant_app::tui_fns::PickerKind,
+        entry: &crate::tui::operant_app::tui_fns::PickerEntry,
+    ) {
         use crate::tui::operant_app::tui_fns::PickerAction;
+        use crate::tui::operant_app::tui_fns::PickerKind;
+        // An effort row sets an effort and nothing else. It has no model to set,
+        // and taking the model branch is the defect this arm exists to prevent.
+        if kind == PickerKind::Effort {
+            match entry.effort.clone() {
+                Some(wire) => {
+                    self.pending_effort = Some(wire.clone());
+                    self.set_status_notice(format!("Effort: {wire} (applying…)"));
+                }
+                // An effort row with no wire value would silently do nothing,
+                // which is the shape the phantom-surface rule forbids: say so
+                // rather than closing the picker on a no-op.
+                None => self.set_status_notice(
+                    "That row carries no effort level — nothing to apply.".to_string(),
+                ),
+            }
+            return;
+        }
         match entry.action {
             PickerAction::Model => {
                 self.pending_model = Some(entry.name.clone());
