@@ -629,7 +629,12 @@ pub(super) fn slot_role_rows(
             name: summary.slot.name().to_string(),
             options: vec![PickerOption {
                 provider: summary.models.join(", "),
-                api_method: if summary.switches_conversation {
+                api_method: if summary.models.is_empty() {
+                    // (model plan M6) An unassigned slot says so on the row
+                    // rather than offering an empty one the operator has to
+                    // press Enter on to discover.
+                    "unassigned"
+                } else if summary.switches_conversation {
                     "switches conversation"
                 } else {
                     "assignment only"

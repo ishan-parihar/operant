@@ -97,6 +97,33 @@ pub const ALL_SLOTS: [ModelSlot; 8] = [
     ModelSlot::MoaReference,
 ];
 
+/// What a slot's acceptance predicate decided.
+///
+/// (model plan M6) Three states, not two: a slot that cannot verify its model
+/// must not be indistinguishable from one that accepts it, because the operator's
+/// next move differs — nothing to do, versus "the catalogue has no row for this
+/// model".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleAcceptance {
+    /// The model is the right shape for this slot's consumer.
+    Accepts,
+    /// No catalogue row: nothing is known, so nothing is refused.
+    Unverified,
+    /// Positive evidence the model is the wrong shape; the reason names what the
+    /// consumer needs.
+    Refuses(&'static str),
+}
+
+impl RoleAcceptance {
+    /// The reason to show the operator, or `None` when there is nothing to say.
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            RoleAcceptance::Refuses(why) => Some(why),
+            RoleAcceptance::Accepts | RoleAcceptance::Unverified => None,
+        }
+    }
+}
+
 impl ModelSlot {
     /// The name an operator types and the picker labels the row with.
     ///
@@ -114,6 +141,55 @@ impl ModelSlot {
             ModelSlot::Memory => "slow",
             ModelSlot::MoaAggregator => "aggregator",
             ModelSlot::MoaReference => "reference",
+        }
+    }
+
+    /// What the model must be able to do for THIS slot's consumer.
+    ///
+    /// (model plan M6) omp gives every role an `accepts(model)` predicate
+    /// (`model-roles.ts:36-51`), and that is what lets a role surface filter the
+    /// catalogue before the operator chooses rather than after the provider
+    /// rejects the request. The rule is the narrowest one each consumer
+    /// actually needs:
+    ///
+    /// - chat-shaped (text in) for the six slots whose consumer sends text:
+    ///   `Conversation`, `Fallback`, `Recap`, `Compression`, `Memory`,
+    ///   `MoaAggregator`, `MoaReference`;
+    /// - image-capable for `Vision`, whose only input is an image.
+    ///
+    /// Unknown metadata is `Unverified`, never a refusal: the catalogue covers
+    /// mapped providers only, so "no row" is the common case and must not lock
+    /// the operator out of their own config. Only positive evidence of the wrong
+    /// shape refuses — the same rule M3 settled for effort.
+    pub fn accepts(
+        self,
+        capabilities: Option<&crate::models_dev::ModelCapabilities>,
+    ) -> RoleAcceptance {
+        let Some(caps) = capabilities else {
+            return RoleAcceptance::Unverified;
+        };
+        let chat_shaped = caps
+            .input_modalities
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("text"));
+        match self {
+            // The only slot whose input is an image; text-only is the wrong shape.
+            ModelSlot::Vision => {
+                if caps.supports_vision {
+                    RoleAcceptance::Accepts
+                } else {
+                    RoleAcceptance::Refuses("vision needs an image-capable model")
+                }
+            }
+            _ => {
+                if chat_shaped || caps.input_modalities.is_empty() {
+                    RoleAcceptance::Accepts
+                } else {
+                    RoleAcceptance::Refuses(
+                        "this slot sends text, and the model takes no text input",
+                    )
+                }
+            }
         }
     }
 
@@ -790,5 +866,68 @@ mod tests {
         cfg.agent.model = String::new();
         let text = describe_slots(&cfg);
         assert!(text.contains("[agent] model"), "{text}");
+    }
+
+    /// (model plan M6) A role's acceptance predicate is what lets the surface
+    /// refuse at the moment of choosing rather than at the provider.
+    #[test]
+    fn the_vision_slot_refuses_a_text_only_model_and_accepts_an_image_one() {
+        use crate::models_dev::ModelCapabilities;
+        let text_only = ModelCapabilities {
+            context_window: Some(128_000),
+            max_output: Some(8_192),
+            supports_tools: true,
+            supports_vision: false,
+            supports_reasoning: false,
+            supports_structured_output: true,
+            input_modalities: vec!["text".to_string()],
+            output_modalities: vec!["text".to_string()],
+            cost_input_per_million: None,
+            cost_output_per_million: None,
+        };
+        assert_eq!(
+            ModelSlot::Vision.accepts(Some(&text_only)),
+            RoleAcceptance::Refuses("vision needs an image-capable model"),
+            "a text-only model must be refused for the slot whose only input is an image"
+        );
+        let image_capable = ModelCapabilities {
+            supports_vision: true,
+            input_modalities: vec!["text".to_string(), "image".to_string()],
+            ..text_only.clone()
+        };
+        assert_eq!(
+            ModelSlot::Vision.accepts(Some(&image_capable)),
+            RoleAcceptance::Accepts
+        );
+    }
+
+    #[test]
+    fn a_chat_slot_refuses_an_image_only_model_and_unknown_metadata_is_not_a_refusal() {
+        use crate::models_dev::ModelCapabilities;
+        let image_only = ModelCapabilities {
+            context_window: None,
+            max_output: None,
+            supports_tools: false,
+            supports_vision: true,
+            supports_reasoning: false,
+            supports_structured_output: false,
+            input_modalities: vec!["image".to_string()],
+            output_modalities: vec!["text".to_string()],
+            cost_input_per_million: None,
+            cost_output_per_million: None,
+        };
+        assert!(
+            ModelSlot::Conversation
+                .accepts(Some(&image_only))
+                .refusal()
+                .is_some(),
+            "a slot whose consumer sends text must refuse a model that takes none"
+        );
+        assert_eq!(
+            ModelSlot::Conversation.accepts(None),
+            RoleAcceptance::Unverified,
+            "no catalogue row is not evidence of the wrong shape"
+        );
+        assert!(ModelSlot::Conversation.accepts(None).refusal().is_none());
     }
 }

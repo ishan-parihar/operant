@@ -3522,6 +3522,27 @@ impl App {
                 // picker assigns the FIRST model of a list-shaped slot, which
                 // is exactly what its own consumer reads.
                 let head = model.split(',').next().unwrap_or("").trim().to_string();
+                // (model plan M6) The slot's acceptance predicate, checked BEFORE
+                // anything is written. Assigning a text-only model to `Vision` is
+                // a row that looks right and fails on the first image; omp's
+                // `accepts(model)` is what lets the surface say so at the moment
+                // of choosing (`model-roles.ts:36-51`). Unknown metadata is not a
+                // refusal — the catalogue covers mapped providers only.
+                let provider = crate::provider::provider_from_url(
+                    self.config.client.base_url.trim_end_matches('/'),
+                )
+                .map(|p| p.name)
+                .unwrap_or_default();
+                let capabilities = operant_core::models_dev::cached_capabilities(&provider, &head);
+                if let Some(why) = slot.accepts(capabilities.as_ref()).refusal() {
+                    self.set_status_notice(format!(
+                        "{} slot refuses {}: {}",
+                        slot.name(),
+                        head,
+                        why
+                    ));
+                    return;
+                }
                 let outcome =
                     match operant_core::config::persist_config_key(slot.persist_key(), &head) {
                         Ok(path) => {
@@ -3601,6 +3622,30 @@ fn slot_with_model(
 
 #[cfg(test)]
 mod tests {
+    /// (model plan M6) Assigning a non-`Conversation` slot is an assignment,
+    /// not a switch: the live conversation keeps whatever it was on. Two
+    /// independent implementations (operant's `ModelSlot` doc and omp's
+    /// `selector-controller.ts:1019-1029`) state the same rule.
+    #[test]
+    fn a_non_conversation_assignment_leaves_the_live_model_alone() {
+        let mut app = crate::tui::app::tests::make_app();
+        let before = app.config.agent.model.clone();
+        app.apply_slot_to_config(operant_core::model_roles::ModelSlot::Memory, "tiny-model");
+        assert_eq!(
+            app.config.agent.model, before,
+            "the conversation model must not move for a side-channel slot"
+        );
+        assert!(
+            app.pending_model.is_none(),
+            "nothing may be queued for the live agent"
+        );
+        assert_eq!(
+            app.config.auxiliary_models.memory.and_then(|m| m.model),
+            Some("tiny-model".to_string()),
+            "the slot itself must be assigned"
+        );
+    }
+
     /// Assigning a slot's MODEL must not discard the slot's ROUTE.
     ///
     /// The durable copy keeps the endpoint and the credential
