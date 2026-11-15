@@ -29,6 +29,20 @@ use super::*;
 #[cfg(test)]
 const MAX_TRAJECTORIES_KEPT: usize = 200;
 
+/// Token ceiling on the transcript snapshot one background review may carry.
+///
+/// The review's snapshot was bounded by a message COUNT (40), which is a poor
+/// proxy for cost: forty one-line answers are nothing and forty pasted files
+/// overflow the review model's window, and the failure is silent in the same way
+/// the advisor's was -- the review is spawned, the call fails, and the only trace
+/// is a log line on a path whose whole output is optional.
+///
+/// Matches the advisor's and recap's ceilings: the three are the same class of
+/// disposable side call over the same class of transcript, and a review that
+/// needs more than this to read the recent conversation is not reading the
+/// recent conversation.
+pub(crate) const REVIEW_VIEW_TOKEN_BUDGET: usize = 8_000;
+
 /// Drop the oldest trajectory files so at most `keep` remain.
 ///
 /// `keep` of 0 means keep them all — the default.
@@ -453,9 +467,30 @@ impl OperantAgent {
         };
 
         // ── Snapshot the conversation ─────────────────────────────────
-        // Limit to last 40 messages to keep token usage reasonable.
+        // Bounded TWICE, for two different reasons.
+        //
+        // A message COUNT (40) bounds how much history the review reads, and it
+        // is a poor proxy for cost: forty one-line answers are nothing, and forty
+        // pasted files are a context-window overflow. So the count stays as the
+        // policy ("the recent conversation") and a TOKEN ceiling is applied to it
+        // with the shared helper -- the same guard the advisor got in iter-2398
+        // and recap has had since iter-2345.
+        //
+        // The count is applied first so a huge transcript does not allocate a
+        // token estimate over its whole length; the token fit then cuts the
+        // tail.
         let start = messages.len().saturating_sub(40);
-        let snapshot: Vec<Message> = messages[start..].to_vec();
+        let snapshot = crate::context_management::fit_messages_to_token_budget(
+            messages[start..].to_vec(),
+            REVIEW_VIEW_TOKEN_BUDGET,
+        );
+        if snapshot.is_empty() {
+            warn!(
+                "background review snapshot emptied by the token budget — the newest \
+                 message alone exceeds it; review skipped rather than run on nothing"
+            );
+            return;
+        }
 
         // ── Tool whitelist: only memory + skill tools ─────────────────
         // The review agent should ONLY have access to memory and skill
@@ -597,8 +632,13 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     // stays the outer bound — a daemon that writes every round
                     // runs to it unchanged.
                     let mut no_write_rounds = 0usize;
+                    // Iterations actually run, so the completion log can tell a
+                    // review that looked and found nothing from one that hit the
+                    // cap. `review_iter` is out of scope by then.
+                    let mut iterations_run = 0usize;
 
                     for review_iter in 0..MAX_REVIEW_ITERATIONS {
+                        iterations_run = review_iter + 1;
                         debug!(
                             iteration = review_iter + 1,
                             max = MAX_REVIEW_ITERATIONS,
@@ -653,6 +693,37 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                                 );
                             }
                             break;
+                        }
+
+                        // ── The staged budget: "finalize now", then stop ─────
+                        //
+                        // The iteration cap was a CLIFF: at iteration 5 the loop
+                        // simply ended, so a review mid-way through a tool
+                        // sequence lost whatever it had done and produced no
+                        // report at all. The reference implementation's dreamer
+                        // does this in two stages instead -- first a soft message
+                        // that says the budget is spent and asks for the result
+                        // now, and only then, if the agent ignores it, a refusal.
+                        //
+                        // One stage is enough here, because the loop already has a
+                        // hard stop: this is the soft half. It fires on the LAST
+                        // iteration (not the penultimate), so a review that would
+                        // have finished anyway is never interrupted, and a review
+                        // that was going to be cut off gets one turn to report.
+                        //
+                        // The message is appended as a USER turn so the model sees
+                        // it as an instruction from the host rather than as its own
+                        // reasoning.
+                        if review_iter + 1 == MAX_REVIEW_ITERATIONS {
+                            info!(
+                                session_id = %session_id,
+                                "Background review reached its last iteration — asking for the result now"
+                            );
+                            review_messages.push(Message::user(
+                                "You are out of iteration budget. Do not make any more tool \
+                                 calls. Report what you changed, or say 'Nothing to save.'"
+                                    .to_string(),
+                            ));
                         }
 
                         // Add assistant message to review conversation
@@ -816,9 +887,19 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                                 .await;
                         }
                     } else {
-                        debug!(
+                        // INFO, not debug, and with the iteration count. A review
+                        // that ran its full budget and changed nothing is a
+                        // DIFFERENT outcome from one that was never spawned, and
+                        // at debug level the two were indistinguishable in every
+                        // log the operator actually reads. The iteration count is
+                        // what separates "looked and found nothing" (few
+                        // iterations, clean exit) from "thrashed and gave up" (hit
+                        // the cap), which is the distinction that tells an
+                        // operator whether the review is worth its spend.
+                        info!(
                             session_id = %session_id,
-                            "Background review completed — no actions taken"
+                            iterations = iterations_run,
+                            "Background review completed with no changes"
                         );
                     }
 
