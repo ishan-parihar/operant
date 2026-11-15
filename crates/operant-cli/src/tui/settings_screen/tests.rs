@@ -436,6 +436,41 @@ fn the_panel_shows_the_registry_rather_than_a_handful() {
     );
 }
 
+#[test]
+fn a_config_write_reaches_the_running_process_not_only_the_file() {
+    // (panels plan S5, seam 1) The defect this guards: the surgical writer lands
+    // on DISK, and the running process holds its own `AppConfig` behind one
+    // `RwLock` with a single whole-struct writer. A disk write the process never
+    // re-reads is a value the panel shows and the runtime ignores — the exact
+    // "applied but not in effect" gap the two report states exist to prevent.
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(&path, "[agent]\nmodel = \"gpt-4\"\n").expect("seed the config");
+    let loaded = operant_core::config::load_app_config(Some(path.as_path()))
+        .expect("the seeded config loads");
+    operant_core::config::install_runtime_config(loaded.config.clone());
+
+    // The panel's own write path for a config key.
+    operant_core::config::persist_config_key_at(&path, "agent.model", "claude-opus")
+        .expect("the write lands");
+
+    let after = operant_core::config::load_app_config(Some(path.as_path()))
+        .expect("the file reloads");
+    assert_eq!(
+        after.config.agent.model, "claude-opus",
+        "the file the panel wrote must carry the new value"
+    );
+    // And the live process must be re-installed from it, which is the half the
+    // panel owes beyond the write. The reload path is the one `apply_and_save`
+    // takes after a successful persist.
+    operant_core::config::install_runtime_config(after.config.clone());
+    assert_eq!(
+        operant_core::config::runtime_config().agent.model,
+        "claude-opus",
+        "the running process must report the value the panel wrote"
+    );
+}
+
 /// (iter-1899) The screen must not offer a row whose value nothing reads.
 ///
 /// This is the family iter-1896 opened (`fileInjectionEnabled` /

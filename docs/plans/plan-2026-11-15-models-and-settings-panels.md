@@ -568,7 +568,7 @@ makes the gateway retention automatic rather than a special case.
 
 ---
 
-### S5 — Red-team and audit pass
+### S5 — Red-team and audit pass  **[SHIPPED — iter-2437]**
 
 **Problem.** Three new surfaces over a shared config, with a generated table
 between them.

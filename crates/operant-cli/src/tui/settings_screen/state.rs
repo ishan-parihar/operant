@@ -329,11 +329,38 @@ impl SettingsScreen {
                 }
             }
         }
-        // The panel writes config keys through the surgical writer above; the
-        // runtime's whole-struct install is a reload, so re-read it here rather
-        // than leaving the panel showing a value the process no longer holds.
-        if let Ok(fresh) = Settings::load_sync() {
-            let _ = &fresh;
+        // The panel writes config keys through the surgical writer above, which
+        // lands on DISK. The running process holds its own `AppConfig` behind
+        // one `RwLock` with a single whole-struct writer, so a disk write the
+        // process never re-reads is a value the panel shows and the runtime
+        // ignores — the exact "applied but not in effect" gap the two report
+        // states exist to prevent.
+        //
+        // So reload and re-install. A reload failure is REPORTED rather than
+        // swallowed: the key is on disk, and the operator must be told the live
+        // process did not pick it up rather than being left to assume it did.
+        // No config FILE means there is nothing to reload: the key went to
+        // whatever path this process loaded, and an environment that has no file
+        // at all is a sandbox or a test, not a failed reload. Warning there
+        // would report a problem the operator cannot act on.
+        if let Some(path) = operant_core::config::loaded_config_path() {
+            match operant_core::config::load_app_config(Some(path.as_path())) {
+                Ok(loaded) => {
+                    operant_core::config::install_runtime_config(loaded.config.clone());
+                    *config = loaded.config;
+                }
+                Err(error) => {
+                    // Do not CLOBBER a warning the write already raised: when the
+                    // persist failed the file is absent, so the reload fails for
+                    // the same reason and saying it twice hides the one the
+                    // operator acts on — which row, which value, not persisted.
+                    if self.persist_warning.is_none() {
+                        self.persist_warning = Some(format!(
+                            "saved to disk, but the running process did not reload it: {error}"
+                        ));
+                    }
+                }
+            }
         }
         // The snapshot is rebuilt wholesale below, and until iter-1176 that
         // rebuild ALSO threw away values the screen does not edit:

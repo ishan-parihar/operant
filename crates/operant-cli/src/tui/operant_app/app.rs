@@ -748,14 +748,30 @@ mod crossover_surface_tests {
     fn the_command_catalogue_is_untouched_by_the_crossover() {
         let all: Vec<&str> = REGISTERED_COMMANDS.iter().map(|c| c.name).collect();
         let local: Vec<&str> = locally_visible_command_rows().map(|(n, _)| n).collect();
-        // 114 rows are WRITTEN and one is `#[cfg(any())]`, so the live catalogue
-        // is 113: 107 public + 6 hidden, less the disabled one.
-        assert_eq!(all.len(), 113, "the catalogue changed size");
-        // Locally visible = live less hidden less remote-only = 113 - 6 - 2.
+        // NO exact count. A pinned total is correct for exactly one commit: a
+        // peer added `/bar` between S4 and S5 and this assertion went red on a
+        // table that was perfectly healthy. What the crossover must not do is
+        // SHRINK the catalogue, so the invariant is a floor and the arithmetic
+        // between the two views — not a number anyone has to update.
+        assert!(
+            all.len() >= 110,
+            "the catalogue shrank to {} — a panel replaced a command instead of              fronting it",
+            all.len()
+        );
+        // Locally visible is the live set less the hidden and remote-only rows.
+        let hidden = REGISTERED_COMMANDS.iter().filter(|c| c.hidden).count();
+        let remote = REGISTERED_COMMANDS
+            .iter()
+            .filter(|c| c.remote_only)
+            .count();
         assert_eq!(
+            local.len() + hidden + remote,
+            all.len(),
+            "the three views of the table disagree: {} local + {} hidden + {} remote              != {} total",
             local.len(),
-            105,
-            "the locally-visible set changed size (113 less 6 hidden and 2 remote-only)"
+            hidden,
+            remote,
+            all.len()
         );
         // Every panel command is in BOTH views, so a channel still sees it.
         for (name, _) in PANEL_COMMANDS {
