@@ -152,7 +152,7 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut AppConfig) 
                         screen.settings_snapshot.config.output_style = Some(new_value.to_string());
                         let _ = screen.settings_snapshot.save_sync();
                     }
-                    "bar_style" => {
+                    "tui.bar_style" => {
                         if let Err(message) = screen.apply_bar_style(config, new_value) {
                             screen.apply_error = Some(message);
                         }
@@ -160,8 +160,18 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut AppConfig) 
                     _ => {}
                 }
             }
-            SettingKind::Number => {
+            SettingKind::Number | SettingKind::Text => {
                 screen.start_edit(entry.key, &entry.value);
+            }
+            // A key nothing reads is never written. Enter on it says so rather
+            // than doing nothing, because a row that silently ignores the
+            // operator is the phantom surface the registry's `live` flag exists
+            // to keep out of the panel in the first place.
+            SettingKind::Unread => {
+                screen.apply_error = Some(format!(
+                    "{} is accepted but unread — no code reads it, so the panel cannot change it.",
+                    entry.key
+                ));
             }
         }
     }

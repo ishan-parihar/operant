@@ -96,12 +96,27 @@ fn every_settings_entry_has_an_applier() {
         .expect("apply_and_save reaches its save")
         .0;
 
+    // (panels plan S2) Every CONFIG row is handled by ONE generic arm that
+    // writes any known key through `persist_config_key`, so the per-key grep
+    // this test used to run is now the wrong shape: it would demand 385 match
+    // arms the design deliberately does not have. What still must not happen is
+    // a row the applier DROPS — so the generic arm is asserted to exist, and a
+    // row whose key is not a known config key is the failure.
+    assert!(
+        applier.contains("persist_config_key"),
+        "the generic config arm must be present: without it every registry row          renders, stores into pending_changes, and is silently discarded"
+    );
     let mut unhandled = Vec::new();
     for entry in &entries {
-        // `SettingsEntry::key` is a `&'static str`, so a borrow is all the
-        // pattern needs. (`entry.key.as_str()` does not compile:
-        // `str::as_str` is unstable on this toolchain — and reaching for it
-        // at all is the tell that the type was guessed instead of read.)
+        // A row that writes `settings.json` needs its own arm; a row that
+        // writes `operant.toml` is carried by the generic arm, provided the key
+        // is one the loader knows.
+        if entry.store == crate::tui::settings_screen::SettingStore::Config {
+            if !operant_core::config_registry::KNOWN_KEYS.contains(&entry.key) {
+                unhandled.push(entry.key);
+            }
+            continue;
+        }
         let quoted = format!("\"{}\"", entry.key);
         if !applier.contains(&quoted) {
             unhandled.push(entry.key);
@@ -255,10 +270,41 @@ fn all_entries_returns_expected_settings() {
         "Should have at least 12 editable settings, got {}",
         entries.len()
     );
+    // (panels plan S2) The panel is a projection of the generated registry, so
+    // the count is the registry's own size rather than a hand-kept number. The
+    // floor catches a registry that stopped being read; the ceiling catches a
+    // row list that grew a second copy of the table.
+    // Only rows the generator could type reach the panel: an f64 ratio or a
+    // HashMap has no single-line editor, so `Widget::None`/`Unsupported` are
+    // omitted by design. The drawn count is therefore BELOW the live count, and
+    // the gap is the honest-omission set.
+    let live_rows = operant_core::config_registry::SETTING_ROWS
+        .iter()
+        .filter(|row| row.live)
+        .count();
+    let drawable = operant_core::config_registry::SETTING_ROWS
+        .iter()
+        .filter(|row| {
+            row.live
+                && !matches!(
+                    row.widget,
+                    operant_core::config_registry::Widget::None
+                        | operant_core::config_registry::Widget::Unsupported
+                )
+        })
+        .count();
     assert!(
-        entries.len() <= 10,
-        "Should have at most 16 editable settings, got {}",
-        entries.len()
+        entries.len() >= drawable,
+        "the panel drew {} rows but the registry offers {} editable ones",
+        entries.len(),
+        drawable
+    );
+    // The TUI's own `settings.json` rows sit on top, so a small excess is the
+    // five declared here; a large one is a second table.
+    assert!(
+        entries.len() <= drawable + 10,
+        "the panel added {} rows beyond the registry, which is a second table",
+        entries.len() - drawable
     );
 }
 
@@ -268,12 +314,12 @@ fn search_filters_entries_correctly() {
     let all = all_entries(&screen);
     let filtered: Vec<_> = all
         .iter()
-        .filter(|e| e.label.to_lowercase().contains("context"))
+        .filter(|e| e.label.to_lowercase().contains("context window"))
         .collect();
     assert_eq!(
         filtered.len(),
         1,
-        "Should find exactly 1 entry matching 'token'"
+        "the search must narrow to one row: {filtered:?}"
     );
     assert_eq!(filtered[0].label, "Context window");
 }
@@ -284,7 +330,7 @@ fn toggle_bool_entry_flips_value() {
     // (iter-1900) "notifications" was here until its dead row went; reduce
     // motion is live, so the row this exercises is a real one.
     screen.reduce_motion = false;
-    screen.open(AppConfig::default().agent.context_window);
+    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
 
     let initial = screen.reduce_motion;
     let all = all_entries(&screen);
@@ -322,6 +368,72 @@ fn cycle_enum_entry_wraps_around() {
 
     idx = (idx + 1) % options.len();
     assert_eq!(options[idx], "default"); // Wraps around
+}
+
+// ---------------------------------------------------------------------------
+// Panels plan S2: the panel is a projection of the generated registry. These
+// generalize the hand-kept dead-key list below to the registry itself.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_row_the_config_calls_unread_reaches_the_panel() {
+    // The phantom-surface guard at the panel edge. A row whose key the config
+    // reports as accepted-but-unread is a control that does nothing, and the
+    // registry marks it `live: false` for exactly this reason. The list below
+    // is the hand-found version of this test; this one asks the registry, so a
+    // key parked tomorrow is caught without anyone adding it here.
+    let screen = with_sandbox_home(SettingsScreen::new);
+    for entry in all_entries(&screen) {
+        let Some(row) = operant_core::config_registry::SETTING_ROWS
+            .iter()
+            .find(|row| row.key == entry.key)
+        else {
+            continue; // a TUI-local `settings.json` row: no registry entry by design
+        };
+        assert!(
+            row.live,
+            "/settings offers `{}`, which the config reports as accepted but unread",
+            entry.key
+        );
+    }
+}
+
+#[test]
+fn every_config_row_is_writable_through_the_one_seam() {
+    // A CONFIG row whose key the loader does not know is refused by the generic
+    // arm, so the operator's edit renders, stores, and vanishes.
+    let screen = with_sandbox_home(SettingsScreen::new);
+    for entry in all_entries(&screen) {
+        if entry.store != crate::tui::settings_screen::SettingStore::Config {
+            continue;
+        }
+        assert!(
+            operant_core::config_registry::KNOWN_KEYS.contains(&entry.key),
+            "`{}` is drawn as a config row but is not a known config key",
+            entry.key
+        );
+    }
+}
+
+#[test]
+fn the_panel_shows_the_registry_rather_than_a_handful() {
+    // The point of S2. A revert to a small literal list fails here.
+    let screen = with_sandbox_home(SettingsScreen::new);
+    let entries = all_entries(&screen);
+    assert!(
+        entries.len() > 100,
+        "the panel drew only {} rows — the registry is not being read",
+        entries.len()
+    );
+    let sections: std::collections::HashSet<&str> = entries
+        .iter()
+        .filter_map(|e| e.key.split('.').next())
+        .collect();
+    assert!(
+        sections.len() >= 5,
+        "the panel covers only {} config sections: {sections:?}",
+        sections.len()
+    );
 }
 
 /// (iter-1899) The screen must not offer a row whose value nothing reads.
@@ -368,7 +480,7 @@ fn the_settings_screen_offers_no_unread_row() {
     }
     // And the rows that DO something are still there.
     for live in [
-        "context_window",
+        "agent.context_window",
         "output_style",
         "reduce_motion",
         "show_cwd",
@@ -432,7 +544,7 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
     // five rows and the old estimate (ten) disagreed with the real window.
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let mut screen = SettingsScreen::new();
-    screen.open(AppConfig::default().agent.context_window);
+    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
     let total = all_entries(&screen).len();
 
     for step in 0..total {
@@ -483,7 +595,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("context_window".to_string(), "200000".to_string());
+        .insert("agent.context_window".to_string(), "200000".to_string());
     screen.apply_and_save(&mut config, &mut settings);
     assert_eq!(config.agent.context_window, 200000);
     assert_eq!(screen.apply_error, None, "a valid value reports no error");
@@ -494,7 +606,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("context_window".to_string(), "4096".to_string());
+        .insert("agent.context_window".to_string(), "4096".to_string());
     screen.apply_and_save(&mut config, &mut settings);
     assert_eq!(
         config.agent.context_window,
@@ -512,7 +624,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("context_window".to_string(), "abc".to_string());
+        .insert("agent.context_window".to_string(), "abc".to_string());
     screen.apply_and_save(&mut config, &mut settings);
     assert_eq!(
         config.agent.context_window,
@@ -550,7 +662,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
             .collect()
     }
 
-    screen.open(AppConfig::default().agent.context_window);
+    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
     screen.apply_error =
         Some("Not a number: Context window \"abc\" — kept the previous value".to_string());
     let errored = painted(&screen);
@@ -589,7 +701,7 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
 #[test]
 fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
     let mut screen = SettingsScreen::new();
-    screen.open(AppConfig::default().agent.context_window);
+    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
     let rows = all_entries(&screen);
     assert!(
         !rows.iter().any(|r| r.key == "compact_threshold"),
@@ -643,7 +755,7 @@ fn a_settings_edit_survives_the_restart_it_promised() {
         let mut screen = SettingsScreen::new();
         screen
             .pending_changes
-            .insert("context_window".to_string(), "200000".to_string());
+            .insert("agent.context_window".to_string(), "200000".to_string());
         screen.apply_and_save(&mut config, &mut settings);
 
         // The live consumer sees it.
@@ -667,7 +779,7 @@ fn a_settings_edit_survives_the_restart_it_promised() {
         std::fs::remove_file(&toml_path).expect("remove the config so the write must fail");
         screen
             .pending_changes
-            .insert("context_window".to_string(), "300000".to_string());
+            .insert("agent.context_window".to_string(), "300000".to_string());
         screen.apply_and_save(&mut config, &mut settings);
         let warn = screen
             .persist_warning
@@ -739,7 +851,7 @@ fn the_bar_style_row_offers_every_style_and_shows_the_live_one() {
     let screen = SettingsScreen::new();
     let entry = all_entries(&screen)
         .into_iter()
-        .find(|entry| entry.key == "bar_style")
+        .find(|entry| entry.key == "tui.bar_style")
         .expect("the settings screen offers a bar-style row");
     let SettingKind::Enum { options } = entry.kind else {
         panic!("the bar-style row must be an enum, not a free-text field");
@@ -770,10 +882,10 @@ fn choosing_a_bar_style_changes_the_bar_without_a_restart() {
     let _guard = with_bar_style(SeparatorStyle::Dot);
     let (mut config, mut settings) = (AppConfig::default(), Settings::default());
     let mut screen = SettingsScreen::new();
-    screen.open(config.agent.context_window);
+    screen.open(config.agent.context_window, &config);
     let index = all_entries(&screen)
         .iter()
-        .position(|entry| entry.key == "bar_style")
+        .position(|entry| entry.key == "tui.bar_style")
         .expect("the bar-style row is offered");
     screen.selected_idx = index;
 
@@ -823,7 +935,7 @@ fn an_unknown_bar_style_is_reported_and_changes_nothing() {
     let mut screen = SettingsScreen::new();
     screen
         .pending_changes
-        .insert("bar_style".to_string(), "powerline-ish".to_string());
+        .insert("tui.bar_style".to_string(), "powerline-ish".to_string());
     screen.apply_and_save(&mut config, &mut settings);
 
     let error = screen

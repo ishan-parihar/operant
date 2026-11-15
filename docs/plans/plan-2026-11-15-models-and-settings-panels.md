@@ -379,7 +379,7 @@ structure is already the grouping the operator recognises from `operant.toml`.
 
 ---
 
-### S2 — The settings panel
+### S2 — The settings panel  **[SHIPPED — iter-2431]**
 
 **Problem.** 8 rows, three widget kinds, hand-written three times, two stores.
 

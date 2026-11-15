@@ -533,7 +533,7 @@ impl App {
             }
 
             "config" | "settings" => {
-                self.settings_screen.open(self.config.agent.context_window);
+                self.settings_screen.open(self.config.agent.context_window, &self.config);
                 true
             }
             "theme" | "skin" => {

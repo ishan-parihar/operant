@@ -20,6 +20,12 @@ pub enum SettingKind {
     Bool,
     Enum { options: Vec<&'static str> },
     Number,
+    /// Free text, parsed as the field's own type.
+    Text,
+    /// A key the config parses and no code reads. Rendered greyed, and never
+    /// written: a control that does nothing is the phantom surface the
+    /// registry's `live` flag exists to keep out of the panel.
+    Unread,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +35,19 @@ pub struct SettingsEntry {
     pub description: &'static str,
     pub kind: SettingKind,
     pub value: String,
+    /// Which store this row writes. The TUI's own visual state lives in
+    /// `settings.json` and must not leak into a shared `operant.toml`; every
+    /// other key is a config key. Carried on the row so no arm has to know.
+    pub store: SettingStore,
+}
+
+/// Where a row's value is persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingStore {
+    /// `settings.json` — the TUI's own per-profile visual state.
+    SettingsJson,
+    /// `operant.toml`, through `persist_config_key`.
+    Config,
 }
 
 pub struct SettingsScreen {
@@ -61,6 +80,13 @@ pub struct SettingsScreen {
     /// hand-edited TOML line, so the operator had eight styles and no way to
     /// reach one (plan 2026-11-15 U1).
     pub bar_style: String,
+    /// The bar styles `SeparatorStyle::ALL` offers, cached so a frame does not
+    /// rebuild the list per row.
+    pub bar_style_options: Vec<&'static str>,
+    /// The live `operant.toml` values, read once per open. A row the panel
+    /// draws from the registry reads its current value from here, so the panel
+    /// never reads the file per frame.
+    pub config_values: std::collections::HashMap<&'static str, String>,
     pub reduce_motion: bool,
     pub show_cwd: bool,
     pub show_git_branch: bool,
