@@ -4521,46 +4521,42 @@ fn test_fast_is_not_a_command() {
     assert!(!app.handle_tui_command("fast", ""));
 }
 
+/// (iter-2452) This used to cycle auto → stream → verbose. The setting it
+/// cycled is a phantom — nothing reads `App::output_style` — so the command now
+/// says so instead of reporting a change that does not happen. The test follows
+/// the command rather than the other way round.
 #[test]
-fn test_output_style_cycles() {
+fn test_output_style_says_so_instead_of_cycling() {
     let mut app = make_app();
-    assert_eq!(app.output_style, "auto");
     assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "stream");
-    assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "verbose");
-    assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "auto");
+    assert_eq!(
+        app.output_style, "auto",
+        "the retired command must not move a value nothing reads"
+    );
+    let notice = app.status_message.clone().unwrap_or_default();
+    assert!(
+        notice.contains("nothing reads") || notice.contains("No output style"),
+        "the refusal names the reason, not just the fact: {notice:?}"
+    );
 }
 
-/// An argument to `/output-style` names the level.
-///
-/// (iter-1773) The arm cycled whatever the argument was, so
-/// `/output-style verbose` moved the style to "stream" — the operator's level
-/// silently became the NEXT one. And an unknown level was accepted the same
-/// way, with no word about it.
+/// (iter-2452) This used to assert that `/output-style verbose` sets the level
+/// and that an unknown level leaves it alone. Both behaviours are gone with the
+/// phantom: an argument is now accepted and reported, not applied. Rewritten to
+/// pin the retirement, because the honest refusal is the property that matters —
+/// the command must never again claim a change it cannot make.
 #[test]
-fn output_style_takes_a_level_argument() {
+fn output_style_takes_any_argument_and_changes_nothing() {
     let mut app = make_app();
     assert!(app.handle_tui_command("output-style", "verbose"));
     assert_eq!(
-        app.output_style, "verbose",
-        "the named level must be set, not cycled past"
-    );
-
-    let mut app = make_app();
-    assert!(app.handle_tui_command("output-style", "loud"));
-    assert_eq!(
         app.output_style, "auto",
-        "an unknown level must not change the style"
+        "the named level must not be applied: nothing reads it"
     );
+    let notice = app.status_message.clone().unwrap_or_default();
     assert!(
-        app.status_message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not an output style"),
-        "an unknown level must be named: {:?}",
-        app.status_message
+        notice.contains("nothing reads") || notice.contains("No output style"),
+        "the refusal is the whole behaviour now: {notice:?}"
     );
 }
 

@@ -1452,7 +1452,7 @@ impl App {
                 // name is refused for both rather than half-honoured.
                 let _ = args.trim();
                 self.set_status_notice(
-                    "No output style in this build — nothing reads the setting, so                      /output-style cannot change what you see."
+                    "No output style in this build — nothing reads the setting, so /output-style cannot change what you see."
                         .to_string(),
                 );
                 true

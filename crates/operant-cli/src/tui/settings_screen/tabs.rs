@@ -129,7 +129,7 @@ pub(crate) fn group_for(key: &str) -> Option<&'static str> {
         }
         SettingsTab::Memory => "General",
         SettingsTab::Gateway => {
-            if key.contains("port") {
+            if key.contains("port") && !key.contains("transport") {
                 "Ports"
             } else if key.contains("posture") {
                 "Posture"

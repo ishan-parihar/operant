@@ -112,7 +112,7 @@ pub(crate) fn select_next_visible(screen: &mut SettingsScreen) {
     screen.select_next(count);
 }
 
-pub(crate) fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut AppConfig) {
+pub(super) fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut AppConfig) {
     // (iter-2452) ONE APPLY SEAM, NOT TWO.
     //
     // This function used to carry its own copy of every write: seven match arms
@@ -134,7 +134,19 @@ pub(crate) fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut 
     let Some((key, value, kind)) = selected else {
         return;
     };
-    let _ = SettingStore::SettingsJson;
+
+    // A key nothing reads is never written. Enter on it says so rather than doing
+    // nothing, because a row that silently ignores the operator is the phantom
+    // surface the registry's `live` flag exists to keep out of the panel. This
+    // is checked FIRST: an early `return` in the match below would make the
+    // refusal unreachable, which is exactly what happened when the arms were
+    // first collapsed.
+    if kind_is_unread(&kind) {
+        screen.apply_error = Some(format!(
+            "{key} is accepted but unread — no code reads it, so the panel cannot change it."
+        ));
+        return;
+    }
 
     // The next value this row would take.
     let next = match kind {
@@ -150,19 +162,17 @@ pub(crate) fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut 
             options[(at + 1) % options.len()].to_string()
         }
         // Number and Text open the inline editor; Enter there is handled by the
-        // editing branch above, so reaching here means nothing to cycle.
-        SettingKind::Number | SettingKind::Text | SettingKind::Unread => return,
+        // editing branch at the top of `handle_settings_key`, so this arm must
+        // OPEN it rather than fall through. Returning here instead made Enter a
+        // silent no-op on 200+ rows and left `start_edit` with no callers —
+        // the same phantom class this commit exists to remove.
+        SettingKind::Number | SettingKind::Text => {
+            screen.start_edit(key, &value);
+            return;
+        }
+        // Unread is the one kind with nothing to change; it reports below.
+        SettingKind::Unread => return,
     };
-
-    // A key nothing reads is never written. Enter on it says so rather than doing
-    // nothing, because a row that silently ignores the operator is the phantom
-    // surface the registry's `live` flag exists to keep out of the panel.
-    if kind_is_unread(&kind) {
-        screen.apply_error = Some(format!(
-            "{key} is accepted but unread — no code reads it, so the panel cannot change it."
-        ));
-        return;
-    }
 
     // Both stores go through `apply_and_save`: its arms name the `settings.json`
     // keys (reduce_motion, show_cwd, …) and its `_` arm is the generic config-key

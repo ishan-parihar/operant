@@ -292,21 +292,27 @@ impl SettingsScreen {
                 "fileAutocompleteShowHiddenFiles" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.config.file_autocomplete_show_hidden_files = on;
+                    self.settings_snapshot
+                        .config
+                        .file_autocomplete_show_hidden_files = on;
                     self.file_autocomplete_show_hidden_files = on;
                 }
                 "reduce_motion" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.reduce_motion = on;
+                    self.settings_snapshot.reduce_motion = on;
                     self.reduce_motion = on;
                 }
                 "show_cwd" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.show_cwd = Some(on);
+                    self.settings_snapshot.show_cwd = Some(on);
                     self.show_cwd = on;
                 }
                 "show_git_branch" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.show_git_branch = Some(on);
+                    self.settings_snapshot.show_git_branch = Some(on);
                     self.show_git_branch = on;
                 }
                 // Every CONFIG key the panel draws goes through the one write

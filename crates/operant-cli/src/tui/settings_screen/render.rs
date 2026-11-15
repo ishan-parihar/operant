@@ -87,36 +87,13 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     // then query — the same list the painter draws and the keyboard counts.
     let filtered = screen.visible_entries();
 
-    let desc_text = if let Some(entry) = filtered.get(screen.selected_idx) {
-        // For Output Style, show current selection and all available options with descriptions
-        if entry.key == "output_style" {
-            let mut lines = vec![entry.description.to_string(), String::new()];
-
-            let all_styles = builtin_styles();
-            let current_style_name = if screen.output_style.is_empty() {
-                "default"
-            } else {
-                &screen.output_style
-            };
-            if let Some(current_style) = find_style(&all_styles, current_style_name) {
-                lines.push(format!(
-                    "Current: {} — {}",
-                    current_style.label, current_style.description
-                ));
-                lines.push(String::new());
-            }
-
-            lines.push("Available:".to_string());
-            for style in builtin_styles() {
-                lines.push(format!("  {} — {}", style.name, style.description));
-            }
-            lines.join("\n")
-        } else {
-            entry.description.to_string()
-        }
-    } else {
-        String::new()
-    };
+    // (iter-2452) The `output_style` branch that used to live here described a
+    // row that no longer exists, and pulled a module-level import in with it.
+    // It is deleted rather than left to read as live.
+    let desc_text = filtered
+        .get(screen.selected_idx)
+        .map(|entry| entry.description.to_string())
+        .unwrap_or_default();
     // (plan 2026-11-16 S3) A risk note renders ABOVE the description, in warning
     // styling, and only for a row that carries one. OMP reserves this for
     // settings that can get the operator rate-limited or banned — not for merely
@@ -214,9 +191,12 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 /// The tab strip: every tab, the current one highlighted, the rest dimmed.
 ///
 /// (plan 2026-11-16 S2) OMP renders a labelled icon per tab and keeps the order
-/// explicit (`SETTING_TABS`, `settings-defs.ts:22-32`). The count on the right is
-/// what each tab HOLDS after the search query — an operator who types "port" and
-/// sees "Gateway 3" knows where the matches went without switching.
+/// explicit (`SETTING_TABS`, `settings-defs.ts:22-32`).
+///
+/// There is deliberately NO per-tab match count. The first version of this comment
+/// claimed one ("type port and see Gateway 3") and no code computed it — a comment
+/// describing an affordance that does not exist is worse than no comment, because
+/// the next reader trusts it. The search is tab-scoped and the empty state says so.
 fn render_tab_strip(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
     for (index, tab) in SettingsTab::ALL.iter().enumerate() {
@@ -245,10 +225,13 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
     let filtered = screen.visible_entries();
 
     if filtered.is_empty() {
+        // The filter is TAB-SCOPED, so the message must say so. A query typed on
+        // Appearance that matches a Gateway row is a zero-result search, and the
+        // honest sentence names the scope rather than blaming the query.
         let empty = if screen.search_query.is_empty() {
             "No settings on this tab."
         } else {
-            "No settings match your search."
+            "No settings on this tab match your search."
         };
         let para = Paragraph::new(empty).style(Style::default().fg(theme::dim_color()));
         frame.render_widget(para, area);
@@ -266,6 +249,13 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
     // drifting: a heading appended after the window would not scroll with its
     // own group.
     let mut lines: Vec<Line> = Vec::new();
+    // (iter-2452, red-team T1) Headings already EMITTED, by name. The grouping is
+    // derived from key content while the row order is the registry's, so one
+    // tab's groups interleave and a transition-only check printed the same
+    // heading several times — "Limits" six times down the Tools tab, which is
+    // noise the heading was added to remove, and six real lines spent by the
+    // scroll window on duplicate bands.
+    let mut emitted_groups: Vec<&str> = Vec::new();
     // (plan 2026-11-16 S2) WHICH ROW EACH LINE BELONGS TO. A heading takes a
     // line but is not a row, so the selection index counts rows and the window
     // counts lines. Deriving the scroll from `selected_idx` alone — as this did
@@ -278,7 +268,10 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
     for (i, entry) in filtered.iter().enumerate() {
         if entry.group != current_group {
             current_group = entry.group;
-            if let Some(group) = entry.group {
+            if let Some(group) = entry.group
+                && !emitted_groups.contains(&group)
+            {
+                emitted_groups.push(group);
                 lines.push(Line::from(Span::styled(
                     format!("  {group}"),
                     Style::default()

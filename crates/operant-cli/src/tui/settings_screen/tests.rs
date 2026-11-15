@@ -1036,18 +1036,18 @@ fn an_unknown_bar_style_is_reported_and_changes_nothing() {
 
 #[test]
 fn a_registry_setting_driven_from_the_panel_actually_changes() {
-    /// THE ACCEPTANCE TEST FOR THE PORT (plan 2026-11-16, red-team R7).
-    ///
-    /// The theming pass's headline finding was that every capability was shipped
-    /// and none of it was reachable from the UI. This pane had the same shape: the
-    /// registry carries hundreds of rows and the operator reached them only by
-    /// hand-editing TOML. "The row renders" is not the bar — a row that renders
-    /// and writes nothing is the iter-1899 phantom this panel has already shipped
-    /// once.
-    ///
-    /// So: take a setting that lives in the registry (not one of the hand-declared
-    /// visual rows), drive it from the panel, and require the CHANGE to be
-    /// observable in the value the panel reads back.
+    // THE ACCEPTANCE TEST FOR THE PORT (plan 2026-11-16, red-team R7).
+    //
+    // The theming pass's headline finding was that every capability was shipped
+    // and none of it was reachable from the UI. This pane had the same shape: the
+    // registry carries hundreds of rows and the operator reached them only by
+    // hand-editing TOML. "The row renders" is not the bar — a row that renders
+    // and writes nothing is the iter-1899 phantom this panel has already shipped
+    // once.
+    //
+    // So: take a setting that lives in the registry (not one of the hand-declared
+    // visual rows), drive it from the panel, and require the CHANGE to be
+    // observable in the value the panel reads back.
     let _lock = crate::config::test_env_lock();
     let mut screen = SettingsScreen::new();
     let config = AppConfig::default();
@@ -1072,7 +1072,7 @@ fn a_registry_setting_driven_from_the_panel_actually_changes() {
         .position(|entry| entry.key == bool_row.key)
         .expect("the row is on its own tab");
     let mut config = AppConfig::default();
-    super::toggle_or_cycle_current(&mut screen, &mut config);
+    super::keys::toggle_or_cycle_current(&mut screen, &mut config);
 
     let after = all_entries(&screen)
         .into_iter()
@@ -1083,5 +1083,117 @@ fn a_registry_setting_driven_from_the_panel_actually_changes() {
         before, after,
         "toggling {} from the panel changed nothing — the row is a phantom",
         bool_row.key
+    );
+}
+
+/// A plain Enter, for the handlers that take a `KeyEvent`.
+fn KEY_ENTER() -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+}
+
+/// Enter on a NUMBER row must open the inline editor.
+///
+/// (iter-2452, red-team blocker R3) The first version of the one-seam toggle
+/// collapsed Number and Text into an early `return`, which made Enter a silent
+/// no-op on 200+ rows and left `start_edit` with no caller anywhere in the
+/// crate. The clipboard had no guard on it: the R7 acceptance test picks a Bool
+/// row, so it passed while the editor was unreachable. This drives Enter on a
+/// Number row through the same key path the operator uses.
+#[test]
+fn enter_on_a_number_row_opens_the_editor() {
+    let mut screen = SettingsScreen::new();
+    let config = AppConfig::default();
+    screen.open(config.agent.context_window, &config);
+
+    let row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Number) && entry.store == SettingStore::Config
+        })
+        .expect("the registry offers a config number");
+
+    screen.select_tab(row.tab);
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
+        .iter()
+        .position(|entry| entry.key == row.key)
+        .expect("the row is on its own tab");
+
+    let mut config = AppConfig::default();
+    let mut settings = Settings::default();
+    let handled = super::handle_settings_key(&mut screen, &mut config, &mut settings, KEY_ENTER());
+    assert!(handled, "Enter is a handled key");
+    assert_eq!(
+        screen.edit_field.as_deref(),
+        Some(row.key),
+        "Enter on a Number row must open the editor on that row"
+    );
+}
+
+/// Enter on a `settings.json` row must reach the App's LIVE settings, not
+/// just the row's own copy.
+///
+/// (iter-2452, red-team blocker R1/R2) The one-seam toggle writes into
+/// `apply_and_save`, whose settings.json arms used to set only the `settings`
+/// argument and the screen's field. `save_sync()` persists
+/// `self.settings_snapshot` and the caller re-installs it, so those rows flipped
+/// on screen while the header kept the old value and a restart reverted them.
+/// The pre-existing `toggling_show_current_directory_in_settings_reaches_the_app_live`
+/// covers the App side; this pins the panel's own read-back.
+#[test]
+fn a_settings_json_row_survives_a_reopen() {
+    let mut screen = SettingsScreen::new();
+    let config = AppConfig::default();
+    screen.open(config.agent.context_window, &config);
+
+    let row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Bool) && entry.store == SettingStore::SettingsJson
+        })
+        .expect("a settings.json bool row");
+
+    screen.select_tab(row.tab);
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
+        .iter()
+        .position(|entry| entry.key == row.key)
+        .expect("the row is on its own tab");
+    let before = row.value.clone();
+
+    let mut config = AppConfig::default();
+    super::keys::toggle_or_cycle_current(&mut screen, &mut config);
+
+    let after = all_entries(&screen)
+        .into_iter()
+        .find(|entry| entry.key == row.key)
+        .map(|entry| entry.value)
+        .expect("the row is still listed");
+    assert_ne!(
+        before, after,
+        "Enter on {} did not change the value the panel reads back",
+        row.key
+    );
+    // And the SNAPSHOT must hold it — that is the value a reopen reads and
+    // `save_sync()` persists, and it was the one left stale before iter-2452.
+    //
+    // The row is asserted by KEY, not by position: `.find()` over the
+    // settings.json bools returns `reduce_motion`, so asserting on
+    // `show_working_dir()` would fail for a correct implementation — which is
+    // exactly what the first version of this guard did.
+    let in_snapshot = match row.key {
+        "reduce_motion" => screen.settings_snapshot.reduce_motion.to_string(),
+        "show_cwd" => screen.settings_snapshot.show_working_dir().to_string(),
+        "show_git_branch" => screen.settings_snapshot.show_branch().to_string(),
+        other => panic!("this guard needs a mapping for the row it picked: {other}"),
+    };
+    assert_eq!(
+        in_snapshot, after,
+        "the snapshot must hold the toggled value of {}: it is what a reopen and \
+         save_sync() persist, and it was the field the bug left behind",
+        row.key
     );
 }
