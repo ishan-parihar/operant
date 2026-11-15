@@ -12,6 +12,10 @@ impl SettingsScreen {
             visible: false,
             search_query: String::new(),
             selected_idx: 0,
+            // The panel opens on the first tab in the strip's own order, not on
+            // `SettingsTab::default()` — there is no default, because a tab
+            // nobody chose is a tab nobody can find their way back to.
+            selected_tab: SettingsTab::ALL[0],
             edit_field: None,
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
@@ -420,22 +424,23 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
     // `operant.toml`: they are per-profile UI state that must not leak into a
     // shared config file, so they are declared here rather than read from the
     // generated registry — which describes CONFIG keys only.
-    entries.push(SettingsEntry {
-        key: "output_style",
-        label: "Output style",
-        description: "Controls the verbosity and format of responses.",
-        kind: SettingKind::Enum {
-            options: vec!["default", "concise", "explanatory", "learning"],
-        },
-        value: screen.output_style.clone(),
-        store: SettingStore::SettingsJson,
-    });
+    //
+    // No `output_style` row (plan 2026-11-16 S4). `App::output_style` is
+    // written in three places and read by NOTHING in the workspace — the
+    // similarly named `operant_app/output_style.rs` is an emoji adapter on its
+    // own `EMOJI_ENABLED` atomic — and the panel offered four option labels for
+    // it while `/output-style` cycled three different ones. That is the phantom
+    // surface `live: false` exists to keep out of the panel, and it is the
+    // first entry in the `DEAD` list that now guards it.
     entries.push(SettingsEntry {
         key: "reduce_motion",
         label: "Reduce motion",
         description: "Disable UI animations.",
         kind: SettingKind::Bool,
         value: bool_text(screen.reduce_motion),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -444,6 +449,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Display the current working directory in the footer.",
         kind: SettingKind::Bool,
         value: bool_text(screen.show_cwd),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -452,6 +460,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Display the current git branch in the footer.",
         kind: SettingKind::Bool,
         value: bool_text(screen.show_git_branch),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -460,6 +471,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Max suggestions shown in @ autocomplete (type more to narrow results).",
         kind: SettingKind::Number,
         value: screen.file_autocomplete_limit.clone(),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -468,6 +482,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Include hidden files (.) in @ autocomplete.",
         kind: SettingKind::Bool,
         value: bool_text(screen.file_autocomplete_show_hidden_files),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     // (plan 2026-11-15 U1) The options come from `SeparatorStyle::ALL` through
@@ -483,6 +500,16 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             options: screen.bar_style_options.clone(),
         },
         value: screen.bar_style.clone(),
+        // Named rather than derived: `tab_for` reads a dotted prefix, and the
+        // six rows above are `settings.json` keys with no prefix to read —
+        // `tab_for` would drop every one of them into Advanced. This row DOES
+        // carry a dotted key and the literal matches what the derivation
+        // answers for it (`tui.bar_style` → Appearance/Status Line); it is
+        // spelled out so both hand-declared dotted rows read the same way as
+        // the rest of the block.
+        tab: SettingsTab::Appearance,
+        group: Some("Status Line"),
+        warning: None,
         store: SettingStore::Config,
     });
 
@@ -496,6 +523,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Total prompt and response capacity in tokens.",
         kind: SettingKind::Number,
         value: screen.context_window.to_string(),
+        tab: SettingsTab::Model,
+        group: Some("Context Window"),
+        warning: None,
         store: SettingStore::Config,
     });
 
@@ -519,6 +549,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 description: env_shadow_note(row.key),
                 kind: SettingKind::Unread,
                 value: screen.config_value(row.key),
+                tab: crate::tui::settings_screen::tab_for(row.key),
+                group: crate::tui::settings_screen::group_for(row.key),
+                warning: None,
                 store: SettingStore::Config,
             });
             continue;
@@ -543,6 +576,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: description_for(row.key),
             kind,
             value: screen.config_value(row.key),
+            tab: crate::tui::settings_screen::tab_for(row.key),
+            group: crate::tui::settings_screen::group_for(row.key),
+            warning: None,
             store: SettingStore::Config,
         });
     }

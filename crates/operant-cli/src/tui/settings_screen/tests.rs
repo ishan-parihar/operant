@@ -293,6 +293,16 @@ fn all_entries_returns_expected_settings() {
                 )
         })
         .count();
+    // (iter-2451) The drawn count, printed. `all_entries` is 6 hand-declared
+    // rows PLUS a walk over the registry, so the panel's size is a property of
+    // `config_registry`, not of `settings_screen/state.rs`. Counting the
+    // `SettingsEntry {` literals there (6) is the natural mistake and it is
+    // wrong by a factor of 45 — it produced a plan document claiming the panel
+    // exposes 6 of 307 settings. Measure, do not count.
+    eprintln!(
+        "SETTINGS PANEL: {} rows total, {drawable} drawable registry rows",
+        entries.len()
+    );
     assert!(
         entries.len() >= drawable,
         "the panel drew {} rows but the registry offers {} editable ones",
@@ -501,6 +511,12 @@ fn the_settings_screen_offers_no_unread_row() {
         "cursor_blink_enabled",
         "auto_commits",
         "output_format",
+        // (iter-2452) The panel's own `output_style` row. Hand-declared, so it
+        // never passed through the registry's `live` gate and this guard never
+        // saw it — which is how a phantom survives a guard built for phantoms.
+        // Nothing reads `App::output_style`; the command and the panel now say
+        // so instead of cycling three vocabularies between them.
+        "output_style",
     ];
     let entries = all_entries(&SettingsScreen::new());
     for key in DEAD {
@@ -510,10 +526,11 @@ fn the_settings_screen_offers_no_unread_row() {
              operator's edit is a promise nothing keeps"
         );
     }
-    // And the rows that DO something are still there.
+    // And the rows that DO something are still there. (iter-2452)
+    // `output_style` moved to the DEAD list above: nothing reads
+    // `App::output_style`, so the panel offering it was a promise nothing kept.
     for live in [
         "agent.context_window",
-        "output_style",
         "reduce_motion",
         "show_cwd",
         "show_git_branch",
@@ -580,10 +597,25 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
         AppConfig::default().agent.context_window,
         &AppConfig::default(),
     );
-    let total = all_entries(&screen).len();
+    // (plan 2026-11-16 S2) The rows are TABBED now, so the walk visits every tab
+    // and walks that tab's rows — `all_entries` is the whole panel, and only the
+    // selected tab is painted. Walking `all_entries` linearly would step off the
+    // end of the first tab and blame the window.
+    let panel = all_entries(&screen);
+    let total = panel.len();
 
     for step in 0..total {
-        screen.select_next(total);
+        // Put the panel index on screen: select the tab that owns it, then the
+        // row within that tab.
+        let target_tab = panel[step].tab;
+        screen.select_tab(target_tab);
+        let in_tab = screen.visible_entries();
+        let idx_in_tab = in_tab
+            .iter()
+            .position(|entry| entry.key == panel[step].key)
+            .expect("the row is on its own tab");
+        screen.selected_idx = idx_in_tab;
+
         terminal
             .draw(|frame| {
                 render_settings_screen(frame, &screen, frame.area());
@@ -596,12 +628,12 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
             .iter()
             .map(|cell| cell.symbol().to_string())
             .collect::<String>();
-        let selected = &all_entries(&screen)[screen.selected_idx];
+        let selected = in_tab[idx_in_tab].label;
         assert!(
-            rendered.contains(selected.label),
+            rendered.contains(selected),
             "step {step}: the selected row {:?} must be painted at 80x24 — the \
              window let the selection run off the end",
-            selected.label
+            selected
         );
         assert!(
             rendered.contains('►'),
@@ -999,5 +1031,57 @@ fn an_unknown_bar_style_is_reported_and_changes_nothing() {
     assert!(
         screen.pending_changes.is_empty(),
         "a failed apply is consumed, so it cannot be retried forever"
+    );
+}
+
+#[test]
+fn a_registry_setting_driven_from_the_panel_actually_changes() {
+    /// THE ACCEPTANCE TEST FOR THE PORT (plan 2026-11-16, red-team R7).
+    ///
+    /// The theming pass's headline finding was that every capability was shipped
+    /// and none of it was reachable from the UI. This pane had the same shape: the
+    /// registry carries hundreds of rows and the operator reached them only by
+    /// hand-editing TOML. "The row renders" is not the bar — a row that renders
+    /// and writes nothing is the iter-1899 phantom this panel has already shipped
+    /// once.
+    ///
+    /// So: take a setting that lives in the registry (not one of the hand-declared
+    /// visual rows), drive it from the panel, and require the CHANGE to be
+    /// observable in the value the panel reads back.
+    let _lock = crate::config::test_env_lock();
+    let mut screen = SettingsScreen::new();
+    let config = AppConfig::default();
+    screen.open(config.agent.context_window, &config);
+
+    // A bool row is the easiest to observe: exactly two states, and the row
+    // shows the one it currently holds.
+    let bool_row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Bool) && entry.store == SettingStore::Config
+        })
+        .expect("the registry offers at least one config bool");
+
+    screen.select_tab(bool_row.tab);
+    let before = bool_row.value.clone();
+
+    // Walk to it within its tab and toggle it through the same path Enter uses.
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
+        .iter()
+        .position(|entry| entry.key == bool_row.key)
+        .expect("the row is on its own tab");
+    let mut config = AppConfig::default();
+    super::toggle_or_cycle_current(&mut screen, &mut config);
+
+    let after = all_entries(&screen)
+        .into_iter()
+        .find(|entry| entry.key == bool_row.key)
+        .map(|entry| entry.value)
+        .expect("the row is still listed");
+    assert_ne!(
+        before, after,
+        "toggling {} from the panel changed nothing — the row is a phantom",
+        bool_row.key
     );
 }
