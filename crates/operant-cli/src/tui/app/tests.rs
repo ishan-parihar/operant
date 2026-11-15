@@ -3662,6 +3662,60 @@ mod left_tap_gesture_tests {
         assert!(app.session_list_pending, "rows load on open");
     }
 
+    /// (plan 2026-11-15 B4) THE OPERATOR'S ASK: "in active session, <- left
+    /// arrow key must open the subagent panel just like oh-my-pi".
+    ///
+    /// An active session (history, no navigator) had no keyboard route to its
+    /// own children at all — `subagent_navigator` was reachable only through
+    /// `/subagents`. The `←` that opens the hub on a FRESH session is left alone
+    /// by this arm: a fresh session has no descendants to show.
+    #[test]
+    fn one_left_on_an_active_session_opens_the_subagent_navigator() {
+        use operant_core::tools::async_delegation::{DelegationAdmission, try_create_record};
+
+        // The registry is process-global; hold its lock for the whole test so a
+        // parallel test cannot empty the roster underneath the walk.
+        let _guard = operant_core::tools::async_delegation::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+        assert!(matches!(
+            try_create_record("audit the stack", "test-model", 64, Some("sess-b4"), None),
+            Ok(DelegationAdmission::Created(_)) | Ok(DelegationAdmission::Reused(_))
+        ));
+
+        let mut app = make_app();
+        // ACTIVE: history, so this is not the fresh-session branch.
+        app.messages
+            .push(Message::user("the first ask".to_string()));
+        app.current_session = Some("sess-b4".to_string());
+
+        app.handle_key_event(left());
+        assert!(
+            app.subagent_navigator.visible,
+            "one ← on an active session with a live roster opens the navigator"
+        );
+        assert!(
+            !app.session_hub.visible,
+            "the navigator takes the gesture; the hub does not also open"
+        );
+
+        // And a session with NO children still falls through: the navigator
+        // refuses (omp's `requireContent`) rather than flashing an empty overlay.
+        operant_core::tools::async_delegation::__test_reset_registry();
+        let mut lonely = make_app();
+        lonely
+            .messages
+            .push(Message::user("the first ask".to_string()));
+        lonely.current_session = Some("sess-b4".to_string());
+        lonely.handle_key_event(left());
+        assert!(
+            !lonely.subagent_navigator.visible,
+            "an empty roster must not mount"
+        );
+        operant_core::tools::async_delegation::__test_reset_registry();
+    }
+
     #[test]
     fn one_further_left_closes_the_armed_hub() {
         let mut app = make_app();

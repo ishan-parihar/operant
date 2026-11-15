@@ -2209,6 +2209,25 @@ impl App {
                     self.last_left_tap_at = None;
                     return false;
                 }
+                // (plan 2026-11-15 B4) ← on an ACTIVE session opens the subagent
+                // navigator — the operator's ask: "in active session, <- left
+                // arrow key must open the subagent panel just like oh-my-pi".
+                //
+                // The split follows omp's: `←` is the SESSION-SCOPED roster, and
+                // the hub keeps the fresh-session `←` above, which has no
+                // descendants to show. The two gestures therefore never compete —
+                // an empty session opens the hub because there is nothing else to
+                // open, and an active one opens its children.
+                //
+                // `open_subagent_navigator` REFUSES on an empty roster (omp's
+                // `requireContent`) and says why, so `←` on a session with no
+                // children is inert rather than flashing an empty overlay. That
+                // refusal is also why this sits BEFORE the double-tap: a refused
+                // navigator leaves `←` free to fall through to the hub.
+                if gesture_candidate && self.open_subagent_navigator() {
+                    self.last_left_tap_at = None;
+                    return false;
+                }
                 if gesture_candidate {
                     let opened = match self.last_left_tap_at {
                         Some(t) => {
