@@ -28,7 +28,7 @@ impl App {
         // The parent edge is the child's `parent_session_id`; a record with none
         // is a top-level delegation this session did not spawn, so it never
         // enters the walk.
-        let edges: Vec<(String, String)> = records
+        let mut edges: Vec<(String, String)> = records
             .iter()
             .filter_map(|r| {
                 r.parent_session_id
@@ -36,7 +36,27 @@ impl App {
                     .map(|parent| (parent, r.delegation_id.clone()))
             })
             .collect();
-        let mut entries: Vec<NavigatorEntry> = descendants(&root, &edges)
+        // A delegation is not a session: the child it spawned runs in its OWN
+        // session, so the next hop down the tree is `delegation → that session`.
+        // Without it the walk asked for `children[dlg-1]` while the ledger held
+        // the key `sess-1` (the child's `session_id`), so no nested delegation
+        // was reachable and the walk stopped at depth 1 — the tree view and the
+        // depth indent could never render past the first level.
+        // MEASURED 2026-11-15 (seventh-pass audit, finding 2).
+        //
+        // The session ids are TRANSPARENT: the hop connects the tree without
+        // spending a depth level, because a session has no row of its own and a
+        // depth is what indents a visible row.
+        let session_ids: Vec<&str> = records
+            .iter()
+            .filter_map(|r| r.session_id.as_deref())
+            .collect();
+        edges.extend(
+            records
+                .iter()
+                .filter_map(|r| r.session_id.clone().map(|s| (r.delegation_id.clone(), s))),
+        );
+        let mut entries: Vec<NavigatorEntry> = descendants(&root, &edges, &session_ids)
             .into_iter()
             .filter_map(|(delegation_id, depth, parent)| {
                 let record = records.iter().find(|r| r.delegation_id == delegation_id)?;

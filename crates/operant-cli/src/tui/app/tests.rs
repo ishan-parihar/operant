@@ -18102,6 +18102,47 @@ mod subagent_navigator_tests {
         assert_eq!(tree_indent, Some(depth), "one hop = one indent");
     }
 
+    /// A nested delegation is reachable, at depth 2, under its own parent.
+    ///
+    /// The ledger's only edge is `(parent_session_id → delegation_id)`, and
+    /// `parent_session_id` is a SESSION id — so the walk cannot descend from a
+    /// delegation by that edge alone: it asks for `children[dlg-1]` while the
+    /// ledger holds `sess-1`, the session the child ran in. Before the fix this
+    /// test could not pass at any input, because no edge shape in the ledger
+    /// makes a delegation an edge KEY. It needs the `delegation → its session`
+    /// hop the navigator now adds.
+    #[test]
+    fn a_grandchild_is_reachable_at_depth_two() {
+        use operant_core::tools::async_delegation::{mark_completed, mark_session};
+        let _guard = operant_core::tools::async_delegation::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+        // This session dispatched a child; the child ran in its own session.
+        let child = spawn_child("sess-root", "the child");
+        mark_session(&child, "sess-child");
+        // The child's session dispatched a grandchild.
+        let grandchild = spawn_child("sess-child", "the grandchild");
+        mark_completed(&child, "ok");
+
+        let mut app = make_app();
+        app.current_session = Some("sess-root".to_string());
+        assert!(app.open_subagent_navigator());
+        let entry = app
+            .subagent_navigator
+            .entries
+            .iter()
+            .find(|e| e.id == grandchild)
+            .expect("the grandchild must be reachable from the root session");
+        assert_eq!(entry.depth, 2, "the grandchild is two hops from the root");
+        assert_eq!(
+            entry.parent.as_deref(),
+            Some(child.as_str()),
+            "the grandchild's parent within the walk is the delegation that spawned it"
+        );
+        let _ = mark_completed(&grandchild, "ok");
+    }
+
     #[test]
     fn the_walk_is_cycle_safe_and_excludes_the_root() {
         use crate::tui::subagent_navigator::descendants;
@@ -18110,7 +18151,7 @@ mod subagent_navigator_tests {
             ("sess-root".to_string(), "dlg-a".to_string()),
             ("dlg-a".to_string(), "sess-root".to_string()),
         ];
-        let found = descendants("sess-root", &edges);
+        let found = descendants("sess-root", &edges, &[]);
         assert_eq!(found.len(), 1, "the cycle must not duplicate or hang");
         assert_eq!(found[0].0, "dlg-a");
         assert!(

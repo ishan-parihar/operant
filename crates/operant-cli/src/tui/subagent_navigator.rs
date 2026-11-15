@@ -118,7 +118,18 @@ impl SubagentNavigatorState {
 /// (session-hub plan T7) jcode's `filter_inline_swarm_subtree`
 /// (`tui_state.rs:2754-2790`): a visited set, so a ledger with a cycle cannot
 /// hang the surface, and `root` never appears as its own descendant.
-pub fn descendants(root: &str, edges: &[(String, String)]) -> Vec<(String, usize, Option<String>)> {
+///
+/// An edge whose `child` is in `transparent` is a hop THROUGH a node the surface
+/// never draws — the delegation → its own session hop, where the session has no
+/// row of its own. The hop keeps the walk connected without spending a depth
+/// level, because a depth is what indents a visible row: counting it would put
+/// every grandchild one column too far right and name an invisible node as its
+/// parent.
+pub fn descendants(
+    root: &str,
+    edges: &[(String, String)],
+    transparent: &[&str],
+) -> Vec<(String, usize, Option<String>)> {
     let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
     for (parent, child) in edges {
         children
@@ -128,16 +139,25 @@ pub fn descendants(root: &str, edges: &[(String, String)]) -> Vec<(String, usize
     }
     let mut out: Vec<(String, usize, Option<String>)> = Vec::new();
     let mut seen: Vec<String> = vec![root.to_string()];
-    let mut frontier: Vec<(String, usize)> = vec![(root.to_string(), 0)];
-    while let Some((parent, depth)) = frontier.pop() {
-        if let Some(kids) = children.get(parent.as_str()) {
+    // (node, depth, the nearest VISIBLE ancestor)
+    let mut frontier: Vec<(&str, usize, Option<String>)> = vec![(root, 0, None)];
+    while let Some((parent, depth, visible_parent)) = frontier.pop() {
+        let parent: &str = parent;
+        if let Some(kids) = children.get(parent) {
             for kid in kids {
                 if seen.iter().any(|s| s == kid) {
                     continue;
                 }
                 seen.push((*kid).to_string());
-                out.push(((*kid).to_string(), depth + 1, Some(parent.clone())));
-                frontier.push(((*kid).to_string(), depth + 1));
+                if transparent.contains(kid) {
+                    // Pass through: same depth, and the child inherits the
+                    // visible ancestor rather than naming this phantom node.
+                    frontier.push((kid, depth, visible_parent.clone()));
+                    continue;
+                }
+                let parent_name = visible_parent.clone().unwrap_or_else(|| parent.to_string());
+                out.push(((*kid).to_string(), depth + 1, Some(parent_name.clone())));
+                frontier.push((kid, depth + 1, Some((*kid).to_string())));
             }
         }
     }
