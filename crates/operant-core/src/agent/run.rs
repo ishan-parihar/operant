@@ -4629,10 +4629,14 @@ impl OperantAgent {
             // ── Rung 2: decay — deterministic decay-render ──
             if estimated_tokens > preflight_threshold {
                 info!("Preflight rung 2 (decay): deterministic decay-render");
+                // The budget the shrunk render has to fit, so the curve knows
+                // how hard to bite. Without it `p` was the constant 1.0 and
+                // decay ignored how far over the window this turn actually was.
                 messages = crate::context_management::decay_render(
                     messages,
                     PREFLIGHT_DECAY_H50,
                     PREFLIGHT_DECAY_CONSTANT,
+                    effective_budget,
                 );
                 estimated_tokens =
                     self.estimate_request_tokens(&messages, schema_tokens) + turn_context_tokens;

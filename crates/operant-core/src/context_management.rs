@@ -1804,13 +1804,48 @@ fn markup_is_balanced(text: &str) -> bool {
     depth <= 0
 }
 
-pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Message> {
+/// How far the natural render overshoots the budget it must fit.
+///
+/// `H ∝ 1/p`, so the per-tier message counts scale as `1/p`: setting
+/// `p = natural / budget` makes the shrunk render land near the budget instead
+/// of near an arbitrary constant. Over budget (the only case a caller runs
+/// decay in) `p > 1` and decay tightens; with room to spare `p < 1` and it
+/// eases off instead of destroying context nothing needed destroyed.
+///
+/// Floored at [`DECAY_PRESSURE_FLOOR`] so a nearly-empty history cannot inflate
+/// the half-lives without bound, and `1.0` when there is no budget to measure
+/// against.
+pub fn decay_pressure(messages: &[Message], budget_tokens: usize) -> f64 {
+    if budget_tokens == 0 {
+        return 1.0;
+    }
+    let natural: usize = messages.iter().map(estimate_message_tokens).sum();
+    (natural as f64 / budget_tokens as f64).max(DECAY_PRESSURE_FLOOR)
+}
+
+/// The floor under [`decay_pressure`]. 0.1 caps the half-life stretch at 10×,
+/// so an almost-empty history decays gently rather than not at all.
+pub const DECAY_PRESSURE_FLOOR: f64 = 0.1;
+
+/// Render `messages` with older turns shrunk by the decay curve.
+///
+/// `budget_tokens` is the room the result has to fit, and it sets the curve's
+/// pressure — see [`decay_pressure`]. Pass `0` for "unpressured": `p` becomes
+/// 1.0 and the result is byte-identical to the pre-pressure behaviour, which is
+/// what a caller with no budget to report should get.
+pub fn decay_render(
+    messages: Vec<Message>,
+    h50: usize,
+    decay: f64,
+    budget_tokens: usize,
+) -> Vec<Message> {
     use crate::client::Role;
 
     let n = messages.len();
     if n <= 1 {
         return messages;
     }
+    let p = decay_pressure(&messages, budget_tokens);
     // The current turn (the latest user message and everything after it) is
     // never decayed: it is the request being answered, and truncating it
     // drops the user's own words rather than old context.
@@ -1847,8 +1882,13 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
             // estimate_tokens). This ensures the decay targets match
             // the budget calculations — previously H50=200 was treated
             // as 200 chars (~50 tokens), which was too aggressive.
-            let p = 1.0_f64; // default importance weight
-            let p = p.max(0.10);
+            //
+            // `p` is BUDGET PRESSURE, computed once per pass from how far the
+            // natural render overshoots the budget it has to fit. This line was
+            // `let p = 1.0; let p = p.max(0.10);` — a constant whose own
+            // `.max` could never fire, so `H ∝ 1/p` was `H ∝ 1` and the curve
+            // never responded to how tight the window actually was. Every
+            // other rung compensates for that; decay itself did not.
             let h_tokens = (h50 as f64) * 2.0_f64.powf((importance - 50.0) / decay) / p;
             let target_tokens = h_tokens.max(20.0) as usize; // never < 20 tokens
             let target_chars = target_tokens * 4; // tokens → chars heuristic
@@ -2234,7 +2274,14 @@ pub fn manage_context_reporting(
     // compression"). This is the standard curve, kept as named constants so
     // the two intents are visible side by side rather than one being a bare
     // literal a reader mistakes for the other's twin.
-    let decayed = decay_render(messages, REACTIVE_DECAY_H50, REACTIVE_DECAY_CONSTANT);
+    // `effective_budget` is what is left after the response reserve, so the
+    // curve is measured against the room the history may actually occupy.
+    let decayed = decay_render(
+        messages,
+        REACTIVE_DECAY_H50,
+        REACTIVE_DECAY_CONSTANT,
+        effective_budget,
+    );
 
     // Step 2: evict if still over budget.
     evict_to_budget_reporting(decayed, effective_budget)
@@ -2875,7 +2922,7 @@ mod tests {
             make_msg(Role::User, "old message that is quite long ".repeat(20)),
             make_msg(Role::User, "recent message"),
         ];
-        let result = decay_render(msgs, 50, 30.0);
+        let result = decay_render(msgs, 50, 30.0, 0);
         // System message should be unchanged.
         assert_eq!(result[0].content, "system prompt");
     }
@@ -2889,7 +2936,7 @@ mod tests {
             make_msg(Role::User, &long_content), // middle
             make_msg(Role::User, &long_content), // most recent, should be ~full
         ];
-        let result = decay_render(msgs, 100, 30.0);
+        let result = decay_render(msgs, 100, 30.0, 0);
         // The oldest (index 1) should be shorter than the newest (index 3).
         let oldest_len = result[1].content.chars().count();
         let newest_len = result[3].content.chars().count();
@@ -3624,7 +3671,7 @@ mod tests {
             make_msg(Role::Assistant, "answer"),
             make_msg(Role::User, &long), // current turn: whole
         ];
-        let result = decay_render(msgs, 100, 30.0);
+        let result = decay_render(msgs, 100, 30.0, 0);
         assert!(
             result[1].content.len() < long.len(),
             "the earlier turn decays"
@@ -3659,7 +3706,7 @@ mod tests {
             make_msg(Role::User, ADVISOR_BATCH), // oldest -> hardest decay
             make_msg(Role::User, "the next real user turn"),
         ];
-        let out = decay_render(msgs, 100, 20.0);
+        let out = decay_render(msgs, 100, 20.0, 0);
         let kept = &out[1].content;
 
         assert_eq!(
@@ -3687,7 +3734,7 @@ mod tests {
             make_msg(Role::User, &prose),
             make_msg(Role::User, "current"),
         ];
-        let out = decay_render(msgs, 100, 20.0);
+        let out = decay_render(msgs, 100, 20.0, 0);
         let kept = &out[1].content;
 
         assert!(kept.chars().count() < prose.chars().count(), "prose decays");
@@ -3711,7 +3758,7 @@ mod tests {
             make_msg(Role::User, short),
             make_msg(Role::User, "current"),
         ];
-        let out = decay_render(msgs, 100, 20.0);
+        let out = decay_render(msgs, 100, 20.0, 0);
         assert_eq!(out[1].content, short, "balanced markup survives intact");
     }
 
@@ -3736,7 +3783,7 @@ mod tests {
                 make_msg(Role::User, &long),
                 make_msg(Role::User, "current"),
             ];
-            let out = decay_render(msgs, 100, 20.0);
+            let out = decay_render(msgs, 100, 20.0, 0);
             let kept = &out[1].content;
             assert!(
                 kept.chars().count() < long.chars().count(),
@@ -3766,6 +3813,147 @@ mod tests {
         // Unbalanced, and deliberately NOT the guard's business.
         assert!(!markup_is_balanced("Vec<T>"));
         assert!(!markup_is_balanced("2 < 3 and 4 > 1"));
+    }
+
+    /// Pressure is what the natural render costs divided by the room it has.
+    /// Over budget (the only case a caller runs decay in) it exceeds 1 and the
+    /// half-lives shrink; with room to spare it drops below 1 and decay eases.
+    #[test]
+    fn decay_pressure_measures_the_overshoot_against_the_budget() {
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &"x".repeat(4_000)),
+            make_msg(Role::User, "current"),
+        ];
+        let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
+        assert!(natural > 0);
+
+        // Exactly the natural cost: no overshoot, no easing.
+        assert!((decay_pressure(&msgs, natural) - 1.0).abs() < f64::EPSILON);
+        // Half the room it needs: twice the pressure, half the half-lives.
+        assert!((decay_pressure(&msgs, natural / 2) - 2.0).abs() < 1e-9);
+        // Ten times the room: pressure eases to a tenth.
+        assert!((decay_pressure(&msgs, natural * 10) - 0.1).abs() < 1e-9);
+        // A budget so large the floor is the only thing left.
+        assert_eq!(decay_pressure(&msgs, natural * 100), DECAY_PRESSURE_FLOOR);
+    }
+
+    /// No budget to measure against means no pressure, which reproduces the
+    /// pre-pressure curve exactly — the compatibility contract for `0`.
+    #[test]
+    fn a_budget_of_zero_is_unpressured() {
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &"y".repeat(9_000)),
+            make_msg(Role::User, "current"),
+        ];
+        assert_eq!(decay_pressure(&msgs, 0), 1.0);
+
+        // `0` is the compatibility value: p is exactly 1.0, so the render is
+        // the pre-pressure curve.
+        let unpressured = decay_render(msgs.clone(), 100, 20.0, 0);
+        let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
+        let exactly_one = decay_render(msgs, 100, 20.0, natural);
+        assert_eq!(unpressured.len(), exactly_one.len());
+        for (a, b) in unpressured.iter().zip(&exactly_one) {
+            assert_eq!(
+                a.content.chars().count(),
+                b.content.chars().count(),
+                "p = 1.0 either way"
+            );
+        }
+    }
+
+    /// A budget far larger than the history does NOT reproduce the unpressured
+    /// curve: pressure floors at 0.1, which stretches the half-lives 10×, so an
+    /// almost-empty history keeps MORE than it would at p = 1.0. That is the
+    /// floor doing its job — without it, `1/p` would grow without bound and a
+    /// nearly-empty history would never decay at all.
+    #[test]
+    fn a_huge_budget_stretches_decay_to_the_floor_not_to_infinity() {
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "current turn"),
+        ];
+        let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
+        let kept =
+            |v: &Vec<Message>| -> usize { v.iter().map(|m| m.content.chars().count()).sum() };
+
+        let floored = kept(&decay_render(msgs.clone(), 100, 20.0, usize::MAX / 2));
+        let unpressured = kept(&decay_render(msgs.clone(), 100, 20.0, 0));
+        let at_natural = kept(&decay_render(msgs, 100, 20.0, natural));
+
+        assert_eq!(
+            decay_pressure(
+                &vec![
+                    make_msg(Role::System, "system"),
+                    make_msg(Role::User, "x"),
+                    make_msg(Role::User, "y"),
+                ],
+                usize::MAX
+            ),
+            DECAY_PRESSURE_FLOOR
+        );
+
+        assert!(
+            floored > unpressured,
+            "the floor eases decay past p=1: floored {floored} > unpressured {unpressured}"
+        );
+        assert!(
+            floored > at_natural,
+            "p=1.0 sits between the floor and real pressure: {at_natural}"
+        );
+    }
+
+    /// THE POINT OF THE FIX: the same history shrinks further against a tight
+    /// budget than against a generous one. Before, `p` was the constant 1.0 and
+    /// the two renders were identical.
+    #[test]
+    fn a_tighter_budget_decays_the_same_history_harder() {
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "current turn"),
+        ];
+        let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
+
+        let tight = decay_render(msgs.clone(), 100, 20.0, natural / 4);
+        let loose = decay_render(msgs, 100, 20.0, natural * 4);
+        let total =
+            |v: &Vec<Message>| -> usize { v.iter().map(|m| m.content.chars().count()).sum() };
+
+        assert!(
+            total(&tight) < total(&loose),
+            "a quarter of the room must shrink the history more than four times \
+             the room: tight {} vs loose {}",
+            total(&tight),
+            total(&loose)
+        );
+        // And the tight render actually got smaller than the input.
+        let input: usize = 2 + "the quick brown fox ".repeat(400).len() * 2 + 12;
+        assert!(
+            total(&tight) < input,
+            "under pressure decay removes bytes: {} < {}",
+            total(&tight),
+            input
+        );
+    }
+
+    /// Pressure never inflates the half-lives past the unpressured curve: the
+    /// floor stops `1/p` at 10×, and a history that already fits is not
+    /// rewarded with an unbounded one.
+    #[test]
+    fn decay_pressure_stays_within_its_floor() {
+        assert_eq!(DECAY_PRESSURE_FLOOR, 0.1);
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, "short"),
+            make_msg(Role::User, "current"),
+        ];
+        assert_eq!(decay_pressure(&msgs, usize::MAX), DECAY_PRESSURE_FLOOR);
     }
 
     #[test]
