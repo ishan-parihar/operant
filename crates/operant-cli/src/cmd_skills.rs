@@ -570,37 +570,31 @@ fn render_tree_node(node: &SkillMeta, depth: usize) -> usize {
     count
 }
 
+/// The ranked matches for a `skills search` query — DATA, not output, so the
+/// ranking is testable without capturing stdout.
+///
+/// This used to be an inline `manager.load_all()` + `name.contains ||
+/// description.contains` filter, which had **no ranking at all**: `load_all`
+/// returns `HashMap`-cache insertion order, so `operant skills search audit`
+/// printed `anti-ceremony` (a description-only hit) above `audit-website`
+/// (the prefix and exact-name hit), while the core matcher put `audit-website`
+/// first. Same query, two surfaces, contradictory answers.
+///
+/// One matcher now: `search_skills_in` is the canonical four-tier ranking
+/// (exact / prefix / substring / description), and the roots are the resolver's
+/// whole list rather than a hand-built `vendor + extra_roots` chain — the
+/// latter silently omitted the project root the resolver contributes.
+fn ranked_skill_search(config: &AppConfig, query: &str) -> Vec<(String, String)> {
+    let roots = crate::skill_roots::skill_roots(config);
+    operant_core::skill_mentions::search_skills_in(&roots, query, SKILL_SEARCH_LIMIT)
+}
+
+/// The rows a `skills search` prints. A ceiling, not a relevance cutoff — the
+/// ranking decides the ORDER, and this bounds the page.
+const SKILL_SEARCH_LIMIT: usize = 100;
+
 fn search_skills(config: &AppConfig, query: &str) -> Result<()> {
-    let skills_dir = &config.skills.root_dir;
-
-    if !skills_dir.exists() {
-        println!("No skills found matching '{}'.", query);
-        return Ok(());
-    }
-
-    // Every resolved root, the same set `list` and the agent read: a search
-    // that saw only the pool would report "no match" for a skill the agent
-    // can run.
-    let mut manager = SkillManager::new(skills_dir.clone());
-    for root in crate::skill_roots::vendor_skill_roots(config)
-        .into_iter()
-        .chain(config.skills.extra_roots.iter().cloned())
-    {
-        manager.add_extra_root(Some(root));
-    }
-    let all = manager
-        .load_all()
-        .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
-
-    let query_lower = query.to_lowercase();
-    let matches: Vec<_> = all
-        .iter()
-        .filter(|s| {
-            s.name.to_lowercase().contains(&query_lower)
-                || s.description.to_lowercase().contains(&query_lower)
-        })
-        .collect();
-
+    let matches = ranked_skill_search(config, query);
     if matches.is_empty() {
         println!("No skills found matching '{}'.", query);
         return Ok(());
@@ -608,8 +602,8 @@ fn search_skills(config: &AppConfig, query: &str) -> Result<()> {
 
     println!("Skills matching '{}' ({}):", query, matches.len());
     println!();
-    for skill in &matches {
-        println!("  {:<24} {}", skill.name, skill.description);
+    for (name, description) in &matches {
+        println!("  {:<24} {}", name, description);
     }
 
     Ok(())
@@ -1665,6 +1659,144 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Write a minimal skill the manager will accept: `name` + `description`
+    /// frontmatter, the same shape `SkillManager` loads from disk.
+    fn write_skill(dir: &Path, name: &str, description: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n"),
+        )
+        .unwrap();
+    }
+
+    /// An `AppConfig` whose skill roots point at the passed dirs — the pool
+    /// and `[skills] extra_roots` — with everything else default.
+    fn config_with_roots(pool: &Path, extra: &[PathBuf]) -> AppConfig {
+        let mut config = AppConfig::default();
+        config.skills.root_dir = pool.to_path_buf();
+        config.skills.extra_roots = extra.to_vec();
+        config
+    }
+
+    /// **GATE 1 — the ranking is real, and it is the core's.**
+    ///
+    /// `audit-website` is BOTH a prefix and an exact-name hit on `audit`;
+    /// `anti-ceremony` matches only in its description. The pre-plan CLI
+    /// printed `anti-ceremony` first because it had no ranking at all
+    /// (`load_all` returns HashMap insertion order), so this is the assertion
+    /// that fails if the ranking is dropped again.
+    #[test]
+    fn a_prefix_name_hit_ranks_above_a_description_only_hit() {
+        let pool = temp_dir("pool");
+        write_skill(
+            &pool.join("audit-website"),
+            "audit-website",
+            "run a website audit and fix the findings",
+        );
+        write_skill(
+            &pool.join("anti-ceremony"),
+            "anti-ceremony",
+            "guard outcome work against process overhead; a full anti-ceremony audit",
+        );
+
+        let config = config_with_roots(&pool, &[]);
+        let ranked = ranked_skill_search(&config, "audit");
+        let names: Vec<&str> = ranked.iter().map(|(n, _)| n.as_str()).collect();
+
+        // The RELATIVE order is the assertion, not the absolute list: the
+        // resolver also reads the operator's real vendor roots (integrations,
+        // plugin roots), so a host with `ponytail-audit` installed would
+        // legitimately add a third row. What must never vary is that the
+        // prefix hit sits above the description-only hit.
+        let website = names
+            .iter()
+            .position(|n| *n == "audit-website")
+            .expect("the prefix hit is present");
+        let ceremony = names
+            .iter()
+            .position(|n| *n == "anti-ceremony")
+            .expect("the description hit is present");
+        assert!(
+            website < ceremony,
+            "the prefix name hit must outrank the description-only hit, got {names:?}"
+        );
+    }
+
+    /// **GATE 2 — the tiers are ordered, not presence-checked.**
+    ///
+    /// A name SUBSTRING (`aio-json-dump`, which sorts alphabetically BEFORE
+    /// the prefix hit) must still rank BELOW the prefix (`jsonpath`). The TUI
+    /// popup ranked these backwards, which is the divergence slice 2 fixes.
+    #[test]
+    fn a_prefix_ranks_above_a_substring_regardless_of_alphabetical_order() {
+        let pool = temp_dir("pool");
+        write_skill(&pool.join("jsonpath"), "jsonpath", "navigate JSON by path");
+        write_skill(
+            &pool.join("aio-json-dump"),
+            "aio-json-dump",
+            "dump the whole json",
+        );
+
+        let config = config_with_roots(&pool, &[]);
+        let names: Vec<String> = ranked_skill_search(&config, "json")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+
+        let prefix = names
+            .iter()
+            .position(|n| n == "jsonpath")
+            .expect("the prefix hit is present");
+        let substring = names
+            .iter()
+            .position(|n| n == "aio-json-dump")
+            .expect("the substring hit is present");
+        assert!(
+            prefix < substring,
+            "a name prefix must outrank a name substring, got {names:?}"
+        );
+    }
+
+    /// **GATE 3 — a skill that lives ONLY in `extra_roots` is searchable.**
+    ///
+    /// The old command built `vendor_skill_roots + config.extra_roots` by hand
+    /// and dropped the resolver's project root; routing through
+    /// `skill_roots(config)` means a configured root reaches the CLI exactly as
+    /// it reaches the agent's toolset.
+    #[test]
+    fn a_skill_living_only_in_extra_roots_is_searchable() {
+        let pool = temp_dir("pool");
+        let extra = temp_dir("extra");
+        write_skill(
+            &extra.join("json-explore"),
+            "json-explore",
+            "walk a nested json document",
+        );
+
+        let config = config_with_roots(&pool, &[extra.clone()]);
+        let ranked = ranked_skill_search(&config, "json-explore");
+
+        // Presence, not an exact count: the operator's own vendor roots may
+        // contribute other rows. What is being proven is that a skill living
+        // ONLY in `extra_roots` is reachable at all.
+        assert!(
+            ranked.iter().any(|(n, _)| n == "json-explore"),
+            "extra_roots must reach the CLI search, got {:?}",
+            ranked.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// **The empty result is still empty, not an error.**
+    #[test]
+    fn a_query_matching_nothing_reports_no_match_rather_than_failing() {
+        let pool = temp_dir("pool");
+        write_skill(&pool.join("audit-website"), "audit-website", "audit it");
+
+        let config = config_with_roots(&pool, &[]);
+        assert!(ranked_skill_search(&config, "zzz-nothing-here").is_empty());
     }
 
     #[test]
