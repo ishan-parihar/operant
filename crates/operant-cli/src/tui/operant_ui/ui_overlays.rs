@@ -201,11 +201,8 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Commands", section_style)));
     lines.push(Line::from(""));
+    // One row per command: the registry's description names the argument form.
     lines.push(command_entry("/help"));
-    lines.push(help_entry(
-        "/help <text>",
-        "Show the overlay filtered on the term",
-    ));
     lines.push(command_entry("/model"));
     lines.push(command_entry("/agents"));
     lines.push(command_entry("/effort"));
@@ -233,11 +230,10 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(command_entry("/refactor"));
     lines.push(command_entry("/resume"));
     lines.push(command_entry("/save"));
-    lines.push(command_entry("/rename"));
     // `/rename --clear` was advertised and does not exist: the arm takes any
     // non-empty argument as the new TITLE, so `/rename --clear` renames the
     // session to the literal string "--clear". (iter-1786)
-    lines.push(help_entry("/rename <name>", "Set the current session name"));
+    lines.push(command_entry("/rename"));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -246,10 +242,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(Line::from(Span::styled("  Memory & Swarm", section_style)));
     lines.push(Line::from(""));
     lines.push(command_entry("/memory"));
-    lines.push(help_entry(
-        "/memory <cmd>",
-        "Run a memory subcommand (list|get|search|store|delete|stats|import|export|clear)",
-    ));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -651,6 +643,41 @@ mod tests {
             .draw(|frame| draw_help_overlay(frame, frame.area(), 0, app))
             .expect("draw");
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// One row per command. `/help`, `/memory` and `/rename` each had a bare
+    /// `command_entry` above a `help_entry` for the same command, so the
+    /// operator read each twice with only one form saying what it does.
+    #[test]
+    fn the_help_catalogue_lists_no_command_twice() {
+        use std::collections::HashSet;
+        let app = make_app();
+        let text = rendered_help_text(&app);
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut dupes: Vec<String> = Vec::new();
+        for line in text.lines() {
+            // Rows render inside the overlay's border: `│    /name  description │`.
+            // Strip the border and padding before reading the command.
+            let body = line.trim_matches(|c: char| c == '│' || c == ' ');
+            let Some(rest) = body.strip_prefix('/') else {
+                continue;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            if !seen.insert(name.clone()) && !dupes.contains(&name) {
+                dupes.push(name);
+            }
+        }
+        assert!(
+            dupes.is_empty(),
+            "these commands are listed more than once in /help: {dupes:?}"
+        );
     }
 
     /// (iter-1795) The `/help` catalogue is far taller than the viewport —

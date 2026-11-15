@@ -3129,6 +3129,34 @@ fn n_cancels_a_pending_archive_instead_of_starting_a_rename() {
 }
 
 #[test]
+fn a_row_reload_mid_rename_keeps_the_draft_and_the_target() {
+    // The target id is captured at open, so a background page reload that
+    // replaces `rows` cannot retarget the write to whatever row landed at that
+    // index — and the operator's typing must survive the reload.
+    let mut app = make_app();
+    app.session_list_pending = false;
+    app.session_hub.open(None);
+    app.session_hub.replace_rows(hub_rows(3));
+    app.session_hub.selected = 1;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    assert!(app.session_hub.rename_active);
+    let target = app.session_hub.rename_target_id.clone();
+    assert_eq!(target.as_deref(), Some("sess_1"), "row 1 is the target");
+
+    // The page reloads with entirely different rows.
+    app.session_hub.replace_rows(hub_rows(2));
+    assert!(
+        app.session_hub.rename_active,
+        "a page reload must not close the editor"
+    );
+    assert_eq!(
+        app.session_hub.rename_target_id, target,
+        "the target is the id captured at open, not the row at that index now"
+    );
+}
+
+#[test]
 fn the_session_picker_refuses_empty_titles_and_subagent_rows() {
     // Esc discards without writing; a subagent row carries a delegation
     // handle, not a sessions.id, so `n` cannot rename it.
@@ -3221,6 +3249,19 @@ fn persistent_header_first_line_carries_the_session_title_when_renamed() {
         !first.starts_with("operant"),
         "the product name must not shadow the title, got: {first:?}"
     );
+}
+
+fn rendered_first_lines(app: &crate::tui::app::App, width: u16) -> Vec<String> {
+    let (persistent, _) = crate::tui::operant_ui::header::build_header_sections(app, width);
+    persistent
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 #[test]
@@ -18079,6 +18120,35 @@ mod subagent_navigator_tests {
     }
 }
 
+#[test]
+fn the_header_title_never_widens_the_row_past_the_pre_change_literal() {
+    // `head_title_width` is `width - tail` with NO floor. A floor would hand
+    // the title columns the badges already claimed, so the row grew past what
+    // the pre-change literal `operant` produced. This pins the property that
+    // matters: whatever the badges do, the title never makes the row WIDER
+    // than the old fixed name did.
+    //
+    // (The badge tail is appended unclamped and can itself exceed a very
+    // narrow pane — pre-existing, unchanged here.)
+    for width in [8u16, 12, 20, 40, 80, 120] {
+        let mut app = make_app();
+        app.is_simulating = true; // the `replay` badge
+        app.session_title = Some("a".repeat(300));
+
+        let first = rendered_first_lines(&app, width)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        // The old line was "operant" + the same badge tail.
+        let old_len = "operant".chars().count() + " · replay".chars().count();
+        assert!(
+            first.chars().count() <= old_len.max(width as usize),
+            "at width {width} the renamed first line ({}) is wider than the old              literal plus its badges ({old_len}): {first:?}",
+            first.chars().count()
+        );
+    }
+}
+
 // ---- red team 5 (2026-11-15): the arrows' width vs the painter's width ----
 
 /// THE BUG the operator reported: "Using up/dn arrows, only moves the prompt
@@ -18185,5 +18255,19 @@ fn the_render_path_publishes_a_usable_input_area_width() {
         app.composer_width() > 0,
         "and the arrows must see a usable width, got {}",
         app.composer_width()
+    );
+}
+
+#[test]
+fn a_fresh_launch_with_no_title_and_no_turns_keeps_the_product_name() {
+    let app = make_app();
+    assert!(app.session_title.is_none());
+    let first = rendered_first_lines(&app, 80)
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        first.starts_with("operant"),
+        "an untitled session with no turns renders the product name, got: {first:?}"
     );
 }

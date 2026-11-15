@@ -303,8 +303,8 @@ impl App {
             acting_seat: None,
             acting_charter: None,
             agent_picker: DialogSelectState::new("Acting employee", Vec::new()),
-            subagent_navigator:
-                crate::tui::subagent_navigator::SubagentNavigatorState::default(),
+            model_scope: crate::tui::model_scope::ModelScope::All,
+            subagent_navigator: crate::tui::subagent_navigator::SubagentNavigatorState::default(),
             agent_roster_cache: Vec::new(),
             acting_seat_seeded: false,
             command_palette: {

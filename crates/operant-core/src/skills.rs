@@ -169,11 +169,33 @@ impl RootIssue {
                 self.reason
             ),
             None => format!(
-                "{}: {} ({})",
+                "{}: {} ({}){}",
                 self.root.display(),
                 self.entry.display(),
-                self.reason
+                self.reason,
+                self.explanation()
             ),
+        }
+    }
+
+    /// A human sentence for the reasons that are not self-explanatory. The
+    /// machine reason stays in the line (it is what a script matches on); this
+    /// is what makes the doctor's output actionable.
+    #[must_use]
+    pub fn explanation(&self) -> String {
+        match self.reason.as_str() {
+            "name_dir_mismatch" => " -- the SKILL.md `name:` differs from its directory, \
+             so the skill answers to two names; rename the directory or fix the \
+             frontmatter so both agree"
+                .to_string(),
+            "dead_symlink" => " -- the symlink target is gone".to_string(),
+            "sensitive_path" => " -- refused: a credential or secret store is not a skill \
+             root"
+                .to_string(),
+            "missing" => " -- the root does not exist".to_string(),
+            "unreadable" => " -- the root could not be read".to_string(),
+            "not_a_directory" => " -- the path is not a directory".to_string(),
+            _ => String::new(),
         }
     }
 }
@@ -616,6 +638,25 @@ impl SkillManager {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| skill.name.clone());
+                    // A name/directory MISMATCH is legal and loads, but it is a
+                    // standing trap: every surface that keys on the directory
+                    // (a `$dir` mention, a pointer, a rename) and every surface
+                    // that keys on the frontmatter (the listing, the popup) then
+                    // disagree about the skill's name. iter-2337 fixed the
+                    // resolver so the advertised name works; this reports the
+                    // mismatch so the operator can remove the ambiguity instead
+                    // of relying on two spellings forever. `validate_root_health`
+                    // already calls this an error, but only on the audit path --
+                    // the load path said nothing, which is why the defect could
+                    // exist unnoticed.
+                    if dir_key != skill.name {
+                        self.issues.push(RootIssue {
+                            root: root.to_path_buf(),
+                            entry: path.clone(),
+                            link_target: None,
+                            reason: "name_dir_mismatch".to_string(),
+                        });
+                    }
                     // A category-qualified alias too, so `$category/skill`
                     // resolves by the path the listing shows. Built from the
                     // root-relative path, which cannot escape the root.
@@ -1630,6 +1671,34 @@ mod tests {
         assert!(
             find_skill_in_roots(&roots.roots, "fine-tuning-with-trl").is_some(),
             "the directory name must still resolve"
+        );
+
+        // And the AMBIGUITY is reported rather than silently supported: the
+        // skill answers to two names, so the operator has to be told. Before
+        // this, `validate_root_health` called the mismatch an error but only
+        // on the audit path, so the load path said nothing.
+        let mut manager = SkillManager::from_roots(&roots);
+        manager.load_all().expect("load");
+        let mismatch: Vec<String> = manager
+            .issues()
+            .iter()
+            .filter(|i| i.reason == "name_dir_mismatch")
+            .map(|i| i.entry.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            mismatch.len(),
+            1,
+            "the name/directory mismatch must be reported exactly once: {mismatch:?}"
+        );
+        let line = manager
+            .issues()
+            .iter()
+            .find(|i| i.reason == "name_dir_mismatch")
+            .expect("the issue")
+            .describe();
+        assert!(
+            line.contains("differs from its directory"),
+            "the doctor's line must say what to do about it: {line:?}"
         );
 
         cleanup(&tmp);

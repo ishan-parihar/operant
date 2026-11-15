@@ -629,7 +629,19 @@ pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, are
     } else {
         0
     };
-    if let Some(hint) = keybind_hint.filter(|_| hint_rows == 1) {
+    // (model plan M7) The scope in force, named on the hint row. `Ctrl+]` moves
+    // it, and a control whose effect is invisible is the phantom surface this
+    // plan exists to prevent.
+    let scope_chip = app
+        .acting_model_scope()
+        .map(|scope| format!("scope: {scope} · "));
+    let hint_text: String = match (scope_chip, keybind_hint) {
+        (Some(chip), Some(hint)) => format!("{chip}{hint}"),
+        (Some(chip), None) => chip,
+        (None, Some(hint)) => hint.to_string(),
+        (None, None) => String::new(),
+    };
+    if hint_rows == 1 {
         // The hint lives outside the box, so it may use the full available
         // width rather than the (often narrow) intrinsic box width. This keeps
         // the favorites/default shortcuts visible even for short model lists.
@@ -641,7 +653,7 @@ pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, are
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                truncate_display(hint, area.width.saturating_sub(1) as usize),
+                truncate_display(&hint_text, area.width.saturating_sub(1) as usize),
                 Style::default().fg(rgb(120, 120, 150)).italic(),
             ))),
             hint_area,
@@ -1588,8 +1600,14 @@ mod tests {
         entry.is_favorite = true;
         entry.recommended = true;
         let both = picker_entry_display_name(entry);
-        assert!(both.contains('♥'), "the favourite chip must survive: {both}");
-        assert!(both.contains('★'), "the recommended chip must survive too: {both}");
+        assert!(
+            both.contains('♥'),
+            "the favourite chip must survive: {both}"
+        );
+        assert!(
+            both.contains('★'),
+            "the recommended chip must survive too: {both}"
+        );
         assert_ne!(
             both.matches('♥').count() + both.matches('★').count(),
             1,

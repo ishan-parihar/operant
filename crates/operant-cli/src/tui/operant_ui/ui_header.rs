@@ -36,10 +36,12 @@ fn unseen_changelog_entries() -> Vec<String> {
 /// what is left of the width once the trailing badges are appended.
 ///
 /// The rendered tail is `" · " + items.join(" · ")`, i.e. `3 + sum + 3*(n-1)`
-/// = `sum + 3n`, plus one column for the `" self-dev"` badge when this is a
-/// canary build. Anything wider than that leaves the LABEL no room, so the
-/// title takes the remainder — and never less than five columns, because a
-/// title squeezed to one or two is worse than one cut with an ellipsis.
+/// = `sum + 3n`, plus the `" self-dev"` badge's 8 columns on a canary build.
+/// The title takes whatever is left, and ZERO when the tail already fills the
+/// row — a floor would push the row past the pane (measured: badges
+/// `replay·cli↑·srv↑·web` = 29 columns at width 30, so a 5-column floor
+/// overflows by 4 while the pre-change literal `operant` overflowed by 6).
+/// The badges' own overflow is pre-existing; the floor would have added to it.
 fn head_title_width(status_items: &[&str], w: usize, is_canary: bool) -> usize {
     let badges: usize = status_items.iter().map(|i| i.chars().count()).sum();
     let tail = if status_items.is_empty() {
@@ -52,7 +54,7 @@ fn head_title_width(status_items: &[&str], w: usize, is_canary: bool) -> usize {
     } else {
         0
     };
-    w.saturating_sub(tail + self_dev).max(5)
+    w.saturating_sub(tail + self_dev)
 }
 
 /// Truncate to `max` chars; appends one ellipsis when the text did not fit.
@@ -663,13 +665,13 @@ fn build_persistent_header_with_auth(
     // clipped mid-word at the border — the same rule the composer's textarea
     // rect learned at 28 columns.
     {
-        let head = if session_title.is_empty() {
+        let title_room = head_title_width(&status_items, w, is_canary);
+        let head = if session_title.is_empty() || title_room == 0 {
+            // No title, or a badge row that already fills the pane: the
+            // product name beats a title cut to nothing.
             "operant".to_string()
         } else {
-            truncate_to_width(
-                &session_title,
-                head_title_width(&status_items, w, is_canary),
-            )
+            truncate_to_width(&session_title, title_room)
         };
         let mut spans = vec![Span::styled(
             head,

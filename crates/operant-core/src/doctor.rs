@@ -201,14 +201,13 @@ fn check_skill_roots(config: &AppConfig, items: &mut Vec<CheckResult>) {
 
     // One row per refused root: the path and the reason, because the two
     // together are the fix ("point extra_roots at the directory you meant").
+    // `describe()` carries the human sentence for the reasons that need one
+    // (a name/directory mismatch is legal and loads, so the operator needs to
+    // be told WHY it is worth fixing rather than just that it happened).
     for issue in &refusals {
-        let detail = match &issue.link_target {
-            Some(target) => format!("{} -> {}", issue.entry.display(), target.display()),
-            None => issue.entry.display().to_string(),
-        };
         items.push(CheckResult::warn(
             cat,
-            format!("skill root refused ({}): {detail}", issue.reason),
+            format!("skill root refused: {}", issue.describe()),
         ));
     }
 }

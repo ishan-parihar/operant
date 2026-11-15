@@ -287,6 +287,107 @@ bounded report; codex scales by making isolation a typed decision. This tree has
 neither — its swarm is a process-local fan-out with an unbounded report.** Items
 1–5 above are that gap, in order of cost.
 
+## Part 3b — Seventh pass (2026-11-15): re-measured at `40380253`
+
+**Revision audited:** `origin/main @ 40380253` ("the models page's scope axis").
+The prior pass measured `3d0fc817`; the tree has since advanced 55 commits, so
+every count and line reference below was re-derived rather than carried forward.
+Measured in a detached worktree (`/home/ishanp/audit-2401-wt`) because the shared
+tree held ~37 uncommitted peer files and sat 7 ahead / 55 behind the published
+revision — a finding verified against it would prove neither the committed state
+nor the peers' intent.
+
+**Reference revisions:** jcode `@ f9604362e`, codex `@ 38cdc4d6`, oh-my-openagent
+`@ 836a1f8a56`. omp is named in the request for the first time; its study is what
+corrected Part 3's comparison table below.
+
+### Part 3's table, corrected by this pass
+
+Part 3 above says this tree's swarm report is "uncapped". It is not, and has not
+been for some iterations:
+
+| axis | jcode | codex | omp | this tree |
+|---|---|---|---|---|
+| result cap into the parent | 4,000 chars, then TL;DR over 240 | none on success (error envelope only) | 32,000 chars + spill-to-file (senpi); none (omo) | **32 KiB per `delegate_task` call** (`agent/mod.rs:1296`), plus a 600-char preview per worker (`sub_agent_tool.rs:1598`) |
+| delivery shape | all-at-once at turn end | mailbox push, all-at-once | pulled via cursor (omo) / batched (senpi) | **incremental drain** (`buffer_unordered`, `run_swarm`) |
+| depth | root-only (numeric counter is `#[cfg(test)]`) | V1: 1; **V2: unbounded** | omp: 3 / senpi: 1 | operator-settable 0..=3, default 2 |
+| global cap | none | none | omp: none / senpi: 8 | **6, operator-settable 1..=32** |
+| per-batch cap | n/a (no batch arg) | n/a | senpi `tasks[]` | **3, operator-settable 1..=10** |
+| permit object | none (recompute + admission mutex) | advisory `AtomicUsize`, no reservation | hand-rolled counting semaphore | **`SpawnPermit::reserve`, atomic RAII** |
+| cancel safety | cascade to descendants; slot freed by status | drop-guard | lease release + park/unpark | cut-off roster accounting; permit held for the swarm |
+
+**Net:** on every axis this table compares, this tree is at or ahead of all three
+references. The two things the references have that this tree does not are both
+*by construction*, not gaps: jcode's durable cross-process membership record
+(this tree's ledger is the equivalent and is the subject of finding 1 below), and
+codex's `SessionIsolation` typed capability stripping (this tree isolates by
+building a fresh `TurnContext` per child).
+
+### Finding 1 (must fix) — the durable ledger can drop a LIVE delegation
+
+`crates/operant-core/src/tools/async_delegation.rs:214-217` (`merge_records`)
+
+- **What this is:** the ledger is one JSON file for the whole home. `persist()`
+  merges the in-memory registry into whatever the file holds, then applies a
+  retention cap so the file cannot grow forever.
+- **Problem:** the cap is documented as bounding *terminal* records —
+  `MAX_RETAINED_TERMINAL` at `:30` says "How many terminal (completed/failed)
+  records to retain". The sibling in-memory pruner honours that: `prune()` at
+  `:684` filters to `status != Pending` **before** counting. `merge_records`
+  does not — it truncates the **whole merged set**, Pending rows included. So a
+  ledger holding 50 terminal rows plus one still-running delegation loses the
+  live one. Proven two ways: a standalone transcription of the function drops a
+  Pending row whose `dispatch_time` is older than every terminal row's
+  `completed_time`; and the 51-pending-rows case — which `prune()` would keep in
+  full — truncates to 50 and drops the oldest. Reachable on the production path:
+  `mark_session` (`:496`) calls `persist()` with no `prune()`, and a live
+  background dispatch calls it at `sub_agent_tool.rs:1237`.
+- **Fix:** filter to terminal rows before the truncate, so both paths share one
+  rule — count `status != Pending` against the cap, and cut only from that
+  subset. Roughly three lines in `merge_records`.
+- **If we skip it:** a running child silently vanishes from the ledger, so the
+  subagent navigator (`tui/app/subagent_nav.rs:27`, which reads exactly this
+  list) and the session hub cannot show it, and a restart forgets work the
+  operator is still waiting on. Nothing errors — the row is simply absent.
+
+### Finding 2 (should fix) — the navigator's tree view can never show depth 2
+
+`crates/operant-cli/src/tui/app/subagent_nav.rs:29-37` (edge construction)
+
+- **What this is:** iter-2399 added a session-scoped subagent navigator. It
+  builds a `parent → children` edge list from the durable ledger and walks
+  outward from the current session, so a nested delegation appears under its
+  parent. The module doc advertises a flat default and a real tree on `t`, and
+  the `NavigatorEntry.depth` field exists to indent it.
+- **Problem:** every edge is `(parent_session_id → delegation_id)`, because that
+  is the only shape the ledger records. `parent_session_id` is a **session id**
+  (`sub_agent_tool.rs:1760` sets it from `context.resolved_session_id()`), so a
+  delegation id is never an edge *key*. The walk therefore asks for
+  `children[dlg-1]` — and the ledger holds the key `sess-1`, the session the
+  child ran in (`record.session_id`). A grandchild is unreachable, and the walk
+  stops at depth 1. Proven by transcribing the walk with a production-shaped
+  ledger (`sess-A → dlg-1`, `sess-1 → dlg-2`): the walk returns only `dlg-1` at
+  depth 1, and `dlg-2` is absent. The four navigator tests do not catch it
+  because each builds edges by hand with a *delegation* id on the left — a shape
+  the ledger never produces.
+- **Fix:** join the delegation to the session it ran in before building edges, so
+  the chain is `session → delegation → its session → its delegation`. That is one
+  extra map: `delegation_id → record.session_id`, consulted when the walk needs a
+  delegation's children. Then the existing walk and indent are correct as
+  written, and the tree view starts working.
+- **If we skip it:** the `t` toggle and the depth indent are dead beyond the
+  first level, so an operator inspecting a nested swarm sees a flat list and
+  cannot tell which worker was spawned by which. The module's stated purpose —
+  "what did this session spawn?" — is answered only one level deep.
+
+### What this pass did not re-open
+
+Findings 1-3 of the fifth pass (the five tools' key-spelling dual reads) and both
+defects of the sixth pass (the `checkpoint` `diff` arm, the `home_assistant`
+`call_service` arm) were re-derived against `40380253` and are **still fixed**:
+`git grep` over the published revision confirms each parse reads both spellings
+in exactly one place, and both sixth-pass guards are present in the tree.
+
 ## Part 4 — What landed from the plan
 
 - **iter-2212** — I1 (the bounded preview read) and I2's producer (the

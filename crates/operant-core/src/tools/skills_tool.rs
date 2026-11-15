@@ -102,12 +102,13 @@ fn dir_has_subdirs(dir: &Path) -> bool {
 /// Whether a directory should be skipped by the skill-tree walkers (hidden,
 /// build, vendored, or resource dirs are never skill nodes).
 fn is_skill_dir_skipped(dir_name: &str) -> bool {
-    dir_name.starts_with('.')
-        || dir_name.starts_with('_')
-        || dir_name == "node_modules"
-        || dir_name == ".archive"
-        || dir_name == ".hub"
-        || ALLOWED_SUBDIRS.contains(&dir_name)
+    // ONE walk rule, from the core: hidden, `_`-prefixed, and the build/vendor
+    // trees. The extra clauses below are the tools' own additions (the
+    // scaffolding dirs a skill MAY carry under itself), not a second policy.
+    if crate::skills::is_skipped_walk_name(dir_name) {
+        return true;
+    }
+    dir_name == ".archive" || dir_name == ".hub" || ALLOWED_SUBDIRS.contains(&dir_name)
 }
 
 // ── Background review write guards ────────────────────────────────────────
@@ -462,7 +463,16 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
             continue;
         }
         let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if dir_name.starts_with('.') || dir_name == "node_modules" {
+        // The SAME skip rule as every other walker in this file, and as the
+        // agent's own `SkillManager` (via `skills::is_skipped_walk_name`). This
+        // walk used to carry a weaker fourth copy -- only `.`-prefixed and
+        // `node_modules` -- so it listed skills under `_`-prefixed and `target/`
+        // directories that the manager cannot load. Measured: a pool with
+        // `normal/`, `_under/` and `target/inside/` produced
+        // `manager.list_available() == ["normal"]` but a `skills_list` offering
+        // all three -- the model was told to run a skill the agent could not
+        // resolve.
+        if is_skill_dir_skipped(dir_name) {
             continue;
         }
         let skill_md = path.join("SKILL.md");
@@ -3604,8 +3614,14 @@ mod tests {
         assert!(view.success, "skill_view failed: {}", view.content);
         let listed: serde_json::Value = serde_json::from_str(&list.content).unwrap();
         let entries = listed["skills"].as_array().unwrap();
-        let names: Vec<&str> = entries.iter().map(|s| s["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"ponytail-review"), "listed names: {names:?}");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"ponytail-review"),
+            "listed names: {names:?}"
+        );
         assert!(names.contains(&"plugin-skill"), "listed names: {names:?}");
         let vendor_entry = entries
             .iter()
@@ -3701,11 +3717,72 @@ mod tests {
             .await;
 
         assert_eq!(listed.len(), 1, "the pool copy must be the only entry");
-        assert_eq!(listed[0].origin, None, "the pool copy is not a vendor skill");
+        assert_eq!(
+            listed[0].origin, None,
+            "the pool copy is not a vendor skill"
+        );
         let viewed: serde_json::Value = serde_json::from_str(&view.content).unwrap();
         assert!(
-            viewed["content"].as_str().unwrap().contains("OPERATOR BODY"),
+            viewed["content"]
+                .as_str()
+                .unwrap()
+                .contains("OPERATOR BODY"),
             "the operator's copy must win: {viewed}"
+        );
+    }
+
+    /// `skills_list` must not offer a skill the agent's `SkillManager` will not
+    /// load. The two used separate walkers with separate skip rules, so a pool
+    /// holding `_under/` and `target/inside/` produced
+    /// `manager.list_available() == ["normal"]` while `skills_list` offered all
+    /// three -- the model was told to run a skill the agent could not resolve.
+    ///
+    /// MUTATION-PROOF: restoring the old weak rule in `collect_skills_recursive`
+    /// (`.`-prefixed and `node_modules` only) fails the equality below.
+    #[tokio::test]
+    async fn the_in_loop_listing_offers_exactly_what_the_manager_loads() {
+        use crate::skills::SkillManager;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = dir.path().join("pool");
+        for (rel, name) in [
+            ("normal", "normal"),
+            ("_under", "under"),
+            ("target/inside", "in-target"),
+        ] {
+            let d = pool.join(rel);
+            std::fs::create_dir_all(&d).expect("skill dir");
+            std::fs::write(
+                d.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\nB\n"),
+            )
+            .expect("skill file");
+        }
+
+        let mut manager = SkillManager::new(pool.clone());
+        manager.load_all().expect("load");
+        let mut managed: Vec<String> = manager
+            .list_available()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        managed.sort();
+
+        let out = SkillsTool::new(pool.clone())
+            .execute(serde_json::json!({}), Default::default())
+            .await;
+        let listed: serde_json::Value = serde_json::from_str(&out.content).expect("json");
+        let mut offered: Vec<String> = listed["skills"]
+            .as_array()
+            .expect("skills array")
+            .iter()
+            .map(|s| s["name"].as_str().unwrap_or_default().to_string())
+            .collect();
+        offered.sort();
+
+        assert_eq!(
+            offered, managed,
+            "skills_list and the manager must agree about which skills exist"
         );
     }
 }

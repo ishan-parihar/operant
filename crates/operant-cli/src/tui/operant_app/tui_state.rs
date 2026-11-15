@@ -232,6 +232,12 @@ pub trait TuiState {
         None
     }
 
+    /// The models page's scope in force, when it is anything other than the
+    /// default `All`. `None` renders no chip: the flat list needs no label.
+    fn acting_model_scope(&self) -> Option<String> {
+        None
+    }
+
     /// The acting seat for this session, when the identity switch is engaged
     /// (`Shift+Tab` / `/agent`). `None` = the session runs unbound; the default
     /// is `None` so the header renders nothing for harnesses that never bind.
