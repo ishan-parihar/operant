@@ -41,10 +41,14 @@ struct Row {
 ///
 /// MEASURED 2026-11-14 (audit finding 13): this registry never pruned, so a
 /// long-lived gateway accumulated one row per worker for the life of the
-/// process — the same unbounded-map defect the async registry bounds at
-/// `async_delegation::MAX_RETAINED_TERMINAL`. Live rows are never pruned: a
-/// running worker must stay visible.
-const MAX_RETAINED_TERMINAL: usize = 50;
+/// process — the same unbounded-map defect the async registry bounds.
+///
+/// (iter-2458, R2) This used to be its own `50`, a second copy of the async
+/// registry's cap. Two numbers for one policy is how they drift, so this is now an
+/// alias: the retention cap has exactly one definition, and the ordering that goes
+/// with it lives in `async_delegation::oldest_terminal_ids`.
+pub(crate) const MAX_RETAINED_TERMINAL: usize =
+    crate::tools::async_delegation::MAX_RETAINED_TERMINAL;
 
 static LIVE: OnceLock<Mutex<Vec<Row>>> = OnceLock::new();
 
@@ -93,36 +97,22 @@ pub fn finish(id: &str, status: &str, detail: Option<String>) {
 
 /// Drop the OLDEST finished rows beyond the retention cap.
 ///
-/// Ordered by `started_at`, with the id as a tiebreak so the survivor of a
-/// same-second prune does not depend on `Vec` order — the same total-order rule
-/// the async pruner follows.
+/// The ordering is NOT defined here any more: `crate::tools::async_delegation::
+/// oldest_terminal_ids` owns "keep the newest N of (time, id)", so the two
+/// registries cannot drift apart. (iter-2458, R2 — this was the second copy of the
+/// rule, with its own cap constant and its own `sort_by`.)
 fn prune() {
     if let Ok(mut rows) = live().lock() {
-        let terminal: Vec<usize> = rows
+        let keys: Vec<(u64, String)> = rows
             .iter()
-            .enumerate()
-            .filter(|(_, r)| r.status != "running")
-            .map(|(i, _)| i)
+            .filter(|r| r.status != "running")
+            .map(|r| (r.started_at, r.id.clone()))
             .collect();
-        if terminal.len() <= MAX_RETAINED_TERMINAL {
-            return;
+        let drop =
+            crate::tools::async_delegation::oldest_terminal_ids(&keys, MAX_RETAINED_TERMINAL);
+        if !drop.is_empty() {
+            rows.retain(|r| !drop.contains(&r.id));
         }
-        let mut ordered: Vec<(u64, &String, usize)> = terminal
-            .iter()
-            .map(|i| (rows[*i].started_at, &rows[*i].id, *i))
-            .collect();
-        ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
-        let drop: std::collections::HashSet<usize> = ordered
-            .into_iter()
-            .take(terminal.len() - MAX_RETAINED_TERMINAL)
-            .map(|(_, _, i)| i)
-            .collect();
-        let mut i = 0;
-        rows.retain(|_| {
-            let keep = !drop.contains(&i);
-            i += 1;
-            keep
-        });
     }
 }
 

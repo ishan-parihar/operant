@@ -341,7 +341,7 @@ fn write_ledger_atomic(path: &std::path::Path, records: &[AsyncDelegationRecord]
 /// room for a finished one makes a restart forget work the operator is still
 /// waiting on.
 fn enforce_terminal_cap(records: &mut Vec<AsyncDelegationRecord>) {
-    let mut terminal: Vec<(u64, String)> = records
+    let keys: Vec<(u64, String)> = records
         .iter()
         .filter(|r| r.status != AsyncDelegationStatus::Pending)
         .map(|r| {
@@ -351,19 +351,39 @@ fn enforce_terminal_cap(records: &mut Vec<AsyncDelegationRecord>) {
             )
         })
         .collect();
-    if terminal.len() <= MAX_RETAINED_TERMINAL {
-        return;
-    }
-    // Oldest first, so the front of the list is what the cap cuts.
-    terminal.sort_by(|(time, id), (other_time, other_id)| {
-        time.cmp(other_time).then_with(|| id.cmp(other_id))
-    });
-    let cut: std::collections::HashSet<String> = terminal
-        .iter()
-        .take(terminal.len() - MAX_RETAINED_TERMINAL)
-        .map(|(_, id)| id.clone())
-        .collect();
+    let cut = oldest_terminal_ids(&keys, MAX_RETAINED_TERMINAL);
     records.retain(|r| !cut.contains(&r.delegation_id));
+}
+
+/// The ONE definition of "keep the newest N terminal entries".
+///
+/// (iter-2458, R2) This ordering was written twice — here and in
+/// `foreground_swarm::prune`, each with its own `MAX_RETAINED_TERMINAL` and its
+/// own `sort_by` — so the two caps could drift without anything failing. Both
+/// registries keep the newest `cap` of `(time, id)` pairs and discard the rest,
+/// and the total order on `(time, id)` is what makes the survivor of a same-second
+/// prune independent of iteration order rather than of the underlying container.
+///
+/// `id` is the tiebreak on purpose: a timestamp alone leaves two rows finished in
+/// the same second in an order the sort is free to choose, so which one survived
+/// depended on whether the caller had sorted stably or not.
+///
+/// Returns the ids to DROP.
+pub(crate) fn oldest_terminal_ids<T: Clone + Ord>(
+    entries: &[(T, String)],
+    cap: usize,
+) -> std::collections::HashSet<String> {
+    if entries.len() <= cap {
+        return std::collections::HashSet::new();
+    }
+    let mut ordered: Vec<&(T, String)> = entries.iter().collect();
+    // Oldest first, so the front of the list is what the cap cuts.
+    ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    ordered
+        .into_iter()
+        .take(entries.len() - cap)
+        .map(|(_, id)| id.clone())
+        .collect()
 }
 
 fn merge_records(
@@ -1977,5 +1997,51 @@ mod ledger_merge_tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// iter-2458 (R2): ONE definition of the retention rule, shared by both
+    /// registries.
+    ///
+    /// `foreground_swarm::prune` and `enforce_terminal_cap` each used to spell out
+    /// "keep the newest N of (time, id)" — their own cap constant and their own
+    /// `sort_by` — so the two caps could drift apart with nothing failing. Both now
+    /// call `oldest_terminal_ids`, and this pins the SHARED shape rather than either
+    /// caller: the newest `cap` by (time, id) survive, the oldest are returned as
+    /// the ids to drop, and a timestamp tie is broken on the id.
+    #[test]
+    fn the_retention_rule_is_one_definition_both_registries_call() {
+        // Below the cap: nothing to drop, whatever the order.
+        let few: Vec<(u64, String)> = (0..3).map(|i| (i, format!("r{i}"))).collect();
+        assert!(
+            oldest_terminal_ids(&few, 5).is_empty(),
+            "a set under the cap must never be cut"
+        );
+
+        // Over the cap: the OLDEST are dropped, and a same-second tie goes to the
+        // highest id (so the survivor never depends on the container's order).
+        // Handed over DESCENDING on purpose: an implementation that kept input
+        // order would keep the wrong end.
+        let many: Vec<(u64, String)> = (0..7)
+            .rev()
+            .map(|i| {
+                let time = if i < 2 { 100 } else { 200 };
+                (time, format!("r{i}"))
+            })
+            .collect();
+        let dropped = oldest_terminal_ids(&many, 5);
+        assert_eq!(dropped.len(), 2, "exactly len-cap ids must be dropped");
+        assert!(
+            dropped.contains("r1") && dropped.contains("r0"),
+            "the two oldest must go, and the timestamp tie must break on the id: {dropped:?}"
+        );
+
+        // And the two production callers use the SAME cap constant shape: one
+        // number, one ordering. If a future edit reintroduces a second copy, the
+        // single-definition grep is the detector.
+        assert_eq!(
+            crate::tools::foreground_swarm::MAX_RETAINED_TERMINAL,
+            MAX_RETAINED_TERMINAL,
+            "both registries must retain the same number of terminal rows"
+        );
     }
 }
