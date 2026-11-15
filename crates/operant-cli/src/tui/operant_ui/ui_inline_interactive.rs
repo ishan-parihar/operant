@@ -58,34 +58,58 @@ fn route_provider_display(provider: &str, api_method: &str) -> String {
 
 fn picker_entry_display_name(entry: &crate::tui::operant_app::tui_fns::PickerEntry) -> String {
     let base = picker_entry_pretty_name(entry);
-    let default_marker = if entry.is_default { " default" } else { "" };
+    // (model plan M7) Every fact a row carries, as INDEPENDENT chips.
+    //
+    // This was an `else if` ladder, so a row showed exactly ONE of favourite /
+    // recommended / new / old / date: a row that was both a favourite and
+    // recommended showed only the first, and the operator could not tell a
+    // curated recommendation from their own bookmark. The chips are independent
+    // because the facts are.
+    let mut chips: Vec<String> = Vec::new();
     let is_new = entry
         .options
         .iter()
         .any(|option| option.detail.contains("recently added"));
-    let suffix = if is_new && !entry.is_current {
-        format!(" new{}", default_marker)
-    } else if entry.is_favorite {
-        format!(" ♥{}", default_marker)
-    } else if entry.recommended {
-        format!(" ★{}", default_marker)
-    } else if entry.old && !entry.is_current {
-        if let Some(ref date) = entry.created_date {
-            format!(" {}{}", date, default_marker)
-        } else {
-            format!(" old{}", default_marker)
+    if is_new && !entry.is_current {
+        chips.push("new".to_string());
+    }
+    if entry.is_favorite {
+        chips.push("♥".to_string());
+    }
+    if entry.recommended {
+        chips.push("★".to_string());
+    }
+    if entry.old && !entry.is_current {
+        match entry.created_date.as_deref() {
+            Some(date) => chips.push(date.to_string()),
+            None => chips.push("old".to_string()),
         }
-    } else if let Some(ref date) = entry.created_date {
-        if !entry.is_current {
-            format!(" {}{}", date, default_marker)
-        } else {
-            default_marker.to_string()
-        }
-    } else {
-        default_marker.to_string()
-    };
+    } else if let Some(date) = entry.created_date.as_deref()
+        && !entry.is_current
+    {
+        chips.push(date.to_string());
+    }
+    if entry.is_default {
+        chips.push("default".to_string());
+    }
+    // The two carried-but-never-rendered ordering signals (model plan M7):
+    // `usage_score` and the option's reference cost were struct fields with no
+    // reader anywhere in the render path, so a row the catalogue had scored
+    // looked identical to one it had not.
+    if entry.usage_score > 0 {
+        chips.push(format!("usage {}", entry.usage_score));
+    }
+    if let Some(cost) = entry
+        .active_option()
+        .and_then(|option| option.estimated_reference_cost_micros)
+    {
+        chips.push(format!("${:.2}/M", cost as f64 / 1_000_000.0));
+    }
 
-    format!("{}{}", base, suffix)
+    if chips.is_empty() {
+        return base;
+    }
+    format!("{}  {}", base, chips.join(" · "))
 }
 
 /// Human-friendly rendering of a model picker row's model name.
@@ -1551,6 +1575,52 @@ mod tests {
         entry.recommended = true;
 
         assert!(picker_entry_display_name(entry).contains("♥"));
+    }
+
+    /// (model plan M7) The guard the plan names: a row that is BOTH a favourite
+    /// and recommended must show BOTH. The old `else if` ladder could express
+    /// only one, so a curated recommendation the operator had also bookmarked
+    /// read as an ordinary bookmark.
+    #[test]
+    fn a_row_shows_every_fact_it_carries_not_just_the_first() {
+        let mut picker = sample_picker();
+        let entry = &mut picker.entries[0];
+        entry.is_favorite = true;
+        entry.recommended = true;
+        let both = picker_entry_display_name(entry);
+        assert!(both.contains('♥'), "the favourite chip must survive: {both}");
+        assert!(both.contains('★'), "the recommended chip must survive too: {both}");
+        assert_ne!(
+            both.matches('♥').count() + both.matches('★').count(),
+            1,
+            "exactly one fact is the defect: {both}"
+        );
+    }
+
+    /// The two carried-but-never-rendered ordering signals (model plan M7).
+    #[test]
+    fn a_row_renders_the_usage_score_and_the_reference_cost() {
+        let mut picker = sample_picker();
+        let entry = &mut picker.entries[0];
+        entry.usage_score = 82;
+        entry.options[0].estimated_reference_cost_micros = Some(420_000);
+        let rendered = picker_entry_display_name(entry);
+        assert!(
+            rendered.contains("usage 82"),
+            "the usage score must reach the row: {rendered}"
+        );
+        assert!(
+            rendered.contains("$0.42/M"),
+            "the reference cost must reach the row: {rendered}"
+        );
+
+        // A row that carries neither gains no empty chips.
+        let mut bare = sample_picker();
+        bare.entries[0].usage_score = 0;
+        bare.entries[0].options[0].estimated_reference_cost_micros = None;
+        let plain = picker_entry_display_name(&bare.entries[0]);
+        assert!(!plain.contains("usage"), "no zero-usage chip: {plain}");
+        assert!(!plain.contains("/M"), "no absent-cost chip: {plain}");
     }
 
     #[test]
