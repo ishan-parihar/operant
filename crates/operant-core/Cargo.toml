@@ -11,6 +11,7 @@ keywords = ["ai", "agent", "llm", "hermes", "react"]
 categories = ["ai", "asynchronous", "network-programming"]
 
 [dependencies]
+libc = "0.2"
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }

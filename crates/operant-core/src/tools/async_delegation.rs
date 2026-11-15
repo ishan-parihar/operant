@@ -170,8 +170,59 @@ pub fn enable_persistence(path: PathBuf) -> usize {
 /// the same ledger.
 ///
 /// Best-effort, as before: a write failure must never block a delegation.
+/// An exclusive advisory lock on the ledger, held across one read-merge-write.
+///
+/// (audit finding) `persist()` reads the file, merges, and writes it back. With
+/// two processes persisting at once — the TUI and the gateway share one home —
+/// both could read the same base and the second write would drop the first's new
+/// record, which is exactly the cross-process case T5's merge exists for. The
+/// lock is what makes the merge mean anything.
+///
+/// Unix-only, like the rest of this module's file handling (`fs_secrets` is
+/// already Unix-shaped): `flock` on a sibling `.lock` file, so the ledger's own
+/// bytes are never the lock target.
+struct LedgerLock {
+    file: std::fs::File,
+}
+
+impl LedgerLock {
+    fn acquire(path: &std::path::Path) -> Option<Self> {
+        use std::os::unix::io::AsRawFd;
+        let lock_path = path.with_extension("lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .ok()?;
+        // Blocking exclusive: a second writer waits its turn rather than
+        // overwriting a record it never read.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            return None;
+        }
+        Some(Self { file })
+    }
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 fn persist() {
     let Some(path) = LEDGER_PATH.get() else {
+        return;
+    };
+    // Serialize the read-merge-write across processes. A writer that cannot take
+    // the lock skips this persist rather than risking a lost record; the next
+    // status change persists again.
+    let Some(_lock) = LedgerLock::acquire(path) else {
         return;
     };
     // Merge base: the current file, which may predate this process.
@@ -180,10 +231,26 @@ fn persist() {
         .and_then(|text| serde_json::from_str::<Vec<AsyncDelegationRecord>>(&text).ok())
         .unwrap_or_default();
     let records = merge_records(prior, list_records());
-    let Ok(json) = serde_json::to_string_pretty(&records) else {
+    write_ledger_atomic(path, &records);
+}
+
+/// Replace `path` with `records` atomically.
+///
+/// (audit finding) `write_secret_file` truncates in place, so a crash mid-write
+/// would leave a half-written ledger that no longer parses — and an unparseable
+/// ledger reads as "no records at all", which is the whole file lost rather than
+/// the one record being written. Writing beside the target and renaming over it
+/// is atomic on the same filesystem, so a reader sees the old ledger or the new
+/// one, never a torn one. The mode is set on the temp before the rename, so the
+/// ledger is never briefly world-readable either.
+fn write_ledger_atomic(path: &std::path::Path, records: &[AsyncDelegationRecord]) {
+    let Ok(json) = serde_json::to_string_pretty(records) else {
         return;
     };
-    let _ = crate::fs_secrets::write_secret_file(path, json.as_bytes());
+    let tmp = path.with_extension("tmp");
+    if crate::fs_secrets::write_secret_file(&tmp, json.as_bytes()).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 /// Merge the current in-memory records into the persisted set.
@@ -223,7 +290,12 @@ fn merge_records(
     let mut terminal: Vec<(u64, String)> = records
         .iter()
         .filter(|r| r.status != AsyncDelegationStatus::Pending)
-        .map(|r| (r.completed_time.unwrap_or(r.dispatch_time), r.delegation_id.clone()))
+        .map(|r| {
+            (
+                r.completed_time.unwrap_or(r.dispatch_time),
+                r.delegation_id.clone(),
+            )
+        })
         .collect();
     if terminal.len() > MAX_RETAINED_TERMINAL {
         // Oldest first, so the front of the list is what the cap cuts.
@@ -1584,5 +1656,50 @@ mod ledger_merge_tests {
              interrupted-records path is for"
         );
         __test_reset_registry();
+    }
+
+    /// (audit finding) The persist is an atomic replace under a lock: the ledger
+    /// parses after a write, and no torn `.tmp` sibling is left behind.
+    #[test]
+    fn a_persist_leaves_a_parseable_ledger_and_no_temp_file() {
+        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let dir =
+            std::env::temp_dir().join(format!("operant-ledger-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("delegations.json");
+        // A prior file so the merge has something to preserve.
+        let prior = AsyncDelegationRecord {
+            delegation_id: "dlg-file-only".to_string(),
+            status: AsyncDelegationStatus::Completed,
+            goal: "from an earlier process".to_string(),
+            model: "m".to_string(),
+            dispatch_time: now_secs(),
+            completed_time: Some(now_secs()),
+            result: Some("ok".to_string()),
+            error: None,
+            session_id: Some("sess-file".to_string()),
+            parent_session_id: None,
+            request_key: None,
+        };
+        std::fs::write(&path, serde_json::to_string_pretty(&[prior.clone()]).unwrap()).unwrap();
+
+        let id = create_record("a fresh delegation", "m");
+        mark_completed(&id, "done");
+        let merged = merge_records(vec![prior], list_records());
+        write_ledger_atomic(&path, &merged);
+
+        let text = std::fs::read_to_string(&path).expect("the ledger is readable");
+        let records: Vec<AsyncDelegationRecord> =
+            serde_json::from_str(&text).expect("the ledger must parse after a write");
+        assert!(
+            records.iter().any(|r| r.delegation_id == "dlg-file-only"),
+            "the file-only record must survive the write"
+        );
+        assert!(records.iter().any(|r| r.delegation_id == id));
+        assert!(
+            !dir.join("delegations.tmp").exists(),
+            "the atomic write must not leave its temp file behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
