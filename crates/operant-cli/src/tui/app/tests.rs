@@ -2735,7 +2735,7 @@ async fn the_hub_navigation_key_waits_for_the_row_load_to_land() {
     let (tx, rx) = tokio::sync::mpsc::channel::<(
         Vec<operant_core::session::listing::SessionEntryV2>,
         Option<usize>,
-        Vec<(String, String)>,
+        Vec<(String, String, usize)>,
         Option<operant_core::database::SessionFilterCounts>,
     )>(1);
     app.session_list_rx = Some(rx);
@@ -2803,7 +2803,7 @@ async fn the_hub_enter_switches_session_and_rebuilds_the_display_in_frame() {
     let (tx, rx) = tokio::sync::mpsc::channel::<(
         Vec<operant_core::session::listing::SessionEntryV2>,
         Option<usize>,
-        Vec<(String, String)>,
+        Vec<(String, String, usize)>,
         Option<operant_core::database::SessionFilterCounts>,
     )>(1);
     app.session_list_rx = Some(rx);
@@ -10631,7 +10631,7 @@ mod rename_on_load_tests {
         let (tx, rx) = tokio::sync::mpsc::channel::<(
             Vec<operant_core::session::listing::SessionEntryV2>,
             Option<usize>,
-            Vec<(String, String)>,
+            Vec<(String, String, usize)>,
             Option<operant_core::database::SessionFilterCounts>,
         )>(1);
         app.session_list_rx = Some(rx);
@@ -10646,7 +10646,7 @@ mod rename_on_load_tests {
         let (tx2, rx2) = tokio::sync::mpsc::channel::<(
             Vec<operant_core::session::listing::SessionEntryV2>,
             Option<usize>,
-            Vec<(String, String)>,
+            Vec<(String, String, usize)>,
             Option<operant_core::database::SessionFilterCounts>,
         )>(1);
         app.session_list_rx = Some(rx2);

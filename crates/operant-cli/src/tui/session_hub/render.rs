@@ -838,9 +838,16 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
             ))),
         ]
     } else if state.visible_rows().is_empty() {
+        // (2026-11-15, session-hub plan T1) A filter that empties the hub must
+        // say WHO it is empty for. A blank pane whose status glyph says nothing
+        // is the "the picker is broken" conclusion the operator reaches.
+        let empty_note = state
+            .employee_filter_label()
+            .map(|label| format!("  No sessions for {label} yet"))
+            .unwrap_or_else(|| "  No sessions match".to_string());
         vec![
             ListItem::new(Line::from(Span::styled(
-                "  No sessions match",
+                empty_note,
                 Style::default()
                     .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD),

@@ -1927,13 +1927,23 @@ impl Database {
     /// Employees with no session are still listed — "this seat has run
     /// nothing" is a fact the operator wants, and hiding the seat makes it
     /// indistinguishable from a seat that does not exist.
-    pub fn list_session_employees(&self) -> Result<Vec<(String, String)>> {
+    /// Every employee the store knows of, WITH the count of sessions that
+    /// employee has.
+    ///
+    /// (2026-11-15, session-hub plan T1) The count is part of the SAME statement
+    /// that produces the roster, so the roster and the counts cannot disagree.
+    /// `employee_id` comes from the sessions it belongs to; the employees table
+    /// contributes its members even at zero sessions, and the count tells the
+    /// operator how many that is.
+    pub fn list_session_employees(&self) -> Result<Vec<(String, String, usize)>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT employee_id,
                         CASE WHEN e.name IS NULL OR e.name = '' THEN employee_id
-                             ELSE e.name END AS label
+                             ELSE e.name END AS label,
+                        (SELECT COUNT(*) FROM sessions x
+                          WHERE x.employee_id = s.employee_id) AS session_count
                  FROM (
                      SELECT employee_id FROM sessions
                      WHERE employee_id IS NOT NULL AND employee_id <> ''
@@ -1949,7 +1959,11 @@ impl Database {
             })?;
         let rows = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                ))
             })
             .map_err(|e| Error::Agent(format!("Failed to list session employees: {}", e)))?;
         let mut out = Vec::new();
@@ -3262,7 +3276,10 @@ impl Database {
     /// Returns the TITLE too, because both callers want it: the explicit-id path
     /// prints the session the operator named, and the marker path falls back to
     /// recency when the row is gone.
-    pub fn get_session_id_and_title(&self, session_id: &str) -> Result<Option<(String, Option<String>)>> {
+    pub fn get_session_id_and_title(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare("SELECT id, title FROM sessions WHERE id = ?1")
@@ -3273,7 +3290,9 @@ impl Database {
             })
             .map_err(|e| Error::Agent(format!("Failed to query session: {}", e)))?;
         match rows.next() {
-            Some(row) => row.map(Some).map_err(|e| Error::Agent(format!("Session row error: {}", e))),
+            Some(row) => row
+                .map(Some)
+                .map_err(|e| Error::Agent(format!("Session row error: {}", e))),
             None => Ok(None),
         }
     }

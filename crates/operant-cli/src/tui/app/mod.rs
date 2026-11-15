@@ -785,9 +785,10 @@ pub struct App {
             // a page (500), so without this the header's row count is the
             // page size and reads as the whole truth (audit finding 3).
             Option<usize>,
-            // The EMPLOYEE ROSTER: every employee the store knows about, by
-            // id and by label (audit finding 3).
-            Vec<(String, String)>,
+            // The EMPLOYEE ROSTER: every employee the store knows about, by id,
+            // label and how many sessions it has (session-hub plan T1). Zero is
+            // a value, not silence.
+            Vec<(String, String, usize)>,
             // The store-wide per-mode counts (plan F4): the tabs say how many
             // rows a filter would show in the STORE, not in the page.
             Option<operant_core::database::SessionFilterCounts>,

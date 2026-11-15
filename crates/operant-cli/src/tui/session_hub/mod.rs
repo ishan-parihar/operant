@@ -585,7 +585,7 @@ pub struct SessionHubState {
     /// authority on which of them have run something. The axis now offers the
     /// roster, and an employee with no session still appears — "this seat has
     /// run nothing" is a fact the operator wants.
-    employee_roster: Vec<(String, String)>,
+    employee_roster: Vec<(String, String, usize)>,
     /// How many sessions the STORE holds, with no limit — the header's
     /// "N of M" (audit finding 3: the hub's own count read as the whole
     /// truth while 2,802 of 3,302 sessions sat past the 500-row page).
@@ -830,7 +830,10 @@ impl SessionHubState {
     /// first stop — an axis the operator cannot step onto without knowing its
     /// shape is an axis they will avoid.
     /// The roster, for the axis's cycle.
-    pub fn set_employee_roster(&mut self, roster: Vec<(String, String)>) {
+    /// One entry per stop on the employee axis: id, display name, and how many
+    /// sessions that stop actually has in the store. Zero is a first-class value —
+    /// "this seat has run nothing" is a fact the operator wants.
+    pub fn set_employee_roster(&mut self, roster: Vec<(String, String, usize)>) {
         self.employee_roster = roster;
     }
 
@@ -848,7 +851,7 @@ impl SessionHubState {
         let employees: Vec<String> = self
             .employee_roster
             .iter()
-            .map(|(id, _)| id.clone())
+            .map(|(id, _, _)| id.clone())
             .collect();
         self.employee_filter = match self.employee_filter.take() {
             None => employees.first().cloned(),
@@ -886,13 +889,16 @@ impl SessionHubState {
     /// The LABEL of the engaged employee — the operator's roster names them
     /// ("Premiere"), and the chip should too. Falls back to the id when the
     /// roster has no label for it (a cron tag, which has no name).
-    pub fn employee_filter_label(&self) -> Option<&str> {
+    /// The chip text for the engaged employee: the roster's label plus the
+    /// count of sessions that employee has. Zero reads as an explicit zero, not
+    /// as a silence the pane leaves to the operator's inference.
+    pub fn employee_filter_label(&self) -> Option<String> {
         let id = self.employee_filter.as_deref()?;
         self.employee_roster
             .iter()
-            .find(|(eid, _)| eid == id)
-            .map(|(_, label)| label.as_str())
-            .or(Some(id))
+            .find(|(eid, _, _)| eid == id)
+            .map(|(_, label, count)| format!("{label} · {count}"))
+            .or_else(|| Some(id.to_string()))
     }
 
     pub fn set_live_session_id(&mut self, id: Option<String>) {
