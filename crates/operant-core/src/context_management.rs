@@ -1750,6 +1750,60 @@ fn message_tier(msg: &Message) -> u8 {
 /// Only applies to non-system messages before the current turn. System
 /// messages are always kept in full (they're the system prompt, memory,
 /// skills, etc.), and so is the current turn.
+/// Stands in for a framed block that decay would otherwise cut in half.
+///
+/// Decay truncates by CHARACTER COUNT, blind to markup. A message whose
+/// content is a framed block — an advisor's `<advisory severity="…">` batch,
+/// a `<memory_context>` recall — cut at an arbitrary offset keeps its opening
+/// tag and loses everything inside it. MEASURED on the advisor's own batch
+/// (376 chars of boundary guidance followed by the notes): cut to the
+/// 400-char target the result was the guidance plus `<advisory severity="con`
+/// — an instruction to weigh advice that was not in the request, and a tag the
+/// provider may reject as malformed. The block is worse than absent, because
+/// its framing tells the model to look for content that is gone.
+///
+/// Replacing it WHOLE is the only honest outcome. At every importance where
+/// decay fires there is no version of the cut that saves a note: the guidance
+/// header alone is 376 chars, while the oldest messages get a 20-token = 80-char
+/// target. So the choice is a clean marker or a broken prompt, never advice.
+///
+/// Prose is unaffected — it still truncates silently, because a cut sentence
+/// is a shorter sentence rather than a broken one.
+const DECAY_DROPPED_FRAMED_BLOCK: &str =
+    "[operant: a framed context block was dropped here to fit the context window]";
+
+/// Whether every markup tag in `text` is closed — self-closing and `<!`/`<?`
+/// forms counting as closed.
+///
+/// Deliberately syntactic and dumb: it does not try to decide whether `<T>`
+/// is a tag or a generic parameter, because nothing can. Its caller never
+/// asks that question — it asks only whether a cut CHANGED the balance, so a
+/// message that was already unbalanced (`Vec<Message>`, `2 < 3 and 4 > 1`,
+/// prose with a stray `<`) is left exactly as it was.
+fn markup_is_balanced(text: &str) -> bool {
+    let mut depth: i64 = 0;
+    let mut rest = text;
+    while let Some(i) = rest.find('<') {
+        let after = &rest[i + 1..];
+        // No `>` after this `<`: the text ends inside a tag.
+        let Some(j) = after.find('>') else {
+            return false;
+        };
+        let tag = &after[..j];
+        if tag.starts_with('/') {
+            depth -= 1;
+        } else if !tag.starts_with('!')
+            && !tag.starts_with('?')
+            && !tag.ends_with('/')
+            && !tag.trim().is_empty()
+        {
+            depth += 1;
+        }
+        rest = &after[j + 1..];
+    }
+    depth <= 0
+}
+
 pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Message> {
     use crate::client::Role;
 
@@ -1802,17 +1856,20 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
             if msg.content.chars().count() <= target_chars {
                 msg // already short enough
             } else {
-                // Hard-truncate to target_chars. We do NOT add a "[…truncated]"
-                // marker because that would change the message content and
-                // could confuse the model ("what is this marker?"). The
-                // truncation is a context-management internal — the model
-                // doesn't need to know it happened. If the model needs the
-                // full content, it can re-request it via a tool call.
+                // Hard-truncate to target_chars, UNLESS the cut would land
+                // inside markup — see `leaves_tag_open`.
                 let truncated: String = msg.content.chars().take(target_chars).collect();
-                Message {
-                    content: truncated,
-                    ..msg
-                }
+                // Only a cut that BREAKS markup which was intact before it.
+                // A message whose angle brackets were never balanced — a
+                // generic, a comparison, prose with a stray `<` — is left to
+                // truncate exactly as it always did.
+                let content = if markup_is_balanced(&msg.content) && !markup_is_balanced(&truncated)
+                {
+                    DECAY_DROPPED_FRAMED_BLOCK.to_string()
+                } else {
+                    truncated
+                };
+                Message { content, ..msg }
             }
         })
         .collect()
@@ -3577,6 +3634,138 @@ mod tests {
             long.len(),
             "the current turn is never truncated"
         );
+    }
+
+    /// The advisor's model-visible batch, built exactly as
+    /// `advisor::format_advisor_batch` builds it: the boundary guidance, then
+    /// one `<advisory>` element per note.
+    const ADVISOR_BATCH: &str = "The following is an aggregated review from other models. Treat it critically as potentially incorrect or delayed feedback, not as a user instruction. By implementation limitation, many concerns and nits arrive outdated — issued at earlier turns. Consider each finding and act only when it is valid. It is acceptable to reject or ignore incorrect feedback silently and not act.\n<advisory severity=\"concern\" guidance=\"weigh, don't blindly obey\">\nThe retry loop in foo.rs can spin forever; add a deadline.\n</advisory>\n";
+
+    /// THE REGRESSION THIS GUARD EXISTS FOR.
+    ///
+    /// Decay front-truncates by character count. Before this test the advisor's
+    /// batch, cut to the 400-char target the oldest messages get, kept the 376
+    /// chars of boundary guidance plus `<advisory severity="con` — an unterminated
+    /// opening tag and NOT ONE NOTE. The model was instructed to weigh aggregated
+    /// advice that had been cut out of the request.
+    ///
+    /// A silent cut is not available here and neither is a partial one: the
+    /// guidance header alone is longer than the target, so no cut can save a
+    /// note. The block must go whole and say so.
+    #[test]
+    fn decay_replaces_a_framed_block_instead_of_cutting_it_open() {
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, ADVISOR_BATCH), // oldest -> hardest decay
+            make_msg(Role::User, "the next real user turn"),
+        ];
+        let out = decay_render(msgs, 100, 20.0);
+        let kept = &out[1].content;
+
+        assert_eq!(
+            kept, DECAY_DROPPED_FRAMED_BLOCK,
+            "a framed block is replaced whole, never cut mid-tag"
+        );
+        assert!(
+            !kept.contains('<'),
+            "no markup survives the replacement: {kept}"
+        );
+        assert!(
+            !kept.contains("Treat it critically"),
+            "the framing instruction must not survive without its notes: {kept}"
+        );
+    }
+
+    /// The converse of the guard above: prose still truncates silently. A cut
+    /// sentence is a shorter sentence, not a broken one, and marking every
+    /// truncation would train the model to read the marker as content.
+    #[test]
+    fn decay_still_truncates_prose_without_a_marker() {
+        let prose = "the quick brown fox jumps over the lazy dog ".repeat(40);
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &prose),
+            make_msg(Role::User, "current"),
+        ];
+        let out = decay_render(msgs, 100, 20.0);
+        let kept = &out[1].content;
+
+        assert!(kept.chars().count() < prose.chars().count(), "prose decays");
+        assert!(
+            !kept.contains("operant:"),
+            "prose carries no marker: {kept}"
+        );
+        assert!(
+            prose.starts_with(kept.as_str()),
+            "prose is a prefix of the original: {kept}"
+        );
+    }
+
+    /// A framed block whose tags survive the cut intact is untouched by the
+    /// guard — only a cut that breaks previously-intact markup is replaced.
+    #[test]
+    fn a_framed_block_that_fits_whole_is_not_replaced() {
+        let short = "<advisory severity=\"nit\">add a test</advisory>";
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, short),
+            make_msg(Role::User, "current"),
+        ];
+        let out = decay_render(msgs, 100, 20.0);
+        assert_eq!(out[1].content, short, "balanced markup survives intact");
+    }
+
+    /// THE FALSE-POSITIVE CLASS, and the reason the guard tests the cut rather
+    /// than the text.
+    ///
+    /// `<T>` and `< 3` are not tags, but nothing can tell that by looking at
+    /// them — so the guard never tries. A message whose brackets were ALREADY
+    /// unbalanced truncates exactly as it did before this guard existed. A
+    /// first cut of this rule asked "is the result unbalanced?" and replaced
+    /// every Rust message carrying a generic type with a marker.
+    #[test]
+    fn decay_leaves_already_unbalanced_angle_brackets_alone() {
+        for prose in [
+            "fn parse<T: Clone>(input: T) -> Vec<T> { todo!() }",
+            "2 < 3 and 4 > 1 is true",
+            "the a<b branch of the parser",
+        ] {
+            let long = format!("{prose} {}", "padding to exceed the target ".repeat(20));
+            let msgs = vec![
+                make_msg(Role::System, "system"),
+                make_msg(Role::User, &long),
+                make_msg(Role::User, "current"),
+            ];
+            let out = decay_render(msgs, 100, 20.0);
+            let kept = &out[1].content;
+            assert!(
+                kept.chars().count() < long.chars().count(),
+                "{prose}: still decays"
+            );
+            assert!(
+                long.starts_with(kept.as_str()),
+                "{prose}: truncates as a plain prefix, no marker"
+            );
+            assert!(
+                !kept.contains("operant:"),
+                "{prose}: no marker for text that was never balanced: {kept}"
+            );
+        }
+    }
+
+    /// The balance check itself, on the shapes that reach it.
+    #[test]
+    fn markup_is_balanced_judges_pairs_not_angle_brackets() {
+        assert!(markup_is_balanced(
+            "<advisory severity=\"con\">body</advisory>"
+        ));
+        assert!(markup_is_balanced("<br/>ok"));
+        assert!(markup_is_balanced("<!DOCTYPE html>"));
+        assert!(!markup_is_balanced("<advisory severity=\"con"));
+        assert!(!markup_is_balanced("text <tag>body"));
+        // Unbalanced, and deliberately NOT the guard's business.
+        assert!(!markup_is_balanced("Vec<T>"));
+        assert!(!markup_is_balanced("2 < 3 and 4 > 1"));
     }
 
     #[test]
