@@ -261,6 +261,49 @@ fn write_ledger_atomic(path: &std::path::Path, records: &[AsyncDelegationRecord]
 /// delegation, so its state is newer than the file's. Retention is applied over
 /// the merged set, then the whole ledger is sorted newest-dispatch-first so a
 /// second process can list a session's children by file alone.
+/// Cut the oldest terminal rows down to [`MAX_RETAINED_TERMINAL`], in place.
+///
+/// ONE implementation of the retention rule. It was four: `merge_records`,
+/// `recover_interrupted` and `prune` each spelled the ordering out by hand, and
+/// `recover_interrupted` sorted by time ALONE — so a restart that recovered two
+/// delegations finished in the same second kept whichever the file happened to
+/// list first, while the other paths keep the higher id. A total order is what
+/// makes "the oldest N are cut" mean the same thing on every path.
+///
+/// That duplication has already shipped a defect: iter-2406 exists because
+/// `merge_records` truncated the WHOLE set while `prune` filtered `Pending`
+/// first, so a still-running child was dropped from the ledger while it ran.
+///
+/// `Pending` rows never count against the cap and are never cut. A pending row
+/// is work in flight; the cap bounds HISTORY, and dropping a live row to make
+/// room for a finished one makes a restart forget work the operator is still
+/// waiting on.
+fn enforce_terminal_cap(records: &mut Vec<AsyncDelegationRecord>) {
+    let mut terminal: Vec<(u64, String)> = records
+        .iter()
+        .filter(|r| r.status != AsyncDelegationStatus::Pending)
+        .map(|r| {
+            (
+                r.completed_time.unwrap_or(r.dispatch_time),
+                r.delegation_id.clone(),
+            )
+        })
+        .collect();
+    if terminal.len() <= MAX_RETAINED_TERMINAL {
+        return;
+    }
+    // Oldest first, so the front of the list is what the cap cuts.
+    terminal.sort_by(|(time, id), (other_time, other_id)| {
+        time.cmp(other_time).then_with(|| id.cmp(other_id))
+    });
+    let cut: std::collections::HashSet<String> = terminal
+        .iter()
+        .take(terminal.len() - MAX_RETAINED_TERMINAL)
+        .map(|(_, id)| id.clone())
+        .collect();
+    records.retain(|r| !cut.contains(&r.delegation_id));
+}
+
 fn merge_records(
     prior: Vec<AsyncDelegationRecord>,
     current: Vec<AsyncDelegationRecord>,
@@ -287,28 +330,7 @@ fn merge_records(
     // not show it and a restart forgot work the operator was waiting on.
     // MEASURED 2026-11-15 (seventh-pass audit, finding 1): `prune()` would keep
     // every row of an all-Pending ledger; this path truncated it to the cap.
-    let mut terminal: Vec<(u64, String)> = records
-        .iter()
-        .filter(|r| r.status != AsyncDelegationStatus::Pending)
-        .map(|r| {
-            (
-                r.completed_time.unwrap_or(r.dispatch_time),
-                r.delegation_id.clone(),
-            )
-        })
-        .collect();
-    if terminal.len() > MAX_RETAINED_TERMINAL {
-        // Oldest first, so the front of the list is what the cap cuts.
-        terminal.sort_by(|(time, id), (other_time, other_id)| {
-            time.cmp(other_time).then_with(|| id.cmp(other_id))
-        });
-        let cut: std::collections::HashSet<&str> = terminal
-            .iter()
-            .take(terminal.len() - MAX_RETAINED_TERMINAL)
-            .map(|(_, id)| id.as_str())
-            .collect();
-        records.retain(|r| !cut.contains(r.delegation_id.as_str()));
-    }
+    enforce_terminal_cap(&mut records);
     records.sort_by(|a, b| {
         b.dispatch_time
             .cmp(&a.dispatch_time)
@@ -335,17 +357,15 @@ pub fn recover_interrupted() -> usize {
     let Ok(records) = serde_json::from_str::<Vec<AsyncDelegationRecord>>(&text) else {
         return 0; // a corrupt ledger must not stop a process from starting
     };
-    let (recovered, settled) = settle_interrupted(records);
+    let (mut recovered, settled) = settle_interrupted(records);
     // Retention still applies across a restart: a ledger that only grows is the
     // same unbounded-map defect persistence would otherwise introduce.
-    let recovered = if recovered.len() > MAX_RETAINED_TERMINAL {
-        let mut recovered = recovered;
-        recovered.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
-        recovered.truncate(MAX_RETAINED_TERMINAL);
-        recovered
-    } else {
-        recovered
-    };
+    //
+    // Via the shared helper, so recovery cuts the same rows the live path would.
+    // It used to sort by time alone: two delegations that finished in the same
+    // second were cut by whichever order the file listed them in, while
+    // `prune` and `merge_records` both break that tie on the id.
+    enforce_terminal_cap(&mut recovered);
     if let Ok(mut map) = registry().lock() {
         *map = recovered
             .into_iter()
@@ -783,17 +803,20 @@ fn prune() {
             .map(|(id, _)| id.clone())
             .collect();
         if terminal.len() > MAX_RETAINED_TERMINAL {
-            let mut sorted: Vec<(&String, u64)> = terminal
-                .iter()
-                .filter_map(|id| {
-                    map.get(id)
-                        .map(|r| (id, r.completed_time.unwrap_or(r.dispatch_time)))
-                })
-                .collect();
-            sorted.sort_by_key(|(id, time)| (*time, *id));
-            for (id, _) in sorted.iter().take(terminal.len() - MAX_RETAINED_TERMINAL) {
-                map.remove(*id);
-            }
+            // The rule lives in `enforce_terminal_cap`; this only adapts it to a
+            // map. The copy that used to sit here is the one iter-2406 fixed in
+            // `merge_records` and NOT here, which is how a duplicated rule drifts.
+            let mut rows: Vec<AsyncDelegationRecord> =
+                terminal.iter().filter_map(|id| map.get(id).cloned()).collect();
+            enforce_terminal_cap(&mut rows);
+            let survivors: std::collections::HashSet<String> =
+                rows.into_iter().map(|r| r.delegation_id).collect();
+            // Pending rows were never candidates to cut, so they must survive the
+            // retain explicitly — `survivors` holds terminal rows only, and a
+            // bare `retain` against it would drop every live delegation.
+            map.retain(|id, r| {
+                r.status == AsyncDelegationStatus::Pending || survivors.contains(id)
+            });
         }
     }
 }
@@ -1495,6 +1518,65 @@ mod ledger_merge_tests {
         assert!(
             ids.contains(&"term-005"),
             "the newest terminal rows survive the cap"
+        );
+    }
+
+    /// Retention is a TOTAL order: rows finished in the same second are cut by
+    /// id, on every path, not by the order the input happened to hold them.
+    ///
+    /// MEASURED 2026-11-15 (ninth-pass audit, finding 1): `recover_interrupted`
+    /// sorted by `completed_time` ALONE while `merge_records` and `prune` both
+    /// broke the tie on the id. So a restart that recovered two delegations
+    /// finished in the same second kept whichever the file listed first, and the
+    /// live path would have kept the other — the same ledger, two different
+    /// survivors, depending on which code path did the cutting. One shared
+    /// `enforce_terminal_cap` closes it.
+    ///
+    /// The fixture is cap+5 rows ALL sharing one timestamp, supplied in
+    /// DESCENDING id order, so "keep input order" and "keep the highest id"
+    /// disagree: a time-only sort is stable, so it would cut `cut-054` first,
+    /// while the rule cuts `cut-000`.
+    ///
+    /// An earlier draft of this test supplied the rows ASCENDING and passed with
+    /// the tiebreak deleted — a stable sort on equal keys preserves input order,
+    /// so both rules cut the same row and the fixture could not tell them apart.
+    /// A tiebreak guard has to make input order lie.
+    #[test]
+    fn the_cap_breaks_a_timestamp_tie_on_the_id_on_every_path() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let same_second = 4_000u64;
+        let rows = MAX_RETAINED_TERMINAL as u64 + 5;
+        // Descending: the highest id is handed over FIRST, so an implementation
+        // that keeps input order keeps the wrong end of the range.
+        let prior: Vec<AsyncDelegationRecord> = (0..rows)
+            .rev()
+            .map(|i| {
+                record(
+                    &format!("cut-{i:03}"),
+                    AsyncDelegationStatus::Completed,
+                    "finished in the same second",
+                    same_second,
+                    Some(same_second),
+                    None,
+                )
+            })
+            .collect();
+        let merged = merge_records(prior, Vec::new());
+        drop(_guard);
+        assert_eq!(
+            merged.len(),
+            MAX_RETAINED_TERMINAL,
+            "the cap still applies to a same-second set"
+        );
+        let ids: Vec<&str> = merged.iter().map(|r| r.delegation_id.as_str()).collect();
+        assert!(
+            ids.contains(&format!("cut-{:03}", rows - 1).as_str()),
+            "the highest id survives a same-second tie"
+        );
+        assert!(
+            !ids.contains(&"cut-000"),
+            "the lowest id is cut, not whichever row the input listed first"
         );
     }
 
