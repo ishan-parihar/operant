@@ -430,3 +430,65 @@ Both iterations: `cargo check --workspace --all-targets` **0 errors**.
 `settle_interrupted` runs first and marks every Pending row Failed, so by the time
 the truncate runs there is nothing live to drop. Recorded rather than changed,
 because a change there would be unguarded work on a path that is not defective.
+
+## Part 5b — Eighth pass (2026-11-15): red-team of the seventh pass's own bytes
+
+**Revision audited:** `origin/main @ d256c7d2` — the seventh pass's own tip, so
+this pass measures exactly what it shipped, not a later tree.
+
+The question this pass asked of each iter-2406/2407 guard is the one the skill
+poses for a self-audit: *what input shape reaches this guard where the condition
+is false while the defect it guards is still present?* The method was mechanical,
+not by reading: instrument the branch, then delete the fix and re-run.
+
+### Finding 1 (should fix) — two of three ledger guards were vacuous — **CLOSED iter-2413**
+
+`crates/operant-core/src/tools/async_delegation.rs` (ledger_merge_tests)
+
+- **What this is:** iter-2406 fixed `merge_records` and added three guards.
+- **Problem:** two of the three passed with the fix deleted. Measured two ways.
+  Instrumenting the retention branch with a panic showed only the third guard
+  entered it (`RETENTION BRANCH RAN with 55 terminal rows`). Then deleting the
+  whole retention block and re-running left two guards green and one red. One
+  defect, one guard — the other two asserted nothing. Guard 1 seeded exactly
+  `MAX_RETAINED_TERMINAL` rows and the branch is gated on `>`, so 50 > 50 is
+  false. Guard 2 seeded an all-Pending ledger, and Pending rows are excluded from
+  the count by construction, so `terminal.len() == 0` and it could not fail for
+  any implementation.
+- **Fix:** both now cross the threshold. Guard 1 seeds cap+5 terminal rows and
+  also asserts the terminal count came out at the cap (evidence the branch ran).
+  Guard 2 becomes `pending_rows_do_not_count_against_the_terminal_cap` and seeds
+  terminal rows over the cap plus five older Pending rows.
+- **If we skip it:** the suite reports 18/18 and the finding reads closed, while
+  two-thirds of its coverage would pass on a tree with no retention at all. A
+  future change that deletes or breaks the cap would ship green.
+
+### What this pass confirmed sound
+
+- **iter-2407's guard is not vacuous.** Deleting the `delegation → its session`
+  edge extension fails `a_grandchild_is_reachable_at_depth_two`. The
+  transparent-hop half is separately pinned: making the hop count a depth level
+  fails it with `left: 3, right: 2`.
+- **The ledger fix is the rule both existing pruners already follow.**
+  `foreground_swarm::prune` (`:99-122`) filters `status != "running"` before
+  counting, exactly as `prune()` and now `merge_records` do. iter-2406 brought
+  the persist path into line with two existing mechanisms rather than inventing a
+  third rule.
+- **`recover_interrupted`'s truncate at `:272` is safe by ordering, confirmed by
+  reading it.** `settle_interrupted` (line 266) marks every Pending row Failed
+  before the truncate runs, so no live row can be cut there.
+- **The fix does not make the ledger unbounded.** Probed: with the pending
+  admission gate (`DEFAULT_MAX_ASYNC_CHILDREN = 3`) respected, the worst case is
+  50 terminal + 3 pending = 53 rows. A probe showing 500 pending rows required
+  bypassing that gate, which only a debug-only mock event handler does
+  (`tui_app.rs:1410`). The fix raises the ceiling by 3, not to unbounded.
+- **No id collision between the two edge spaces.** Delegations are
+  `dlg-<secs>-<n>` (`new_id`) and sessions are `sess_<uuid>`, so the transparent
+  hop cannot mistake a delegation for a session.
+
+### The rule this pass adds to the checklist
+
+A guard is not evidence until it has been observed to fail. "Mutation proven"
+means the fix's *behaviour* was restored; it does not mean the guard *reached* the
+branch. The cheap test is to delete the fix entirely and count the reds — a guard
+that stays green is a guard that was never written, whatever it asserts.
