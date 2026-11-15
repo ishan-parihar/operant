@@ -159,16 +159,68 @@ pub fn enable_persistence(path: PathBuf) -> usize {
     recover_interrupted()
 }
 
-/// Rewrite the ledger from the in-memory registry. Best-effort: a failure must
-/// never block a delegation, the same rule the approval allowlist follows.
+/// Rewrite the ledger from the in-memory registry.
+///
+/// (session-hub plan T5) The write MERGES the memory into the file rather than
+/// replacing the file wholesale. Before this, a process whose registry held a few
+/// test records wrote ONLY those — replacing the operator's real history with
+/// them on `enable_persistence`. The merge keeps every file-only record and lets
+/// memory win on the records THIS process actually holds (the authority: it ran
+/// them), so a delegating process, a resumed process and the next one all observe
+/// the same ledger.
+///
+/// Best-effort, as before: a write failure must never block a delegation.
 fn persist() {
     let Some(path) = LEDGER_PATH.get() else {
         return;
     };
-    let Ok(json) = serde_json::to_string_pretty(&list_records()) else {
+    // Merge base: the current file, which may predate this process.
+    let prior: Vec<AsyncDelegationRecord> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<AsyncDelegationRecord>>(&text).ok())
+        .unwrap_or_default();
+    let records = merge_records(prior, list_records());
+    let Ok(json) = serde_json::to_string_pretty(&records) else {
         return;
     };
     let _ = crate::fs_secrets::write_secret_file(path, json.as_bytes());
+}
+
+/// Merge the current in-memory records into the persisted set.
+///
+/// (session-hub plan T5) A file-only record is preserved: another process, or an
+/// earlier one, wrote it and this process's memory is not the authority for it.
+/// A memory record replaces the file row with the same id — this process ran that
+/// delegation, so its state is newer than the file's. Retention is applied over
+/// the merged set, then the whole ledger is sorted newest-dispatch-first so a
+/// second process can list a session's children by file alone.
+fn merge_records(
+    prior: Vec<AsyncDelegationRecord>,
+    current: Vec<AsyncDelegationRecord>,
+) -> Vec<AsyncDelegationRecord> {
+    let mut records = prior;
+    for record in current {
+        if let Some(slot) = records
+            .iter_mut()
+            .find(|existing| existing.delegation_id == record.delegation_id)
+        {
+            *slot = record;
+        } else {
+            records.push(record);
+        }
+    }
+    // Retention is the same cap that applies on resume: a ledger that only
+    // grows unbounded is the defect the cap exists to prevent.
+    if records.len() > MAX_RETAINED_TERMINAL {
+        records.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
+        records.truncate(MAX_RETAINED_TERMINAL);
+    }
+    records.sort_by(|a, b| {
+        b.dispatch_time
+            .cmp(&a.dispatch_time)
+            .then_with(|| b.delegation_id.cmp(&a.delegation_id))
+    });
+    records
 }
 
 /// Adopt the previous process's ledger and settle whatever it left running.
@@ -774,10 +826,8 @@ mod tests {
         let b = create_record("live-b", "m");
         let c = create_record("live-c", "m");
         let d = create_record("live-d", "m");
-        let mine: std::collections::HashSet<String> = [&a, &b, &c, &d]
-            .into_iter()
-            .cloned()
-            .collect();
+        let mine: std::collections::HashSet<String> =
+            [&a, &b, &c, &d].into_iter().cloned().collect();
 
         // Force DISTINCT dispatch times. `create_record` stamps `now_secs()`, so
         // three records created in the same second share one timestamp and a
@@ -1128,7 +1178,10 @@ mod tests {
 
         // ONE row is newly settled by this call. The other was settled before
         // this process existed, so it is history, not a casualty.
-        assert_eq!(settled, 1, "only the pending row is recovered by THIS start");
+        assert_eq!(
+            settled, 1,
+            "only the pending row is recovered by THIS start"
+        );
         assert_eq!(recovered.len(), 2, "both rows still load");
         assert_eq!(
             recovered[0].status,
@@ -1139,5 +1192,199 @@ mod tests {
             recovered[1].delegation_id, "dlg-now-1",
             "the pending row is the one that transitions"
         );
+    }
+}
+
+// ── the durable ledger merge (session-hub plan T5, 2026-11-15) ──────────────
+//
+// Two guarantees, one test each: a record written by ANOTHER process survives
+// this process's persist, and a record written by THIS process carries its
+// dispatching session's parent edge into the file so the next process can list
+// that session's children from the file alone.
+#[cfg(test)]
+mod ledger_merge_tests {
+    use super::*;
+
+    fn record(
+        id: &str,
+        status: AsyncDelegationStatus,
+        goal: &str,
+        dispatch: u64,
+        completed: Option<u64>,
+        parent: Option<&str>,
+    ) -> AsyncDelegationRecord {
+        AsyncDelegationRecord {
+            delegation_id: id.to_string(),
+            status,
+            goal: goal.to_string(),
+            model: "m".to_string(),
+            dispatch_time: dispatch,
+            completed_time: completed,
+            result: None,
+            error: None,
+            session_id: None,
+            parent_session_id: parent.map(str::to_string),
+            request_key: None,
+        }
+    }
+
+    #[test]
+    fn a_second_processs_file_records_survive_this_processs_persist() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        // The file as a DEAD process left it: two completed delegations, one
+        // under each of two dispatchers' sessions.
+        let dead = vec![
+            record(
+                "dlg-dead-1",
+                AsyncDelegationStatus::Completed,
+                "work of the dead process",
+                100,
+                Some(110),
+                Some("sess-parent-1"),
+            ),
+            record(
+                "dlg-dead-2",
+                AsyncDelegationStatus::Completed,
+                "more of the dead process",
+                101,
+                Some(111),
+                Some("sess-parent-2"),
+            ),
+        ];
+        let merged = merge_records(dead.clone(), Vec::new());
+        assert_eq!(
+            merged.len(),
+            2,
+            "a persist with an empty registry must not discard the dead process's records"
+        );
+        assert!(
+            merged
+                .iter()
+                .all(|r| dead.iter().any(|d| d.delegation_id == r.delegation_id)),
+        );
+
+        // This process's OWN record carries its parent edge into the same ledger.
+        let mine = record(
+            "dlg-live-1",
+            AsyncDelegationStatus::Completed,
+            "work of the live process",
+            200,
+            Some(201),
+            Some("sess-parent-3"),
+        );
+        let merged = merge_records(dead, vec![mine.clone()]);
+        assert_eq!(
+            merged.len(),
+            3,
+            "merge keeps the file records and adds this process's own"
+        );
+        assert!(
+            merged.iter().any(|r| r.delegation_id == "dlg-live-1"),
+            "this process's record must reach the merged ledger"
+        );
+        assert!(
+            merged.iter().any(|r| r.delegation_id == "dlg-dead-1"),
+            "the dead process's record must survive the merge"
+        );
+
+        // A record the file already knows about is REPLACED by the newer state,
+        // never duplicated.
+        let mine_recompleted = record(
+            "dlg-dead-1",
+            AsyncDelegationStatus::Failed,
+            "work of the dead process",
+            100,
+            Some(112),
+            Some("sess-parent-1"),
+        );
+        let merged = merge_records(merged, vec![mine_recompleted]);
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|r| r.delegation_id == "dlg-dead-1")
+                .count(),
+            1,
+            "a record present in both sets is merged, not duplicated"
+        );
+        __test_reset_registry();
+    }
+
+    /// The second process reads the file alone and lists its session's children
+    /// by the parent edge — the whole point of persisting `parent_session_id`.
+    #[test]
+    fn a_resumed_process_lists_a_sessions_children_from_the_file_alone() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let ledger = vec![
+            record(
+                "dlg-resume-1",
+                AsyncDelegationStatus::Completed,
+                "child of the resumed session",
+                100,
+                Some(110),
+                Some("sess-parent-1"),
+            ),
+            record(
+                "dlg-resume-2",
+                AsyncDelegationStatus::Failed,
+                "another child of the same session",
+                101,
+                Some(111),
+                Some("sess-parent-1"),
+            ),
+            record(
+                "dlg-resume-3",
+                AsyncDelegationStatus::Completed,
+                "child of a DIFFERENT session",
+                102,
+                Some(112),
+                Some("sess-parent-2"),
+            ),
+        ];
+        // Persist = serde write; then a fresh process reads the file into its
+        // own registry — exactly what `recover_interrupted` does through the
+        // OnceLock, without the process-global path fight between tests.
+        let json = serde_json::to_string_pretty(&ledger).unwrap();
+        let reloaded: Vec<AsyncDelegationRecord> =
+            serde_json::from_str(&json).expect("the file alone must carry the whole ledger");
+
+        let children_of_parent_1: Vec<&AsyncDelegationRecord> = reloaded
+            .iter()
+            .filter(|r| r.parent_session_id.as_deref() == Some("sess-parent-1"))
+            .collect();
+        assert_eq!(
+            children_of_parent_1.len(),
+            2,
+            "the resumed session's two children must be listable from the file alone"
+        );
+        assert!(
+            !children_of_parent_1
+                .iter()
+                .any(|r| r.parent_session_id.as_deref() == Some("sess-parent-2")),
+            "two dispatchers' records must not cross"
+        );
+        // The pending row stays pending on resume when it was a live record
+        // whose child died with the process — recover_interrupted's contract,
+        // pinned at the file's edge.
+        let pending_on_disk = record(
+            "dlg-resume-4",
+            AsyncDelegationStatus::Pending,
+            "work that died with the process",
+            103,
+            None,
+            Some("sess-parent-1"),
+        );
+        let reloaded = serde_json::from_str::<Vec<AsyncDelegationRecord>>(
+            &serde_json::to_string_pretty(&[pending_on_disk]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reloaded[0].status,
+            AsyncDelegationStatus::Pending,
+            "a Pending row is not settled by a plain read — that is what the \
+             interrupted-records path is for"
+        );
+        __test_reset_registry();
     }
 }
