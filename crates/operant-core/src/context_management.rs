@@ -1876,19 +1876,22 @@ pub const ADVERTISED_SKILLS_TOKEN_BUDGET: usize = 4_000;
 /// The share of the context window the advertised-skills block may claim when
 /// the operator has not set an explicit budget.
 ///
-/// [`ADVERTISED_SKILLS_TOKEN_BUDGET`] is a flat 4 000, which is a sensible
-/// number against a 32k window and a bad one against the 128k default
-/// ([`crate::context_window::DEFAULT_CONTEXT_WINDOW`]): it advertises ~105
-/// clipped skills and then starts deleting, even though a 128k window has room
-/// for three times that. A flat ceiling cannot tell a 32k route from a 1M one.
+/// **The share is 1/8 and it IS the current behaviour** (iter-2395);
+/// [`advertised_skills_budget`] returns `window / 8`, floored at
+/// [`ADVERTISED_SKILLS_TOKEN_BUDGET`]. This doc used to describe the flat
+/// constant as the live rule and the share as a proposal, which was backwards
+/// by four commits and sent at least one reader looking for a switch that did
+/// not exist.
 ///
-/// The historical 4 000 is NOT an arbitrary number: it is exactly one eighth
-/// of a 32,000-token window. That is the tell -- the constant was calibrated
-/// against the 32k context era and never revisited when the default window
-/// became 128k ([`crate::context_window::DEFAULT_CONTEXT_WINDOW`]), so a modern
-/// route advertises a 32k-sized catalogue into a four-times-larger window.
-/// Keeping the 1/8 share makes the block scale with the window instead of
-/// against it, and makes the old constant fall out at the old window size.
+/// Why 1/8 and not the flat 4 000 that came before: 4 000 is exactly one
+/// eighth of a 32,000-token window. That is the tell -- the constant was
+/// calibrated against the 32k context era and never revisited when the default
+/// window became 128k
+/// ([`crate::context_window::DEFAULT_CONTEXT_WINDOW`]), so a modern route
+/// advertised a 32k-sized catalogue into a four-times-larger window. At the
+/// flat 4 000 the block claimed 0.4% of a 1M window; at the share it claims a
+/// constant 12.5% of whatever the route actually is, and the old constant falls
+/// out at the old window size (4 000 = 32 000 / 8).
 pub const ADVERTISED_SKILLS_WINDOW_SHARE_NUM: usize = 1;
 pub const ADVERTISED_SKILLS_WINDOW_SHARE_DEN: usize = 8;
 
