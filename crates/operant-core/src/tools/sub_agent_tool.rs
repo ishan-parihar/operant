@@ -331,6 +331,24 @@ fn max_global_workers() -> usize {
     MAX_GLOBAL_WORKERS.load(Ordering::Relaxed)
 }
 
+/// The per-swarm in-flight cap in force, read from the live atomic.
+///
+/// The description states this to the model, so it must be read rather than
+/// repeated as a literal — a config change that desynchronised the prose is the
+/// failure a hardcoded number would hide.
+fn max_concurrent_children() -> usize {
+    MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize
+}
+
+/// The per-worker wall-clock timeout a caller gets when it does not set one.
+///
+/// A plain read of the constant, deliberately not derived from the ITERATION
+/// budget (`default_child_max_iterations`): those are two different limits and
+/// coupling them would let an iteration change silently move a timeout.
+fn default_child_timeout_seconds() -> u64 {
+    DEFAULT_CHILD_TIMEOUT_SECONDS
+}
+
 /// Whether `live` of `max` worker slots leaves no headroom.
 ///
 /// Split from the caller so the DECISION is testable without the process-global
@@ -1786,10 +1804,12 @@ impl OperantTool for SubAgentTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<SubAgentArgs>(
-            TOOL_NAME,
-            "Delegate a focused task to an isolated Operant sub-agent",
-        )
+        // The description the model reads is built per call, so it can state the
+        // limits it is ACTUALLY under rather than a number that was true when the
+        // string was written. (iter-2459, F8: this used a fixed one-line string
+        // that named no limit at all, so a model could not predict that asking for
+        // more workers than the in-flight cap means the tail is cut off.)
+        ToolSchema::from_type::<SubAgentArgs>(TOOL_NAME, runtime_description())
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
@@ -2080,6 +2100,51 @@ fn replay_handle(id: &str, model: &str, goal: &str) -> String {
         "poll": format!("delegate_task query=\"{id}\""),
     })
     .to_string()
+}
+
+/// The tool description the model reads, built from the limits in force.
+///
+/// (iter-2459, F8) This used to be a fixed string that named no number at all, so
+/// a model could not predict the one thing it most needs to predict about a swarm:
+/// that the SWARM RESULT DEADLINE is a wall-clock deadline for the WHOLE fan-out,
+/// not per worker, and that only `max_concurrent_children` workers run at once. A
+/// roster larger than the in-flight cap therefore has its TAIL CUT OFF — reported
+/// honestly as `[cut off]`, but not predictable in advance.
+///
+/// Codex states its cap to the model in prose for the same reason. The numbers are
+/// read from the live atomics, so this cannot go stale when an operator changes the
+/// config: a config change desynchronising the prose is exactly the failure a
+/// hardcoded string would hide.
+fn runtime_description() -> String {
+    format!(
+        "Delegate work to isolated sub-agents. Use this for deep analysis, \
+         specialized coding investigation, architectural review, or other self-contained work. \
+         Modes: single (goal + context), SWARM (tasks array — each entry becomes a real worker \
+         session with its own conversation, tools and bounded timeout), and background \
+         (background=true returns a handle immediately — poll with query=\"<id>\"). \
+         Optional output_schema enforces a structured JSON contract on the child's final answer \
+         (exactly one bounded retry on validation failure). \
+         The sub-agent has a fresh conversation and does not inherit parent memory. \
+         Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own \
+         sub-agents. \
+         LIMITS IN FORCE, right now: at most {in_flight} worker(s) run concurrently per swarm, \
+         and at most {global} worker(s) live across the WHOLE process. Requests past either cap \
+         are refused or truncated with an explicit '[not spawned]' marker rather than silently \
+         dropped. Each worker has its own hard timeout (default {timeout}s), so a wedged worker \
+         cannot stall the rest. \
+         THE SWARM RESULT DEADLINE IS {deadline}s FOR THE WHOLE FAN-OUT, NOT PER WORKER. It is \
+         wall-clock from the moment the swarm starts, so it is shared by every wave: if you ask \
+         for more workers than the {in_flight} that can run at once, the later waves get only \
+         what is left of the {deadline}s and their workers are reported '[cut off]'. Keep a \
+         swarm within {in_flight} worker(s), or expect the tail to be cut and re-dispatch it. \
+         SWARM COST: every worker is its own model stream and its own tool-call spend, so N \
+         workers cost roughly N times one worker. Fan out only for genuinely independent \
+         subtasks; a task you could do in one tool call should not get a worker.",
+        in_flight = max_concurrent_children(),
+        global = max_global_workers(),
+        timeout = default_child_timeout_seconds(),
+        deadline = SWARM_RESULT_DEADLINE_SECS,
+    )
 }
 
 /// One-line preview with a hard character cap (for background handles and
@@ -3834,5 +3899,65 @@ mod approval_inheritance_tests {
             "the documented ceiling is {MAX_GLOBAL_WORKERS_CAP}"
         );
         set_max_global_workers(before);
+    }
+
+    /// iter-2459 (F8): the description states the limits the model is ACTUALLY
+    /// under, and follows a runtime change.
+    ///
+    /// The defect: `schema()` passed a fixed one-line string that named no number,
+    /// so a model could not predict that the swarm result deadline is a wall-clock
+    /// deadline for the WHOLE fan-out rather than per worker — the single thing that
+    /// decides whether asking for 6 workers returns 6 results or 3 plus three
+    /// `[cut off]` rows.
+    ///
+    /// The caps are process-global atomics and sibling tests set them, so this
+    /// follows the same read / set / assert / restore discipline they use.
+    #[test]
+    fn the_description_states_the_live_limits_and_follows_a_change() {
+        let before_in_flight = max_concurrent_children();
+        let before_global = max_global_workers();
+
+        let text = runtime_description();
+        assert!(
+            text.contains(&format!(
+                "at most {before_in_flight} worker(s) run concurrently"
+            )),
+            "the description must name the live per-swarm cap: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "at most {before_global} worker(s) live across the WHOLE process"
+            )),
+            "the description must name the live process-wide cap: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "SWARM RESULT DEADLINE IS {SWARM_RESULT_DEADLINE_SECS}s"
+            )),
+            "the description must name the deadline: {text}"
+        );
+        assert!(
+            text.contains("NOT PER WORKER"),
+            "the description must say the deadline is shared by every wave, or a model \
+             reads {SWARM_RESULT_DEADLINE_SECS}s as a per-worker budget"
+        );
+
+        // A config change must reach the prose. This is what a hardcoded string
+        // would fail, and why the description is built per call.
+        set_max_concurrent_children(2);
+        let changed = runtime_description();
+        assert!(
+            changed.contains("at most 2 worker(s) run concurrently"),
+            "the description must follow the live cap, not a stale literal: {changed}"
+        );
+        assert!(
+            changed.contains(&format!(
+                "SWARM RESULT DEADLINE IS {SWARM_RESULT_DEADLINE_SECS}s"
+            )),
+            "the deadline is a constant and must not move with the cap: {changed}"
+        );
+
+        set_max_concurrent_children(before_in_flight);
+        set_max_global_workers(before_global);
     }
 }
