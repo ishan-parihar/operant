@@ -1237,7 +1237,9 @@ impl OperantAgent {
                     let line = format!(
                         "  <skill name=\"{}\">{}</skill>\n",
                         escape_xml_text(name),
-                        escape_xml_text(description)
+                        escape_xml_text(&crate::context_management::clip_skill_description(
+                            description,
+                        ))
                     );
                     let cost = crate::context_management::estimate_tokens(&line);
                     if used + cost > budget {
@@ -1292,7 +1294,7 @@ impl OperantAgent {
         // the level or the install changes these prefix bytes: cache
         // invalidation is the documented consequence (same class as any
         // config change).
-            if let Some(block) =
+        if let Some(block) =
             crate::ponytail::frozen_prefix_block(&self.config.ponytail, self.posture_override())
         {
             frozen.push_str(&block);

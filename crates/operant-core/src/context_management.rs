@@ -1821,6 +1821,94 @@ pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
 /// rest are dropped, and the drop is stated in the block itself.
 pub const ADVERTISED_SKILLS_TOKEN_BUDGET: usize = 4_000;
 
+/// The characters of a skill description the advertised block shows.
+///
+/// This is the missing half of the ceiling. Without it the block spends the
+/// 4 000-token budget on whole descriptions, so the ceiling is enforced by
+/// DELETING SKILLS: measured on a 310-skill install, 21 674 tokens of
+/// description filled the budget after 53 skills and 257 were dropped, ordered
+/// by nothing but the alphabet. The two reference designs both cap instead --
+/// jcode at 120 (`jcode-base/src/prompt.rs`), hermes-agent at 60
+/// (`agent/skill_utils.py`) -- and neither has a ceiling that removes skills.
+/// A clip keeps the whole catalogue advertised and costs bounded tokens per
+/// row, so the ceiling stops being a visibility filter.
+///
+/// 120 rather than 60: this install's descriptions run long (measured mean
+/// 111, median 63), and 60 chars fits only 48% of them intact, which would
+/// trade a deletion problem for a truncation problem. 120 fits 64% whole and
+/// makes the rest legible enough to route on.
+pub const ADVERTISED_SKILL_DESCRIPTION_CHARS: usize = 120;
+
+/// Clip a skill description to one line of at most
+/// [`ADVERTISED_SKILL_DESCRIPTION_CHARS`] characters, cutting at a word
+/// boundary and marking the cut.
+///
+/// Two normalisations the raw frontmatter needs before it can sit in an XML
+/// attribute-like position on one line:
+///
+/// 1. **Whitespace is collapsed.** A YAML folded scalar (`description: >`) is
+///    legal and common, and a newline inside the advertised line would break
+///    the one-skill-per-line shape the whole block (and its token estimate)
+///    assumes.
+/// 2. **The cut is at a word boundary**, not mid-word. A description clipped
+///    to `Use this for audit` reads as a skill about "audit"; clipped to
+///    `Use this for aud` it reads as a typo and routes worse. This is the
+///    refinement hermes makes (`skill_utils.py::clip_skill_description`).
+///
+/// Pure: same input, same output, so the frozen prefix stays byte-stable
+/// across turns and the prompt cache holds.
+#[must_use]
+pub fn clip_skill_description(description: &str) -> String {
+    let one_line: String = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let char_count = one_line.chars().count();
+    if char_count <= ADVERTISED_SKILL_DESCRIPTION_CHARS {
+        return one_line;
+    }
+    // Keep one char fewer than the budget so the ellipsis fits inside it: the
+    // caller gets a string that is AT MOST the budget, not budget + 1.
+    let head: String = one_line
+        .chars()
+        .take(ADVERTISED_SKILL_DESCRIPTION_CHARS.saturating_sub(1))
+        .collect();
+    // Cut at the last word boundary in `head`. `split_whitespace` on the head
+    // loses the distinction between "a whole word ends here" and "the string
+    // ends mid-word", so re-derive it: if the character AFTER the head is not
+    // whitespace, the head's last word is incomplete and must go too.
+    let next_is_boundary = one_line
+        .chars()
+        .nth(ADVERTISED_SKILL_DESCRIPTION_CHARS.saturating_sub(1))
+        .is_none_or(char::is_whitespace);
+    let mut clipped = if next_is_boundary {
+        head.clone()
+    } else {
+        // `map_or` would move `head` into its default while it is borrowed by
+        // the call; match instead.
+        match head.rsplit_once(' ') {
+            Some((keep, _)) => keep.to_string(),
+            None => head.clone(),
+        }
+    };
+    // A cut at a trailing separator (`word, ` or `word -- `) leaves the
+    // separator dangling in front of the ellipsis; trim it.
+    while clipped
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '.' | '-' | '('))
+    {
+        clipped.pop();
+    }
+    // If every character was separators (a description of pure punctuation),
+    // fall back to the hard clip rather than emitting an empty string.
+    if clipped.is_empty() {
+        clipped = one_line
+            .chars()
+            .take(ADVERTISED_SKILL_DESCRIPTION_CHARS.saturating_sub(1))
+            .collect();
+    }
+    clipped.push('…');
+    clipped
+}
+
 /// The token ceiling on the recalled-memory block (`<memory_context>`) that
 /// the memory provider's prefetch injects into the turn tail each turn
 /// (audit iter-2345).
@@ -3603,6 +3691,174 @@ mod tests {
                 ttl
             ),
             Some("prompt cache idle past its TTL")
+        );
+    }
+
+    // ── advertised-skill description clip (iter-2395) ──────────────────
+
+    /// The clip is the missing half of the advertised-skills ceiling: without
+    /// it the 4 000-token budget is enforced by DELETING skills (measured 257
+    /// of 310 dropped on a real install). These pin the shape of the cut.
+    #[test]
+    fn a_short_description_is_returned_verbatim() {
+        assert_eq!(clip_skill_description("Audit a repo"), "Audit a repo");
+    }
+
+    /// The output is AT MOST the budget, ellipsis included. A clip that
+    /// returns budget + 1 is the classic off-by-one that makes the row cost
+    /// more than the caller budgeted for.
+    #[test]
+    fn the_clipped_description_never_exceeds_the_budget() {
+        for len in [
+            ADVERTISED_SKILL_DESCRIPTION_CHARS,
+            ADVERTISED_SKILL_DESCRIPTION_CHARS + 1,
+            ADVERTISED_SKILL_DESCRIPTION_CHARS * 3,
+        ] {
+            let desc = "x".repeat(len);
+            let clipped = clip_skill_description(&desc);
+            assert!(
+                clipped.chars().count() <= ADVERTISED_SKILL_DESCRIPTION_CHARS,
+                "a {len}-char description clipped to {} chars",
+                clipped.chars().count()
+            );
+        }
+    }
+
+    /// A multi-line description (YAML folded scalar, `description: >`) is
+    /// COLLAPSED to one line. A newline inside the advertised row would break
+    /// the one-skill-per-line shape the block and its token estimate assume.
+    #[test]
+    fn a_folded_scalar_description_becomes_one_line() {
+        let desc = "Operate the harness\n  as a systemd service,\n  tune its memory";
+        assert_eq!(
+            clip_skill_description(desc),
+            "Operate the harness as a systemd service, tune its memory"
+        );
+    }
+
+    /// The cut is at a WORD boundary, not mid-word. `...for aud` reads as a
+    /// typo and routes worse than `...for`, which is the refinement hermes
+    /// makes and jcode does not.
+    #[test]
+    fn the_cut_lands_on_a_word_boundary() {
+        // The head must contain a space for a boundary to be findable; a head
+        // that is one long word has none and falls back to the hard clip (which
+        // `the_cut_falls_back_to_a_hard_clip_when_there_is_no_boundary` pins).
+        // Build a description whose head ends INSIDE a short word.
+        // 112 + 1 + 4 = 117 chars before the last word, so the 119-char head
+        // ends INSIDE "tail" and that word must be dropped whole.
+        let desc = format!("{} xyz tail", "a".repeat(112));
+        let clipped = clip_skill_description(&desc);
+        assert!(clipped.ends_with('…'), "the cut is marked: {clipped:?}");
+        assert!(
+            !clipped.contains("aaa…"),
+            "the incomplete last word must be dropped, not clipped mid-word: {clipped:?}"
+        );
+        assert_eq!(
+            clipped,
+            format!("{} xyz…", "a".repeat(112)),
+            "the incomplete word goes whole, not clipped"
+        );
+    }
+
+    /// A head with no space in it has no boundary to cut at, so the clip is a
+    /// hard character clip. It must still stay inside the budget.
+    #[test]
+    fn the_cut_falls_back_to_a_hard_clip_when_there_is_no_boundary() {
+        let desc = "a".repeat(ADVERTISED_SKILL_DESCRIPTION_CHARS * 2);
+        let clipped = clip_skill_description(&desc);
+        assert_eq!(
+            clipped,
+            format!("{}…", "a".repeat(ADVERTISED_SKILL_DESCRIPTION_CHARS - 1))
+        );
+    }
+
+    /// A trailing separator left dangling in front of the ellipsis is trimmed:
+    /// `word, …` reads as a typo.
+    #[test]
+    fn a_dangling_separator_is_trimmed_before_the_ellipsis() {
+        let desc = format!(
+            "{} word, and more",
+            "a".repeat(ADVERTISED_SKILL_DESCRIPTION_CHARS - 8)
+        );
+        let clipped = clip_skill_description(&desc);
+        assert!(!clipped.contains(", …"), "no dangling comma: {clipped:?}");
+        assert!(!clipped.contains(" …"), "no dangling space: {clipped:?}");
+        assert!(
+            clipped.ends_with('…'),
+            "the cut is still marked: {clipped:?}"
+        );
+    }
+
+    /// A description that is ALL punctuation still produces a non-empty clip.
+    /// Emitting an empty description would silently remove a skill's whole
+    /// routing signal.
+    #[test]
+    fn an_all_separator_description_still_clips_to_something() {
+        let desc = "-".repeat(ADVERTISED_SKILL_DESCRIPTION_CHARS * 2);
+        let clipped = clip_skill_description(&desc);
+        assert!(!clipped.is_empty(), "an empty clip would erase the skill");
+        assert!(
+            clipped.chars().count() <= ADVERTISED_SKILL_DESCRIPTION_CHARS,
+            "still within budget: {}",
+            clipped.chars().count()
+        );
+    }
+
+    /// Unicode: the budget is CHARACTERS, not bytes. A byte-indexed clip would
+    /// panic on a multi-byte boundary (the RT-325 class of bug).
+    #[test]
+    fn the_budget_is_characters_not_bytes() {
+        let desc = "é".repeat(ADVERTISED_SKILL_DESCRIPTION_CHARS * 2);
+        let clipped = clip_skill_description(&desc);
+        assert!(
+            clipped.chars().count() <= ADVERTISED_SKILL_DESCRIPTION_CHARS,
+            "characters, not bytes: {} chars / {} bytes",
+            clipped.chars().count(),
+            clipped.len()
+        );
+    }
+
+    /// THE defect this fixes, measured end to end: a catalogue whose
+    /// descriptions are long must still be ADVERTISED in full, and must cost
+    /// far less than the ceiling.
+    ///
+    /// MUTATION-PROOF: removing the clip from the advertisement loop fails
+    /// `every_skill_is_still_advertised` (the long-description catalogue drops
+    /// skills again).
+    #[test]
+    fn a_long_description_catalogue_is_fully_advertised_and_cheap() {
+        // 40 skills, each with a 300-char description: the shape of a real
+        // install's long-tail skills.
+        let rows: Vec<(String, String)> = (0..40)
+            .map(|i| {
+                (
+                    format!("skill-{i:02}"),
+                    format!("{} end of skill {i:02}", "word ".repeat(50)),
+                )
+            })
+            .collect();
+
+        let mut total = 0usize;
+        for (name, desc) in &rows {
+            let line = format!(
+                "  <skill name=\"{}\">{}</skill>\n",
+                name,
+                crate::context_management::clip_skill_description(desc)
+            );
+            total += estimate_tokens(&line);
+        }
+
+        // Every skill fits: 40 rows of ~35 tokens each is ~1 400, well inside
+        // the 4 000 budget. Unclipped, the same catalogue would be ~7 000 and
+        // would drop most of them.
+        assert!(
+            total < ADVERTISED_SKILLS_TOKEN_BUDGET,
+            "the clipped catalogue costs {total} tokens against the {ADVERTISED_SKILLS_TOKEN_BUDGET} budget"
+        );
+        assert!(
+            total > 40 * 20,
+            "the estimate must not collapse to nothing: {total} tokens for 40 skills"
         );
     }
 }

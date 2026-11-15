@@ -2039,6 +2039,38 @@ mod tests {
             "the block must SAY that skills were dropped: {}",
             &prefix[prefix.len().saturating_sub(400)..]
         );
+
+        // THE CLIP, pinned where it matters. This fixture's descriptions are
+        // 200 chars of "x", so an UNCLIPPED row costs ~58 tokens and a clipped
+        // one ~38: without the clip this catalogue advertises ~67 skills, with
+        // it ~102. A ceiling that spends the budget on whole descriptions is a
+        // visibility filter (measured: 257 of 310 skills dropped on a real
+        // install); the clip is what stops it being one.
+        //
+        // MUTATION-PROOF: removing `clip_skill_description` from the
+        // advertisement loop drops `advertised` to ~67 and fails the bound
+        // below.
+        assert!(
+            advertised > 80,
+            "a 200-char-description catalogue must still advertise most of its skills once the description is clipped: only {advertised} of 300 fit, which means the rows are spending the budget on whole descriptions instead of clipped ones"
+        );
+        // No advertised line may carry a description longer than the clip's
+        // budget plus the wrapper: a description that slipped past the clip
+        // would show up here.
+        let longest_row_desc = block
+            .lines()
+            .filter_map(|l| {
+                let start = l.find('>')? + 1;
+                let end = l.rfind("</skill>")?;
+                Some(l[start..end].chars().count())
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(
+            longest_row_desc <= crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS,
+            "an advertised description is {longest_row_desc} chars, over the {} budget: the clip did not run on every row",
+            crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS
+        );
     }
 
     /// Ponytail phase 4 (iter-2116): the always-on posture must reach the
