@@ -365,3 +365,101 @@ the concurrency and deadline limits it is actually under; a delegation can name
 its model and its inherited fallback list becomes live; each model gets a lane
 against one shared rate limiter; the two live-worker registries become one; and
 the loop-detection kill switch becomes reachable from config.
+---
+
+## Execution record (revision 3, 2026-11-16)
+
+All eight tranches are executed and pushed. Each landed as its own commit with its
+own gate run, and each regression was **mutation-checked** — the test was shown to
+FAIL when the fix was reverted, which is the only evidence that a test guards
+anything.
+
+| Tranche | Label | What landed | Mutation check |
+|---|---|---|---|
+| T1 | iter-2455 | kanban claim atomicity + partial unique index + 6 dead columns dropped | plain index ⇒ `left: 2, right: 1` |
+| T2 | iter-2457 | ledger work off the async runtime; terminal write reports failure | retries 3→1 still passes (see below) |
+| T3 | iter-2458 | one retention rule, one cap | second literal (25) ⇒ `left: 25, right: 50` |
+| T4 | iter-2459 | delegate description states the live limits | literal cap (3) ⇒ assertion fails |
+| T5 | iter-2460 | per-delegation model; child fallback chain live | override ignored ⇒ `left: "parent-model", right: "cheap-scout"` |
+| T6 | iter-2461 | N children share ONE rate-limit bucket | own limiter ⇒ aggregate assertion fails |
+| T7 | — | **closed with no code change** — see below | n/a |
+| T8 | iter-2462 | `loop_detection_enabled` is a real config key | hardcoded `true` ⇒ assertion fails |
+
+### T7 — closed as already satisfied by T3; no code change
+
+T7 proposed unifying "two live-worker registries". Measured, the premise does not
+hold, and the only real duplication had already been removed by T3.
+
+| Concern | foreground_swarm | async_delegation | Verdict |
+|---|---|---|---|
+| Cap constant | `MAX_RETAINED_TERMINAL = 50` | same, `= 50` | merged in T3 — foreground now aliases the async constant |
+| Retention ordering | own `sort_by` on `(started_at, id)` | own `sort_by` on `(time, id)` | merged in T3 — both call `oldest_terminal_ids` |
+| Clock | `fn now_secs()` | `pub fn now_secs()` | already delegated — foreground's is a one-line forwarder |
+| Registry | `OnceLock<Mutex<Vec<Row>>>` | `OnceLock<Mutex<HashMap<String, Record>>>` | not duplicates |
+
+The registries hold different things and must stay apart. `foreground_swarm` is
+process-local UI membership for FOREGROUND swarms — a `Vec<Row>` of
+`{id, label, status, detail, started_at}`, ordered, pruned, read by exactly one
+surface (`App::swarm_gallery_members` via `list_filtered`), whose own header says a
+DB-backed projection "is deliberately NOT here". `async_delegation` is a durable
+keyed record store for BACKGROUND delegations — a `HashMap` by delegation id, with
+ledger persistence, `request_key` dedup and `settle_interrupted` recovery.
+
+Merging them would mean keying the UI membership list by delegation id and giving
+foreground workers ledger persistence they deliberately do not have. That is not a
+consolidation, it is a different feature. Recorded here rather than as a commit
+because the useful output is the finding, not a diff.
+
+### T6 — the model lane is still open
+
+T6 asked for a per-model lane AND for one shared rate limiter. The aggregate-bucket
+half landed (iter-2461). **The model lane did not**, deliberately: a lane needs a
+`model → provider` key and a second ceiling beside `max_global_workers`, which is a
+new operator-facing policy knob. With the bucket now global, the acute half of F9 is
+gone, and a lane belongs with T5's per-delegation model rather than bolted on
+afterwards. It is recorded as open rather than half-built.
+
+### Corrections to this plan, found during execution
+
+1. **T1's index had to be PARTIAL, and had to dedupe first.** A full unique index
+   breaks every retry, because `fail_run` resets the task to `todo` and leaves the
+   old run `failed`. And `CREATE UNIQUE INDEX` FAILS OUTRIGHT on a database that
+   already carries the corruption — verified against a real v1 schema seeded with
+   two running rows — so the migration would have aborted on exactly the operator
+   F1 already hurt, taking every `kanban` command down with it.
+2. **T4 needed no trait change.** The plan proposed a defaulted
+   `OperantTool::runtime_description()` because `description()` returns `&str`.
+   Unnecessary: `SubAgentTool::schema()` builds its own `ToolSchema` and
+   `from_type` takes `impl Into<String>`, so the owned `String` goes straight in.
+   No trait change, no ~40 implementors touched.
+3. **T5 needed no `with_fallback_models` builder.** I added one plus a struct
+   field, then deleted both: `AgentConfig::default()` already inherits
+   `fallback_models` via `AgentConfig::from(&BehaviorSettings)`, so the builder was
+   a second plumbing path that could drift from the one that already works.
+4. **T2's "lock contention" framing was wrong.** `LedgerLock::acquire` uses a
+   BLOCKING `flock` with no `LOCK_NB`, so a contended lock waits and then succeeds —
+   contention is not the failure the guard catches. What reaches the failure branch
+   is `acquire` being unable to open or lock the `.lock` file at all. The code
+   comments now say that, and the test's stated scope is narrower as a result.
+5. **T8 is a config-schema change, as revision 2 predicted.** It needed a
+   `BehaviorSettings` field, a `From` thread, a `config_registry` entry in THREE
+   structures, and `operant.example.toml`. The parking-walk gate caught the missed
+   `KNOWN_KEYS` entry.
+
+### Still open after execution
+
+- **F9's model lane** (above).
+- **F6, F5, F12, F13** remain non-goals with their own plans needed.
+- **Pre-existing defects reported, not fixed** (AGENTS.md rule 7):
+  - `cargo check -p operant-cli` fails with **E0364** at
+    `crates/operant-cli/src/tui/settings_screen.rs:221` — `pub(crate) use keys::{…
+    toggle_or_cycle_current}` re-exports a `pub(super)` fn. Proven pre-existing by
+    stashing my change and reproducing the identical error. This blocks the CLI
+    gate for every iteration in this set.
+  - `config::tests::lifeos_key_is_gone_from_config` fails, and several config tests
+    are order-dependent (they share process-global paths): 75/75 pass with
+    `--test-threads=1`. Proven pre-existing by re-running without my changes.
+  - 9 clippy errors in `database.rs`, `cronjobs/scheduler.rs`, `config_backup.rs`,
+    `agent/turn_context.rs`, `send_message_tool.rs`, `home_assistant_tool.rs`,
+    `config_heal.rs`, `delegation_output_schema.rs` — all byte-identical at
+    origin/main in files these iterations did not touch.
