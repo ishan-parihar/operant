@@ -859,6 +859,36 @@ fn vendor_skill_roots_for(handler: &GatewayMessageHandler) -> Vec<std::path::Pat
     operant_core::skills::vendor_skill_roots(&host)
 }
 
+/// Every skill root this gateway may offer: the vendor roots PLUS the
+/// operator's `[skills] extra_roots`.
+///
+/// ONE helper, because the defect it replaces was a drift: three call sites
+/// (the `$` expansion, the browse, the invoke) extended the vendor list with
+/// `extra_roots` and one -- the bare `/skills` picker -- passed the vendor list
+/// alone. Over a channel, browse therefore omitted every configured extra root
+/// while search and invoke included them, so a skill could be listed and
+/// rejected in the same session.
+fn skill_roots_for(handler: &GatewayMessageHandler) -> Vec<std::path::PathBuf> {
+    extend_with_extra_roots(vendor_skill_roots_for(handler), &handler.skills_extra_roots)
+}
+
+/// Append `extra` to `roots`, de-duplicating by path.
+///
+/// Extracted so the merge has ONE testable definition. The defect this replaces
+/// was not in the merge logic — it was that one call site did not call it at
+/// all.
+fn extend_with_extra_roots(
+    mut roots: Vec<std::path::PathBuf>,
+    extra: &[std::path::PathBuf],
+) -> Vec<std::path::PathBuf> {
+    for root in extra {
+        if !roots.contains(root) {
+            roots.push(root.clone());
+        }
+    }
+    roots
+}
+
 /// Offer the skills matching `query` to a chat as a button plane.
 ///
 /// The pending list lives in `PENDING_SKILL_PICKERS`, keyed by chat: the
@@ -1028,12 +1058,10 @@ fn skill_surface_for(
             SkillSurface::None
         };
     }
-    let vendor_roots = vendor_skill_roots_for(handler);
+    // ONE list, via the helper, so `$skill` over a channel resolves the SAME
+    // set the TUI's `$` popup offers and the `/skills` browse lists.
+    let roots = skill_roots_for(handler);
     let session = derived_gateway_session_id(session_key);
-    // The configured extra roots ride beside the vendor roots so a `$skill`
-    // over a channel resolves the SAME set the TUI's `$` popup offers.
-    let mut roots = vendor_roots.clone();
-    roots.extend(handler.skills_extra_roots.iter().cloned());
     let expansion = operant_core::skill_mentions::expand_skill_mentions_in(
         &handler.skills_root_dir,
         content,
@@ -1651,15 +1679,10 @@ async fn handle_runtime_command(
         "skill" | "skills" => {
             let rest = args.trim();
             let skills_dir = handler.skills_root_dir.clone();
-            // The vendor roots — the installed content integrations plus the
-            // plugin roots captured at start: ONE list, the same one the
-            // SkillManager and the in-loop tools read.
-            let vendor_roots = vendor_skill_roots_for(handler);
-            // The configured extra roots belong in every gateway skill surface
-            // too: the browse, the invoke and the picker all resolve against
-            // the same set the TUI and `operant doctor` report.
-            let mut roots = vendor_roots.clone();
-            roots.extend(handler.skills_extra_roots.iter().cloned());
+            // The vendor roots AND the configured extra roots, via the ONE
+            // helper: the browse, the invoke and the picker all resolve
+            // against the same set the TUI and `operant doctor` report.
+            let roots = skill_roots_for(handler);
             if rest.is_empty() {
                 // The browse half, over a channel: the REAL installed list,
                 // not a canned "see the TUI". A root with no skills says so
@@ -6932,7 +6955,13 @@ pub async fn start_gateway(
                                                     msg.thread_id,
                                                     None,
                                                     &handler_for_stop.skills_root_dir,
-                                                    &vendor_skill_roots_for(&handler_for_stop),
+                                                    // The SAME roots invoke and
+                                                    // search use. This passed the
+                                                    // bare vendor list, so a
+                                                    // configured extra root was
+                                                    // browsable-but-not-invocable
+                                                    // in one session.
+                                                    &skill_roots_for(&handler_for_stop),
                                                     "",
                                                     0,
                                                 )
@@ -7030,8 +7059,12 @@ pub async fn start_gateway(
                                             // hyphen as an underscore, so a token that is no
                                             // built-in may still be a skill — try both
                                             // spellings before rejecting (iter-2159).
+                                            // Via the ONE helper, so this sees the
+                                            // configured extra roots too: a skill
+                                            // published only from an extra root is
+                                            // still a command.
                                             let vendor_roots =
-                                                crate::skill_roots::vendor_skill_roots(&app_config_clone);
+                                                skill_roots_for(&handler_for_stop);
                                             let instruction = msg
                                                 .content
                                                 .trim()
@@ -7362,11 +7395,8 @@ pub async fn start_gateway(
                                     //   * a bare `$`, or a name that resolves to nothing —
                                     //     answered by the picker, the utility surface a
                                     //     channel can render (tappable rows + navigation).
-                                    let skill_vendor_roots = {
-                                        let mut r = vendor_skill_roots_for(&handler_for_stop);
-                                        r.extend(handler_for_stop.skills_extra_roots.iter().cloned());
-                                        r
-                                    };
+                                    // The ONE helper: vendor roots + extra roots.
+                                    let skill_vendor_roots = skill_roots_for(&handler_for_stop);
                                     if let Some(marker) = msg.raw.get("skill_callback").cloned() {
                                         let key = format!("{platform}:{}", msg.channel_id);
                                         match skill_tap_action(&marker, &key) {

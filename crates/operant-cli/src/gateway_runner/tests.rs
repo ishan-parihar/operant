@@ -3779,3 +3779,91 @@ async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_histor
         other => panic!("a history request must be answered with the history, got {other:?}"),
     }
 }
+
+/// **Every gateway skill surface resolves against the SAME roots.**
+///
+/// The browse (`/skills` with no argument) passed the bare vendor list while
+/// the invoke, the search and the tap callback extended it with
+/// `skills_extra_roots`. Over a channel, a skill living only in a configured
+/// extra root was listed by search and rejected by browse in the same
+/// session — and the reject is the confusing half, because the name was
+/// right there on screen.
+///
+/// The fix routes every surface through `skill_roots_for`, whose merge is
+/// `extend_with_extra_roots`. This pins the merge contract directly: the
+/// extra root arrives, and a path already present is not duplicated.
+#[test]
+fn the_gateway_root_merge_keeps_extra_roots_and_dedups() {
+    let vendor = std::path::PathBuf::from("/vendor/one");
+    let extra = std::path::PathBuf::from("/operator/extra");
+    let dup = std::path::PathBuf::from("/vendor/one");
+
+    let roots = extend_with_extra_roots(vec![vendor.clone()], &[extra.clone(), dup]);
+
+    assert!(
+        roots.contains(&extra),
+        "a configured extra root must reach every gateway skill surface, got {roots:?}"
+    );
+    assert_eq!(
+        roots.iter().filter(|r| *r == &vendor).count(),
+        1,
+        "a root already present must not be added twice, got {roots:?}"
+    );
+}
+
+/// **No gateway skill surface may read the vendor roots directly.**
+///
+/// `skill_roots_for` is the ONE list: vendor roots + `[skills] extra_roots`.
+/// The defect was a drift, not a logic error — three sites extended the list
+/// and one (the bare `/skills` browse picker) passed the vendor list alone, so
+/// a skill living only in a configured extra root was listed by search and
+/// rejected by browse in the same session.
+///
+/// A unit test on the merge cannot catch that: the merge was always correct.
+/// This reads the source, because the failure mode is a call site that skips
+/// the helper. The helper itself is the only place allowed to call the vendor
+/// function; a `skill_surface` / picker path that calls it directly has
+/// reintroduced the drift.
+#[test]
+fn no_skill_surface_bypasses_the_shared_root_list() {
+    let source = include_str!("../gateway_runner.rs");
+
+    // The helper is the sole caller of the vendor-root function.
+    let helper_start = source
+        .find("fn skill_roots_for(")
+        .expect("skill_roots_for must exist");
+    let helper_end = source[helper_start..]
+        .find("\n}\n")
+        .map(|i| helper_start + i)
+        .expect("the helper must close");
+    let helper = &source[helper_start..helper_end];
+    assert!(
+        helper.contains("vendor_skill_roots_for"),
+        "the helper must build on the vendor roots, else extra roots are lost"
+    );
+
+    // Every OTHER reference to the vendor function must be its definition.
+    let outside: Vec<&str> = source
+        .match_indices("vendor_skill_roots_for")
+        .map(|(i, _)| i)
+        .filter(|i| !(*i >= helper_start && *i <= helper_end))
+        .map(|i| {
+            let line_start = source[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let line_end = source[i..]
+                .find('\n')
+                .map(|p| i + p)
+                .unwrap_or(source.len());
+            &source[line_start..line_end]
+        })
+        .collect();
+
+    let offenders: Vec<&str> = outside
+        .into_iter()
+        .filter(|line| !line.contains("fn vendor_skill_roots_for"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a skill surface reads the vendor roots directly and so drops \
+         [skills] extra_roots — route it through `skill_roots_for`: {offenders:?}"
+    );
+}
