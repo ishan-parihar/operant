@@ -123,7 +123,9 @@ pub mod free_mode_dialog;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
 pub mod memory_file_selector;
+pub mod theme_bundled;
 pub mod theme_colors;
+pub mod theme_files;
 pub mod theme_screen;
 pub mod usage_overlay;
 

@@ -336,17 +336,50 @@ pub fn set_active_theme(theme_name: &str) {
     //
     // A match, not `unwrap_or_else`: this runs in the render path, and a theme
     // name must never be able to take the UI down.
-    let source = match ColorPalette::for_theme(theme_name) {
-        Some(palette) => palette,
-        None => {
-            tracing::warn!(
-                theme = theme_name,
-                known = ?ColorPalette::NAMES,
-                "unknown theme name; falling back to the default palette"
-            );
-            ColorPalette::default_theme()
-        }
+    // A name that is not a built-in is an OPERATOR THEME FILE (U2) before it is
+    // a warning: `<config dir>/themes/<name>.toml` is a `[tui.colors]`-shaped
+    // set of pairs, so the file seeds the default palette and the pairs land
+    // through the same role-override path the config section uses.
+    let (mut source, file_pairs) = match ColorPalette::for_theme(theme_name) {
+        Some(palette) => (palette, None),
+        None => match crate::tui::theme_files::load(theme_name) {
+            Some(pairs) => (ColorPalette::default_theme(), Some(pairs)),
+            None => {
+                tracing::warn!(
+                    theme = theme_name,
+                    known = ?ColorPalette::NAMES,
+                    "unknown theme name; falling back to the default palette"
+                );
+                (ColorPalette::default_theme(), None)
+            }
+        },
     };
+    // The 14 `theme_colors::*` accessors read the ColorPalette FIELDS, not the
+    // role table, so a file that only wrote role pairs would leave the chrome on
+    // the default palette while markdown and syntax changed. Carry the file's
+    // pairs onto the fields whose roles they name (the inverse of
+    // `roles_for_field`) BEFORE the palette is quantized and stored — doing it
+    // after is what made the first version of this a no-op.
+    let file_map = file_pairs.as_ref().map(|pairs| {
+        pairs
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeMap<String, String>>()
+    });
+    if let Some(map) = &file_map {
+        let mut seeded = ColorPalette::default_theme();
+        for (field, _) in palette_fields(&seeded) {
+            for role in roles_for_field(field) {
+                if let Some(value) = map.get(role.key())
+                    && let Some(rgb) = role_rgb_from_str(value)
+                {
+                    assign_field(&mut seeded, field, rgb);
+                    break;
+                }
+            }
+        }
+        source = seeded;
+    }
     let next =
         crate::tui::color_depth::quantize_palette(&source, crate::tui::color_depth::detect());
     match ACTIVE.write() {
@@ -354,6 +387,12 @@ pub fn set_active_theme(theme_name: &str) {
         Err(poisoned) => *poisoned.into_inner() = next,
     }
     sync_role_palette(&source);
+    // The file's pairs ride the same merge as `[tui.colors]`, so a theme file
+    // cannot be half-applied and cannot clobber an explicit operator override
+    // that names the same role.
+    if let Some(map) = &file_map {
+        set_role_overrides(map);
+    }
     apply_role_overrides();
 }
 
@@ -591,6 +630,40 @@ fn role_palette_for(source: &ColorPalette) -> Palette {
         }
     }
     next
+}
+
+/// Parse a `#rrggbb` / `#rgb` / bare-index string to a colour.
+fn role_rgb_from_str(value: &str) -> Option<Color> {
+    let (overrides, errors) = palette::Palette::from_pairs([("probe", value)]);
+    assert!(errors.is_empty(), "{value:?} must parse: {errors:?}");
+    let role = palette::Role::Accent;
+    let (r, g, b) = overrides.rgb(role);
+    (overrides.is_overridden(role)).then_some(Color::Rgb(r, g, b))
+}
+
+/// Write one field of a palette by name.
+fn assign_field(palette: &mut ColorPalette, field: &str, color: Color) {
+    match field {
+        "error" => palette.error = color,
+        "success" => palette.success = color,
+        "warning" => palette.warning = color,
+        "info" => palette.info = color,
+        "action" => palette.action = color,
+        "disabled" => palette.disabled = color,
+        "accent" => palette.accent = color,
+        "secondary_accent" => palette.secondary_accent = color,
+        "text_light" => palette.text_light = color,
+        "text_dark" => palette.text_dark = color,
+        "border" => palette.border = color,
+        "emphasis" => palette.emphasis = color,
+        "text" => palette.text = color,
+        "muted" => palette.muted = color,
+        "panel_bg" => palette.panel_bg = color,
+        "overlay_bg" => palette.overlay_bg = color,
+        "selection_bg" => palette.selection_bg = color,
+        "text_selection_bg" => palette.text_selection_bg = color,
+        _ => {}
+    }
 }
 
 /// Accent bar / selection accent.
@@ -902,6 +975,7 @@ pub(crate) mod tests {
         Role::MdCodeBlock,
         Role::MdQuote,
         Role::MdHr,
+        Role::MdListBullet,
         Role::ToolDiffAdded,
         Role::ToolDiffRemoved,
         Role::ToolDiffContext,

@@ -119,7 +119,14 @@ fn theme_description(name: &str) -> &'static str {
 }
 
 fn builtin_themes() -> Vec<ThemeOption> {
-    THEME_NAMES
+    // Built-ins first, then the operator's own theme files (U2). A built-in is
+    // never shadowed by a same-named file — see `theme_files`' module doc — so
+    // the two lists are concatenated, not merged by name.
+    let operator: Vec<String> = crate::tui::theme_files::available()
+        .into_iter()
+        .filter(|name| !THEME_NAMES.contains(&name.as_str()))
+        .collect();
+    let mut rows: Vec<ThemeOption> = THEME_NAMES
         .iter()
         .filter_map(|name| {
             // The swatch is read from the palette itself, so the preview can
@@ -142,7 +149,52 @@ fn builtin_themes() -> Vec<ThemeOption> {
                 ],
             })
         })
-        .collect()
+        .collect();
+    // An operator theme has no hand-written label or description: it is named by
+    // its file, and its swatch is read from the file's own pairs so the preview
+    // cannot drift from what applying it does. A file that fails to parse shows
+    // the default palette's swatch rather than being omitted — an operator who
+    // can see the row can see why it looks wrong.
+    rows.extend(operator.into_iter().map(|name| {
+        let pairs = crate::tui::theme_files::load(&name);
+        let mut palette = ColorPalette::for_theme("default").expect("default is built in");
+        if let Some(pairs) = &pairs {
+            let map: std::collections::BTreeMap<String, String> = pairs.iter().cloned().collect();
+            let (overrides, errors) = crate::tui::vendor::style::palette::Palette::from_pairs(
+                map.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+            );
+            for error in &errors {
+                tracing::warn!(error, "ignoring invalid entry in theme file {name}");
+            }
+            if overrides.has_overrides() {
+                use crate::tui::vendor::style::palette::Role;
+                for role in crate::tui::vendor::style::palette::ALL_ROLES {
+                    if overrides.is_overridden(*role) {
+                        let (r, g, b) = overrides.rgb(*role);
+                        match role {
+                            Role::Accent => palette.accent = Color::Rgb(r, g, b),
+                            Role::Success => palette.success = Color::Rgb(r, g, b),
+                            Role::Border => palette.border = Color::Rgb(r, g, b),
+                            Role::UserBg => palette.panel_bg = Color::Rgb(r, g, b),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        ThemeOption {
+            label: name.clone(),
+            description: "Operator theme file".to_string(),
+            name,
+            swatch: [
+                palette.panel_bg,
+                palette.accent,
+                palette.success,
+                palette.text,
+            ],
+        }
+    }));
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -305,8 +357,13 @@ mod tests {
         let mut screen = ThemeScreen::new();
         screen.open("default");
 
+        // The list is the eight built-ins THEN the bundled and operator theme
+        // files (U2), so the wrap target is the last row, whatever that is — the
+        // invariant is the cycle, not a name. Asserting a literal name here is
+        // what made this guard fail the moment the palettes shipped.
+        let last = screen.themes.len() - 1;
         screen.select_prev();
-        assert_eq!(screen.selected_name(), Some("deuteranopia"));
+        assert_eq!(screen.selected_name(), Some(screen.themes[last].name.as_str()));
 
         screen.select_next();
         assert_eq!(screen.selected_name(), Some("default"));
