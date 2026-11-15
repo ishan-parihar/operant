@@ -5699,6 +5699,170 @@ wonderful_unknown_key = 42
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Panels plan S1: the generated row table is what a settings panel draws.
+    // These are the guards that keep it honest.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn every_setting_row_names_a_real_config_key() {
+        // The panel is a projection of the registry, so a row whose key is not
+        // in `CONFIG_KEYS` is a row that writes a key the loader will refuse.
+        for row in crate::config_registry::SETTING_ROWS {
+            assert!(
+                crate::config_registry::KNOWN_KEYS.contains(&row.key),
+                "SETTING_ROWS names `{}` which is not a known config key",
+                row.key
+            );
+        }
+    }
+
+    #[test]
+    fn every_known_key_has_exactly_one_setting_row() {
+        // A missing row is a key the panel cannot show; a duplicate is a row
+        // the panel shows twice. Both are drift between the two tables.
+        let mut rows: Vec<&str> = crate::config_registry::SETTING_ROWS
+            .iter()
+            .map(|r| r.key)
+            .collect();
+        let before = rows.len();
+        rows.sort_unstable();
+        rows.dedup();
+        assert_eq!(before, rows.len(), "a config key has two setting rows");
+        assert_eq!(
+            before,
+            crate::config_registry::KNOWN_KEYS.len(),
+            "SETTING_ROWS and KNOWN_KEYS disagree on how many keys exist"
+        );
+        for key in crate::config_registry::KNOWN_KEYS {
+            assert!(
+                crate::config_registry::SETTING_ROWS
+                    .iter()
+                    .any(|r| r.key == *key),
+                "`{key}` has no setting row"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_the_warning_reports_is_never_marked_live() {
+        // THE phantom-surface guard. A key that `unused_setting_warnings` can
+        // name is a key no code reads, so a panel that offers it ships a
+        // control that does nothing. Set every inert key, read the warning, and
+        // require the row table to agree — a parking that forgot the marker
+        // fails here rather than reaching an operator.
+        let raw = concat!(
+            "[tui]\n",
+            "show_iterations = true\n",
+            "landing_title = \"x\"\n",
+            "prompt_placeholder = \"x\"\n",
+            "refresh_rate_ms = 5\n",
+            "compact_width = 100\n",
+            "medium_width = 100\n",
+            "[skills]\n",
+            "template_name = \"x\"\n",
+            "template_description = \"x\"\n",
+            "[pk]\n",
+            "enabled = true\n",
+            "sidecar_script = \"x\"\n",
+            "ndjson_socket = \"x\"\n",
+            "exec_timeout_secs = 5\n",
+            "[bylaws]\n",
+            "grant_ttl_days = 5\n",
+            "[socialization]\n",
+            "enabled = true\n",
+            "schedule = \"x\"\n",
+            "turn_budget = 5\n",
+            "pairs = []\n",
+            "[agent]\n",
+            "max_consecutive_tool_only = 5\n",
+            "session_reset = \"always\"\n",
+            "[cli]\n",
+            "max_help_lines = 5\n",
+            "[tools]\n",
+            "event_channel_size = 5\n",
+            "browser_binary_path = \"x\"\n",
+            "[memory]\n",
+            "agentmemory_url = \"x\"\n",
+            "agentmemory_secret = \"x\"\n",
+        );
+        let config = parse_config_str(raw, Path::new("memory://s1-live")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert!(!warnings.is_empty(), "the inert config produced no warning");
+
+        // Every key named in a warning must be a key the row table calls dead.
+        // The warnings carry the key text in prose, so match on the leaf name
+        // the message quotes rather than parsing the sentence.
+        let dead: Vec<&str> = crate::config_registry::SETTING_ROWS
+            .iter()
+            .filter(|r| !r.live)
+            .map(|r| r.key)
+            .collect();
+        assert!(
+            dead.len() >= 41,
+            "expected at least the 41 measured inert keys, found {}: {dead:?}",
+            dead.len()
+        );
+        for key in [
+            "tui.show_iterations",
+            "tui.landing_title",
+            "tui.compact_width",
+            "tui.medium_width",
+            "agent.session_reset",
+            "agent.max_consecutive_tool_only",
+            "skills.template_name",
+            "pk.enabled",
+            "bylaws.grant_ttl_days",
+            "socialization.enabled",
+            "cli.max_help_lines",
+            "tools.event_channel_size",
+            "memory.agentmemory_url",
+        ] {
+            assert!(
+                dead.contains(&key),
+                "`{key}` is reported unread by the warning but the panel would offer it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parked_field_is_not_live_even_when_the_warning_forgets_it() {
+        // A peer can park a key by editing only the doc comment: that is what
+        // happened to the two historian keys, which say "PARKED ... accepted and
+        // ignored" while `unused_setting_warnings` names neither. The row table
+        // must still call them dead, or the panel offers two dead controls.
+        for key in [
+            "agent.context_historian",
+            "agent.context_historian_max_span",
+        ] {
+            let row = crate::config_registry::SETTING_ROWS
+                .iter()
+                .find(|r| r.key == key)
+                .unwrap_or_else(|| panic!("`{key}` has no setting row"));
+            assert!(!row.live, "`{key}` is parked in its doc but marked live");
+        }
+    }
+
+    #[test]
+    fn the_panel_has_widgets_to_draw() {
+        // The distribution, pinned so a generator regression that collapses
+        // every row to one widget fails here rather than shipping a panel of
+        // identical rows. Measured at S1: 65 Bool, 8 Cycle, 85 Number, 147
+        // Text, and the rest deliberately uneditable.
+        use crate::config_registry::{SettingRow, Widget};
+        let count_of = |want: Widget| {
+            crate::config_registry::SETTING_ROWS
+                .iter()
+                .filter(|r| r.widget == want)
+                .count()
+        };
+        assert!(count_of(Widget::Bool) >= 60, "Bool rows collapsed");
+        assert!(count_of(Widget::Number) >= 80, "Number rows collapsed");
+        assert!(count_of(Widget::Text) >= 140, "Text rows collapsed");
+        assert!(count_of(Widget::Cycle) > 0, "no cycle rows at all");
+        let _: Option<&SettingRow> = None;
+    }
+
     #[test]
     fn unused_setting_warnings_name_only_the_keys_actually_set() {
         // A clean config says nothing: defaults must not produce noise.

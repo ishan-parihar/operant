@@ -196,16 +196,21 @@ def struct_span(src: str, name: str) -> tuple[int, int] | None:
     return None
 
 
-def fields_of(src: str, start: int, end: int) -> list[tuple[str, str]]:
-    """(field name, note) for every `pub` field in `src[start:end]`.
+def fields_of(src: str, start: int, end: int) -> list[tuple[str, str, str]]:
+    """(field name, type, note) for every `pub` field in `src[start:end]`.
 
     The body is scanned in place rather than sliced, because a field's NOTE
     lives on the lines above it and the slice's line numbering would point at
     the wrong text. Only TOP-LEVEL fields are returned: a line inside a
     nested `#[serde(...)]` attribute or a multi-line type is not a field
     declaration, and the brace depth is what tells them apart.
+
+    The TYPE is captured because the panel's widget is inferred from it (see
+    `widget_for`). Measured on this file: 369 of 370 fields declare their type
+    on the same line as the name and none wrap, so a single-line match is the
+    whole population rather than a convenient subset.
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     # Absolute offset of the first body line, so a relative line index can be
     # converted back for the doc-comment read.
     body_start_line = src.count("\n", 0, start)
@@ -215,9 +220,13 @@ def fields_of(src: str, start: int, end: int) -> list[tuple[str, str]]:
         stripped = line.strip()
         if stripped.startswith("}") or stripped.startswith("]"):
             depth -= 1
-        m = re.match(r"\s*pub ([a-z_][a-z0-9_]*)\s*:", line)
+        m = re.match(r"\s*pub ([a-z_][a-z0-9_]*)\s*:\s*(.*?),?\s*$", line)
         if m and depth == 0:
-            out.append((m.group(1), doc_comment_at(src, body_start_line + i)))
+            out.append((
+                m.group(1),
+                m.group(2).strip().rstrip(","),
+                doc_comment_at(src, body_start_line + i),
+            ))
         depth += line.count("{") - line.count("}")
     return out
 
@@ -254,6 +263,152 @@ def doc_comment_at(src: str, line_idx: int) -> str:
     # Drop the empty paragraphs a `///` separator line leaves behind, so the
     # rendered note reads as prose rather than as `para  para`.
     return " ".join(part for part in reversed(out) if part).strip()
+
+
+# The vocabulary a doc comment uses to say "this field is parsed and ignored".
+# Measured against every settings struct: `PARKED` (the newest spelling, added
+# by the historian retirement) plus the older phrasings that predate it. A field
+# carrying one of these in ITS OWN doc block is `live: false`.
+#
+# WHY THE DOC COMMENT AND NOT THE WARNING BODY: `unused_setting_warnings` builds
+# each message with `format!` at runtime, so searching its body for a dotted key
+# finds zero keys — the keys exist only as `self.tui.compact_width != …` inside a
+# `flag!` macro call. And a peer parked two keys whose doc blocks say "accepted
+# and ignored" while the warning body still names neither. The doc comment is
+# the one place every parking is recorded, and the generator already reads it.
+PARKED_MARKERS = re.compile(
+    r"PARKED|accepted and ignored|accepted but unread|accepted and unread"
+    r"|READ BY NOTHING|read by nothing|accepts? it and ignore",
+    re.IGNORECASE,
+)
+
+
+# The dotted paths `unused_setting_warnings` proves unread. They are recovered
+# from the `flag!` macro calls rather than from the messages: the body builds
+# every string with `format!` at runtime, so searching it for a dotted key finds
+# zero. The macro's FIRST argument names the fields (`self.tui.compact_width`)
+# and its second is the label; the fields are what this needs.
+def inert_keys_from_warnings(src: str) -> set[str]:
+    """Every dotted config path the warning body tests for a non-default value.
+
+    A key that only exists to be reported as "accepted but unread" is a key no
+    code reads — that is what the warning MEANS — so its presence here is the
+    same fact the doc-comment marker carries, from the other side.
+    """
+    start = src.find("pub fn unused_setting_warnings")
+    if start < 0:
+        return set()
+    end = src.find("pub fn apply_env_overrides", start)
+    body = src[start:end if end > 0 else len(src)]
+    out: set[str] = set()
+    for cond, _label in re.findall(r'flag!\(\s*(.*?),\s*"([^"]+)"\s*\)\s*;', body, re.S):
+        out.update(re.findall(r'self\.([a-z0-9_.]+)', cond))
+    # The two cluster arms compare LOCALS, not `self.<path>`, so their fields
+    # are recovered from the `let <local> = &self.<section>;` binding that opens
+    # each block and the `unread.push("<field>")` literals inside it. Bounding
+    # each block at the NEXT binding is what keeps the observability fields from
+    # inheriting the context_injection prefix — a single flat scan cannot tell
+    # two same-shaped blocks apart.
+    binds = [
+        (m.start(), m.group(1))
+        for m in re.finditer(
+            r"^\s*let\s+\w+\s*=\s*&self\.([a-z_]+);\s*$", body, re.M
+        )
+    ]
+    for i, (pos, section) in enumerate(binds):
+        if section not in {"observability", "context_injection"}:
+            continue
+        stop = binds[i + 1][0] if i + 1 < len(binds) else len(body)
+        for field in re.findall(r"unread\.push\(\"([a-z_]+)\"\)", body[pos:stop]):
+            out.add(f"{section}.{field}")
+    for name in re.findall(r'\("([a-z_]+)",\s*&self\.', body):
+        out.add(f"auxiliary_models.{name}")
+    return out
+
+
+def is_live(note: str) -> bool:
+    """Whether a field's own doc comment claims code reads it.
+
+    False only on a positive parked marker. Silence is NOT evidence of death:
+    most live fields say nothing about being read, so an absent marker must
+    default to live or the filter would hide most of the panel.
+    """
+    return not PARKED_MARKERS.search(note or "")
+
+
+# Rust scalar types the panel can edit directly.
+BOOL_TYPES = {"bool"}
+NUMBER_TYPES = {
+    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64",
+    "isize",
+}
+
+
+def bare_type(ftype: str) -> str:
+    """`Option<T>` / `&'a T` wrappers stripped, so a type can be resolved.
+
+    A `pub model: Option<String>` field is still a `String` field for widget
+    purposes; the panel shows the current value and the unset state is the
+    empty string, which is what `Option` means in the config file anyway.
+    """
+    t = (ftype or "").strip()
+    t = re.sub(r"^Option<\s*", "", t)
+    t = re.sub(r"^&'?\w*\s*", "", t)
+    return re.sub(r">$", "", t).strip()
+
+
+def widget_for(ftype: str, enum_values: int | None) -> str:
+    """The panel widget a field's Rust type implies.
+
+    Returns the VARIANT NAME as it appears in the generated module. `None` for a
+    type the panel must not offer, which is the honest answer for an `f64`
+    ratio (measured: 16 fields) or a nested settings struct — a text box that
+    accepts any string is a control the config will reject or silently ignore.
+
+    `enum_values` is the variant count when the field's type is an enum defined in
+    `config.rs`; None when the generator cannot resolve it.
+    """
+    t = (ftype or "").strip()
+    bare = re.sub(r"^Option<|>$", "", t).strip()
+    if bare in BOOL_TYPES:
+        return "Bool"
+    if bare in NUMBER_TYPES:
+        return "Number"
+    # An array option cycles in place; anything longer belongs to a config
+    # editor, because a twelve-step cycle is a worse control than typing.
+    if enum_values is not None:
+        return "Cycle" if enum_values <= 6 else "Unsupported"
+    if bare in {"String", "PathBuf", "toml::Value"}:
+        return "Text"
+    return "None"
+
+
+def enum_variant_count(src: str, enum_name: str) -> int | None:
+    """How many variants `enum_name` declares, or None when it is not here.
+
+    Only enums declared in `config.rs` are counted: an enum imported from
+    another crate has variants the generator cannot see, and guessing a count
+    would silently mislabel a widget.
+    """
+    m = re.search(r"pub enum " + re.escape(enum_name) + r"\s*\{", src)
+    if not m:
+        return None
+    lo = m.end() - 1
+    depth = 0
+    hi = None
+    for i in range(lo, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                hi = i
+                break
+    if hi is None:
+        return None
+    body = src[lo:hi]
+    names = re.findall(r"^\s{4}([A-Z][A-Za-z0-9_]*)", body, re.M)
+    return len(names) if names else None
 
 
 def default_map(src: str) -> dict[str, str]:
@@ -337,7 +492,12 @@ def main() -> int:
     src = strip_test_items(CONFIG.read_text(encoding="utf-8"))
     defaults = default_map(src)
 
-    rows: list[tuple[str, str, str]] = []  # (dotted, default, note)
+    rows: list[tuple[str, str, str, str, bool]] = []  # (dotted, default, note, widget, live)
+    # TWO sources, because neither alone is complete. The warning body names 41
+    # keys that only exist to be reported unread; the doc-comment marker names
+    # keys a peer parked WITHOUT updating the warning body (measured at rev 2:
+    # the two historian keys). A key dead by either test is dead.
+    inert = inert_keys_from_warnings(src)
 
     # Struct lookup across every loaded source, `config.rs` first so its
     # definitions win a name collision with another file's.
@@ -362,12 +522,21 @@ def main() -> int:
         rel, lo, hi = found
         body_src = all_sources[rel]
         dmap = defaults.get(struct_name, {})
-        for field, note in fields_of(body_src, lo, hi):
+        for field, ftype, note in fields_of(body_src, lo, hi):
             dotted = f"{prefix}.{field}" if prefix else field
             default = dmap.get(field, "")
             if not default:
                 default = f"<{struct_name}::default()>"
-            rows.append((dotted, default, note or "<no note>"))
+            note = note or "<no note>"
+            # A cycle needs the variant count, which only the declaring file
+            # can supply. An enum from another crate resolves to None and falls
+            # through to Text rather than being guessed at.
+            variants = enum_variant_count(body_src, bare_type(ftype))
+            widget = widget_for(ftype, variants)
+            rows.append((
+                dotted, default, note, widget,
+                is_live(note) and dotted not in inert,
+            ))
 
     # Top-level sections: `AppConfig`'s own fields name the section, and each
     # section's struct supplies the leaves.
@@ -376,7 +545,7 @@ def main() -> int:
     if app_found:
         app_rel, app_lo, app_hi = app_found
         app_src = all_sources[app_rel]
-        for field, _note in fields_of(app_src, app_lo, app_hi):
+        for field, _ftype, _note in fields_of(app_src, app_lo, app_hi):
             m = re.search(
                 r"pub " + re.escape(field) + r"\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*(?:Option<)?([A-Za-z_][A-Za-z0-9_]*)",
                 app_src,
@@ -394,11 +563,19 @@ def main() -> int:
     if app_found:
         app_rel, app_lo, app_hi = app_found
         app_src = all_sources[app_rel]
-        for field, note in fields_of(app_src, app_lo, app_hi):
+        for field, ftype, note in fields_of(app_src, app_lo, app_hi):
             if field not in TOP_LEVEL_KEYS:
                 continue
             dmap = defaults.get("AppConfig", {})
-            rows.append((field, dmap.get(field, "<AppConfig::default()>"), note or "<no note>"))
+            note = note or "<no note>"
+            variants = enum_variant_count(app_src, bare_type(ftype))
+            rows.append((
+                field,
+                dmap.get(field, "<AppConfig::default()>"),
+                note,
+                widget_for(ftype, variants),
+                is_live(note) and field not in inert,
+            ))
 
     # A nested settings struct is reached through its parent field, so the
     # dotted prefix is the parent path -- not a synthesised name. The parent
@@ -416,7 +593,7 @@ def main() -> int:
         # `AuxiliaryModels.memory: Option<AuxiliaryModelConfig>`, so every
         # `auxiliary_models.memory.*` row was built from the wrong struct.
         parent_body = p_src[p_lo:p_hi]
-        for field, _note in fields_of(p_src, p_lo, p_hi):
+        for field, _ftype, _note in fields_of(p_src, p_lo, p_hi):
             if field not in children:
                 continue
             m = re.search(
@@ -436,7 +613,7 @@ def main() -> int:
         g_rel, g_lo, g_hi = gp_found
         g_src = all_sources[g_rel]
         g_body = g_src[g_lo:g_hi]
-        for field, _note in fields_of(g_src, g_lo, g_hi):
+        for field, _ftype, _note in fields_of(g_src, g_lo, g_hi):
             if field != child:
                 continue
             cm = re.search(
@@ -452,7 +629,7 @@ def main() -> int:
             m_rel, m_lo, m_hi = mid_found
             m_src = all_sources[m_rel]
             m_body = m_src[m_lo:m_hi]
-            for leaf, _n in fields_of(m_src, m_lo, m_hi):
+            for leaf, _t, _n in fields_of(m_src, m_lo, m_hi):
                 if leaf not in grandchildren:
                     continue
                 lm = re.search(
@@ -504,12 +681,17 @@ def main() -> int:
     return 0
 
 
-def render(rows: list[tuple[str, str, str]]) -> str:
+def render(rows: list[tuple[str, str, str, str, bool]]) -> str:
     """The generated Rust module.
 
     `include_str!` of the config source is not an option (the registry must be
     a static list, not a parse at startup), so the rows are emitted as a
-    `&[(&str, &str, &str)]` the runtime can binary-search by key.
+    `&[(...)]` the runtime can binary-search by key.
+
+    Two tables, because they have two readers: `CONFIG_KEYS` is the operator-
+    facing `(key, default, note)` triple that `config describe` renders, and
+    `SETTING_ROWS` adds what a panel needs — which widget to draw and whether
+    the field is read at all.
     """
     lines = [
         "//! GENERATED FILE — do not edit.",
@@ -526,20 +708,67 @@ def render(rows: list[tuple[str, str, str]]) -> str:
         "/// `(dotted key, default, note)`, sorted by dotted key.",
         "pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[",
     ]
-    for dotted, default, note in sorted(rows):
+    for dotted, default, note, _w, _live in sorted(rows):
         safe_default = default.replace("\\", "\\\\").replace('"', '\\"')
         safe_note = note.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'    ("{dotted}", "{safe_default}", "{safe_note}"),')
     lines.append("];")
     lines.append("")
+    lines.append("/// What a settings panel draws for one key.")
+    lines.append("///")
+    lines.append("/// (2026-11-15, panels plan S1) The widget is INFERRED from the field's")
+    lines.append("/// Rust type, and `live` from two sources: the field's own doc comment")
+    lines.append("/// (a parked field says so) and `unused_setting_warnings`, which names")
+    lines.append("/// the keys that exist only to be reported as unread. Neither can drift")
+    lines.append("/// from the struct. `live: false` is the phantom-surface guard: a panel")
+    lines.append("/// that offers such a key ships a control that does nothing.")
+    lines.append("pub struct SettingRow {")
+    lines.append("    /// The dotted config key, e.g. `agent.context_window`.")
+    lines.append("    pub key: &'static str,")
+    lines.append("    /// The widget a panel should draw.")
+    lines.append("    pub widget: Widget,")
+    lines.append("    /// Whether any code reads this key. False = accepted and ignored.")
+    lines.append("    pub live: bool,")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// The controls a panel can draw for one config key.")
+    lines.append("///")
+    lines.append("/// Inferred from the field's type, so the set is closed by what the")
+    lines.append("/// generator can prove. `None` means the panel must not offer the key:")
+    lines.append("/// an `f64` ratio or a nested table has no honest single-line editor.")
+    lines.append("#[derive(Debug, Clone, Copy, PartialEq, Eq)]")
+    lines.append("pub enum Widget {")
+    lines.append("    /// A boolean, cycled in place.")
+    lines.append("    Bool,")
+    lines.append("    /// An enum with at most six variants, cycled in place.")
+    lines.append("    Cycle,")
+    lines.append("    /// An integer with a known range, edited by typing.")
+    lines.append("    Number,")
+    lines.append("    /// Free text, parsed as the field's own type.")
+    lines.append("    Text,")
+    lines.append("    /// An enum longer than a cycle should hold, or a shape with no")
+    lines.append("    /// single-line editor.")
+    lines.append("    Unsupported,")
+    lines.append("    /// No editor: the key needs a structured surface (a table, a")
+    lines.append("    /// nested struct, an `f64` ratio).")
+    lines.append("    None,")
+    lines.append("}")
+    lines.append("")
+    lines.append("pub const SETTING_ROWS: &[SettingRow] = &[")
+    for dotted, _default, _note, widget, live in sorted(rows):
+        live_lit = "true" if live else "false"
+        lines.append(
+            f'    SettingRow {{ key: "{dotted}", widget: Widget::{widget}, live: {live_lit} }},'
+        )
+    lines.append("];")
+    lines.append("")
     lines.append("/// Every dotted key this build accepts.")
     lines.append("pub const KNOWN_KEYS: &[&str] = &[")
-    for dotted, _default, _note in sorted(rows):
+    for dotted, _default, _note, _w, _live in sorted(rows):
         lines.append(f'    "{dotted}",')
     lines.append("];")
     lines.append("")
     return "\n".join(lines)
-
 
 if __name__ == "__main__":
     sys.exit(main())

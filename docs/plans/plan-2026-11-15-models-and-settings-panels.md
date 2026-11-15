@@ -1,8 +1,17 @@
 # Plan — a models panel and a settings panel that own what the slash commands do
 
 **Date:** 2026-11-15
-**Base:** `origin/main` @ `9c2daeb4`
-**Status:** outline. Writing this file executes nothing.
+**Revision:** 2 — supersedes revision 1 in place. What changed: the registry
+count was wrong by 4.6x (83 → **385**), which made the inert-key count wrong
+too (5 → **41**); the `live` filter's source moved from the warning body to the
+field's own doc comment, because the body builds its messages at runtime and
+cannot be searched for keys, and because a peer parked two keys whose doc blocks
+say so while the warning body does not; and the `Recent` scope was re-priced
+after measurement showed operant tracks no model recency at all. Tranches S1–S5
+are otherwise unchanged in shape and order.
+**Base:** `origin/main` @ `733ea7de`
+**Status:** outline. Writing this file executes nothing. Revision 2 is the
+execution base: S1 starts from the counts and the `live` source stated here.
 **Sibling:** [plan-2026-11-15-model-picker-hub-and-effort.md](plan-2026-11-15-model-picker-hub-and-effort.md)
 (M1–M7, shipped) and
 [plan-2026-11-15-session-hub-surfaces-and-agent-identity.md](plan-2026-11-15-session-hub-surfaces-and-agent-identity.md)
@@ -27,7 +36,8 @@ the gateway keeping the commands.
 
 Both references were read at `oh-my-pi` @ `19a76233fb`. They are the yardstick,
 not a porting target: omp is TypeScript with a settings registry of 613 entries;
-operant is Rust with a generated key table of 83.
+operant is Rust with a generated key table of **385** (revision 2 correction:
+this file first said 83, which counted one tuple form and missed the rest).
 
 ### oh-my-pi's settings panel is a projection, not a UI
 
@@ -105,7 +115,7 @@ a `--check` staleness gate.
 
 ```rust
 /// `(dotted key, default, note)`, sorted by dotted key.
-pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[ … ];  // 83 keys
+pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[ … ];  // 385 keys
 pub const KNOWN_KEYS: &[&str] = &[ … ];
 ```
 
@@ -155,19 +165,56 @@ gesture. It is registered at `DialogPriority::SessionHub = 190`.
 
 ### 1. The registry contains keys the config itself reports as inert
 
-`AppConfig::unused_setting_warnings` (`config.rs:3908`) names every key that
-parses and is read by nothing. Cross-referencing it against `CONFIG_KEYS`:
-**5 of the 83 registry keys are inert.**
+`AppConfig::unused_setting_warnings` names every key that parses and is read
+by nothing. Measured at revision 2 against `CONFIG_KEYS` (385 keys):
+**41 registry keys are inert** — 26 named by a `flag!(self.x != …, "key")`
+invocation, plus three clusters compared through locals rather than `self`:
+`auxiliary_models.*` (6), `observability.*` (6), `context_injection.*` (3).
 
 ```
-tools.event_channel_size   tui.compact_width    tui.landing_title
-tui.medium_width           tui.show_iterations
+agent.max_consecutive_tool_only   agent.session_reset
+bylaws.grant_ttl_days             cli.max_help_lines
+memory.agentmemory_url/secret     pk.enabled / sidecar_script /
+                                  ndjson_socket / exec_timeout_secs
+skills.template_name/_description socialization.enabled / schedule /
+                                  turn_budget / pairs
+tools.browser_binary_path         tools.event_channel_size
+tools.tool_search.search_default_limit / max_search_limit
+tui.compact_width / landing_title / medium_width /
+    prompt_placeholder / refresh_rate_ms / show_iterations
+auxiliary_models.web_extract / image_gen / embeddings /
+                  search / code_execution / reasoning
+observability.otel_endpoint / otel_service_name / otel_headers /
+              runtime_trace_mode / runtime_trace_path /
+              runtime_trace_max_entries
+context_injection.global_quota / dept_quota / self_quota
 ```
 
-A panel projected straight off `CONFIG_KEYS` would ship five controls that do
-nothing. The registry needs a liveness filter before it can drive a panel —
-which is precisely the "phantom selection surface" `model_roles.rs` was written
-to prevent.
+A panel projected straight off `CONFIG_KEYS` would ship 41 controls that do
+nothing — one in nine rows. The registry needs a liveness filter before it can
+drive a panel, which is precisely the "phantom selection surface"
+`model_roles.rs` was written to prevent.
+
+**The filter's source cannot be the warning body alone.** Two reasons, both
+measured:
+
+- The body does not name keys as dotted literals — it builds each message from
+  `format!` at runtime, so an exact-string search of the function finds **zero**
+  registry keys. The keys are only recoverable from the `flag!` arguments
+  (`self.tui.compact_width != …` paired with its `"[tui]"` label) and from the
+  loop literals in the three cluster arms.
+- **Peers are parking keys faster than the warning body is updated.** At
+  revision 2, `agent.context_historian` and `agent.context_historian_max_span`
+  were parked — their doc blocks say "PARKED … accepted and ignored", and
+  `unused_setting_warnings` does **not** name them. A filter reading only the
+  warning body would offer two dead controls.
+
+So `live` is computed from the **field's own doc comment**, which is the source
+the generator already reads for `note`. The parked markers are a small, stable
+vocabulary — `PARKED`, `accepted and ignored`, `accepted but unread`,
+`READ BY NOTHING` — and a field carrying one is `live: false`. The warning body
+is the cross-check, not the source: S1's test asserts every key the body names
+is also `live: false`, which catches a parking that forgot the marker.
 
 ### 2. There is no per-key live setter
 
