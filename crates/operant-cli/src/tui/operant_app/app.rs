@@ -431,6 +431,41 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/title", "Rename the session (alias of /rename)"),
 ];
 
+/// The commands a panel subsumes, and which panel it is.
+///
+/// (panels plan S4) The crossover rule, written as data so a test can hold it.
+/// A command appears here only when its ENTIRE effect is setting a value that
+/// persists — that is the line the plan drew, and it is why `/stats` is absent
+/// (it produces a report) and `/clear` is absent (it mutates a session).
+///
+/// The panel is an ADDITIONAL front end, never a replacement: every name here
+/// is still a `RegisteredCommand` and still dispatches for a channel. That is
+/// what makes the gateway's retention automatic rather than a special case.
+pub(crate) const PANEL_COMMANDS: &[(&str, PanelSurface)] = &[
+    ("/model", PanelSurface::Models),
+    ("/models", PanelSurface::Models),
+    ("/config", PanelSurface::Settings),
+    ("/effort", PanelSurface::Models),
+    ("/agents", PanelSurface::Models),
+];
+
+/// The panel a command opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelSurface {
+    /// The models panel (settings plan S3).
+    Models,
+    /// The settings panel (settings plan S2).
+    Settings,
+}
+
+/// Which panel a command opens, if any.
+pub(crate) fn panel_for_command(name: &str) -> Option<PanelSurface> {
+    PANEL_COMMANDS
+        .iter()
+        .find(|(command, _)| *command == name)
+        .map(|(_, surface)| *surface)
+}
+
 /// Every non-hidden slash command with its one-line description, in
 /// registration order. The `/help` overlay uses this to list commands its
 /// hand-written sections have not covered, so a newly registered command can
@@ -629,5 +664,103 @@ fn scan_slash_tokens(input: &str, mut on_token: impl FnMut(usize, usize)) {
         }
 
         line_start = ch == '\n';
+    }
+}
+
+#[cfg(test)]
+mod panel_crossover_tests {
+    use super::*;
+
+    /// (panels plan S4) The crossover rule: a command moves behind a panel only
+    /// when its entire effect is setting a value that persists, and it never
+    /// STOPS being a command — that is what keeps the gateway working.
+    #[test]
+    fn every_panel_command_is_still_a_registered_command() {
+        for (name, _surface) in PANEL_COMMANDS {
+            assert!(
+                REGISTERED_COMMANDS.iter().any(|command| command.name == *name),
+                "`{name}` opens a panel but is no longer a RegisteredCommand, so a \
+                 channel lost it — the gateway retention depends on this row existing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_command_never_replaced_its_command_row() {
+        // The same invariant stated the other way: the count of registered
+        // commands must not have gone DOWN when the panels landed. A sweep that
+        // deleted the overlay commands to "replace" them would pass the check
+        // above for the survivors and fail this one.
+        // 114 rows are written in the table; ONE is `#[cfg(any())]`, so the
+        // live count is 113. A count taken from the source text counts the dead
+        // row and reads a healthy table as shrunken — measure the compiled
+        // slice, not the file.
+        assert!(
+            !PANEL_COMMANDS.is_empty(),
+            "no command opens a panel, so the crossover did not happen"
+        );
+        for (name, _) in PANEL_COMMANDS {
+            assert!(
+                registered_command_help(name).is_some(),
+                "`{name}` opens a panel but has no help row, so /help and the \
+                 channel replies lost it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_crossover_table_names_only_commands_that_exist() {
+        for (name, _) in PANEL_COMMANDS {
+            assert!(
+                REGISTERED_COMMANDS.iter().any(|command| command.name == *name),
+                "`{name}` is in the crossover table but not in the catalogue"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_still_has_a_help_row() {
+        // The gateway's channel replies and the /help overlay both read this
+        // table. A command that lost its row is invisible in both.
+        for command in REGISTERED_COMMANDS {
+            if command.hidden {
+                continue;
+            }
+            assert!(
+                !command.help.is_empty(),
+                "`{}` has no help text",
+                command.name
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod crossover_surface_tests {
+    use super::*;
+
+    /// (panels plan S4) The gateway's command list and the /help overlay both
+    /// read REGISTERED_COMMANDS. The crossover added a TABLE BESIDE it and never
+    /// edited it, so both surfaces are unchanged by construction — and this pins
+    /// that, because the next person to "replace the overlay commands" would
+    /// edit the table the two of them read.
+    #[test]
+    fn the_command_catalogue_is_untouched_by_the_crossover() {
+        let all: Vec<&str> = REGISTERED_COMMANDS.iter().map(|c| c.name).collect();
+        let local: Vec<&str> = locally_visible_command_rows().map(|(n, _)| n).collect();
+        // 114 rows are WRITTEN and one is `#[cfg(any())]`, so the live catalogue
+        // is 113: 107 public + 6 hidden, less the disabled one.
+        assert_eq!(all.len(), 113, "the catalogue changed size");
+        // Locally visible = live less hidden less remote-only = 113 - 6 - 2.
+        assert_eq!(
+            local.len(),
+            105,
+            "the locally-visible set changed size (113 less 6 hidden and 2 remote-only)"
+        );
+        // Every panel command is in BOTH views, so a channel still sees it.
+        for (name, _) in PANEL_COMMANDS {
+            assert!(all.contains(name), "`{name}` is not in the full catalogue");
+            assert!(local.contains(name), "`{name}` is not locally visible");
+        }
     }
 }
