@@ -2165,6 +2165,12 @@ impl TuiApp {
             // will use, so a no-op switch (the same id re-applied) is detectable
             // here rather than by comparing the operator's words to the config.
             let unchanged = app.model_name == applied;
+            // (panels plan S3) The recency source `Recent` ranks. Recorded on
+            // EVERY applied model, including a re-apply, because "I just used
+            // this" is true either way and the list dedupes by model — so a
+            // no-op switch still moves the row to the front, which is what the
+            // operator would expect from a list they are about to read.
+            crate::tui::model_recent::RecentModels::record_and_save(&applied);
             app.model_name = applied.clone();
             app.session_model = Some(applied.clone());
             if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {

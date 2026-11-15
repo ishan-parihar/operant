@@ -1218,6 +1218,15 @@ impl App {
         }
 
         // Settings screen intercepts keys
+        // (panels plan S3) The models panel: arrows move, Enter begins an
+        // assignment, x clears, Esc leaves. It sits with the other full-frame
+        // surfaces rather than with the inline picker, because it owns the
+        // keyboard while it is up.
+        if self.models_panel.visible {
+            self.handle_models_panel_key(key);
+            return false;
+        }
+
         if self.settings_screen.visible {
             crate::settings_screen::handle_settings_key(
                 &mut self.settings_screen,
@@ -3356,6 +3365,84 @@ impl App {
     /// the row's options and applies on the last column, Esc clears the
     /// filter first and closes second. Returns true when the key was
     /// consumed (the caller must not forward it).
+    /// (panels plan S3) Keys while the models panel is up.
+    ///
+    /// The panel is a two-step surface: the cursor picks a SLOT, then Enter
+    /// arms the assignment and the catalogue picks the MODEL. `x` clears the
+    /// slot under the cursor. Esc leaves the step it is in rather than the
+    /// panel, so an operator who armed an assignment by mistake gets one press
+    /// back to the list instead of out of the surface.
+    pub(super) fn handle_models_panel_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        // Step two: choosing the model for an armed slot. The catalogue is the
+        // inline picker's, so this step hands over to it rather than growing a
+        // second catalogue here.
+        if self.models_panel.assigning.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.models_panel.cancel_assign();
+                    return;
+                }
+                // The model list is the picker's; opening it keeps one
+                // catalogue. The slot stays armed so the picker's apply step
+                // knows what it is filling.
+                KeyCode::Enter => {
+                    let slot = self.models_panel.assigning;
+                    self.models_panel.cancel_assign();
+                    if let Some(slot) = slot {
+                        self.set_status_notice(format!(
+                            "assigning {} — pick a model",
+                            slot.name()
+                        ));
+                    }
+                    self.open_model_picker_inline("");
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => self.models_panel.close(),
+            KeyCode::Up => {
+                let total = self.models_panel.rows(&self.config).len();
+                self.models_panel.move_selection(-1, total);
+            }
+            KeyCode::Down => {
+                let total = self.models_panel.rows(&self.config).len();
+                self.models_panel.move_selection(1, total);
+            }
+            KeyCode::Enter => {
+                if let Some(slot) = self.models_panel.begin_assign(&self.config) {
+                    self.set_status_notice(format!(
+                        "{} — Enter to choose a model, Esc to cancel",
+                        slot.name()
+                    ));
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(key_path) = self.models_panel.clear_slot(&self.config) {
+                    // The write is the slot's own persist key, which is the
+                    // same seam the picker's assignment uses. An empty value
+                    // is "unassigned" in the config, so the slot falls back to
+                    // `auto` rather than being written as a blank model name.
+                    match operant_core::config::persist_config_key(key_path, "") {
+                        Ok(path) => self.models_panel.notice = Some(format!(
+                            "cleared {key_path} ({})",
+                            path.display()
+                        )),
+                        Err(error) => {
+                            self.models_panel.notice =
+                                Some(format!("could not clear {key_path}: {error}"));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn handle_inline_interactive_key(
         &mut self,
         code: KeyCode,

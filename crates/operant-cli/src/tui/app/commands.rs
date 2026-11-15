@@ -758,6 +758,17 @@ impl App {
                 // argument was only ever a filter string, so `/model slow:xhigh`
                 // narrowed the list to nothing and set nothing.
                 let selector = args.trim();
+                // `/model roles` opens the models panel on its Roles view: the
+                // one surface that shows every slot, assigned or not, with an
+                // unassign. `/agents` keeps its own menu — that one lists the
+                // RUNNING subagents, which is a different question from "what
+                // is each slot configured with", and repointing it would take
+                // away a working surface rather than add one.
+                if selector.eq_ignore_ascii_case("roles") {
+                    self.models_panel
+                        .open(crate::tui::model_scope::ModelScope::Roles);
+                    return true;
+                }
                 if selector.is_empty() {
                     self.open_model_picker_inline("");
                     return true;

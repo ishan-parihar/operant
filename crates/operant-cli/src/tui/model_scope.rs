@@ -67,7 +67,7 @@ pub fn scopes(entries: &[PickerEntry]) -> Vec<ModelScope> {
 /// A role row belongs to `Roles` and to no provider scope; a model row belongs to
 /// every provider it carries an option for, which is how an OpenRouter row that
 /// resolves to a vendor model appears under both names.
-pub fn contains(scope: &ModelScope, entry: &PickerEntry) -> bool {
+pub fn contains(scope: &ModelScope, entry: &PickerEntry, recent: &[&str]) -> bool {
     match scope {
         ModelScope::All => true,
         ModelScope::Roles => matches!(entry.action, PickerAction::ModelSlot(_)),
@@ -82,19 +82,30 @@ pub fn contains(scope: &ModelScope, entry: &PickerEntry) -> bool {
                     .iter()
                     .any(|option| option.provider.trim() == name)
         }
-        // `Recent` is the recency window, which the picker does not carry yet:
-        // an empty selection is honest, and the scope says so rather than
-        // inventing an order.
-        ModelScope::Recent => false,
+        // `Recent` is the recency window, and the caller supplies it: the
+        // entries this picker holds are catalogue rows while the recency file
+        // holds model names, so the join happens against a list the caller read
+        // rather than a global this module reached for.
+        //
+        // Empty when nothing is recorded, which is the correct state on a fresh
+        // install rather than a defect: a scope that invented an order would be
+        // worse than one that honestly shows nothing.
+        ModelScope::Recent => recent
+            .iter()
+            .any(|model| model.eq_ignore_ascii_case(&entry.name)),
     }
 }
 
 /// The indices of the rows a scope selects, in body order.
-pub fn select(scope: &ModelScope, entries: &[PickerEntry]) -> Vec<usize> {
+pub fn select(
+    scope: &ModelScope,
+    entries: &[PickerEntry],
+    recent: &[&str],
+) -> Vec<usize> {
     entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| contains(scope, entry))
+        .filter(|(_, entry)| contains(scope, entry, recent))
         .map(|(index, _)| index)
         .collect()
 }
@@ -169,12 +180,12 @@ mod tests {
     fn a_role_row_is_a_roles_scope_row_and_belongs_to_no_provider() {
         let entries = vec![model_row("vision", &["Anthropic"], true)];
         assert_eq!(
-            select(&ModelScope::Roles, &entries),
+            select(&ModelScope::Roles, &entries, &[]),
             vec![0],
             "the role row is the Roles scope"
         );
         assert!(
-            select(&ModelScope::Provider("Anthropic".to_string()), &entries).is_empty(),
+            select(&ModelScope::Provider("Anthropic".to_string()), &entries, &[]).is_empty(),
             "a role row is an assignment, not a provider's model list"
         );
     }
@@ -185,14 +196,47 @@ mod tests {
         // names: the operator looking for either finds it.
         let entries = vec![model_row("vendor/model", &["OpenRouter", "vendor"], false)];
         assert_eq!(
-            select(&ModelScope::Provider("OpenRouter".to_string()), &entries),
+            select(&ModelScope::Provider("OpenRouter".to_string()), &entries, &[]),
             vec![0]
         );
         assert_eq!(
-            select(&ModelScope::Provider("vendor".to_string()), &entries),
+            select(&ModelScope::Provider("vendor".to_string()), &entries, &[]),
             vec![0]
         );
-        assert!(select(&ModelScope::Provider("missing".to_string()), &entries).is_empty());
+        assert!(select(&ModelScope::Provider("missing".to_string()), &entries, &[]).is_empty());
+    }
+
+    #[test]
+    fn recent_selects_the_models_the_recency_list_names() {
+        // (panels plan S3) The scope used to select nothing, with the honest
+        // comment that the picker carried no recency window. It has one now, so
+        // the scope must JOIN against it rather than stay empty — an empty
+        // `Recent` on a machine that has switched models is the defect.
+        let entries = vec![
+            model_row("gpt-4", &["OpenAI"], false),
+            model_row("claude-opus", &["Anthropic"], false),
+            model_row("unrecorded", &["OpenAI"], false),
+        ];
+        let recent = vec!["claude-opus", "gpt-4"];
+        assert_eq!(
+            select(&ModelScope::Recent, &entries, &recent),
+            vec![0, 1],
+            "both recorded models are selected, in body order"
+        );
+        // A model the list does not name is not selected, so `Recent` is a
+        // ranking rather than a second `All`.
+        assert!(
+            !select(&ModelScope::Recent, &entries, &recent).contains(&2),
+            "an unrecorded model must not appear in Recent"
+        );
+    }
+
+    #[test]
+    fn recent_with_nothing_recorded_selects_nothing() {
+        // The correct state on a fresh install, not a defect. A scope that
+        // invented an order would be worse than one that shows nothing.
+        let entries = vec![model_row("gpt-4", &["OpenAI"], false)];
+        assert!(select(&ModelScope::Recent, &entries, &[]).is_empty());
     }
 
     #[test]
@@ -201,9 +245,9 @@ mod tests {
             model_row("gpt-4", &["OpenAI"], false),
             model_row("vision", &["Anthropic"], true),
         ];
-        assert_eq!(select(&ModelScope::All, &entries), vec![0, 1]);
+        assert_eq!(select(&ModelScope::All, &entries, &[]), vec![0, 1]);
         assert!(
-            select(&ModelScope::Recent, &entries).is_empty(),
+            select(&ModelScope::Recent, &entries, &[]).is_empty(),
             "the picker carries no recency window, so the scope selects nothing \
              rather than inventing an order"
         );

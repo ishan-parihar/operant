@@ -63,7 +63,12 @@ impl App {
         let Some(picker) = self.inline_interactive.as_mut() else {
             return scope;
         };
-        let mut rows = select(&scope, &picker.entries);
+        // The recency list the `Recent` scope joins against. Read once per
+        // scope change, not per row: the file does not change while the picker
+        // is open, and a read per row would put a syscall in a filter.
+        let recent = crate::tui::model_recent::RecentModels::load();
+        let recent_models = recent.models();
+        let mut rows = select(&scope, &picker.entries, &recent_models);
         if !needle.is_empty() {
             rows.retain(|index| {
                 let entry = &picker.entries[*index];

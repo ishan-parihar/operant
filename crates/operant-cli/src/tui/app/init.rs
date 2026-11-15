@@ -243,6 +243,7 @@ impl App {
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),
+            models_panel: crate::tui::models_panel::ModelsPanel::default(),
             pending_inline_images: std::cell::RefCell::new(Vec::new()),
             theme_screen: ThemeScreen::new(),
             stats_dialog: StatsDialogState::new(),

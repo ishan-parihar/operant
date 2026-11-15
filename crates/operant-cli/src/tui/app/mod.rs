@@ -691,6 +691,9 @@ pub struct App {
     // ---- Settings / theme / privacy screens --------------------------------
     /// Full-screen tabbed settings screen (/config, /settings).
     pub settings_screen: SettingsScreen,
+    /// (panels plan S3) The models panel: one row per model slot, with the
+    /// scope axis beside it. Opened by `/model roles`.
+    pub models_panel: crate::tui::models_panel::ModelsPanel,
     /// Theme picker overlay (/theme).
     pub theme_screen: ThemeScreen,
     /// Token/cost analytics dialog.
