@@ -1102,6 +1102,48 @@ impl TuiApp {
         }
     }
 
+    /// Seed the acting seat from the session row (first submit of a run),
+    /// then sync seat + charter onto the agent as one pair.
+    ///
+    /// Seeded once per run: the session row is the persistent binding, and the
+    /// App's copy is the authority afterwards. `config` is never written —
+    /// this is a session-scoped binding, so a second session in the same
+    /// process keeps its own seat and the global employee binding is untouched.
+    fn sync_acting_seat_to_agent(
+        &mut self,
+        agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
+    ) {
+        if !self.app.acting_seat_seeded {
+            self.app.acting_seat_seeded = true;
+            if let Some(session_id) = self.app.current_session.clone() {
+                let db_path = self.app.config.database_path.clone();
+                if let Ok(db) = operant_core::database::Database::init(db_path) {
+                    if let Ok(Some(seed)) = db.get_session_employee(&session_id) {
+                        // Read the seeded seat's charter so the pair is atomic.
+                        if let Ok(roster) = db.list_employee_roster() {
+                            if let Some(record) = roster.iter().find(|r| r.employee_id == seed) {
+                                self.app.acting_charter = record.system_prompt.clone();
+                            }
+                        }
+                        self.app.acting_seat = Some(seed);
+                    }
+                }
+            }
+        }
+        match self.app.acting_seat.clone() {
+            Some(seat) => {
+                agent.set_seat_id(seat);
+                agent.set_charter(self.app.acting_charter.clone());
+            }
+            None => {
+                // The seed and the operator both said unbound: the agent must
+                // not inherit the previous session's seat.
+                agent.clear_seat_id();
+                agent.set_charter(None);
+            }
+        }
+    }
+
     async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
@@ -1120,6 +1162,13 @@ impl TuiApp {
         // the goal as `<turn_context>` instead of losing it to the
         // conversation's depth. `None` clears the agent's copy too.
         agent.set_standing_goal(self.app.session_goal.clone());
+        // (session-hub plan T4) The acting seat rides every turn the same way
+        // the goal does, as one atomic pair: `set_seat_id` AND `set_charter`.
+        // The seat is seeded from the session row on the FIRST submit of a
+        // run, so a session bound at the store (premiere, or a seat stamped by
+        // `/agent`) resumes under its own instructions; after that the App's
+        // copy is the authority until the session changes.
+        self.sync_acting_seat_to_agent(agent);
         // User activity cancels any pending idle recap (omp parity: the
         // recap exists to greet a returning user, never to interrupt one).
         if let Some(activity) = &self.app.recap_activity {
@@ -1917,6 +1966,12 @@ impl TuiApp {
                 // RT-206: retain the real session id, so Ctrl+B can anchor
                 // `CurrentBranch` on a fact rather than on a `Live`-row guess.
                 app.current_session = Some(fresh.clone());
+                // (session-hub plan T4) The new session seeds its own seat at
+                // the next submit: a seat is session-scoped, never inherited
+                // from the previous conversation.
+                app.acting_seat = None;
+                app.acting_charter = None;
+                app.acting_seat_seeded = false;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -1960,6 +2015,11 @@ impl TuiApp {
                 agent.notify_session_switch(&session_id, &old, false);
                 // RT-206: keep the retained id in step with the switch.
                 app.current_session = Some(session_id.clone());
+                // (session-hub plan T4) Same reset as the fresh-session path:
+                // this session's seat is re-seeded from its own row.
+                app.acting_seat = None;
+                app.acting_charter = None;
+                app.acting_seat_seeded = false;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();

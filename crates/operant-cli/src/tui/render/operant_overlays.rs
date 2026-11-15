@@ -535,6 +535,9 @@ fn paint_free_mode_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
+    if app.agent_picker.visible {
+        render_dialog_select(frame, &app.agent_picker, ctx.size);
+    }
 }
 
 fn paint_session_hub(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {

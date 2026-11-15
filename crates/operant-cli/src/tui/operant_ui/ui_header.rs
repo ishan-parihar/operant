@@ -577,6 +577,10 @@ fn build_persistent_header_with_auth(
     if let Some(badge) = crate::tui::operant_app::perf::profile().tier.badge() {
         status_items.push(badge);
     }
+    // (session-hub plan T4) The acting seat names itself where the operator
+    // reads the session's identity; a bound seat that is invisible is
+    // indistinguishable from an unbound one.
+    let acting_seat = app.acting_seat();
 
     // Labeled versions for the `server:` / `client:` lines. Lots of users run
     // mismatched client/server binaries, so both lines carry their own version
@@ -625,6 +629,12 @@ fn build_persistent_header_with_auth(
             spans.push(Span::styled(
                 format!(" · {}", status_items.join(" · ")),
                 Style::default().fg(dim_color()),
+            ));
+        }
+        if let Some(seat) = acting_seat.as_deref() {
+            spans.push(Span::styled(
+                format!(" · {}", seat),
+                Style::default().fg(rgb(255, 200, 100)),
             ));
         }
         lines.push(Line::from(spans).alignment(align));

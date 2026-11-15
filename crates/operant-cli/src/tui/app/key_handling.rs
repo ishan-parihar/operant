@@ -8,40 +8,6 @@ use super::*;
 /// the loss window for a long session that never runs one.
 const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 
-// ---- 2026-10-14 batch, plan 03: effort wire mapping ----
-
-impl App {
-    /// Shift+Tab (plan 03 decision 1; plan 10 cleared the permission cycle
-    /// off this key): cycle the reasoning ladder, forwarding each step to the
-    /// agent via the pending-action channel.
-    ///
-    /// (2026-11-15, model plan M2) The ladder is `EffortLevel::ALL` now, so this
-    /// is one call rather than a hand-written table. The old table had four arms
-    /// for a seven-rung vocabulary and its top arm was the defect: `Max => (Low,
-    /// "")` set the level to `Low` while sending the OFF wire value, so the
-    /// operator turned reasoning off and the display said "low".
-    ///
-    /// (2026-11-15, session plan T4) This is the last tranche that owns this key:
-    /// the operator ruled that `Shift+Tab` becomes the agent-identity switch and
-    /// effort moves to the models page (model plan M1-M3).
-    pub(crate) fn cycle_effort(&mut self) {
-        // (2026-11-15, model plan M3) A model that does not reason has no effort
-        // to cycle. Refuse and say why rather than sending a field the provider
-        // will reject on the next request.
-        if let Some(why) = self.effort_support_for_current_model().refusal() {
-            self.set_status_notice(why.to_string());
-            return;
-        }
-        let next_level = self.effort_level.next_up();
-        self.effort_level = next_level;
-        // `wire()` is the only producer of the string; `Off` is the empty one.
-        let wire = next_level.wire().to_string();
-        let label = next_level.label().to_string();
-        self.pending_effort = Some(wire);
-        self.set_status_notice(format!("Effort: {label}"));
-    }
-}
-
 impl App {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         // ── F12: toggle debug overlay (highest priority, never blocked) ──
@@ -591,6 +557,54 @@ impl App {
             match key.code {
                 KeyCode::Esc => self.import_config_dialog.close(),
                 KeyCode::Enter => self.perform_import_config(),
+                _ => {}
+            }
+            return false;
+        }
+
+        // Identity picker (`Shift+Tab`, `/agent`) — one row per seat on the
+        // roster, label · department · role · session count.
+        if self.agent_picker.visible {
+            match key.code {
+                KeyCode::Esc => {
+                    self.agent_picker.close();
+                }
+                KeyCode::Home => {
+                    self.agent_picker.move_home();
+                }
+                KeyCode::End => {
+                    self.agent_picker.move_end();
+                }
+                KeyCode::Up => {
+                    self.agent_picker.move_up();
+                }
+                KeyCode::Down => {
+                    self.agent_picker.move_down();
+                }
+                KeyCode::PageUp => {
+                    self.agent_picker.page_up();
+                }
+                KeyCode::PageDown => {
+                    self.agent_picker.page_down();
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.agent_picker.move_up();
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.agent_picker.move_down();
+                }
+                KeyCode::Enter => {
+                    if let Some(selected) = self.agent_picker.selected().cloned() {
+                        self.agent_picker.close();
+                        self.apply_acting_seat(&selected.id);
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.agent_picker.filter_pop();
+                }
+                KeyCode::Char(c) => {
+                    self.agent_picker.filter_push(c);
+                }
                 _ => {}
             }
             return false;
@@ -2169,10 +2183,12 @@ impl App {
 
             // ---- Shift+Tab ----------------------------------------------
             // 2026-10-14 batch, plan 10 removed the permission-mode cycle
-            // (two silent presses armed Bypass); plan 03 rebinds the key to
-            // the effort cycle — the oh-my-pi "effort ladder" muscle memory.
+            // (two silent presses armed Bypass); plan 03 rebound the key to
+            // the effort cycle; session-hub plan T4 rebinds it again to the
+            // AGENT-IDENTITY switch (the operator's ruling: effort moves to
+            // the models page, which is model plan M1-M3 landed here).
             KeyCode::BackTab if !self.is_streaming => {
-                self.cycle_effort();
+                self.open_agent_picker();
             }
 
             // ---- Submit ------------------------------------------------

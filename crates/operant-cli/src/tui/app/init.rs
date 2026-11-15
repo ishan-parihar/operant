@@ -297,6 +297,11 @@ impl App {
                 import_config_picker_items(),
             ),
             import_config_dialog: ImportConfigDialogState::new(),
+            acting_seat: None,
+            acting_charter: None,
+            agent_picker: DialogSelectState::new("Acting employee", Vec::new()),
+            agent_roster_cache: Vec::new(),
+            acting_seat_seeded: false,
             command_palette: {
                 // (iter-1791) The palette's rows are GROUPED by category.
                 // They used to be in registration order, so the categories

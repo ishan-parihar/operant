@@ -610,7 +610,7 @@ impl TuiCategory {
 pub fn tui_category(name: &str) -> TuiCategory {
     match name {
         "connect" | "model" | "models" | "effort" | "effort-set" | "refresh-model-list"
-        | "provider" => TuiCategory::ModelAndProvider,
+        | "provider" | "agent" => TuiCategory::ModelAndProvider,
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "save" | "transcript"
         | "retry" | "undo" | "rollback" | "stop" | "cancel" | "clear" | "cls" | "clear-view"
         | "rename" | "history" | "refresh" | "replay" | "replay-diff" => {

@@ -1386,6 +1386,18 @@ impl App {
                 self.open_effort_picker_inline(args);
                 true
             }
+            "agent" => {
+                // session-hub plan T4: /agent with no argument opens the
+                // roster picker (label · department · role · session count).
+                // `/agent <seat>` switches directly by id or name.
+                let args = args.trim();
+                if args.is_empty() {
+                    self.open_agent_picker();
+                } else {
+                    self.apply_acting_seat_by_query(args);
+                }
+                true
+            }
             "effort-set" => {
                 // (plan 03) hidden command the picker/model-picker confirm
                 // path funnels through: sets the wire value on the live agent

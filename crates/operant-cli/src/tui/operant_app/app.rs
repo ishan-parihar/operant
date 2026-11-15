@@ -231,6 +231,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         // levels they could not choose.
         "Pick the reasoning effort (low | normal | high | max)",
     ),
+    RegisteredCommand::public(
+        "/agent",
+        "Switch the acting employee for this session (roster picker; /agent <seat>)",
+    ),
     RegisteredCommand::hidden("/effort-set", "Internal: set effort on the live agent"),
     RegisteredCommand::public(
         "/thinking-display",

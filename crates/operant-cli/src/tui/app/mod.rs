@@ -1,6 +1,7 @@
 // app/mod.rs — App state struct and main event loop.
 
 mod agent_events;
+mod agent_identity;
 mod channel_drains;
 mod commands;
 mod dialog_routing;
@@ -846,6 +847,28 @@ pub struct App {
     pub import_config_dialog: ImportConfigDialogState,
     /// Ctrl+K command palette overlay.
     pub command_palette: DialogSelectState,
+    /// The acting seat for the CURRENT session, or `None` when the session
+    /// runs unbound.
+    ///
+    /// (session-hub plan T4) Session-scoped on purpose: a switch changes the
+    /// operator's instructions for this conversation and writes nothing to the
+    /// config — `config.agent.model` and the employee binding are other tools'
+    /// state. Seeded from the session row at session switch, kept in sync at
+    /// every submit. The charter rides alongside so the seat switch stays one
+    /// atomic pair on the agent (`events.rs:956-959`).
+    pub acting_seat: Option<String>,
+    /// The acting seat's charter (the org system prompt), kept in step with
+    /// `acting_seat` so the pair is atomic for prompt-cache purposes.
+    pub acting_charter: Option<String>,
+    /// The identity picker (`Shift+Tab`, `/agent`): one row per seat on the
+    /// roster — label, department, role — with the charter to apply.
+    pub agent_picker: DialogSelectState,
+    /// The roster rows behind the picker's items, cached at open time so
+    /// applying a selection needs no second database read.
+    pub agent_roster_cache: Vec<operant_core::database::EmployeeRecord>,
+    /// Whether the seat has been seeded from the session row this run (guards
+    /// the first-submit seed).
+    pub acting_seat_seeded: bool,
     /// Output style: "auto" | "stream" | "verbose".
     pub output_style: String,
     /// PR number for the current branch (None if not in a PR context).

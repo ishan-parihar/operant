@@ -1064,13 +1064,20 @@ fn the_help_overlay_descriptions_match_what_the_arms_do() {
 #[test]
 fn a_commands_argument_narrows_the_picker_it_opens() {
     // /effort — the level names a row, so the list narrows to it.
+    //
+    // (model plan M3) The picker is capability-gated, and `make_app`'s default
+    // model is `gpt-4`, which models.dev reports as `reasoning: false` — so the
+    // gate refuses to open it. The other effort tests declare their capability
+    // state; this one has to as well, or it measures the gate instead of the
+    // narrowing it is about.
     let mut app = make_app();
-    assert!(app.handle_tui_command("effort", "high"));
+    app.config.client.base_url = "http://127.0.0.1:1/v1".to_string();
+    assert!(app.handle_tui_command("effort", "medium"));
     let Some(picker) = app.inline_interactive.as_ref() else {
         panic!("/effort must open the effort picker");
     };
     assert_eq!(
-        picker.filter, "high",
+        picker.filter, "medium",
         "the argument must become the picker's filter"
     );
     assert_eq!(
@@ -1078,23 +1085,58 @@ fn a_commands_argument_narrows_the_picker_it_opens() {
         1,
         "the argument must narrow the list to the row it names"
     );
+    // The filter is a SUBSTRING match, and the seven-rung vocabulary has two
+    // rungs that contain "high" (`high` and `xhigh`). Pinning that here keeps
+    // the narrowing honest: one row for an unambiguous level, and a known pair
+    // for the ambiguous one — never a silent widening.
+    let mut app = make_app();
+    app.config.client.base_url = "http://127.0.0.1:1/v1".to_string();
+    assert!(app.handle_tui_command("effort", "high"));
+    let picker = app.inline_interactive.as_ref().expect("the picker opens");
+    assert_eq!(
+        picker.filtered.len(),
+        2,
+        "'high' matches 'high' and 'xhigh': {:?}",
+        picker
+            .filtered
+            .iter()
+            .map(|i| picker.entries[*i].name.clone())
+            .collect::<Vec<_>>()
+    );
 
-    // /model — the model name filters the model's rows.
+    // /model — the argument is a SELECTOR now (model plan M4), not a filter:
+    // it resolves against the configured ids and applies, so an unknown id is
+    // refused by name rather than narrowing a list.
     let mut app = make_app();
     app.has_credentials = true;
     assert!(app.handle_tui_command("model", "glm"));
-    let Some(picker) = app.inline_interactive.as_ref() else {
-        panic!("/model must open the model picker");
-    };
-    assert_eq!(
-        picker.filter, "glm",
-        "the argument must become the picker's filter"
+    assert!(
+        app.inline_interactive.is_none(),
+        "/model <arg> must not open a picker: the argument selects"
     );
     assert!(
-        picker.filtered.len() < picker.entries.len(),
-        "the argument must narrow the list: {} of {} rows",
-        picker.filtered.len(),
-        picker.entries.len()
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("unknown model 'glm'")),
+        "an unresolvable selector must name the model it could not find: {:?}",
+        app.status_message
+    );
+
+    // A configured id applies.
+    let mut app = make_app();
+    app.has_credentials = true;
+    assert!(app.handle_tui_command("model", "gpt-4"));
+    assert_eq!(
+        app.pending_model.as_deref(),
+        Some("gpt-4"),
+        "a configured id must be applied"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("applying")),
+        "the switch must say it is being applied: {:?}",
+        app.status_message
     );
 }
 
@@ -3201,9 +3243,8 @@ mod left_tap_gesture_tests {
     fn double_left_opens_the_hub_armed_on_a_session_with_history() {
         let mut app = make_app();
         // History: a session that HAS messages keeps the double-tap opener.
-        app.messages.push(
-            Message::user("the first ask".to_string()),
-        );
+        app.messages
+            .push(Message::user("the first ask".to_string()));
         app.handle_key_event(left());
         assert!(!app.session_hub.visible, "the first tap only arms");
         tap_gap();
@@ -16698,22 +16739,21 @@ mod effort_picker_surface {
     // ── the ladder itself (model plan M2) ────────────────────────────────────
 
     #[test]
-    fn cycling_past_the_top_turns_reasoning_off_and_says_so() {
+    fn the_top_of_the_ladder_turns_reasoning_off_with_the_empty_wire() {
         // The M1 defect, exactly: the old top arm was `Max => (Low, "")`, so the
         // operator pressed the key once more to turn reasoning off and the display
         // said "low". The level and the wire must now agree.
-        let mut app = make_app();
-        with_unknown_capabilities(&mut app);
-        app.effort_level = EffortLevel::Max;
-        app.cycle_effort();
+        // (session-hub plan T4) `Shift+Tab` no longer cycles the ladder — it
+        // opens the identity picker — so the ladder's own top arm is asserted on
+        // the type, where it lives.
         assert_eq!(
-            app.effort_level,
+            EffortLevel::Max.next_up(),
             EffortLevel::Off,
-            "cycling past the top must land on Off, not on Low"
+            "the rung after the top is Off, not Low"
         );
         assert_eq!(
-            app.pending_effort.as_deref(),
-            Some(""),
+            EffortLevel::Off.wire(),
+            "",
             "Off must send the empty wire value, which the drain reads as 'clear it'"
         );
     }
@@ -16788,20 +16828,22 @@ mod effort_picker_surface {
             return;
         }
 
-        // The ladder refuses and says why.
+        // The level does not move and nothing is forwarded: the key is the
+        // identity picker now (T4), so the effort surfaces that remain are the
+        // picker and the command.
         let before = app.effort_level;
-        app.cycle_effort();
-        assert_eq!(app.effort_level, before, "the ladder must not move");
-        assert!(
-            app.pending_effort.is_none(),
-            "nothing may be forwarded to the agent"
-        );
 
         // The picker does not open.
         app.open_effort_picker_inline("");
         assert!(
             app.inline_interactive.is_none(),
             "the picker must not open for a model that cannot reason"
+        );
+
+        assert_eq!(app.effort_level, before, "the level must not move");
+        assert!(
+            app.pending_effort.is_none(),
+            "nothing may be forwarded to the agent"
         );
 
         // And the command refuses rather than applying.
@@ -16978,6 +17020,184 @@ mod model_selector_wiring {
             app.configured_model_ids(),
             vec!["gpt-5".to_string(), "claude-opus-4-8".to_string()],
             "the configured model plus fallbacks, in order, deduplicated"
+        );
+    }
+}
+
+// ── the identity switch (session-hub plan T4) ───────────────────────────────
+mod agent_identity_tests {
+    use super::*;
+    use crate::tui::dialog_select::SelectItem;
+
+    fn seat(
+        id: &str,
+        name: &str,
+        department: &str,
+        role: &str,
+        charter: Option<&str>,
+    ) -> operant_core::database::EmployeeRecord {
+        operant_core::database::EmployeeRecord {
+            employee_id: id.to_string(),
+            name: name.to_string(),
+            role: role.to_string(),
+            department: Some(department.to_string()),
+            system_prompt: charter.map(str::to_string),
+        }
+    }
+
+    fn roster() -> Vec<operant_core::database::EmployeeRecord> {
+        vec![
+            seat(
+                "premiere",
+                "Premiere",
+                "executive",
+                "org-lead",
+                Some("You are Premiere, the org lead."),
+            ),
+            seat(
+                "analyst",
+                "Analyst",
+                "research",
+                "analyst",
+                Some("You are Analyst."),
+            ),
+        ]
+    }
+
+    /// A store with the org registry's own shape, so the picker has something
+    /// to open over. `employees` belongs to the org registry, which creates it
+    /// outside operant-core's migrations.
+    fn org_db_with(roster: &[(&str, &str, &str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("operant-agent-picker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.sqlite");
+        // Let operant's own migrations lay the schema down first: the roster
+        // read goes through `Database::init`, which refuses a file it cannot
+        // migrate.
+        operant_core::database::Database::init(path.clone()).expect("operant schema");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS employees (
+                 employee_id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                 role TEXT NOT NULL DEFAULT 'automator', department TEXT,
+                 skills TEXT NOT NULL DEFAULT '[]', agent_type TEXT, persona TEXT,
+                 status TEXT NOT NULL DEFAULT 'active', reason TEXT NOT NULL,
+                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, system_prompt TEXT);",
+        )
+        .unwrap();
+        for (id, name, role, dept) in roster {
+            conn.execute(
+                "INSERT INTO employees (employee_id, name, role, department, reason, \
+                 created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'test', '2026-11-15', '2026-11-15')",
+                rusqlite::params![id, name, role, dept],
+            )
+            .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn shift_tab_opens_the_identity_picker_and_not_the_effort_ladder() {
+        let mut app = make_app();
+        app.config.database_path = org_db_with(&[
+            ("premiere", "Premiere", "org-lead", "executive"),
+            ("analyst", "Analyst", "analyst", "research"),
+        ]);
+        assert!(!app.agent_picker.visible, "the picker starts closed");
+
+        let effort_before = app.effort_level;
+        app.handle_key_event(press_key(KeyCode::BackTab, KeyModifiers::NONE));
+        assert!(
+            app.agent_picker.visible,
+            "Shift+Tab opens the identity picker"
+        );
+        assert_eq!(
+            app.agent_picker.items.len(),
+            2,
+            "the roster's seats are the picker's rows"
+        );
+        assert_eq!(
+            app.effort_level, effort_before,
+            "Shift+Tab must not move the effort ladder any more"
+        );
+    }
+
+    #[test]
+    fn the_picker_lists_every_seat_with_its_label_department_role_and_count() {
+        let mut app = make_app();
+        app.open_agent_picker_with(roster(), &[("premiere".to_string(), 3)]);
+        let items: Vec<&SelectItem> = app.agent_picker.items.iter().collect();
+        assert_eq!(items.len(), 2, "one row per seat");
+        let premiere = items
+            .iter()
+            .find(|i| i.id == "premiere")
+            .expect("premiere row");
+        assert_eq!(premiere.title, "Premiere");
+        assert_eq!(premiere.description, "executive · org-lead");
+        assert_eq!(premiere.badge.as_deref(), Some("3 sessions"));
+        let analyst = items.iter().find(|i| i.id == "analyst").expect("analyst");
+        assert_eq!(
+            analyst.badge.as_deref(),
+            Some("0 sessions"),
+            "a seat that has run nothing says so rather than going silent"
+        );
+    }
+
+    #[test]
+    fn picking_a_seat_sets_the_pair_and_says_it_is_session_scoped() {
+        let mut app = make_app();
+        app.open_agent_picker_with(roster(), &[]);
+        app.apply_acting_seat("premiere");
+        assert_eq!(app.acting_seat.as_deref(), Some("premiere"));
+        assert_eq!(
+            app.acting_charter.as_deref(),
+            Some("You are Premiere, the org lead."),
+            "the charter rides with the seat, or the operator talks to one \
+             employee with another's instructions"
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|n| n.contains("this session only")),
+            "the switch must say it is session-scoped: {:?}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn agent_with_a_seat_name_switches_directly() {
+        let mut app = make_app();
+        app.open_agent_picker_with(roster(), &[]);
+        app.agent_picker.close();
+        app.apply_acting_seat_by_query("Analyst");
+        assert_eq!(app.acting_seat.as_deref(), Some("analyst"));
+        app.apply_acting_seat_by_query("no-such-seat");
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|n| n.contains("no seat matches")),
+            "an unknown seat must be named back, not silently ignored"
+        );
+    }
+
+    #[test]
+    fn switching_sessions_drops_the_previous_seat() {
+        // The session-scoping rule: a seat is the CURRENT session's, so a
+        // switch must not carry the previous conversation's employee into the
+        // next one. The switch sites reset the seed; the next submit re-reads
+        // the new session's own row.
+        let mut app = make_app();
+        app.open_agent_picker_with(roster(), &[]);
+        app.apply_acting_seat("premiere");
+        assert_eq!(app.acting_seat.as_deref(), Some("premiere"));
+        // Exactly what the two session-switch paths do.
+        app.current_session = Some("sess-next".to_string());
+        app.acting_seat = None;
+        app.acting_charter = None;
+        app.acting_seat_seeded = false;
+        assert!(
+            app.acting_seat.is_none() && !app.acting_seat_seeded,
+            "the next session starts unbound and re-seeds from its own row"
         );
     }
 }

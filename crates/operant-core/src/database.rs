@@ -193,6 +193,22 @@ pub enum SessionStatusFilter {
     Archived,
 }
 
+/// One seat on the operator's roster, as the identity picker needs it.
+///
+/// (session-hub plan T4) The picker shows who the seats ARE — label,
+/// department, role — and carries the seat's charter, because switching the
+/// seat without switching the charter leaves the operator talking to one
+/// employee with another's instructions. The charter is read here rather than
+/// at switch time so the switch is one atomic pair on the agent.
+#[derive(Debug, Clone)]
+pub struct EmployeeRecord {
+    pub employee_id: String,
+    pub name: String,
+    pub role: String,
+    pub department: Option<String>,
+    pub system_prompt: Option<String>,
+}
+
 /// The filter a session-row page is read under (F4).
 ///
 /// The hub used to filter in Rust over the rows it had LOADED — the newest
@@ -1987,6 +2003,55 @@ impl Database {
     /// Returns session IDs and matching content snippets.
     pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionSearchResult>> {
         self.search_sessions_filtered(query, None, limit)
+    }
+
+    /// Every employee the store knows about, with the fields the identity
+    /// picker renders. Ordered by name, the roster's own order.
+    pub fn list_employee_roster(&self) -> Result<Vec<EmployeeRecord>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT employee_id, name, role, department, system_prompt
+                 FROM employees
+                 ORDER BY name COLLATE NOCASE",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare list_employee_roster: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(EmployeeRecord {
+                    employee_id: row.get::<_, String>(0)?,
+                    name: row.get::<_, String>(1)?,
+                    role: row.get::<_, String>(2)?,
+                    department: row.get::<_, Option<String>>(3)?,
+                    system_prompt: row.get::<_, Option<String>>(4)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to list employee roster: {}", e)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(
+                row.map_err(|e| Error::Agent(format!("Failed to read employee roster: {}", e)))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Read the bylaws seat bound to a session row, if any.
+    ///
+    /// (session-hub plan T4) The TUI seeds its serving seat from the session's
+    /// `employee_id` at the first submit — the same per-session binding the
+    /// gateway performs from the turn prologue. `None` means the session runs
+    /// unbound (personal), never that the row is missing.
+    pub fn get_session_employee(&self, session_id: &str) -> Result<Option<String>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT employee_id FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare get_session_employee: {}", e)))?;
+        let employee = stmt
+            .query_row(params![session_id], |row| row.get::<_, Option<String>>(0))
+            .ok()
+            .flatten();
+        Ok(employee)
     }
 
     /// Stamp the bylaws seat on a session row (the operator's employee
@@ -6035,6 +6100,87 @@ mod tests {
         let b = rows.iter().find(|r| r.id == "emp-b").expect("b");
         assert_eq!(a.employee_id.as_deref(), Some("analyst"));
         assert_eq!(b.employee_id, None, "the stamp must not leak to other rows");
+    }
+
+    /// (session-hub plan T4) Two sessions, two seat switches: each row keeps
+    /// its own employee. A single global seat would pass a one-session test.
+    #[test]
+    fn two_sessions_keep_their_own_seat_after_two_switches() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("seat-a", Some("A"), "local", &now, &now)
+            .expect("a");
+        db.save_session("seat-b", Some("B"), "local", &now, &now)
+            .expect("b");
+        db.set_session_employee("seat-a", "premiere").expect("a");
+        db.set_session_employee("seat-b", "analyst").expect("b");
+        let rows = db.list_sessions_rich(10).expect("list");
+        let a = rows.iter().find(|r| r.id == "seat-a").expect("a");
+        let b = rows.iter().find(|r| r.id == "seat-b").expect("b");
+        assert_eq!(a.employee_id.as_deref(), Some("premiere"));
+        assert_eq!(b.employee_id.as_deref(), Some("analyst"));
+        assert_ne!(
+            a.employee_id, b.employee_id,
+            "the second switch must not re-point the first session"
+        );
+    }
+
+    /// The roster read the picker draws from: every seat, with its department,
+    /// role and charter.
+    #[test]
+    fn the_roster_read_returns_every_seat_with_its_charter() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let conn = db.lock_conn().expect("conn");
+            // The `employees` table belongs to the org registry (Holon), which
+            // creates it outside operant-core's migrations. The test provides
+            // the registry's own shape, as the live store has it.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS employees (
+                     employee_id TEXT PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     role TEXT NOT NULL DEFAULT 'automator',
+                     department TEXT,
+                     skills TEXT NOT NULL DEFAULT '[]',
+                     agent_type TEXT,
+                     persona TEXT,
+                     status TEXT NOT NULL DEFAULT 'active',
+                     reason TEXT NOT NULL,
+                     created_at TEXT NOT NULL,
+                     updated_at TEXT NOT NULL,
+                     system_prompt TEXT
+                 );",
+            )
+            .expect("employees table");
+            for (id, name, role, dept, charter) in [
+                (
+                    "emp-premiere",
+                    "Premiere",
+                    "org-lead",
+                    "executive",
+                    "You are Premiere.",
+                ),
+                ("emp-analyst", "Analyst", "analyst", "research", "You are Analyst."),
+            ] {
+                conn.execute(
+                    "INSERT INTO employees (employee_id, name, role, department, \
+                     skills, status, reason, created_at, updated_at, system_prompt) \
+                     VALUES (?1, ?2, ?3, ?4, '[]', 'active', 'test', ?5, ?5, ?6)",
+                    rusqlite::params![id, name, role, dept, now, charter],
+                )
+                .expect("employee row");
+            }
+        }
+        let roster = db.list_employee_roster().expect("roster");
+        let premiere = roster
+            .iter()
+            .find(|r| r.employee_id == "emp-premiere")
+            .expect("premiere row");
+        assert_eq!(premiere.name, "Premiere");
+        assert_eq!(premiere.department.as_deref(), Some("executive"));
+        assert_eq!(premiere.role, "org-lead");
+        assert_eq!(premiere.system_prompt.as_deref(), Some("You are Premiere."));
     }
 
     /// The directory column must have a PRODUCER, not just a consumer. It did

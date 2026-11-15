@@ -313,6 +313,10 @@ impl TuiState for App {
         self.active_provider.clone().unwrap_or_default()
     }
 
+    fn acting_seat(&self) -> Option<String> {
+        self.acting_seat.clone()
+    }
+
     fn provider_model(&self) -> String {
         self.model_name.clone()
     }

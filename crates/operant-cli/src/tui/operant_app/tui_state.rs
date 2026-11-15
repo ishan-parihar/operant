@@ -232,6 +232,13 @@ pub trait TuiState {
         None
     }
 
+    /// The acting seat for this session, when the identity switch is engaged
+    /// (`Shift+Tab` / `/agent`). `None` = the session runs unbound; the default
+    /// is `None` so the header renders nothing for harnesses that never bind.
+    fn acting_seat(&self) -> Option<String> {
+        None
+    }
+
     // ---- Provider ----
     fn provider_name(&self) -> String;
     fn provider_model(&self) -> String;
