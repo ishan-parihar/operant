@@ -211,9 +211,31 @@ fn merge_records(
     }
     // Retention is the same cap that applies on resume: a ledger that only
     // grows unbounded is the defect the cap exists to prevent.
-    if records.len() > MAX_RETAINED_TERMINAL {
-        records.sort_by_key(|r| std::cmp::Reverse(r.completed_time.unwrap_or(r.dispatch_time)));
-        records.truncate(MAX_RETAINED_TERMINAL);
+    //
+    // TERMINAL rows only, because that is what the cap is documented to bound
+    // (`MAX_RETAINED_TERMINAL`) and what `prune()` enforces on the in-memory
+    // path. Truncating the WHOLE merged set dropped a still-running delegation
+    // whenever the terminal rows around it were newer: a live child vanished
+    // from the ledger while it ran, so the subagent navigator and the hub could
+    // not show it and a restart forgot work the operator was waiting on.
+    // MEASURED 2026-11-15 (seventh-pass audit, finding 1): `prune()` would keep
+    // every row of an all-Pending ledger; this path truncated it to the cap.
+    let mut terminal: Vec<(u64, String)> = records
+        .iter()
+        .filter(|r| r.status != AsyncDelegationStatus::Pending)
+        .map(|r| (r.completed_time.unwrap_or(r.dispatch_time), r.delegation_id.clone()))
+        .collect();
+    if terminal.len() > MAX_RETAINED_TERMINAL {
+        // Oldest first, so the front of the list is what the cap cuts.
+        terminal.sort_by(|(time, id), (other_time, other_id)| {
+            time.cmp(other_time).then_with(|| id.cmp(other_id))
+        });
+        let cut: std::collections::HashSet<&str> = terminal
+            .iter()
+            .take(terminal.len() - MAX_RETAINED_TERMINAL)
+            .map(|(_, id)| id.as_str())
+            .collect();
+        records.retain(|r| !cut.contains(r.delegation_id.as_str()));
     }
     records.sort_by(|a, b| {
         b.dispatch_time
@@ -1226,6 +1248,131 @@ mod ledger_merge_tests {
             parent_session_id: parent.map(str::to_string),
             request_key: None,
         }
+    }
+
+    /// Retention bounds TERMINAL rows only: a live delegation is not history,
+    /// and dropping one loses work the operator is still waiting on.
+    ///
+    /// `prune()` (the in-memory path) filters to non-Pending before counting;
+    /// `merge_records` (the persist path) truncated the WHOLE merged set, so a
+    /// ledger of 51 live delegations lost the oldest on the persist that should
+    /// have recorded it. The two paths disagreeing was the defect: liveness is
+    /// what decides whether a row may be cut.
+    #[test]
+    fn a_pending_record_is_never_cut_by_the_merge_retention_cap() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        // A full ledger of terminal rows, all NEWER than the pending one.
+        let prior: Vec<AsyncDelegationRecord> = (0..MAX_RETAINED_TERMINAL as u64)
+            .map(|i| {
+                record(
+                    &format!("term-{i:03}"),
+                    AsyncDelegationStatus::Completed,
+                    "finished work",
+                    1000 + i,
+                    Some(1000 + i),
+                    None,
+                )
+            })
+            .collect();
+        // This process is still running one delegation. It has no
+        // completed_time, so the truncate key falls back to its dispatch_time.
+        let live = record(
+            "live-pending",
+            AsyncDelegationStatus::Pending,
+            "still running",
+            900,
+            None,
+            None,
+        );
+        let merged = merge_records(prior, vec![live]);
+        // Drop the guard BEFORE asserting: an assert that panics while holding
+        // the process-global lock poisons it, and every later test in the
+        // module then fails with PoisonError instead of its own result.
+        drop(_guard);
+        assert!(
+            merged.iter().any(|r| r.delegation_id == "live-pending"),
+            "a Pending record must survive the merge cap: it is not terminal history"
+        );
+    }
+
+    /// The same rule from the other side: when every row is live there is no
+    /// terminal row to bound, so the cap must cut nothing at all.
+    #[test]
+    fn an_all_pending_ledger_is_not_truncated_by_the_merge_cap() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let prior: Vec<AsyncDelegationRecord> = (0..(MAX_RETAINED_TERMINAL as u64 + 1))
+            .map(|i| {
+                record(
+                    &format!("live-{i:03}"),
+                    AsyncDelegationStatus::Pending,
+                    "running",
+                    1000 + i,
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let merged = merge_records(prior, Vec::new());
+        drop(_guard);
+        assert_eq!(
+            merged.len(),
+            MAX_RETAINED_TERMINAL + 1,
+            "a ledger of only-Pending rows has nothing terminal to prune"
+        );
+    }
+
+    /// The cap still cuts what it was built for: the OLDEST terminal rows go,
+    /// newest survive, and the live rows are untouched.
+    #[test]
+    fn the_merge_cap_still_cuts_the_oldest_terminal_rows() {
+        let _guard = test_lock().lock().unwrap();
+        __test_reset_registry();
+        let mut prior: Vec<AsyncDelegationRecord> = (0..(MAX_RETAINED_TERMINAL as u64 + 5))
+            .map(|i| {
+                record(
+                    &format!("term-{i:03}"),
+                    AsyncDelegationStatus::Completed,
+                    "finished work",
+                    100 + i,
+                    Some(100 + i),
+                    None,
+                )
+            })
+            .collect();
+        // One live row that predates every terminal row: it must still survive.
+        prior.push(record(
+            "live-old",
+            AsyncDelegationStatus::Pending,
+            "still running",
+            1,
+            None,
+            None,
+        ));
+        let merged = merge_records(prior, Vec::new());
+        drop(_guard);
+        let ids: Vec<&str> = merged.iter().map(|r| r.delegation_id.as_str()).collect();
+        assert!(
+            ids.contains(&"live-old"),
+            "the live row must survive even though it is the oldest by the truncate key"
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|r| r.status != AsyncDelegationStatus::Pending)
+                .count(),
+            MAX_RETAINED_TERMINAL,
+            "terminal rows are still capped"
+        );
+        assert!(
+            !ids.contains(&"term-000"),
+            "the oldest terminal row is the one the cap cuts"
+        );
+        assert!(
+            ids.contains(&"term-005"),
+            "the newest terminal rows survive the cap"
+        );
     }
 
     #[test]
