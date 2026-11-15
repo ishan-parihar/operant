@@ -364,6 +364,8 @@ fn test_config() -> AgentConfig {
         reasoning_effort_param: Default::default(),
         context_semantic_compaction: false,
         context_semantic_max_groups: 0,
+        context_historian: false,
+        context_historian_max_span: 0,
         context_reference_hard_share: 0.0,
         context_reference_soft_share: 0.0,
         max_trajectories: 0,
