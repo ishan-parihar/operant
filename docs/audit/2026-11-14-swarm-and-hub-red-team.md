@@ -48,6 +48,34 @@
 > byte-identical but for one filter, and a bare `30` restating
 > `MIN_WORKER_TIMEOUT_SECONDS`) — iter-2378.
 >
+> **FOURTH PASS (2026-11-15, self-red-team of the landed bytes).** A pass over
+> the thirteen iterations above asked, for each fix, which input shape reaches
+> the guard while the defect survives. One real defect came out of it:
+>
+> | # | finding | landed as |
+> |---|---|---|
+> | 1 | a blank or whitespace-only `request_key` matched every other blank key, so two different goals merged into one handle and the second one's work never ran | iter-2384 |
+> | 2 | the iter-2376 alias guard exercised two of five multi-word fields, so a new field could fail the same silent way | iter-2385 |
+>
+> Also landed: iter-2380 (the lister-agreement test counted rows other tests
+> leak — a shared-singleton race, not a logic error), and a docs pass
+> (iter-2394) that backfills the changelog for iter-2380/2384/2385 and adds
+> these rows.
+>
+> **Two things the fourth pass got wrong and corrected itself.** (a) It
+> reported `PaneFocus::label` as dead surface; the compile gate refused the
+> deletion because `render.rs:1353` calls it as `PaneFocus::Sessions.label()`
+> — an associated-function form no grep pattern in the pass matched. The
+> caller has existed since iter-1476, so the method is live and the finding is
+> void. (b) It first reported that `list_pane_width` duplicated the `SPLIT`
+> literal; that was iter-2377's own fix and it stands on current bytes.
+>
+> **Correction to the iter-2377 row above.** The row says iter-2377 deleted
+> `PreviewFilter::label`. Iter-2389 restored it and wired it to the preview
+> header and footer ("the preview must be visible, not remembered"). The row
+> stands for what iter-2377 removed, not for what runs today: the method is
+> live again, by a later decision.
+>
 > **The third pass corrected its own report twice, both worth recording.**
 > (a) It first claimed the gallery "ignored the parent edge" by hardcoding
 > `report_back_to_session_id: None`. Nothing reads that field at all, so the
