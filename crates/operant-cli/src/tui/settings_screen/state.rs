@@ -214,6 +214,8 @@ impl SettingsScreen {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let mut wrote_config_key = false;
+
         for (field, value) in &pending {
             let value: String = value.clone();
             match field.as_str() {
@@ -326,6 +328,7 @@ impl SettingsScreen {
                     let key: &'static str =
                         Box::leak(field.clone().into_boxed_str());
                     self.config_values.insert(key, value.clone());
+                    wrote_config_key = true;
                 }
             }
         }
@@ -336,14 +339,20 @@ impl SettingsScreen {
         // ignores — the exact "applied but not in effect" gap the two report
         // states exist to prevent.
         //
-        // So reload and re-install. A reload failure is REPORTED rather than
-        // swallowed: the key is on disk, and the operator must be told the live
-        // process did not pick it up rather than being left to assume it did.
+        // So reload and re-install, but ONLY when this call wrote a config key:
+        // `loaded_config_path()` is a process-global set by any earlier load, so
+        // gating on it alone makes every `apply_and_save` in a test that only
+        // touched `settings.json` reload — and install — a config it never
+        // wrote. That is what turned a passing context_window test into a
+        // global-state writer.
+        //
         // No config FILE means there is nothing to reload: the key went to
         // whatever path this process loaded, and an environment that has no file
         // at all is a sandbox or a test, not a failed reload. Warning there
         // would report a problem the operator cannot act on.
-        if let Some(path) = operant_core::config::loaded_config_path() {
+        if wrote_config_key
+            && let Some(path) = operant_core::config::loaded_config_path()
+        {
             match operant_core::config::load_app_config(Some(path.as_path())) {
                 Ok(loaded) => {
                     operant_core::config::install_runtime_config(loaded.config.clone());

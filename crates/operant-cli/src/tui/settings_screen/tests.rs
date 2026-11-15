@@ -446,29 +446,23 @@ fn a_config_write_reaches_the_running_process_not_only_the_file() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let path = dir.path().join("operant.toml");
     std::fs::write(&path, "[agent]\nmodel = \"gpt-4\"\n").expect("seed the config");
-    let loaded = operant_core::config::load_app_config(Some(path.as_path()))
-        .expect("the seeded config loads");
-    operant_core::config::install_runtime_config(loaded.config.clone());
 
-    // The panel's own write path for a config key.
+    // The panel's write path, then the reload that must follow it.
     operant_core::config::persist_config_key_at(&path, "agent.model", "claude-opus")
         .expect("the write lands");
-
     let after = operant_core::config::load_app_config(Some(path.as_path()))
         .expect("the file reloads");
     assert_eq!(
         after.config.agent.model, "claude-opus",
         "the file the panel wrote must carry the new value"
     );
-    // And the live process must be re-installed from it, which is the half the
-    // panel owes beyond the write. The reload path is the one `apply_and_save`
-    // takes after a successful persist.
-    operant_core::config::install_runtime_config(after.config.clone());
-    assert_eq!(
-        operant_core::config::runtime_config().agent.model,
-        "claude-opus",
-        "the running process must report the value the panel wrote"
-    );
+
+    // Deliberately NO `install_runtime_config` here. It is a PROCESS-GLOBAL
+    // write, and a test that makes one races every other test reading
+    // `runtime_config()` in parallel — which is exactly how this test first
+    // made an unrelated context_window test flap. What the panel owes is the
+    // reload, and that is what this asserts; that the reload is then installed
+    // is `apply_and_save`'s own step, covered by the two report-state tests.
 }
 
 /// (iter-1899) The screen must not offer a row whose value nothing reads.
