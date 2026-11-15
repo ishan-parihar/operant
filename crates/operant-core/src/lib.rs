@@ -96,6 +96,7 @@ pub mod fs_secrets;
 pub mod gateway_session;
 pub mod harness_adapters;
 pub mod harness_seams_r3;
+pub mod historian;
 pub mod interrupt;
 pub mod justification;
 pub mod kanban;
