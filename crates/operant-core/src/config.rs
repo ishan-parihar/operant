@@ -965,23 +965,22 @@ pub struct BehaviorSettings {
     /// per compaction, and recency already protects the tail.
     #[serde(default)]
     pub context_semantic_compaction: bool,
-    /// Run the HISTORIAN: fold closed spans of old messages into durable
-    /// compartments stored out of band, so a summary is paid for once instead of
-    /// riding every later request.
+    /// PARKED — the historian rung was REMOVED (iter-2404) and this now reads
+    /// nothing. Do not set it expecting a fold.
     ///
-    /// Off by default. It costs one model call per folded span, and the ladder
-    /// below it (decay, summarize, eviction) already fits the request — the
-    /// historian is a floor UNDER that ladder for sessions long enough that the
-    /// lossy rungs are degrading a conversation the operator still wants.
-    /// Every degrade path is the rung's own pass-through: no model, a failed
-    /// call, an unsafe span — all leave the messages untouched.
+    /// It used to gate `preflight_historian_fold`, which stored a summary and left
+    /// the message list unchanged: it saved no tokens, and its positional anchor
+    /// went stale as soon as the summarizer rewrote the list upstream. The rung is
+    /// gone; the `compartments` table and `historian.rs`'s pure logic stay for a
+    /// future design that keys compartments to stable message ids.
+    ///
+    /// The field stays because `AppConfig` carries `deny_unknown_fields`: deleting
+    /// it would make an existing `operant.toml` that sets it fail to parse. It is
+    /// accepted and ignored.
     #[serde(default)]
     pub context_historian: bool,
-    /// The largest span one historian pass may fold, in messages.
-    ///
-    /// A span that large is one model call's worth of input. 0 keeps the
-    /// built-in [`crate::historian::MAX_SPAN_MESSAGES`]. The backlog is folded
-    /// in successive passes, so this bounds ONE call rather than the backlog.
+    /// PARKED with [`Self::context_historian`] — see the note there. One fold
+    /// call's ceiling in messages; 0 = the built-in. Accepted and ignored.
     #[serde(default)]
     pub context_historian_max_span: usize,
     /// Share of the context window above which `@file:`/`@folder:` injection
