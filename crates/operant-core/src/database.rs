@@ -183,6 +183,48 @@ UPDATE sessions SET first_prompt = (
 WHERE first_prompt IS NULL;
 ";
 
+/// v5 — the compartment store: durable summaries of CLOSED message spans.
+///
+/// A fold used to be a marker STRING inside the message list
+/// (`context_management::MICRO_MARKER_PREFIX`). That shape has four costs, and
+/// each one is why this table exists:
+///
+/// - the summary is re-sent on every turn forever, because it lives in the
+///   transcript rather than beside it;
+/// - it cannot be re-rendered at a different fidelity — the marker replaced the
+///   original, so the material it summarized is gone from the request;
+/// - there is no idempotency: refolding the same span produces a second summary
+///   with nothing to detect that it is the same span;
+/// - there is no audit trail, so "what did this compartment summarize" has no
+///   answer.
+///
+/// `source_hash` is the idempotency key: a fold whose span hashes to a value
+/// already stored is a no-op rather than a duplicate. `tier` is the render
+/// fidelity (1..4, P1..P4), stored so a tight window can render an old
+/// compartment at lower fidelity WITHOUT re-running a model.
+///
+/// The span is stored on the row so the host derives the next span from durable
+/// state (`max(span_end) + 1`) instead of trusting a model to say where it
+/// stopped — the forward-progress rule the historian's no-progress guard needs.
+const COMPARTMENT_MIGRATION: &str = "
+CREATE TABLE IF NOT EXISTS compartments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    span_start INTEGER NOT NULL,
+    span_end INTEGER NOT NULL,
+    tier INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    importance INTEGER NOT NULL,
+    source_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_compartments_span
+    ON compartments(session_id, span_end);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_compartments_hash
+    ON compartments(session_id, source_hash);
+";
+
 /// The status axis of a session row, as the store holds it.
 ///
 /// `Live` is deliberately absent: the row that is being streamed right now is
@@ -274,6 +316,7 @@ impl Database {
         DEFERRED_INDEX_SQL,
         CONTEXT_LEDGER_MIGRATION,
         FIRST_PROMPT_MIGRATION,
+        COMPARTMENT_MIGRATION,
     ];
 
     /// Initialize a new database at the specified path.
@@ -949,6 +992,93 @@ impl Database {
         let mut rows = rows;
         rows.reverse();
         Ok(rows)
+    }
+
+    /// Store one compartment, UNLESS a compartment with the same `source_hash`
+    /// already exists for this session.
+    ///
+    /// Returns `true` when a row was written and `false` when the write was
+    /// suppressed as a duplicate. The suppression is the idempotency rule: a
+    /// refold of a span already folded is a no-op, not a second row, so a
+    /// crash-and-retry cannot double-summarize one span. It is enforced by
+    /// `idx_compartments_hash` rather than by a read-then-write, because two
+    /// hosts may fold the same session concurrently and a check-then-write race
+    /// would let both through.
+    pub fn insert_compartment(&self, record: &CompartmentRecord) -> Result<bool> {
+        let conn = self.lock_conn()?;
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO compartments (
+                    session_id, span_start, span_end, tier, body, importance,
+                    source_hash, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    record.session_id,
+                    record.span_start,
+                    record.span_end,
+                    record.tier,
+                    record.body,
+                    record.importance,
+                    record.source_hash,
+                    record.created_at,
+                ],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to insert compartment: {}", e)))?;
+        Ok(inserted > 0)
+    }
+
+    /// Every compartment for a session, oldest-first, bounded by `limit`.
+    ///
+    /// Oldest-first is the render order: the assembled request reads a
+    /// compartment block in the order the conversation happened.
+    pub fn compartments_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CompartmentRecord>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, span_start, span_end, tier, body, importance,
+                        source_hash, created_at
+                 FROM compartments WHERE session_id = ?1
+                 ORDER BY span_end ASC, id ASC LIMIT ?2",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare compartment read: {}", e)))?;
+        let rows = stmt
+            .query_map(params![session_id, limit], |row| {
+                Ok(CompartmentRecord {
+                    session_id: row.get(0)?,
+                    span_start: row.get(1)?,
+                    span_end: row.get(2)?,
+                    tier: row.get(3)?,
+                    body: row.get(4)?,
+                    importance: row.get(5)?,
+                    source_hash: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query compartments: {}", e)))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Agent(format!("Failed to read compartment row: {}", e)))?;
+        Ok(rows)
+    }
+
+    /// The last message id already covered by a compartment for this session.
+    ///
+    /// This is the forward-progress anchor: the next span starts at
+    /// `last_covered + 1`. Deriving it from the STORE rather than from a model's
+    /// self-report is what makes an unsafe fold detectable — a historian that
+    /// reports a span it did not advance writes no row, and the caller can see
+    /// that rather than trusting the report.
+    pub fn last_compartment_span_end(&self, session_id: &str) -> Result<Option<i64>> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT MAX(span_end) FROM compartments WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .map_err(|e| Error::Agent(format!("Failed to read compartment span end: {}", e)))
     }
 
     /// How many sessions have any recorded token usage at all.
@@ -3720,6 +3850,31 @@ pub struct ContextRequestRecord {
     pub window_tokens: i64,
     pub ladder_fired: bool,
     pub note: Option<String>,
+}
+
+/// One durable summary of a CLOSED span of a session's messages.
+///
+/// A compartment is the out-of-band replacement for the in-band fold marker: the
+/// span's text is summarized once, stored here, and referenced from the message
+/// list by id, so the summary is not re-sent on every subsequent turn.
+///
+/// `span_start`/`span_end` are MESSAGE ids, inclusive. They are stored so the
+/// next span is derived from durable state (`max(span_end) + 1`) rather than
+/// from a model's claim about where it stopped.
+///
+/// `tier` is the render fidelity (1..4). Storing it — rather than recomputing it
+/// at request time — is what lets a tight window re-render an old compartment at
+/// lower fidelity without paying for another model call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompartmentRecord {
+    pub session_id: String,
+    pub span_start: i64,
+    pub span_end: i64,
+    pub tier: i64,
+    pub body: String,
+    pub importance: i64,
+    pub source_hash: String,
+    pub created_at: String,
 }
 
 /// Full session data matching Python operant_state.py schema.
@@ -6907,6 +7062,131 @@ mod tests {
             tool_rows[0].token_count,
             Some((crate::context_management::estimate_tokens(model_visible) + 4) as i64),
             "the token count must be of the MODEL-VISIBLE copy"
+        );
+    }
+    /// The compartment table must EXIST on a database created from scratch.
+    ///
+    /// A migration registered in `DATABASE_MIGRATIONS` but missing from the
+    /// list is the failure this pins: every other test would still pass, because
+    /// they all run against a database this one creates. The write below is the
+    /// only thing that proves the table arrived.
+    #[test]
+    fn the_compartment_table_is_created_on_a_fresh_database() {
+        let db = test_db();
+        let wrote = db
+            .insert_compartment(&CompartmentRecord {
+                session_id: "test-session".to_string(),
+                span_start: 1,
+                span_end: 4,
+                tier: 2,
+                body: "the first exchange".to_string(),
+                importance: 60,
+                source_hash: "hash-one".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .expect("the write must succeed against a fresh database");
+        assert!(wrote, "the first write of a span must land");
+    }
+
+    /// Refolding the SAME span is a no-op, not a second row.
+    ///
+    /// The idempotency key is `source_hash`: a historian that crashes after the
+    /// model call and retries must not double-summarize one span. This is the
+    /// property that makes the fold retryable.
+    #[test]
+    fn refolding_the_same_span_writes_one_row() {
+        let db = test_db();
+        let record = CompartmentRecord {
+            session_id: "test-session".to_string(),
+            span_start: 1,
+            span_end: 4,
+            tier: 2,
+            body: "the first exchange".to_string(),
+            importance: 60,
+            source_hash: "same-span".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        assert!(db.insert_compartment(&record).expect("first write"));
+        let second = db
+            .insert_compartment(&record)
+            .expect("the duplicate write must not error");
+        assert!(!second, "a refold of the same span must be suppressed");
+        let rows = db
+            .compartments_for_session("test-session", 100)
+            .expect("read");
+        assert_eq!(rows.len(), 1, "one span, one row");
+    }
+
+    /// The forward-progress anchor advances, and reads back oldest-first.
+    ///
+    /// `last_compartment_span_end` is what the next fold derives its start from,
+    /// so it must be the MAXIMUM and not the newest-inserted row: a backfilled
+    /// or out-of-order fold must not drag the anchor backwards.
+    #[test]
+    fn the_span_anchor_is_the_maximum_and_rows_read_oldest_first() {
+        let db = test_db();
+        assert_eq!(
+            db.last_compartment_span_end("test-session")
+                .expect("empty read"),
+            None,
+            "a session with no compartments has no anchor"
+        );
+        for (start, end, hash) in [(1_i64, 4_i64, "h1"), (5, 12, "h2"), (13, 20, "h3")] {
+            db.insert_compartment(&CompartmentRecord {
+                session_id: "test-session".to_string(),
+                span_start: start,
+                span_end: end,
+                tier: 2,
+                body: format!("span {start}..{end}"),
+                importance: 50,
+                source_hash: hash.to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .expect("write");
+        }
+        assert_eq!(
+            db.last_compartment_span_end("test-session")
+                .expect("anchor"),
+            Some(20),
+            "the anchor is the maximum span end"
+        );
+        let rows = db
+            .compartments_for_session("test-session", 100)
+            .expect("read");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows.iter().map(|r| r.span_end).collect::<Vec<_>>(),
+            vec![4, 12, 20],
+            "compartments read in conversation order"
+        );
+    }
+
+    /// Compartments are scoped per session: one session's fold is invisible to
+    /// another, and the anchor does not leak across the boundary.
+    #[test]
+    fn compartments_do_not_leak_between_sessions() {
+        let db = test_db();
+        db.insert_compartment(&CompartmentRecord {
+            session_id: "test-session".to_string(),
+            span_start: 1,
+            span_end: 9,
+            tier: 2,
+            body: "session one".to_string(),
+            importance: 50,
+            source_hash: "s1".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        })
+        .expect("write");
+        assert!(
+            db.compartments_for_session("other-session", 100)
+                .expect("read")
+                .is_empty(),
+            "another session sees none of them"
+        );
+        assert_eq!(
+            db.last_compartment_span_end("other-session")
+                .expect("anchor"),
+            None
         );
     }
 }
