@@ -366,6 +366,20 @@ fn quarantine_hazard(note: &str) -> Option<&'static str> {
 /// makes the contract true rather than requested.
 const MAX_NOTE_CHARS: usize = 500;
 
+/// Token ceiling on the transcript view one advisor side call may carry.
+///
+/// `MAX_NOTE_CHARS` bounds the review's OUTPUT; this bounds its INPUT, which
+/// nothing bounded before. The delta is a whole turn's transcript, so a turn
+/// ending on a large pasted file or a big tool result made the side call exceed
+/// the advisory model's window, and the failure was silent: the error arm logs
+/// and `continue`s, the cursor has already advanced, and the review is gone for
+/// good.
+///
+/// Matches RECAP's `RECAP_VIEW_TOKEN_BUDGET`: the two are the same class of
+/// disposable side call over the same class of view, and a review that needs
+/// more than a status line to read is not a review.
+pub const ADVISOR_VIEW_TOKEN_BUDGET: usize = 8_000;
+
 /// Cut one note to [`MAX_NOTE_CHARS`], on a character boundary.
 ///
 /// The truncation is STATED rather than silent: a note the primary cannot read
@@ -638,6 +652,35 @@ pub fn spawn_advisor(
             {
                 view.push(Message::user(crate::moa::ADVISORY_INSTRUCTION));
             }
+            // FIT THE VIEW TO A BUDGET. The delta is a whole turn's worth of
+            // transcript, so a turn that ends on a large pasted file or a big
+            // tool result makes the side call exceed the advisory model's
+            // window. The provider rejects it, the error arm below logs and
+            // `continue`s, and the cursor was already advanced — so the review
+            // is lost PERMANENTLY, with one log line as the only trace.
+            //
+            // RECAP has had this guard since iter-2345 (`fit_recap_view`, plus
+            // an empty-view skip rather than a confident summary of nothing).
+            // The advisor is the same class of side call over the same class of
+            // disposable view and did not have it. The cut is the shared
+            // helper, so this is one policy rather than a second copy.
+            let view = crate::context_management::fit_messages_to_token_budget(
+                view,
+                ADVISOR_VIEW_TOKEN_BUDGET,
+            );
+            // An empty fitted view means the NEWEST message alone out-busts the
+            // budget — a huge pasted log, one assistant turn echoing a file.
+            // Advancing past it is right (the next turn is different material),
+            // but reviewing an empty view would ask the model to advise on
+            // nothing, which produces a confident note about no evidence.
+            if view.is_empty() {
+                tracing::warn!(
+                    session = %session_id,
+                    "advisor view emptied by the budget — the newest message is larger than the whole advisor budget; review skipped rather than fabricated"
+                );
+                st.cursor.store(messages.len() as u64, Ordering::Relaxed);
+                continue;
+            }
             let mut msgs = vec![Message::system(system_prompt.clone())];
             msgs.extend(view);
             // Advance the cursor BEFORE the call: a failed call skips the
@@ -780,7 +823,7 @@ fn delta_fingerprint(delta: &[Message]) -> u64 {
     // is already in hand, so hashing all of it costs one pass over bytes
     // already in cache.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut mix = |bytes: &[u8], h: &mut u64| {
+    let mix = |bytes: &[u8], h: &mut u64| {
         for b in bytes {
             *h ^= u64::from(*b);
             *h = h.wrapping_mul(0x0000_0100_0000_01b3);
@@ -1141,6 +1184,10 @@ mod engine {
     struct ScriptedModel {
         base_url: String,
         calls: Arc<PMutex<usize>>,
+        /// The last request body received, so a test can assert on what the
+        /// engine actually SENT rather than only on how many times it called.
+        /// Empty until the first request arrives.
+        last_body: Arc<PMutex<String>>,
     }
 
     impl ScriptedModel {
@@ -1150,7 +1197,9 @@ mod engine {
                 .expect("bind a loopback port");
             let addr = listener.local_addr().expect("the bound address");
             let calls = Arc::new(PMutex::new(0usize));
+            let last_body = Arc::new(PMutex::new(String::new()));
             let c2 = Arc::clone(&calls);
+            let b2 = Arc::clone(&last_body);
             tokio::spawn(async move {
                 loop {
                     let Ok((mut socket, _)) = listener.accept().await else {
@@ -1159,12 +1208,13 @@ mod engine {
                     let mut buf = vec![0u8; 256 * 1024];
                     let read = socket.read(&mut buf).await.unwrap_or(0);
                     *c2.lock() += 1;
-                    // The request BODY is deliberately not asserted on: it is
-                    // read so the client's write completes and the connection
-                    // closes cleanly. Asserting on it would couple these tests
-                    // to the OpenAI wire format; the transcript the engine
-                    // SNAPSHOT is the input under test, not the HTTP body.
+                    // The body is read so the client's write completes and the
+                    // connection closes cleanly, and the LAST one is kept so a
+                    // test can assert on what was sent. No test asserts the
+                    // OpenAI wire format; the view SIZE is what the budget tests
+                    // measure, and the body is the only place it is visible.
                     debug_assert!(read > 0, "the client always sends a request body");
+                    *b2.lock() = String::from_utf8_lossy(&buf[..read]).to_string();
                     let response = format!(
                         "{{\"id\":\"1\",\"object\":\"chat.completion\",\"created\":0,\
                          \"model\":\"adv\",\"choices\":[{{\"index\":0,\"message\":{{\
@@ -1186,11 +1236,16 @@ mod engine {
             Self {
                 base_url: format!("http://{addr}/v1"),
                 calls,
+                last_body,
             }
         }
 
         fn calls(&self) -> usize {
             *self.calls.lock()
+        }
+
+        fn last_body(&self) -> String {
+            self.last_body.lock().clone()
         }
     }
 
@@ -1631,5 +1686,73 @@ mod engine {
         assert_eq!(d.notes[0].severity, Severity::Blocker);
         assert!(d.batch.contains("the build is red"));
         assert!(d.should_continue);
+    }
+    /// The advisor's INPUT is bounded, not only its output.
+    ///
+    /// `MAX_NOTE_CHARS` bounds what a review may say; nothing bounded what it
+    /// read. A turn ending on a large pasted file made the side call exceed the
+    /// advisory model's window, and the failure was silent: the error arm logs
+    /// and `continue`s, the cursor has already advanced, and that delta is never
+    /// reviewed again. The assertion is on the BODY that reached the wire,
+    /// because the transcript the engine snapshotted is the input under test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_oversized_delta_is_cut_to_the_view_budget() {
+        // Four turns of ~4,000 tokens each: well past the 8,000-token budget, so
+        // only the newest can survive.
+        let big = "x".repeat(16_000);
+        let mut transcript = Vec::new();
+        for i in 0..4 {
+            transcript.push(Message::user(format!("turn {i} {big}")));
+            transcript.push(Message::assistant(format!("answer {i}")));
+        }
+        let h = Harness::start("- [nit] a note", transcript).await;
+        h.end_turn();
+        assert!(
+            eventually(|| h.model.calls() >= 1).await,
+            "the side call must happen"
+        );
+
+        let body = h.model.last_body();
+        assert!(
+            body.len() < 200_000,
+            "an oversized delta must not reach the wire whole (body was {} bytes)",
+            body.len()
+        );
+        // The tail survived and the head did not: the newest turn is the point
+        // of a review, so the cut keeps the end.
+        assert!(
+            body.contains("answer 3"),
+            "the newest turn must survive the cut"
+        );
+        assert!(
+            !body.contains("turn 0 "),
+            "the oldest turn must be the one dropped"
+        );
+    }
+
+    /// An over-budget NEWEST message yields an EMPTY view, and the engine skips
+    /// rather than asking the model to advise on nothing.
+    ///
+    /// "Nothing delivered" is safer than "a confident note about no evidence",
+    /// which is the same rule RECAP adopted. The observable is that the call
+    /// count does NOT grow: a fabricated review would still call the model.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_empty_fitted_view_skips_the_review() {
+        // One message larger than the entire 8,000-token budget.
+        let huge = "y".repeat(200_000);
+        let transcript = vec![Message::assistant("prior answer"), Message::user(huge)];
+        let h = Harness::start("- [nit] a note", transcript).await;
+        h.end_turn();
+        // Give the engine a chance to (wrongly) call the model.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(
+            h.model.calls(),
+            0,
+            "a view emptied by the budget must be skipped, not reviewed"
+        );
+        assert!(
+            h.delivered().is_empty(),
+            "nothing may be delivered from an empty view"
+        );
     }
 }

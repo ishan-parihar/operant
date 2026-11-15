@@ -50,27 +50,12 @@ const RECAP_VIEW_TOKEN_BUDGET: usize = 8_000;
 ///
 /// The view arrives oldest-first, so the tail is kept and the head dropped —
 /// a recap is about where the session stands, and that is the recent turns.
-/// Returns the view unchanged when it already fits, byte for byte.
+/// The cut itself is the shared `fit_messages_to_token_budget`, so this names
+/// only the recap's own ceiling: the policy ("keep the newest that fit") is one
+/// policy and now lives in one place, which is what the truncator audit asked
+/// for. A view that already fits comes back unchanged, byte for byte.
 fn fit_recap_view(view: Vec<Message>) -> Vec<Message> {
-    let total: usize = view
-        .iter()
-        .map(|m| crate::context_management::estimate_tokens(&m.content))
-        .sum();
-    if total <= RECAP_VIEW_TOKEN_BUDGET {
-        return view;
-    }
-    let mut kept: Vec<Message> = Vec::new();
-    let mut used = 0usize;
-    for msg in view.into_iter().rev() {
-        let cost = crate::context_management::estimate_tokens(&msg.content);
-        if used + cost > RECAP_VIEW_TOKEN_BUDGET {
-            break;
-        }
-        used += cost;
-        kept.push(msg);
-    }
-    kept.reverse();
-    kept
+    crate::context_management::fit_messages_to_token_budget(view, RECAP_VIEW_TOKEN_BUDGET)
 }
 
 fn recap_instruction(instructions: &str) -> String {

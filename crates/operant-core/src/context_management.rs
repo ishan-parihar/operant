@@ -366,6 +366,39 @@ pub fn fit_to_token_budget(text: &str, budget_tokens: usize) -> String {
     format!("{kept}{marker}")
 }
 
+/// Cut a MESSAGE LIST to the newest messages that fit a token budget.
+///
+/// The single owner of "keep the tail, drop the head" for the background
+/// engines. RECAP and ADVISOR each need the same thing — a side call whose input
+/// is a disposable copy of part of the conversation — and they each grew their
+/// own before this existed. Two copies of one policy is the fragmentation the
+/// truncator audit found: the policies differ by what they truncate (a string, a
+/// tool result, a message list) but "the newest messages up to a ceiling" is one
+/// policy, and it belongs here.
+///
+/// Returns the view unchanged when it already fits, byte for byte. When the
+/// NEWEST message alone busts the budget the result is EMPTY rather than one
+/// over-budget message: a caller that sends a single oversized message has
+/// gained nothing and still pays for it.
+pub fn fit_messages_to_token_budget(view: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
+    let total: usize = view.iter().map(|m| estimate_tokens(&m.content)).sum();
+    if total <= budget_tokens {
+        return view;
+    }
+    let mut kept: Vec<Message> = Vec::new();
+    let mut used = 0usize;
+    for msg in view.into_iter().rev() {
+        let cost = estimate_tokens(&msg.content);
+        if used + cost > budget_tokens {
+            break;
+        }
+        used += cost;
+        kept.push(msg);
+    }
+    kept.reverse();
+    kept
+}
+
 // ---------------------------------------------------------------------------
 // output-token fitting (omp `output-budget.ts` parity, iter-792)
 // ---------------------------------------------------------------------------
