@@ -1266,12 +1266,12 @@ impl SubAgentTool {
                     // name the session that ran it, or the operator can see
                     // that work happened without being able to open it.
                     if let Some(session_id) = answer.session_id.as_deref() {
-                        async_delegation::mark_session(&spawn_id, session_id);
+                        async_delegation::mark_session_off_runtime(&spawn_id, session_id).await;
                     }
                     // Persist the record FIRST — the event send below is
                     // best-effort UI surfacing only (try_send so a full/slow
                     // parent channel can never stall the background task).
-                    async_delegation::mark_completed(&spawn_id, &answer.text);
+                    async_delegation::mark_completed_off_runtime(&spawn_id, &answer.text).await;
                     if let Some(tx) = event_tx {
                         let _ = tx.try_send(AgentEvent::AsyncDelegation {
                             delegation_id: spawn_id.clone(),
@@ -1281,7 +1281,7 @@ impl SubAgentTool {
                     }
                 }
                 Err(error) => {
-                    async_delegation::mark_failed(&spawn_id, &error.to_string());
+                    async_delegation::mark_failed_off_runtime(&spawn_id, &error.to_string()).await;
                     if let Some(tx) = event_tx {
                         let _ = tx.try_send(AgentEvent::AsyncDelegation {
                             delegation_id: spawn_id.clone(),
