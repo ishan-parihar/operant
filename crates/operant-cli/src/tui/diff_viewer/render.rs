@@ -463,7 +463,7 @@ pub(crate) fn build_inline_diff_spans(
                     s,
                     Style::default()
                         .fg(theme_colors::text())
-                        .bg(Color::Rgb(150, 30, 30)),
+                        .bg(theme::diff_word_removed_bg()),
                 ));
             }
             ChangeTag::Insert => {
@@ -471,7 +471,7 @@ pub(crate) fn build_inline_diff_spans(
                     s,
                     Style::default()
                         .fg(theme_colors::text())
-                        .bg(Color::Rgb(30, 130, 30)),
+                        .bg(theme::diff_word_added_bg()),
                 ));
             }
         }

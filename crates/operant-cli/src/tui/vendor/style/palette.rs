@@ -117,6 +117,26 @@ pub enum Role {
     MdHr,
     /// List bullet / ordered marker.
     MdListBullet,
+    /// Dim markdown chrome: blockquote bars, ordered markers, thematic breaks,
+    /// heading rules, code-block frames.
+    ///
+    /// Its frozen default is the literal `operant_markdown::md_dim_color()`
+    /// returned, so wiring that helper to this role is a ZERO-pixel change —
+    /// the same move `code_fg()` made for `md_code` (plan 2026-11-15 U5).
+    /// `md_dim_color()` alone drives blockquotes, list markers, thematic breaks,
+    /// heading rules and code-block frames, so this is the choke point for most
+    /// of the markdown chrome.
+    MdDim,
+    /// Word-level diff: the background behind inserted words.
+    ///
+    /// The row markers either side are already themed (`tool_diff_added` /
+    /// `tool_diff_removed`); the word-level backgrounds were hardcoded, so the
+    /// same widget was half-themed. Default == the literal it replaces, so this
+    /// is a zero-pixel wiring.
+    ToolDiffWordAddedBg,
+    /// Word-level diff: the background behind removed words. See
+    /// [`Role::ToolDiffWordAddedBg`].
+    ToolDiffWordRemovedBg,
     /// Diff added rows.
     ToolDiffAdded,
     /// Diff removed rows.
@@ -177,6 +197,9 @@ pub const ALL_ROLES: &[Role] = &[
     Role::MdQuote,
     Role::MdHr,
     Role::MdListBullet,
+    Role::MdDim,
+    Role::ToolDiffWordAddedBg,
+    Role::ToolDiffWordRemovedBg,
     Role::ToolDiffAdded,
     Role::ToolDiffRemoved,
     Role::ToolDiffContext,
@@ -226,6 +249,9 @@ impl Role {
             Role::MdQuote => "md_quote",
             Role::MdHr => "md_hr",
             Role::MdListBullet => "md_list_bullet",
+            Role::MdDim => "md_dim",
+            Role::ToolDiffWordAddedBg => "tool_diff_word_added_bg",
+            Role::ToolDiffWordRemovedBg => "tool_diff_word_removed_bg",
             Role::ToolDiffAdded => "tool_diff_added",
             Role::ToolDiffRemoved => "tool_diff_removed",
             Role::ToolDiffContext => "tool_diff_context",
@@ -289,6 +315,9 @@ impl Role {
             Role::MdQuote => (150, 150, 150),
             Role::MdHr => (130, 130, 140),
             Role::MdListBullet => (200, 150, 90),
+            Role::MdDim => (100, 100, 100),
+            Role::ToolDiffWordAddedBg => (30, 130, 30),
+            Role::ToolDiffWordRemovedBg => (150, 30, 30),
             Role::ToolDiffAdded => (110, 200, 120),
             Role::ToolDiffRemoved => (200, 110, 110),
             Role::ToolDiffContext => (140, 140, 150),
@@ -901,6 +930,13 @@ mod default_palette_is_frozen {
         (Role::MdQuote, (150, 150, 150)),
         (Role::MdHr, (130, 130, 140)),
         (Role::MdListBullet, (200, 150, 90)),
+        // Dim markdown chrome (plan 2026-11-15 U5). The literal
+        // `md_dim_color()` returned, so the rendered pixel is unchanged.
+        (Role::MdDim, (100, 100, 100)),
+        // Word-level diff backgrounds (plan 2026-11-15 U5): the literals
+        // `build_inline_diff_spans` hardcoded, unchanged.
+        (Role::ToolDiffWordAddedBg, (30, 130, 30)),
+        (Role::ToolDiffWordRemovedBg, (150, 30, 30)),
         (Role::ToolDiffAdded, (110, 200, 120)),
         (Role::ToolDiffRemoved, (200, 110, 110)),
         (Role::ToolDiffContext, (140, 140, 150)),

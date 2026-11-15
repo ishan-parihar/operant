@@ -634,11 +634,10 @@ fn role_palette_for(source: &ColorPalette) -> Palette {
 
 /// Parse a `#rrggbb` / `#rgb` / bare-index string to a colour.
 fn role_rgb_from_str(value: &str) -> Option<Color> {
-    let (overrides, errors) = palette::Palette::from_pairs([("probe", value)]);
-    assert!(errors.is_empty(), "{value:?} must parse: {errors:?}");
-    let role = palette::Role::Accent;
-    let (r, g, b) = overrides.rgb(role);
-    (overrides.is_overridden(role)).then_some(Color::Rgb(r, g, b))
+    // `from_pairs` is not usable here: it rejects an unknown role name, and this
+    // parses a VALUE. `parse_hex` is the same parser the config path uses, so a
+    // colour accepted here is accepted there too.
+    palette::parse_hex(value).map(|(r, g, b)| Color::Rgb(r, g, b))
 }
 
 /// Write one field of a palette by name.
@@ -976,6 +975,9 @@ pub(crate) mod tests {
         Role::MdQuote,
         Role::MdHr,
         Role::MdListBullet,
+        Role::MdDim,
+        Role::ToolDiffWordAddedBg,
+        Role::ToolDiffWordRemovedBg,
         Role::ToolDiffAdded,
         Role::ToolDiffRemoved,
         Role::ToolDiffContext,

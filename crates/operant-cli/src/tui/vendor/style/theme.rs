@@ -88,6 +88,26 @@ pub fn code_color() -> Color {
 pub fn list_bullet_color() -> Color {
     super::palette::role_color(super::palette::Role::MdListBullet)
 }
+/// Dim markdown chrome ink (plan 2026-11-15 U5).
+///
+/// The literal `operant_markdown::md_dim_color()` returned before U5, so the
+/// default is that grey and the wiring is a zero-pixel change. `md_dim` is the
+/// home for `MdDim`, whose default is deliberately NOT seeded from a colour the
+/// eight themes carry: the one exception `seed_never_repaints_an_operant_value`
+/// has to guard is `deuteranopia.border`, which already carries this triple.
+pub fn md_dim_color() -> Color {
+    super::palette::role_color(super::palette::Role::MdDim)
+}
+
+/// Background behind word-level INSERTED spans in a `/diff` line (U5).
+pub fn diff_word_added_bg() -> Color {
+    super::palette::role_color(super::palette::Role::ToolDiffWordAddedBg)
+}
+
+/// Background behind word-level REMOVED spans in a `/diff` line (U5).
+pub fn diff_word_removed_bg() -> Color {
+    super::palette::role_color(super::palette::Role::ToolDiffWordRemovedBg)
+}
 /// Markdown link text (plan 2026-11-14 U4).
 pub fn link_color() -> Color {
     super::palette::role_color(super::palette::Role::MdLink)

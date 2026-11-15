@@ -6,6 +6,14 @@
 //! `theme_files` reads, so a bundled palette and an operator file take the same
 //! apply path.
 //!
+//! OMP writes a colour as a hex string, a `vars` reference, or a 0..255 ANSI
+//! index, and at least one theme carries an 8-digit RGBA value. All of it is
+//! resolved to 3- or 6-digit hex HERE, at generation time, because
+//! `palette::parse_hex` — the parser the whole config path shares — accepts only
+//! that. Emitting anything else produces a value that passes a loose generator
+//! check and is then dropped at apply time: the guard on this table asserts
+//! `parse_hex` accepts every value, and it is what caught the RGBA case.
+//!
 //! The mapping is lossy and deliberately so: OMP carries 69 colour tokens and
 //! operant has 43 roles, so tokens with no counterpart (per-segment `statusLine*`,
 //! `thinking*`, `bashMode`/`pythonMode`, `muted`) are DROPPED rather than forced
@@ -18,7 +26,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "alabaster",
         &[
             ("accent", "#505860"),
-            ("ai_text", "133"),
+            ("ai_text", "#993399"),
             ("border", "#e8e8ec"),
             ("dim", "#909098"),
             ("error", "#704040"),
@@ -56,7 +64,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "amethyst",
         &[
             ("accent", "#b48eff"),
-            ("ai_text", "213"),
+            ("ai_text", "#ff66ff"),
             ("border", "#6b4d9e"),
             ("dim", "#6a5a78"),
             ("error", "#d96c75"),
@@ -94,7 +102,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "anthracite",
         &[
             ("accent", "#e8734a"),
-            ("ai_text", "173"),
+            ("ai_text", "#cc6633"),
             ("border", "#3d4555"),
             ("dim", "#6b7280"),
             ("error", "#d9534f"),
@@ -170,7 +178,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "birch",
         &[
             ("accent", "#608058"),
-            ("ai_text", "133"),
+            ("ai_text", "#993399"),
             ("border", "#c8c4b8"),
             ("dim", "#8a9d84"),
             ("error", "#b85a50"),
@@ -247,7 +255,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-arctic",
         &[
             ("accent", "#88c0d0"),
-            ("ai_text", "139"),
+            ("ai_text", "#996699"),
             ("border", "#5e81ac"),
             ("dim", "#434c5e"),
             ("error", "#bf616a"),
@@ -285,7 +293,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-aurora",
         &[
             ("accent", "#bd00ff"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#00b4d8"),
             ("dim", "#606060"),
             ("error", "#ff0055"),
@@ -439,7 +447,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-copper",
         &[
             ("accent", "#d08770"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#5e81ac"),
             ("dim", "#4c566a"),
             ("error", "#bf616a"),
@@ -631,7 +639,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-ember",
         &[
             ("accent", "#ff6f61"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#5f8dd3"),
             ("dim", "#5c6370"),
             ("error", "#e06c75"),
@@ -821,7 +829,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-lavender",
         &[
             ("accent", "#bd93f9"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#bd93f9"),
             ("dim", "#6272a4"),
             ("error", "#ff5555"),
@@ -897,7 +905,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-midnight",
         &[
             ("accent", "#2979ff"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#2979ff"),
             ("dim", "#546e7a"),
             ("error", "#ff1744"),
@@ -1128,7 +1136,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-ocean",
         &[
             ("accent", "#FF8B6D"),
-            ("ai_text", "204"),
+            ("ai_text", "#ff3366"),
             ("border", "#5BC0BE"),
             ("dim", "#5A7B99"),
             ("error", "#FF6F5E"),
@@ -1218,7 +1226,6 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
             ("md_link_url", "#00CED1"),
             ("md_list_bullet", "#5DE4c7"),
             ("md_quote", "#767c9d"),
-            ("selection_bg", "#717cb425"),
             ("status_line_bg", "#303340"),
             ("success", "#00CED1"),
             ("syntax_comment", "#767c9d"),
@@ -1320,7 +1327,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-retro",
         &[
             ("accent", "#ffc633"),
-            ("ai_text", "209"),
+            ("ai_text", "#ff6633"),
             ("border", "#cc8800"),
             ("dim", "#664400"),
             ("error", "#ff6b6b"),
@@ -1398,7 +1405,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-sakura",
         &[
             ("accent", "#f06292"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#90caf9"),
             ("dim", "#9e9e9e"),
             ("error", "#ef9a9a"),
@@ -1436,7 +1443,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-slate",
         &[
             ("accent", "#5e81ac"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#81a1c1"),
             ("dim", "#4c566a"),
             ("error", "#bf616a"),
@@ -1589,7 +1596,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-sunset",
         &[
             ("accent", "#FF9E4A"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#614E72"),
             ("dim", "#5E508D"),
             ("error", "#E44C1D"),
@@ -1741,7 +1748,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-terminal",
         &[
             ("accent", "#00ff00"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#00aaff"),
             ("dim", "#666666"),
             ("error", "#ff0000"),
@@ -1779,7 +1786,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "dark-tokyo-night",
         &[
             ("accent", "#bb9af7"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#7aa2f7"),
             ("dim", "#51597d"),
             ("error", "#db4b4b"),
@@ -1932,7 +1939,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "graphite",
         &[
             ("accent", "#f0d050"),
-            ("ai_text", "222"),
+            ("ai_text", "#ffcc66"),
             ("border", "#404550"),
             ("dim", "#8893a8"),
             ("error", "#d88989"),
@@ -1970,7 +1977,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-arctic",
         &[
             ("accent", "#8FBCBB"),
-            ("ai_text", "139"),
+            ("ai_text", "#996699"),
             ("border", "#81A1C1"),
             ("dim", "#B4BCC8"),
             ("error", "#BF616A"),
@@ -2161,7 +2168,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-coral",
         &[
             ("accent", "#ff7043"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#1e88e5"),
             ("dim", "#90a4ae"),
             ("error", "#e53935"),
@@ -2315,7 +2322,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-eucalyptus",
         &[
             ("accent", "#00897b"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#00796b"),
             ("dim", "#607d8b"),
             ("error", "#c62828"),
@@ -2353,7 +2360,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-forest",
         &[
             ("accent", "#4f7942"),
-            ("ai_text", "131"),
+            ("ai_text", "#993333"),
             ("border", "#7e8c54"),
             ("dim", "#8b7355"),
             ("error", "#be5103"),
@@ -2392,7 +2399,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-frost",
         &[
             ("accent", "#03a9f4"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#2196f3"),
             ("dim", "#90a4ae"),
             ("error", "#f44336"),
@@ -2584,7 +2591,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-honeycomb",
         &[
             ("accent", "#ffb300"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#f57f17"),
             ("dim", "#8d6e63"),
             ("error", "#d32f2f"),
@@ -2660,7 +2667,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-lavender",
         &[
             ("accent", "#7e57c2"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#5e35b1"),
             ("dim", "#7e57c2"),
             ("error", "#e53935"),
@@ -2736,7 +2743,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-mint",
         &[
             ("accent", "#00bfa5"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#4682b4"),
             ("dim", "#888888"),
             ("error", "#cd5c5c"),
@@ -2812,7 +2819,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-ocean",
         &[
             ("accent", "#378ad7"),
-            ("ai_text", "110"),
+            ("ai_text", "#6699cc"),
             ("border", "#297685"),
             ("dim", "#8b7d6b"),
             ("error", "#ff8a80"),
@@ -2964,7 +2971,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-paper",
         &[
             ("accent", "#d19a66"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#4271ae"),
             ("dim", "#8e908c"),
             ("error", "#c82829"),
@@ -3016,7 +3023,6 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
             ("md_link_url", "#00CED1"),
             ("md_list_bullet", "#5DE4c7"),
             ("md_quote", "#767c9d"),
-            ("selection_bg", "#717cb425"),
             ("status_line_bg", "#7390AA"),
             ("success", "#00CED1"),
             ("syntax_comment", "#767c9d"),
@@ -3080,7 +3086,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-retro",
         &[
             ("accent", "#ffbb00"),
-            ("ai_text", "133"),
+            ("ai_text", "#993399"),
             ("border", "#cc9900"),
             ("dim", "#5a5a5a"),
             ("error", "#cc3333"),
@@ -3120,7 +3126,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-sand",
         &[
             ("accent", "#a1887f"),
-            ("ai_text", "205"),
+            ("ai_text", "#ff3399"),
             ("border", "#1565c0"),
             ("dim", "#8d6e63"),
             ("error", "#c62828"),
@@ -3272,7 +3278,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "light-sunset",
         &[
             ("accent", "#d4a259"),
-            ("ai_text", "139"),
+            ("ai_text", "#996699"),
             ("border", "#ff8b6a"),
             ("dim", "#a89080"),
             ("error", "#d47766"),
@@ -3463,7 +3469,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "limestone",
         &[
             ("accent", "#a07840"),
-            ("ai_text", "130"),
+            ("ai_text", "#993300"),
             ("border", "#907050"),
             ("dim", "#909080"),
             ("error", "#a85840"),
@@ -3501,7 +3507,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "mahogany",
         &[
             ("accent", "#c4a050"),
-            ("ai_text", "138"),
+            ("ai_text", "#996666"),
             ("border", "#3a302a"),
             ("dim", "#8a847c"),
             ("error", "#9d4451"),
@@ -3539,7 +3545,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "marble",
         &[
             ("accent", "#5a6878"),
-            ("ai_text", "133"),
+            ("ai_text", "#993399"),
             ("border", "#c4c0bc"),
             ("dim", "#9a968f"),
             ("error", "#8b4049"),
@@ -3653,7 +3659,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "pearl",
         &[
             ("accent", "#b08090"),
-            ("ai_text", "133"),
+            ("ai_text", "#993399"),
             ("border", "#7080a0"),
             ("dim", "#807880"),
             ("error", "#a06060"),
@@ -3729,7 +3735,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "quartz",
         &[
             ("accent", "#c07088"),
-            ("ai_text", "132"),
+            ("ai_text", "#993366"),
             ("border", "#8070a0"),
             ("dim", "#a898b0"),
             ("error", "#b85860"),
@@ -3767,7 +3773,7 @@ pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[
         "sandstone",
         &[
             ("accent", "#b86040"),
-            ("ai_text", "131"),
+            ("ai_text", "#993333"),
             ("border", "#c87850"),
             ("dim", "#544840"),
             ("error", "#b86040"),

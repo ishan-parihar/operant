@@ -140,11 +140,12 @@ mod tests {
                     Role::from_key(key).is_some(),
                     "{name}: {key:?} is not a role key"
                 );
+                // Hex only. A 0..255 ANSI index would pass a digits-only check
+                // and then be dropped by `parse_hex` at apply time, so the
+                // generator resolves indices to hex and this rejects them.
                 assert!(
-                    value.is_empty()
-                        || value.starts_with('#')
-                        || value.chars().all(|c| c.is_ascii_digit()),
-                    "{name}: {key} has an unusable value {value:?}"
+                    crate::tui::vendor::style::palette::parse_hex(value).is_some(),
+                    "{name}: {key} has an unparseable value {value:?}"
                 );
             }
             assert!(
@@ -159,14 +160,21 @@ mod tests {
     /// row in the picker that applies to nothing.
     #[test]
     fn applying_a_bundled_palette_changes_the_palette() {
-        let _lock = crate::config::test_env_lock();
+        // The process-global palette is shared with every other theming test, so
+        // a bare "read, apply, read" races: the suite runs these in parallel and
+        // a neighbouring `set_active_theme` between the two reads makes the guard
+        // fail for a reason that has nothing to do with the file. `ACTIVE_LOCK`
+        // is the lock `theme_colors`' own tests use for exactly this.
+        let _lock = crate::tui::vendor::style::STYLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let before = crate::tui::theme_colors::accent();
-        crate::tui::theme_colors::set_active_theme("tokyo-night");
+        crate::tui::theme_colors::set_active_theme("dark-tokyo-night");
         let after = crate::tui::theme_colors::accent();
         crate::tui::theme_colors::set_active_theme("default");
         assert_ne!(
             before, after,
-            "tokyo-night must move at least one colour the TUI reads"
+            "dark-tokyo-night must move at least one colour the TUI reads"
         );
     }
 

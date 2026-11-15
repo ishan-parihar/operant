@@ -468,3 +468,104 @@ fn the_diff_footers_space_claim_is_only_shown_where_space_dispatches() {
          {detail_footer:?}"
     );
 }
+
+/// The word-level diff backgrounds must come from the palette, not a literal.
+///
+/// Before U5 the delete/insert spans painted `Color::Rgb(150,30,30)` /
+/// `Color::Rgb(30,130,30)`, which no role's frozen default matched, so
+/// `[tui.colors]` could not reach them at all — the row markers either side WERE
+/// themed, so the same widget was half-themed. The two roles' defaults are those
+/// literals, so this asserts the whole chain rather than just the call site:
+/// override the role, render the span, run the buffer pass, and require the cell
+/// to have moved.
+///
+/// MEASURED, and worth stating because it inverts the obvious reading: this
+/// guard ALSO passes with the literal left in place. `configured_native_color`
+/// rewrites any cell whose colour IS an overridden role's frozen default, and
+/// the role's default IS that literal — so creating the role is what makes the
+/// cell themeable, and the call site may read either the accessor or the
+/// literal with the same effect. The property under test is the operator-visible
+/// one (an override repaints this cell), not which of the two the span names.
+/// The accessor is still the right thing to write: it is what makes the next
+/// reader see the role, and it survives a change to the default.
+#[test]
+fn the_word_level_diff_backgrounds_follow_an_override() {
+    use crate::tui::vendor::style::palette::{ALL_ROLES, Palette, Role, set_palette};
+    use crate::tui::vendor::style::theme_mode::{
+        ThemeMode, adapt_buffer_for_display, set_theme_mode,
+    };
+
+    let _lock = crate::tui::vendor::style::STYLE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = crate::tui::vendor::style::palette::configured_palette();
+    set_theme_mode(ThemeMode::Dark);
+
+    // Restore the previous palette whatever happens below. `set_palette` takes an
+    // owned `Palette` and has no "clear" form — `None` is what the caller has to
+    // pass to `configure_palette`, not to `set_palette` — so the previous value
+    // is restored by re-installing it, or the default table when there was none.
+    struct Restore(Option<Palette>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_palette(self.0.take().unwrap_or_default());
+        }
+    }
+    let _restore = Restore(previous);
+
+    for (role, old, new) in [
+        (Role::ToolDiffWordRemovedBg, "abc def", "abc xyz"),
+        (Role::ToolDiffWordAddedBg, "abc xyz", "abc def"),
+    ] {
+        let mut palette = Palette::default();
+        palette.set(role, (1, 2, 3));
+        assert!(palette.is_overridden(role));
+        set_palette(palette);
+
+        let (old_spans, new_spans) = build_inline_diff_spans(old, new);
+        let spans = if role == Role::ToolDiffWordAddedBg {
+            new_spans
+        } else {
+            old_spans
+        };
+
+        // The changed word is the one carrying a background.
+        let styled: Vec<&Span> = spans
+            .iter()
+            .filter(|span| span.style.bg.is_some())
+            .collect();
+        assert!(
+            !styled.is_empty(),
+            "{role:?}: no span carried a background, so the role has no reader"
+        );
+
+        let before = styled[0].style.bg.expect("a background");
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 4, 1));
+        buffer.set_style(
+            ratatui::layout::Rect::new(0, 0, 4, 1),
+            ratatui::style::Style::default().bg(before),
+        );
+        adapt_buffer_for_display(&mut buffer);
+        let after = buffer
+            .cell((0, 0))
+            .expect("a cell")
+            .style()
+            .bg
+            .expect("still a background");
+        assert_ne!(
+            before, after,
+            "{role:?}: overriding it left the rendered cell unchanged, so the span is \
+             still painting a literal rather than reading the palette"
+        );
+        assert_eq!(
+            after,
+            ratatui::style::Color::Rgb(1, 2, 3),
+            "{role:?}: the override did not reach the cell"
+        );
+    }
+
+    set_palette(Palette::default());
+    for role in ALL_ROLES {
+        assert!(!role.key().is_empty());
+    }
+}

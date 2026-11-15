@@ -552,7 +552,12 @@ fn heading_color() -> Color {
     crate::tui::vendor::style::theme::heading_color()
 }
 fn md_dim_color() -> Color {
-    rgb(100, 100, 100)
+    // U5: the literal this returned before wiring (`rgb(100,100,100)`) IS
+    // `Role::MdDim`'s frozen default, so the rendered pixel is unchanged and
+    // `[tui.colors] md_dim` can now repaint the blockquote bars, ordered
+    // markers, thematic breaks, heading rules and code-block frames that all
+    // draw through here.
+    crate::tui::vendor::style::theme::md_dim_color()
 }
 const RULE_LEN: usize = 24;
 
