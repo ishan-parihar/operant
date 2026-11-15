@@ -227,7 +227,7 @@ context_compression = false
 # folded span, and the rungs below already fit the request. Turn it on for
 # sessions long enough that the lossy rungs are degrading a conversation you
 # still want.
-# RETIRED (iter-2448) -- the historian rung, its module and its table are gone;
+# RETIRED (iter-2453) -- the historian rung, its module and its table are gone;
 # these two keys now read nothing. They are accepted so an existing operant.toml
 # still parses, and have no effect. Do not set them expecting a fold.
 # context_historian = false

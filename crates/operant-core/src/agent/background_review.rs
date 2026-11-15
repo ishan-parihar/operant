@@ -504,7 +504,7 @@ pub(crate) fn build_review_prompt_with_instructions(
 ///
 /// The daemon's ON/OFF and RESPONSE SHAPE before this struct: two intervals in
 /// `[agent]`, and no way to change what a review looks for without a rebuild.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BackgroundReviewSettings {
     /// Master switch for BOTH review lanes.
@@ -527,15 +527,6 @@ pub struct BackgroundReviewSettings {
     /// side-call engines answer the same axis the same way.
     #[serde(default)]
     pub instructions: String,
-}
-
-impl Default for BackgroundReviewSettings {
-    fn default() -> Self {
-        Self {
-            enabled: None,
-            instructions: String::new(),
-        }
-    }
 }
 
 impl BackgroundReviewSettings {

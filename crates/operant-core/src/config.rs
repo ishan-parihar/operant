@@ -981,22 +981,34 @@ pub struct BehaviorSettings {
     /// per compaction, and recency already protects the tail.
     #[serde(default)]
     pub context_semantic_compaction: bool,
-    /// PARKED — the historian rung was REMOVED (iter-2404) and this now reads
-    /// nothing. Do not set it expecting a fold.
+    /// (retired, iter-2453) the historian rung — accepted, ignored.
     ///
-    /// It used to gate `preflight_historian_fold`, which stored a summary and left
-    /// the message list unchanged: it saved no tokens, and its positional anchor
-    /// went stale as soon as the summarizer rewrote the list upstream. The rung is
-    /// gone; the `compartments` table and `historian.rs`'s pure logic stay for a
-    /// future design that keys compartments to stable message ids.
+    /// It gated `preflight_historian_fold`, which stored a summary and then
+    /// returned the message list UNCHANGED: it saved no tokens, and its anchor
+    /// was a positional index into a list the summarizer rewrites upstream, so
+    /// it went stale every turn. The rung was deleted in iter-2404; the module,
+    /// the `compartments` table and this key went in iter-2453.
     ///
-    /// The field stays because `AppConfig` carries `deny_unknown_fields`: deleting
-    /// it would make an existing `operant.toml` that sets it fail to parse. It is
-    /// accepted and ignored.
+    /// The field stays because `AppConfig` carries `deny_unknown_fields`:
+    /// deleting it would make an existing `operant.toml` that sets it fail to
+    /// parse. It is accepted and ignored, like the retired `agentmemory_*`
+    /// keys.
+    ///
+    /// WHY NOT JUST ADD THE MISSING GUARDS. The reference implementation's
+    /// persisted compartment anchor is ALSO positional — an ordinal recomputed
+    /// on every read as a count over `(time_created, id)` minus finished
+    /// summaries — so "a message has no stable id" was never the reason this
+    /// could not work. What makes theirs survivable is four fail-closed guards
+    /// (`BoundaryOrdinalMismatch`, `Absent`, `IdentityDrift`, a `revert_epoch`
+    /// CAS) plus per-block content fingerprints re-verified INSIDE the publish
+    /// transaction. Those guards protect a producer, a publish transaction and
+    /// a render path; this repo has none of the three, so the guards would
+    /// guard nothing. Reintroducing the historian means building that system,
+    /// not adding four checks to a dead module.
     #[serde(default)]
     pub context_historian: bool,
-    /// PARKED with [`Self::context_historian`] — see the note there. One fold
-    /// call's ceiling in messages; 0 = the built-in. Accepted and ignored.
+    /// (retired, iter-2453) with [`Self::context_historian`] — accepted and
+    /// ignored.
     #[serde(default)]
     pub context_historian_max_span: usize,
     /// Share of the context window above which `@file:`/`@folder:` injection

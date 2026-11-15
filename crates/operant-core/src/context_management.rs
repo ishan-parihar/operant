@@ -3822,7 +3822,7 @@ mod tests {
     fn decay_pressure_measures_the_overshoot_against_the_budget() {
         let msgs = vec![
             make_msg(Role::System, "system"),
-            make_msg(Role::User, &"x".repeat(4_000)),
+            make_msg(Role::User, "x".repeat(4_000)),
             make_msg(Role::User, "current"),
         ];
         let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
@@ -3844,7 +3844,7 @@ mod tests {
     fn a_budget_of_zero_is_unpressured() {
         let msgs = vec![
             make_msg(Role::System, "system"),
-            make_msg(Role::User, &"y".repeat(9_000)),
+            make_msg(Role::User, "y".repeat(9_000)),
             make_msg(Role::User, "current"),
         ];
         assert_eq!(decay_pressure(&msgs, 0), 1.0);
@@ -3873,8 +3873,8 @@ mod tests {
     fn a_huge_budget_stretches_decay_to_the_floor_not_to_infinity() {
         let msgs = vec![
             make_msg(Role::System, "system"),
-            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
-            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "the quick brown fox ".repeat(400)),
             make_msg(Role::User, "current turn"),
         ];
         let natural: usize = msgs.iter().map(estimate_message_tokens).sum();
@@ -3885,17 +3885,12 @@ mod tests {
         let unpressured = kept(&decay_render(msgs.clone(), 100, 20.0, 0));
         let at_natural = kept(&decay_render(msgs, 100, 20.0, natural));
 
-        assert_eq!(
-            decay_pressure(
-                &vec![
-                    make_msg(Role::System, "system"),
-                    make_msg(Role::User, "x"),
-                    make_msg(Role::User, "y"),
-                ],
-                usize::MAX
-            ),
-            DECAY_PRESSURE_FLOOR
-        );
+        let tiny = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, "x"),
+            make_msg(Role::User, "y"),
+        ];
+        assert_eq!(decay_pressure(&tiny, usize::MAX), DECAY_PRESSURE_FLOOR);
 
         assert!(
             floored > unpressured,
@@ -3914,8 +3909,8 @@ mod tests {
     fn a_tighter_budget_decays_the_same_history_harder() {
         let msgs = vec![
             make_msg(Role::System, "system"),
-            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
-            make_msg(Role::User, &"the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "the quick brown fox ".repeat(400)),
+            make_msg(Role::User, "the quick brown fox ".repeat(400)),
             make_msg(Role::User, "current turn"),
         ];
         let natural: usize = msgs.iter().map(estimate_message_tokens).sum();

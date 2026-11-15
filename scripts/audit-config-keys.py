@@ -417,17 +417,54 @@ def registry_keys() -> list[tuple[str, str, str]]:
         )
         sys.exit(2)
     src = REGISTRY.read_text(encoding="utf-8")
-    # The generated CONFIG_KEYS table is one `("key", "default", "note"),` per
-    # line. The generator owns that format, so a change to it is a change to
-    # both sides of this contract — which is the point of generating it.
+    # The CONFIG_KEYS table is one `("key", "default", "note")` per entry, and
+    # the generator owns that format — so a change to it is a change to both
+    # sides of this contract, which is the point.
+    #
+    # It must be read STRUCTURALLY, not line by line. The generator writes each
+    # tuple on ONE line, but `cargo fmt --all` — which this repo runs before
+    # every commit — reflows a long one across FOUR:
+    #
+    #       (
+    #           "agent.context_historian",
+    #           "…",
+    #           "…",
+    #       ),
+    #
+    # A line-anchored regex matched only the short tuples that survived the
+    # reflow: 83 of 387 on the current tree. The gate then evaluated a fifth of
+    # the keys, printed a negative coverage count (`-189 of them reach all four
+    # surfaces`), and read as green while 304 keys went unchecked. Scope the
+    # match to the CONFIG_KEYS block so other 3-tuples in the file cannot match.
+    block = _const_block(src, "CONFIG_KEYS")
     return [
         (m.group(1), m.group(2), m.group(3))
         for m in re.finditer(
-            r'^\s{4}\("((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\),$',
-            src,
-            re.M,
+            r'\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*,'
+            r'\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)',
+            block,
+            re.S,
         )
     ]
+
+
+def _const_block(src: str, name: str) -> str:
+    """The body of `pub const <name> … = &[ … ];`, brace-matched.
+
+    Returns "" when the constant is absent, which makes the caller report zero
+    keys rather than matching some other table in the file.
+    """
+    m = re.search(rf"pub\s+const\s+{re.escape(name)}\b[^=]*=\s*&\[", src)
+    if not m:
+        return ""
+    depth, i = 1, m.end()
+    while i < len(src) and depth:
+        if src[i] == "[":
+            depth += 1
+        elif src[i] == "]":
+            depth -= 1
+        i += 1
+    return src[m.end():i - 1]
 
 
 # The set of top-level config sections, derived from the registry rather than
