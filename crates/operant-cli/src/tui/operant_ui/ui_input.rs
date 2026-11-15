@@ -950,6 +950,23 @@ fn append_batch_progress_spans(
     }
 }
 
+/// Whether the status row gets the bar fill.
+///
+/// (plan 2026-11-15 B2) Three things must hold: the row is a real status row
+/// (the caller knows whether the transcript collapsed), it has height, and it
+/// carries TEXT. The last one is the fix — the idle arm resolves to an empty
+/// line, and filling an empty line paints a solid bar of `status_line_bg` with
+/// nothing in it (measured at 80x24: `rgb:161A21` across all 80 columns on the
+/// row above the composer).
+///
+/// Extracted as a pure function because the defective arm cannot be driven from
+/// a test where it sits: `draw_status` reads the process-global build-progress
+/// file and the configured tip, so a render-level guard hangs or passes for
+/// reasons unrelated to the rule. The caller passes the three inputs.
+fn status_row_fills(status_row_is_real: bool, height: u16, line_width: usize) -> bool {
+    status_row_is_real && height > 0 && line_width > 0
+}
+
 pub(super) fn draw_status(
     frame: &mut Frame,
     app: &dyn TuiState,
@@ -1349,8 +1366,26 @@ pub(super) fn draw_status(
         line = add_caps(line, area.width, crate::tui::status_line::style::style());
     }
 
+    // (plan 2026-11-15 B2) An EMPTY status line must not be filled.
+    //
+    // The idle arm resolves to `Line::from("")`, and the caller used to fill any
+    // real row with height — so an idle session painted a solid bar of
+    // `status_line_bg` with no text in it. MEASURED on the real binary at 80x24:
+    // the row between the last message and the composer was `rgb:161A21` across
+    // all 80 columns carrying nothing, which reads as "an extra grey line above
+    // the input bar". It is not extra chrome; it is the status row with nothing
+    // to say.
+    //
+    // Keyed on the LINE, not on `is_processing`: a processing session whose
+    // status is `Idle` produces the same empty line and the same phantom bar.
+    // The row itself stays reserved (`Constraint::Length(1)`) — the reservation
+    // is the composer's breathing space and other arms paint into it; only the
+    // fill is conditional.
+    // Measured BEFORE the move into `Paragraph::new` below — that call takes the
+    // line by value.
+    let line_width = line.width();
     let paragraph = Paragraph::new(line);
-    let paragraph = if status_row_is_real && area.height > 0 {
+    let paragraph = if status_row_fills(status_row_is_real, area.height, line_width) {
         paragraph.style(crate::tui::status_line::bar::fill_style())
     } else {
         paragraph
@@ -3713,6 +3748,34 @@ mod composer_hint_tests {
             })
             .expect("draw");
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// (plan 2026-11-15 B2) An EMPTY status line is not filled.
+    ///
+    /// The idle arm resolves to `Line::from("")`, and filling an empty line
+    /// paints a solid bar of `status_line_bg` with nothing in it — measured on
+    /// the real binary at 80x24: the row between the last message and the
+    /// composer was `rgb:161A21` across all 80 columns carrying no text. That is
+    /// the operator's "extra grey line above the input bar".
+    ///
+    /// The rule is pinned through [`status_row_fills`], the pure decision the
+    /// fill site calls, rather than by re-stating the condition here — a copy
+    /// would pass with the live site unfixed.
+    #[test]
+    fn an_empty_status_line_is_not_filled() {
+        // The live site's inputs, driven through the live decision.
+        assert!(
+            !status_row_fills(true, 1, 0),
+            "an empty line on a real row must not be filled — that is the \
+             phantom grey bar above the composer"
+        );
+        assert!(
+            status_row_fills(true, 1, 5),
+            "a status line with content is still filled"
+        );
+        // The arms the earlier test pinned must not move.
+        assert!(!status_row_fills(true, 0, 5), "a zero-height row has nothing to fill");
+        assert!(!status_row_fills(false, 1, 5), "a collapsed layout is not filled");
     }
 
     /// THE INPUT AREA CARRIES ONLY THE OPERATOR'S TEXT.
