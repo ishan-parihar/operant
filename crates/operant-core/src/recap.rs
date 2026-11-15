@@ -233,6 +233,19 @@ pub fn spawn_recap_engine(
             // and cut the view to the budget the main path already uses for an
             // injected block.
             let mut view = fit_recap_view(crate::moa::build_advisory_messages(&messages));
+            // If the newest single message out-bust the budget (a huge pasted
+            // log, one assistant turn echoing a file, full tool-call args), the
+            // fit keeps NOTHING and the recap would run on an empty view with
+            // only the instruction — a confident fabrication. Skip the recap:
+            // "nothing delivered" is safer than "a fabricated recap the operator
+            // will believe".
+            if view.is_empty() {
+                tracing::warn!(
+                    session = %session_id,
+                    "recap view emptied by the budget — the newest message is larger than the whole recap budget; skipped rather than fabricate"
+                );
+                continue;
+            }
             view.push(Message::user(recap_instruction(&instructions)));
             let request = ChatRequest::new(model.clone(), view).with_stream(false);
             let reply = match client.chat(request).await {
@@ -251,7 +264,18 @@ pub fn spawn_recap_engine(
                 .iter()
                 .find_map(|c| c.message.content.clone())
                 .unwrap_or_default();
-            let text = text.trim().to_string();
+            // Enforce the promised shape: one line, no markdown. The model
+            // is INSTRUCTED to produce "40 words, 1-2 plain sentences, no
+            // markdown", but a multi-line reply would ride to the host and
+            // the gateway splits at the first continuation tag — so an
+            // injected tag anywhere inside a multi-line recap would truncate
+            // the operator's view. Collapse to a single line here, at the
+            // one place the promise is made.
+            let text = text
+                .replace(crate::advisor::CONTINUATION_TAG, "[advisor-continuation]")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             if text.is_empty() {
                 continue;
             }
@@ -332,6 +356,78 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].session_id, "sess-1");
         assert!(got[0].text.contains("recap engine"));
+        drop(engine);
+    }
+
+    /// A transcript whose newest single message out-busts the whole recap
+    /// budget empties the fitted view. The engine must SKIP rather than send
+    /// the instruction alone and let the model fabricate a recap.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_empty_fitted_view_skips_the_recap() {
+        let bus = crate::turn_end::TurnEndBus::new();
+        let rx = bus.subscribe();
+        let delivered = Arc::new(Mutex::new(Vec::<Recap>::new()));
+        let d2 = delivered.clone();
+        let huge = "x".repeat(RECAP_VIEW_TOKEN_BUDGET * 4 + 1);
+        let engine = spawn_recap_engine(
+            Arc::new(FixedClient("goal: never; task: never; next: never")),
+            "m".to_string(),
+            Duration::from_millis(10),
+            String::new(),
+            rx,
+            move || vec![Message::user(huge.clone())],
+            move |r| d2.lock().push(r),
+        );
+        bus.emit("sess-1", 3, 5, "partial result text", None);
+        for _ in 0..50 {
+            if !delivered.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            delivered.lock().is_empty(),
+            "a recap whose view is empty must not be delivered — it would be fabricated"
+        );
+        drop(engine);
+    }
+
+    /// The delivered recap is ONE line: the model is instructed to produce
+    /// 1-2 plain sentences, but a multi-line reply must not ride to the host
+    /// as a multi-line block (the gateway splits advisor summaries at the
+    /// first continuation tag, and a tag inside a multi-line recap would
+    /// truncate it).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_delivered_recap_is_one_line() {
+        let bus = crate::turn_end::TurnEndBus::new();
+        let rx = bus.subscribe();
+        let delivered = Arc::new(Mutex::new(Vec::<Recap>::new()));
+        let d2 = delivered.clone();
+        let engine = spawn_recap_engine(
+            Arc::new(FixedClient(
+                "goal: testing\nwith a newline\ntask: one line\nnext: verify",
+            )),
+            "m".to_string(),
+            Duration::from_millis(10),
+            String::new(),
+            rx,
+            || vec![Message::user("do the thing")],
+            move |r| d2.lock().push(r),
+        );
+        bus.emit("sess-1", 3, 5, "partial result text", None);
+        for _ in 0..50 {
+            if !delivered.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let got = delivered.lock();
+        assert_eq!(got.len(), 1);
+        assert!(
+            !got[0].text.contains('\n'),
+            "recap must be a single line, got {:?}",
+            got[0].text
+        );
         drop(engine);
     }
 

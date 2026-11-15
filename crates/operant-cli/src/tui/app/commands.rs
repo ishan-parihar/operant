@@ -1812,6 +1812,16 @@ impl App {
             // the status stays honest about that. Ref: hermes-agent
             // cli.py reload_skills().
             "reload-skills" => {
+                // The operator's off switch is sticky across the runtime
+                // path too: a rescan re-adds everything the operator turned
+                // off at boot, defeating `[skills] autoload = false`.
+                if !self.config.skills.autoload {
+                    self.set_status_notice(
+                        "[skills] autoload = false — the skill surface stays off. Set autoload = true and restart."
+                            .to_string(),
+                    );
+                    return true;
+                }
                 let skills_dir = self.config.skills.root_dir.clone();
                 // The vendor roots — the installed integrations AND the
                 // plugin roots. The ponytail-only root this used to wire

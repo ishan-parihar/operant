@@ -767,8 +767,24 @@ pub async fn preprocess_context_references(
     // The shares were compile-time literals (0.50 / 0.25) with no control, so
     // an operator whose attachments are large could not raise the bound and
     // had to split the message by hand. 0 keeps each built-in share.
-    let hard_share = if hard_share > 0.0 { hard_share } else { 0.50 };
-    let soft_share = if soft_share > 0.0 { soft_share } else { 0.25 };
+    //
+    // Clamps: a share is a fraction, so anything outside (0..=1] is nonsense
+    // — a hard_share of 2.0 silently disables the refusal an operator armed
+    // this for. NaN and negatives fall back to the built-in too. soft must
+    // never exceed hard (otherwise the warning path is dead and every
+    // injection that would warn instead hard-fails).
+    let hard_share = if hard_share.is_finite() && hard_share > 0.0 {
+        hard_share
+    } else {
+        0.50
+    }
+    .clamp(0.0, 1.0);
+    let soft_share = if soft_share.is_finite() && soft_share > 0.0 {
+        soft_share
+    } else {
+        0.25
+    }
+    .clamp(0.0, hard_share);
     let hard_limit = (context_length as f64 * hard_share).max(1.0) as usize;
     let soft_limit = (context_length as f64 * soft_share).max(1.0) as usize;
 
@@ -1037,6 +1053,45 @@ mod tests {
             preprocess_context_references("@file:big.txt", dir.path(), 10_000, 0.0, 0.0).await;
         assert!(result.blocked);
         assert!(result.warnings.iter().any(|w| w.contains("50% hard limit")));
+    }
+
+    /// Shares outside (0, 1] are nonsense a config can carry, not a policy.
+    /// `hard_share = 2.0` would silently disable the refusal the operator
+    /// armed — the clamp lands on 1.0, so the refusal still fires. And a sane
+    /// custom pair warns below its own hard limit rather than at a hardcoded
+    /// quarter.
+    #[tokio::test]
+    async fn reference_shares_are_clamped_to_the_window() {
+        let dir = tmp_repo();
+        let big = "x".repeat(60_000);
+        write_file(dir.path(), "big.txt", &big);
+        // hard_share = 2.0 clamps to 1.0 (100% of the window): a 60k-char
+        // file against a 10k window (2.5k hard limit at 25% of the window
+        // chars... the injection is 15k tokens) refuses at the FULL window,
+        // which still refuses — "2.0 disables the guard" is false.
+        let oversized =
+            preprocess_context_references("@file:big.txt", dir.path(), 10_000, 2.0, 0.0).await;
+        assert!(
+            oversized.blocked,
+            "hard_share = 2.0 must clamp to 1.0 and still refuse"
+        );
+
+        // A sane custom pair: hard 0.8, soft 0.4 of a 10k-token window →
+        // 8,000 / 4,000 token limits. A 20k-char file is ~5,000 tokens: over
+        // soft, under hard — warned, not refused.
+        let mid = "y".repeat(20_000);
+        write_file(dir.path(), "mid.txt", &mid);
+        let warned =
+            preprocess_context_references("@file:mid.txt", dir.path(), 10_000, 0.8, 0.4).await;
+        assert!(
+            !warned.blocked,
+            "5k tokens of a 10k window under an 0.8 hard share must not refuse"
+        );
+        assert!(
+            warned.warnings.iter().any(|w| w.contains("soft limit")),
+            "a sane custom pair must warn above its own soft limit: {:?}",
+            warned.warnings
+        );
     }
 
     #[tokio::test]

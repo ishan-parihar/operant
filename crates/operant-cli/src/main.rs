@@ -1358,6 +1358,7 @@ pub(crate) async fn build_registry(
         // A peer's spelling of the same Vec -> HashSet conversion, kept as theirs.
         config.command_allowlist.clone().into_iter().collect(),
         Some(operant_core::platform::operant_home().join("approval_allowlist.json")),
+        config.skills.autoload,
     )
     .await?;
     // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
@@ -3187,18 +3188,15 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     // `[advisor] enabled = true` and `recap_idle_seconds` were silently inert
     // here. The handle must be held for the loop's life — dropping it stops
     // the engine (`attach_recap_engine`'s own doc).
-    let _recap_activity = {
-        let idle = config.agent.recap_idle_seconds;
-        if idle == 0 {
-            None
-        } else {
-            Some(agent.attach_recap_engine(
-                std::time::Duration::from_secs(idle),
-                config.recap.clone(),
-                crate::client_config(config),
-            ))
-        }
-    };
+    // attach_recap_engine itself returns the disabled handle for idle == 0
+    // (builders.rs), so the off switch is one call, not an if/else at every
+    // host — the wrapper is deleted from the headless site to match the TUI
+    // and gateway, which both call it unconditionally.
+    let _recap_activity = agent.attach_recap_engine(
+        std::time::Duration::from_secs(config.agent.recap_idle_seconds),
+        config.recap.clone(),
+        crate::client_config(config),
+    );
     agent.attach_advisor(config.advisor.clone(), crate::client_config(config));
 
     // Spawn task to display tool events in real-time
@@ -3232,7 +3230,39 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
                     eprintln!("  Tool Error {}: {}", name, error);
                 }
                 AgentEvent::BackgroundReview { summary, .. } => {
-                    println!("  \u{1f4be} Self-improvement review: {summary}");
+                    // The TUI and gateway split the advisor summary at the
+                    // continuation marker: the card is operator-visible, the
+                    // payload after it is a machine batch. The headless host
+                    // has no path to submit a follow-up turn — but printing
+                    // the machine bytes verbatim was leaking the advisory
+                    // model's raw output to the terminal in the exact shape
+                    // the operator never asked for. Print the card only; an
+                    // advisor review that wants to continue is reported, not
+                    // acted on.
+                    let marker = operant_core::advisor::CONTINUATION_TAG;
+                    let (card, continuation) = if summary.starts_with('⚑') {
+                        match summary.find(marker) {
+                            Some(pos) => (
+                                summary[..pos].trim_end().to_string(),
+                                Some(summary[pos..].trim().to_string()),
+                            ),
+                            None => (summary.clone(), None),
+                        }
+                    } else {
+                        (summary.clone(), None)
+                    };
+                    if let Some(batch) = continuation
+                        && !batch.is_empty()
+                    {
+                        // Mirror of the gateway's behaviour (gateway_runner):
+                        // say so rather than drop silently — headless cannot
+                        // submit the follow-up, so the continue channel is a
+                        // card-only experience here, same as the gateway.
+                        tracing::warn!(
+                            "advisor: continuation batch produced but this host has no                              turn-submission path — printed as a card only"
+                        );
+                    }
+                    println!("  \u{1f4be} Self-improvement review: {card}");
                 }
                 AgentEvent::AsyncDelegation {
                     delegation_id,

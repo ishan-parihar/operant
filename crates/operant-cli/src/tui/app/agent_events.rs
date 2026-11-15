@@ -662,12 +662,22 @@ impl App {
                 // `<advisory>` XML into the card — the "it lumps everything
                 // without correct formatting" report. Split at the marker:
                 // the card ends there, the payload starts there.
-                let (card, continuation) = match summary.find(marker) {
-                    Some(pos) => (
-                        summary[..pos].trim_end().to_string(),
-                        Some(summary[pos..].trim().to_string()),
-                    ),
-                    None => (summary.clone(), None),
+                // Only an advisor summary owns the tag. A recap (prefix
+                // "※") whose text happens to contain it must not have its
+                // tail queued as the next turn's query — the tag is how the
+                // host learns which bytes are machine-directed. Splitting
+                // blind would hand a model-generated line the role of an
+                // injected user instruction.
+                let (card, continuation) = if summary.starts_with('⚑') {
+                    match summary.find(marker) {
+                        Some(pos) => (
+                            summary[..pos].trim_end().to_string(),
+                            Some(summary[pos..].trim().to_string()),
+                        ),
+                        None => (summary.clone(), None),
+                    }
+                } else {
+                    (summary.clone(), None)
                 };
                 if let Some(batch) = continuation
                     && !batch.is_empty()

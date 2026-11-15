@@ -61,6 +61,7 @@ async fn full_registry(root: &std::path::Path) -> anyhow::Result<Arc<ToolRegistr
         cron_db,
         kanban_db,
         None,
+        true,
     )
     .await?;
     Ok(registry)

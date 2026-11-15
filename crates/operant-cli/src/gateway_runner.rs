@@ -1230,57 +1230,69 @@ async fn handle_runtime_command(
 
         // ── /reload-skills — rescan + runtime swap (set_skill_manager) ──
         "reload-skills" => {
-            let skills_dir = handler.skills_root_dir.clone();
-            // (RT-508) EVERY slot gets its own SkillManager: the field is
-            // owned by each agent, and a manager swapped into one slot
-            // would leave the other slots on the stale list.
-            let build = || {
-                let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
-                // The vendor roots across a reload (iter-2159) — the
-                // installed content integrations plus the plugin roots the
-                // handler captured at start. A rescan that dropped them
-                // would make /skill ponytail-review fail right after a
-                // reload.
-                #[cfg(feature = "plugins-wasm")]
-                let host = handler.wasm_plugin_skill_roots.clone();
-                #[cfg(not(feature = "plugins-wasm"))]
-                let host: Vec<std::path::PathBuf> = Vec::new();
-                for root in operant_core::skills::vendor_skill_roots(&host) {
-                    mgr.add_extra_root(Some(root));
-                }
-                // The operator's configured extra roots: a `/reload-skills`
-                // that dropped them would make every skill in them fail right
-                // after a reload.
-                for root in &handler.skills_extra_roots {
-                    mgr.add_extra_root(Some(root.clone()));
-                }
-                mgr.load_all().map(|loaded| (mgr, loaded.len()))
-            };
-            match build() {
-                Ok((first, count)) => {
-                    let slots = handler.slots.iter().count();
-                    handler.slots.slots[0].agent.set_skill_manager(Some(first));
-                    let mut swapped = 1usize;
-                    for slot in &handler.slots.slots[1..] {
-                        if let Ok((mgr, _)) = build() {
-                            slot.agent.set_skill_manager(Some(mgr));
-                            swapped += 1;
-                        }
+            // The off switch is sticky here too: the operator set
+            // `[skills] autoload = false` to keep skills off, and a reload
+            // is a PEEK at the roots, not a reason to resurrect the
+            // surface. This is the only runtime path in the gateway that
+            // re-adds skills to an agent.
+            if !handler.skills_autoload {
+                Some(
+                    "🔇 `[skills] autoload = false` — the skill surface stays off, and /reload-skills does not                      resurrect it. Set autoload = true and restart to re-enable."
+                        .to_string(),
+                )
+            } else {
+                let skills_dir = handler.skills_root_dir.clone();
+                // (RT-508) EVERY slot gets its own SkillManager: the field is
+                // owned by each agent, and a manager swapped into one slot
+                // would leave the other slots on the stale list.
+                let build = || {
+                    let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
+                    // The vendor roots across a reload (iter-2159) — the
+                    // installed content integrations plus the plugin roots the
+                    // handler captured at start. A rescan that dropped them
+                    // would make /skill ponytail-review fail right after a
+                    // reload.
+                    #[cfg(feature = "plugins-wasm")]
+                    let host = handler.wasm_plugin_skill_roots.clone();
+                    #[cfg(not(feature = "plugins-wasm"))]
+                    let host: Vec<std::path::PathBuf> = Vec::new();
+                    for root in operant_core::skills::vendor_skill_roots(&host) {
+                        mgr.add_extra_root(Some(root));
                     }
-                    tracing::info!(
-                        skills = count,
-                        slots = swapped,
-                        dir = %skills_dir.display(),
-                        "Gateway /reload-skills: rescanned and swapped the live skill managers"
-                    );
-                    Some(format!(
-                        "🔄 Skills reloaded: {count} skill(s) from `{}` on {swapped} of {slots} agent slot(s) — the next message sees the fresh list.",
-                        skills_dir.display()
-                    ))
+                    // The operator's configured extra roots: a `/reload-skills`
+                    // that dropped them would make every skill in them fail right
+                    // after a reload.
+                    for root in &handler.skills_extra_roots {
+                        mgr.add_extra_root(Some(root.clone()));
+                    }
+                    mgr.load_all().map(|loaded| (mgr, loaded.len()))
+                };
+                match build() {
+                    Ok((first, count)) => {
+                        let slots = handler.slots.iter().count();
+                        handler.slots.slots[0].agent.set_skill_manager(Some(first));
+                        let mut swapped = 1usize;
+                        for slot in &handler.slots.slots[1..] {
+                            if let Ok((mgr, _)) = build() {
+                                slot.agent.set_skill_manager(Some(mgr));
+                                swapped += 1;
+                            }
+                        }
+                        tracing::info!(
+                            skills = count,
+                            slots = swapped,
+                            dir = %skills_dir.display(),
+                            "Gateway /reload-skills: rescanned and swapped the live skill managers"
+                        );
+                        Some(format!(
+                            "🔄 Skills reloaded: {count} skill(s) from `{}` on {swapped} of {slots} agent slot(s) — the next message sees the fresh list.",
+                            skills_dir.display()
+                        ))
+                    }
+                    Err(e) => Some(format!(
+                        "🔄 Skill reload failed — the previous list stays active. Error: {e}"
+                    )),
                 }
-                Err(e) => Some(format!(
-                    "🔄 Skill reload failed — the previous list stays active. Error: {e}"
-                )),
             }
         }
 
@@ -3371,6 +3383,11 @@ struct GatewayMessageHandler {
     /// `/reload-skills` listed the pool only, while `operant doctor` and the
     /// in-loop tools saw every root.
     skills_extra_roots: Vec<std::path::PathBuf>,
+    /// `[skills] autoload` captured at gateway start — the off switch the
+    /// operator set. `/reload-skills` re-reads roots to repair a stale
+    /// manager; it must not resurrect the skill surface the operator turned
+    /// off.
+    skills_autoload: bool,
     /// iter-1720 — skill-plugin `skills/` dirs captured at gateway start
     /// (the handler has no config handle, same reason as
     /// `summary_ttl_minutes`). `/reload-skills` re-adds them so a rescan
@@ -5652,6 +5669,7 @@ pub async fn start_gateway(
             .collect(),
         skills_root_dir: app_config.skills.root_dir.clone(),
         skills_extra_roots: app_config.skills.extra_roots.clone(),
+        skills_autoload: app_config.skills.autoload,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: crate::plugin_tools::plugin_skill_roots(app_config),
         queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
@@ -6266,12 +6284,23 @@ pub async fn start_gateway(
                     // XML as their card. The card is everything BEFORE the
                     // marker, exactly as the TUI reads it.
                     let marker = operant_core::advisor::CONTINUATION_TAG;
-                    let (card, continuation) = match summary.find(marker) {
-                        Some(pos) => (
-                            summary[..pos].trim_end().to_string(),
-                            Some(summary[pos..].trim().to_string()),
-                        ),
-                        None => (summary.clone(), None),
+                    // Recaps ride the same BackgroundReview channel with a
+                    // "※" prefix; the tag inside a recap must NOT be read as
+                    // an advisor boundary. Phoning home a phantom
+                    // "continuation produced" warning for every tag mention
+                    // in a codebase discussion is exactly the kind of false
+                    // alarm that teaches operators to ignore the log.
+                    let (card, continuation) = if summary.starts_with('⚑') {
+                        match summary.find(marker) {
+                            Some(pos) => (
+                                summary[..pos].trim_end().to_string(),
+                                Some(summary[pos..].trim().to_string()),
+                            ),
+                            None => (summary.clone(), None),
+                        }
+                    } else {
+                        // Not an advisor summary: deliver verbatim.
+                        (summary.clone(), None)
                     };
                     if let Some(batch) = continuation
                         && !batch.is_empty()
@@ -6290,8 +6319,8 @@ pub async fn start_gateway(
 
                     match target {
                         Some((platform, channel_id, thread_id)) => {
-                            let msg = OutgoingMessage::new(&channel_id, &card)
-                                .with_thread_id(thread_id);
+                            let msg =
+                                OutgoingMessage::new(&channel_id, &card).with_thread_id(thread_id);
                             let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                         }
                         None => {

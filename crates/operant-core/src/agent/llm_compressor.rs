@@ -27,7 +27,6 @@ use tracing::{debug, info, warn};
 
 use crate::agent::model_client::{ChatRequest, ModelClient};
 use crate::client::{Message, Role};
-use crate::context_management::estimate_tokens;
 use crate::database::Database;
 use crate::error::Result;
 
@@ -421,10 +420,19 @@ impl LlmCompressor {
         if !self.config.enabled {
             return false;
         }
-        let window = if window == 0 {
+        let window = if window > 0 {
+            window
+        } else if self.config.context_window > 0 {
             self.config.context_window
         } else {
-            window
+            // Both zero: no denominator exists, so the threshold would be
+            // zero and the answer would be "always compress". That is a
+            // misconfiguration trap, not a policy. The agent-side
+            // `effective_context_window()` is floored at MIN_CONTEXT_WINDOW
+            // (4,097) so the production path never reaches this — but this
+            // public API should not silently start compressing every call
+            // when both numbers are unset.
+            return false;
         };
         let threshold = window as f64 * self.config.threshold_percent;
         estimated_tokens > threshold as usize
@@ -1326,6 +1334,17 @@ mod tests {
         // A zero window falls back to the configured value rather than
         // collapsing the threshold to nothing.
         assert!(!compressor.should_compress(60_000, 0));
+
+        // Both windows zero: there is no denominator, so the threshold would
+        // be zero and the answer would be "always compress". The API refuses
+        // instead of silently compressing every call.
+        let no_window = LlmCompressor::new(LlmCompressorConfig {
+            context_window: 0,
+            threshold_percent: 0.80,
+            ..Default::default()
+        });
+        assert!(!no_window.should_compress(60_000, 0));
+        assert!(!no_window.should_compress(usize::MAX, 0));
     }
 
     #[test]

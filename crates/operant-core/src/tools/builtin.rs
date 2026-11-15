@@ -88,6 +88,7 @@ pub async fn register_builtin_tools(
     cron_db: Arc<CronDb>,
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
+    skills_autoload: bool,
 ) -> Result<()> {
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
@@ -149,15 +150,28 @@ pub async fn register_builtin_tools(
     registry.register(ClarifyTool).await?;
     registry.register(PatchTool).await?;
     registry.register(VisionTool).await?;
-    registry
-        .register(SkillsTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
-        .await?;
-    registry
-        .register(SkillViewTool::new(skills_dir.to_path_buf()).with_vendor_roots(vendor_skill_roots.to_vec()))
-        .await?;
-    registry
-        .register(SkillManageTool::new(skills_dir.to_path_buf()))
-        .await?;
+    // The operator's skills off switch: skills_list / skill_view / skill_manage
+    // stay unregistered when `[skills] autoload = false`, so the off switch is
+    // the whole surface it claims to be. They read the roots directly and
+    // never consult the agent's manager, so gating only the frozen prefix
+    // would have been a lie by omission.
+    if skills_autoload {
+        registry
+            .register(
+                SkillsTool::new(skills_dir.to_path_buf())
+                    .with_vendor_roots(vendor_skill_roots.to_vec()),
+            )
+            .await?;
+        registry
+            .register(
+                SkillViewTool::new(skills_dir.to_path_buf())
+                    .with_vendor_roots(vendor_skill_roots.to_vec()),
+            )
+            .await?;
+        registry
+            .register(SkillManageTool::new(skills_dir.to_path_buf()))
+            .await?;
+    }
     // The operator's SOP playbooks (iter-1126) — the agent reads them.
     registry.register(SopTool).await?;
     registry
@@ -259,6 +273,10 @@ pub async fn register_builtin_tools_with_sub_agent(
     // decisions the operator made for the parent (audit finding 2).
     parent_approval_allowlist: std::collections::HashSet<String>,
     parent_approval_allowlist_path: Option<std::path::PathBuf>,
+    // The operator's skills off switch: `[skills] autoload = false` keeps
+    // the skill tools off too, so the "whole skill surface" off switch is
+    // real. Tests pass `true`.
+    skills_autoload: bool,
 ) -> Result<()> {
     register_builtin_tools(
         registry,
@@ -269,6 +287,7 @@ pub async fn register_builtin_tools_with_sub_agent(
         cron_db,
         kanban_db,
         mcp_manager,
+        skills_autoload,
     )
     .await?;
     registry
@@ -406,6 +425,7 @@ mod tests {
             cron_db,
             kanban_db,
             None,
+            true,
         )
         .await
         .unwrap();
@@ -455,6 +475,7 @@ mod tests {
             std::collections::HashSet::new(),
             std::collections::HashSet::new(),
             None,
+            true,
         )
         .await
         .unwrap();
@@ -515,6 +536,44 @@ mod tests {
 
     /// (iter-1231) The async half: after a full registration pass, the
     /// registry must not contain any purged tool.
+    /// `[skills] autoload = false` keeps the skill tools unregistered (audit:
+    /// the "whole skill surface off switch" had registered them anyway).
+    /// The control half (autoload = true registers them) is the existing
+    /// `test_register_all_builtin_tools` count assertion.
+    #[tokio::test]
+    async fn skills_autoload_false_leaves_the_skill_tools_unregistered() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        let (_tmp, skills_dir) = setup_skills_dir();
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_no_skills_tools.db")).unwrap());
+        let cron_db =
+            Arc::new(CronDb::init(std::env::temp_dir().join("test_no_skills_cron.db")).unwrap());
+        let kanban_db = Arc::new(
+            KanbanDb::init(std::env::temp_dir().join("test_no_skills_kanban.db")).unwrap(),
+        );
+        let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
+        register_builtin_tools(
+            &registry,
+            &skills_dir,
+            &memory_dir,
+            &[],
+            database,
+            cron_db,
+            kanban_db,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        for tool in ["skills_list", "skill_view", "skill_manage"] {
+            assert!(
+                !registry.contains(tool).await,
+                "skills autoload = false must not register {tool}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn purged_tools_are_not_in_a_registered_registry() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
@@ -535,6 +594,7 @@ mod tests {
             cron_db,
             kanban_db,
             None,
+            true,
         )
         .await
         .unwrap();

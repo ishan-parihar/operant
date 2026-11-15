@@ -186,6 +186,7 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -410,6 +411,7 @@ fn slow_echo_handler_with_slots(
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -497,6 +499,7 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -1938,6 +1941,7 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2077,6 +2081,7 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2214,6 +2219,7 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2394,6 +2400,7 @@ async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: skills_root.clone(),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: vec![vendor.clone()],
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2471,6 +2478,7 @@ async fn the_posture_command_settles_into_the_agents_cell() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2560,6 +2568,7 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -2900,6 +2909,7 @@ fn handler_for_skills(
         mcp_server_configs: Vec::new(),
         skills_root_dir: skills_root,
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -3008,6 +3018,7 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
         skills_extra_roots: Vec::new(),
+        skills_autoload: true,
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: Vec::new(),
         queue_waits: tokio::sync::Mutex::new(Default::default()),
@@ -3288,6 +3299,7 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
             skills_extra_roots: Vec::new(),
+            skills_autoload: true,
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
@@ -3445,6 +3457,7 @@ async fn a_queued_prompt_holds_no_cap_slot() {
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
             skills_extra_roots: Vec::new(),
+            skills_autoload: true,
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
@@ -3542,6 +3555,7 @@ async fn a_queued_prompt_can_be_cancelled() {
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
             skills_extra_roots: Vec::new(),
+            skills_autoload: true,
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
@@ -3634,6 +3648,7 @@ async fn the_next_turn_queue_is_bounded() {
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),
             skills_extra_roots: Vec::new(),
+            skills_autoload: true,
             session_tracker_dir: dir.path().join("active"),
         })),
         bus: Arc::new(SessionBus::new()),
@@ -3734,6 +3749,7 @@ async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_histor
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
             skills_extra_roots: Vec::new(),
+            skills_autoload: true,
             #[cfg(feature = "plugins-wasm")]
             wasm_plugin_skill_roots: Vec::new(),
             queue_waits: tokio::sync::Mutex::new(Default::default()),

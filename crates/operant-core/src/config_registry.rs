@@ -169,12 +169,12 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "agent.context_reference_hard_share",
         "0.0",
-        "Share of the context window above which `@file:`/`@folder:` injection is REFUSED, and the share above which it is WARNED about (defaults 0.50 / 0.25). They were compile-time literals with no control, so an operator whose attachments are large could not raise the bound and had to split the message by hand. 0 keeps each built-in share.",
+        "Share of the context window above which `@file:`/`@folder:` injection is REFUSED, and the share above which it is WARNED about (defaults 0.50 / 0.25). They were compile-time literals with no control, so an operator whose attachments are large could not raise the bound and had to split the message by hand. 0 keeps each built-in share. Values are clamped to [0, 1]: a share is a fraction, and `hard_share = 2.0` would silently disable the refusal the operator armed.",
     ),
     (
         "agent.context_reference_soft_share",
         "0.0",
-        "The WARN share, below [`Self::context_reference_hard_share`]. 0 keeps the built-in 0.25.",
+        "The WARN share, below [`Self::context_reference_hard_share`] — a value above the hard share is clamped down to it (the refusal is the stronger bound; the warning band simply empties). 0 keeps the built-in 0.25.",
     ),
     (
         "agent.context_semantic_compaction",
@@ -1249,7 +1249,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "skills.autoload",
         "true",
-        "Load and advertise skills at agent construction (README: \"autoload at boot\"). `false` builds an EMPTY skill manager, so no skill is loaded, advertised in the frozen prefix, or offered as a tool — the operator's off switch for the whole skill surface. The parse-only surfaces (`operant skills`, the popups) still read the roots from config.",
+        "Load and advertise skills at agent construction (README: \"autoload at boot\"). `false` builds an EMPTY skill manager (nothing loaded, nothing advertised in the frozen prefix) AND leaves the `skills_list` / `skill_view` / `skill_manage` tools unregistered, so the model cannot enumerate, read or edit skills either — the operator's off switch for the whole skill surface, including `/reload-skills`, which honors the flag instead of resurrecting the surface at runtime. The parse-only surfaces (`operant skills`, the popups) still read the roots from config.",
     ),
     (
         "skills.extra_roots",

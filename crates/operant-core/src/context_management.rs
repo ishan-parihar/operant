@@ -351,14 +351,16 @@ pub fn fit_to_token_budget(text: &str, budget_tokens: usize) -> String {
         keep_chars = text.chars().count();
     }
     let kept: String = text.chars().take(keep_chars).collect();
-    // Land on an ITEM boundary when one is in reach. The recall is a run of
-    // `format_hits` blocks joined by newlines, so cutting at the last newline
-    // keeps every retained item whole. A character cut leaves the boundary
-    // item ending mid-sentence, which reads as a complete memory and is not
-    // one. A single item longer than the whole budget has no newline in reach,
-    // and that is the only case where an item is still divided.
+    // Land on an ITEM boundary when one is in reach and keeps a reasonable
+    // share of the budget. The recall is a run of `format_hits` blocks joined
+    // by newlines, so cutting at the last newline keeps every retained item
+    // whole. But if the only newline in reach is the first character of the
+    // text (a recall that starts with "-\n" and then one giant item), the
+    // boundary yields a one-character keep that spends nearly the whole
+    // budget's marker-overhead on nothing; in that case fall back to the
+    // character cut, which is the pre-item-boundary behaviour.
     let kept = match kept.rfind('\n') {
-        Some(pos) if pos > 0 => kept[..pos].to_string(),
+        Some(pos) if pos >= keep_chars / 4 => kept[..pos].to_string(),
         _ => kept,
     };
     format!("{kept}{marker}")
@@ -717,6 +719,14 @@ pub async fn semantic_compaction_cutoff(
     } else {
         max_groups
     };
+    // Clamp the operator's ceiling. Each group's text rides one embedding
+    // batch, so an unbounded ceiling is an endpoint memory/cost tragedy:
+    // `context_semantic_max_groups = 1_000_000` turned one compaction into
+    // a 500 MB POST. 1024 groups is roughly 512 KiB of payload, which no
+    // legitimate tool-exchange session will ever reach, and it is simply
+    // linear in the work the rung already does.
+    const MAX_EMBED_CEILING: usize = 1_024;
+    let max_groups = max_groups.clamp(1, MAX_EMBED_CEILING);
     // Computed once, and the sole answer the degraded path may give.
     let cap = safe_compaction_cutoff(messages, budget_tokens);
     let recency = move || SemanticCut {
@@ -774,19 +784,32 @@ pub async fn semantic_compaction_cutoff(
         out.chars().take(SEMANTIC_GROUP_CHARS).collect()
     };
 
-    // One embedding round-trip for the goal plus every group. Any failure here
-    // is a degrade, not an error: compaction must not fail because an optional
-    // embedding endpoint is down.
+    // The embedder trait is NOT batched — `OpenAIEmbedder::embed` posts every
+    // text it is given in one request, and the "the engine batches at most
+    // 32" note refers to a different layer (lcm vector_recall), not this
+    // call. Batch at 32 texts per round-trip, matching the trait's own
+    // stated contract, and keep the response order stable (vectors[0] is
+    // the goal). Any failure is a degrade, not an error: compaction must
+    // not fail because an optional embedding endpoint is down.
+    const EMBED_BATCH: usize = 32;
     let mut texts = Vec::with_capacity(groups.len() + 1);
     texts.push(goal.clone());
     texts.extend(groups.iter().map(|g| group_text(*g)));
-    let vectors = match embedder.embed(&texts).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::debug!(error = %e, "semantic compaction cut: embed failed, using recency");
-            return recency();
+    let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    let mut failed = false;
+    for chunk in texts.chunks(EMBED_BATCH) {
+        match embedder.embed(chunk).await {
+            Ok(mut v) => vectors.append(&mut v),
+            Err(e) => {
+                tracing::debug!(error = %e, "semantic compaction cut: embed failed, using recency");
+                failed = true;
+                break;
+            }
         }
-    };
+    }
+    if failed {
+        return recency();
+    }
     let Some(goal_vec) = vectors
         .first()
         .filter(|v| !v.is_empty() && v.iter().all(|x| x.is_finite()))
@@ -1295,6 +1318,20 @@ pub fn micro_compact(
         }
     };
     let marker_text = format!("{MICRO_MARKER_PREFIX} {kept}");
+    // A fold may never GROW the store. `estimate_message_tokens` counts the
+    // role overhead every message pays, so a marker plus gist can outweigh a
+    // tiny exchange ("ok"/"ok" is ~10 tokens against a ~40-77 token marker);
+    // the batch ladder then faced a request LARGER than before the fold.
+    // Returning None here stops that fold and ends the loop instead of
+    // shrinking the store by negative authority.
+    let marker_cost = estimate_message_tokens(&Message::user(marker_text.clone()));
+    let removed: usize = messages[start..end]
+        .iter()
+        .map(estimate_message_tokens)
+        .sum();
+    if marker_cost >= removed {
+        return None;
+    }
     messages.splice(
         start..end,
         std::iter::once(Message::user(marker_text.clone())),
@@ -1815,14 +1852,24 @@ pub const MEMORY_INJECTION_WRAP_TOKENS: usize = 20;
 /// The budget the recall text is fitted to, once the wrapper's own cost is
 /// paid — the one place the subtraction happens.
 ///
-/// Clamped to 1, never to 0: [`fit_to_token_budget`] reads 0 as "unset" and
-/// substitutes the 4,000 default, so a raw `saturating_sub` turned every
-/// ceiling at or below the wrapper's cost into a 4,000-token block. That was
-/// both wrong and inverted — a *smaller* configured ceiling produced a *bigger*
-/// injected block, by 400x at a ceiling of 10. At 1 the marker's reserve
-/// exceeds the budget and the block comes back empty, which is the honest
-/// answer for a ceiling that cannot hold one token of recall.
+/// A configured 0 means the built-in [`MEMORY_INJECTION_TOKEN_BUDGET`], and
+/// every non-zero ceiling pays the wrapper cost before the body is fitted.
+/// The clamp to 1 (never 0) is for ceilings at or below the wrapper's own
+/// cost: [`fit_to_token_budget`] reads 0 as "unset" and would substitute the
+/// 4,000 default, which is why the raw subtraction is clamped rather than
+/// passed through. At 1 the marker's reserve exceeds the budget and the
+/// block comes back empty, which is the honest answer for a ceiling that
+/// cannot hold one token of recall.
 pub fn recall_fit_budget(budget_tokens: usize) -> usize {
+    // A configured 0 means "the built-in default", exactly as every budget
+    // knob in this config means it and as `operant.example.toml` ships it
+    // (`memory_injection_budget_tokens = 0`). Reading 0 as "unset" and
+    // substituting the default at the LAST step — after the subtraction —
+    // instead of here is what let this knob silently empty the recall for
+    // anyone copying the example.
+    if budget_tokens == 0 {
+        return MEMORY_INJECTION_TOKEN_BUDGET;
+    }
     budget_tokens
         .saturating_sub(MEMORY_INJECTION_WRAP_TOKENS)
         .max(1)
@@ -2038,7 +2085,7 @@ mod tests {
     #[test]
     fn a_recall_ceiling_below_the_wrapper_cost_never_becomes_the_default() {
         let text = "recalled text long enough that the difference is visible";
-        for ceiling in 0..=MEMORY_INJECTION_WRAP_TOKENS {
+        for ceiling in 1..=MEMORY_INJECTION_WRAP_TOKENS {
             let fitted = recall_fit_budget(ceiling);
             assert!(fitted >= 1, "ceiling {ceiling} fitted to {fitted}");
             let out = fit_to_token_budget(text, fitted);
@@ -2047,6 +2094,15 @@ mod tests {
                 "ceiling {ceiling} produced {out:?}, which is not a fitted block"
             );
         }
+        // 0 is the documented "the built-in default" spelling — the value
+        // `operant.example.toml` ships. It must land on the 4,000 default,
+        // NOT on an empty block.
+        assert_eq!(recall_fit_budget(0), MEMORY_INJECTION_TOKEN_BUDGET);
+        let out = fit_to_token_budget(text, recall_fit_budget(0));
+        assert!(
+            out.len() >= text.len(),
+            "0 means the built-in default, got {out:?}"
+        );
         assert!(recall_fit_budget(4_000) > MEMORY_INJECTION_WRAP_TOKENS);
     }
 
@@ -3202,15 +3258,22 @@ mod tests {
 
     #[test]
     fn micro_compact_folds_past_an_earlier_marker() {
+        // The exchanges must be REAL sized, not four characters: a fold only
+        // pays when the marker it writes is smaller than the exchange it
+        // removes, and "a0" against a ~77-token marker is a net GROWTH. The
+        // non-progress guard (a fold may never inflate the store) refuses
+        // those, so a two-character exchange is not a valid fold subject.
+        let q = "a real question with enough substance that the exchange is worth folding";
+        let a = "a real answer with enough substance that the exchange is worth folding";
         let mut msgs = vec![
-            make_msg(Role::User, "q0"),
-            make_msg(Role::Assistant, "a0"),
-            make_msg(Role::User, "q1"),
-            make_msg(Role::Assistant, "a1"),
-            make_msg(Role::User, "q2"),
-            make_msg(Role::Assistant, "a2"),
-            make_msg(Role::User, "q3"),
-            make_msg(Role::Assistant, "a3"),
+            make_msg(Role::User, q),
+            make_msg(Role::Assistant, a),
+            make_msg(Role::User, q),
+            make_msg(Role::Assistant, a),
+            make_msg(Role::User, q),
+            make_msg(Role::Assistant, a),
+            make_msg(Role::User, q),
+            make_msg(Role::Assistant, a),
         ];
         assert!(micro_compact(&mut msgs, 0, 1, 240).is_some());
         assert!(
@@ -3222,6 +3285,93 @@ mod tests {
                 .filter(|m| m.content.starts_with(MICRO_MARKER_PREFIX))
                 .count(),
             2
+        );
+    }
+
+    /// A fold that would GROW the store is refused (red-team of iter-2369).
+    /// A marker plus gist can cost more than a tiny exchange, so folding
+    /// "ok"/"ok" into a ~50-token marker inflates the request the fold was
+    /// supposed to shrink.
+    #[test]
+    fn a_fold_that_would_grow_the_store_is_refused() {
+        let mut msgs = vec![
+            make_msg(Role::User, "ok"),
+            make_msg(Role::Assistant, "ok"),
+            make_msg(Role::User, "ok"),
+            make_msg(Role::Assistant, "ok"),
+            make_msg(Role::User, "still here"),
+        ];
+        let before = estimate_total_tokens(&msgs);
+        assert!(
+            micro_compact(&mut msgs, 0, 1, 240).is_none(),
+            "folding two 2-token exchanges into a marker must be refused"
+        );
+        assert_eq!(
+            estimate_total_tokens(&msgs),
+            before,
+            "the store must not change"
+        );
+    }
+
+    /// The embedder is called in bounded batches, never once with everything
+    /// (red-team of iter-2370): the trait's own contract says the caller
+    /// batches, and `OpenAIEmbedder::embed` posts every text it is given in
+    /// one request.
+    #[tokio::test]
+    async fn the_embedder_is_called_in_bounded_batches() {
+        struct CountingEmbedder(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::context::Embedder for CountingEmbedder {
+            fn model_id(&self) -> &str {
+                "counting"
+            }
+            async fn embed(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+                assert!(
+                    texts.len() <= 32,
+                    "one embed call carried {} texts",
+                    texts.len()
+                );
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(texts.iter().map(|_| vec![1.0f32, 0.0, 0.0]).collect())
+            }
+        }
+        // 40 TOOL exchanges → 80 groups + the goal, so an unbatched call
+        // would carry 81 texts and any call carrying > 32 texts is a defect.
+        // The cap is raised past the built-in 64 with the operator knob —
+        // the point of iter-2370's knob — which is the exact case a
+        // single-shot embed would have made pathological.
+        let mut msgs = Vec::new();
+        for i in 0..40 {
+            msgs.push(make_msg(Role::User, format!("question {i}")));
+            msgs.push(make_tool_use(&format!("call{i}")));
+            msgs.push(Message::tool(format!("call{i}"), format!("result {i}")));
+        }
+        let embedder = CountingEmbedder(std::sync::atomic::AtomicUsize::new(0));
+        {
+            let starts = tool_group_starts(&msgs);
+            let mut groups = 0usize;
+            let mut i = 0usize;
+            while i < starts.len() {
+                let mut end = i + 1;
+                while end < starts.len() && starts[end] == starts[i] {
+                    end += 1;
+                }
+                groups += 1;
+                i = end;
+            }
+            eprintln!("messages: {} groups: {}", msgs.len(), groups);
+        }
+        let cut = semantic_compaction_cutoff(&msgs, 100, Some(&embedder), 100).await;
+        assert!(cut.semantic, "the raised cap must reach the embedding path");
+        eprintln!(
+            "embed calls: {}",
+            embedder.0.load(std::sync::atomic::Ordering::Relaxed)
+        );
+        eprintln!("semantic: {} kept: {}", cut.semantic, cut.kept.len());
+        assert!(cut.kept.len() <= msgs.len());
+        assert!(
+            embedder.0.load(std::sync::atomic::Ordering::Relaxed) >= 2,
+            "80 groups in <=32-sized batches needs at least 2 calls"
         );
     }
 
