@@ -19,6 +19,13 @@ impl SettingsScreen {
             apply_error: None,
             persist_warning: None,
             output_style: "default".to_string(),
+            // The live cell, not the config: `tui_app` installs `[tui]
+            // bar_style` before `App::new` builds this screen, so this reads
+            // back what the status line is actually drawing. Reading
+            // `runtime_config()` instead would read `AppConfig::default()` —
+            // nothing in the tree ever loads a real config into it — and the
+            // row would claim `dot` while the bar drew powerline.
+            bar_style: crate::tui::status_line::style::style().key().to_string(),
             reduce_motion: false,
             show_cwd: true,
             show_git_branch: true,
@@ -68,6 +75,11 @@ impl SettingsScreen {
 
         // Wire real settings from snapshot
         self.apply_settings_from_snapshot();
+        // The bar style is not a `settings.json` key — the TOML owns it and
+        // the status line is its only reader — so the row re-reads the live
+        // cell rather than a snapshot that never had it. That also picks up a
+        // style chosen earlier in this session.
+        self.bar_style = crate::tui::status_line::style::style().key().to_string();
     }
 
     pub fn close(&mut self) {
@@ -118,13 +130,69 @@ impl SettingsScreen {
         self.edit_value.clear();
     }
 
+    /// Apply one bar-style value to the live status line, the config and the
+    /// TOML. The ONE writer for this setting, so the cycle row and the edit
+    /// commit cannot disagree about what "applied" means.
+    ///
+    /// An unknown value changes nothing and is reported: a settings row that
+    /// silently fell back to `dot` would leave the operator believing they had
+    /// chosen a style. The live value is set BEFORE the persist is attempted
+    /// and the persist is reported rather than gated, matching
+    /// `context_window`'s reasoning — a config with no file on disk still gets
+    /// the style for this session.
+    pub(super) fn apply_bar_style(
+        &mut self,
+        config: &mut AppConfig,
+        value: &str,
+    ) -> Result<(), String> {
+        let (style, known) = crate::tui::status_line::style::SeparatorStyle::parse(value);
+        if !known {
+            return Err(format!(
+                "Status bar style \"{value}\" - expected one of: {}",
+                crate::tui::status_line::style::SeparatorStyle::ALL
+                    .iter()
+                    .map(|s| s.key())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        config.tui.bar_style = style.key().to_string();
+        self.bar_style = style.key().to_string();
+        crate::tui::status_line::style::set_style(Some(style));
+        let persisted = config.config_path.as_ref().map_or_else(
+            || {
+                Err(operant_core::error::Error::Config(
+                    "the loaded config has no recorded source path".to_string(),
+                ))
+            },
+            |path| operant_core::config::persist_config_key_at(path, "tui.bar_style", style.key()),
+        );
+        if let Err(e) = persisted {
+            self.persist_warning = Some(format!(
+                "Status bar style \"{}\" - applied for this session, but not persisted: {e}",
+                style.key()
+            ));
+        }
+        Ok(())
+    }
+
     /// Apply all pending changes to settings and persist them.
     pub fn apply_and_save(&mut self, config: &mut AppConfig, settings: &mut Settings) {
         // (iter-1948) A new apply supersedes the previous verdict.
         self.apply_error = None;
         self.persist_warning = None;
         let mut unread: Vec<String> = Vec::new();
-        for (field, value) in &self.pending_changes {
+        // Cloned so the loop can call a `&mut self` writer (`apply_bar_style`)
+        // without fighting the borrow of `pending_changes`. Same shape as
+        // `theme_colors::apply_role_overrides`, which clones the override list
+        // for the identical reason.
+        let pending: Vec<(String, String)> = self
+            .pending_changes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (field, value) in &pending {
+            let value: String = value.clone();
             match field.as_str() {
                 "context_window" => {
                     if let Ok(n) = value.parse::<usize>() {
@@ -172,6 +240,17 @@ impl SettingsScreen {
                     } else {
                         Some(value.clone())
                     };
+                }
+                // (plan 2026-11-15 U1) The bar style is a `[tui]` key, not a
+                // `settings.json` one, so it takes the same shape as
+                // `context_window` above: apply live, then report the persist
+                // rather than gate on it — an environment with no config file
+                // still gets the style the operator picked.
+                "bar_style" => {
+                    if let Err(message) = self.apply_bar_style(config, &value) {
+                        unread.push(message);
+                        continue;
+                    }
                 }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
@@ -265,6 +344,24 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 options: vec!["default", "concise", "explanatory", "learning"],
             },
             value: screen.output_style.clone(),
+        },
+        // (plan 2026-11-15 U1) The options come from `SeparatorStyle::ALL`
+        // through `key()`, never a second literal list: `theme_screen.rs:85-95`
+        // records what a duplicated theme-name list costs — a row that renders
+        // the fallback for a name the picker never asked for. The value is
+        // normalized the same way the startup install normalizes it, so the
+        // row always shows one of these eight strings.
+        SettingsEntry {
+            key: "bar_style",
+            label: "Status Bar Style",
+            description: "Glyph drawn between status-line segments.",
+            kind: SettingKind::Enum {
+                options: crate::tui::status_line::style::SeparatorStyle::ALL
+                    .iter()
+                    .map(|style| style.key())
+                    .collect::<Vec<_>>(),
+            },
+            value: screen.bar_style.clone(),
         },
         SettingsEntry {
             key: "reduce_motion",

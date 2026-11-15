@@ -53,6 +53,14 @@ pub struct SettingsScreen {
 
     // ---- Real settings fields ----
     pub output_style: String,
+    /// Which glyph draws the boundary between two status-line segments.
+    ///
+    /// Mirrors `[tui] bar_style` rather than living in `settings.json`: the
+    /// status line is the bar's only consumer and the config key already owns
+    /// the value. Before this row existed that key's only control was a
+    /// hand-edited TOML line, so the operator had eight styles and no way to
+    /// reach one (plan 2026-11-15 U1).
+    pub bar_style: String,
     pub reduce_motion: bool,
     pub show_cwd: bool,
     pub show_git_branch: bool,

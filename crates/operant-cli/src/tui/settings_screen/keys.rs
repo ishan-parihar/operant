@@ -41,7 +41,7 @@ pub fn handle_settings_key(
     // Navigation mode
     match key.code {
         KeyCode::Enter => {
-            toggle_or_cycle_current(screen);
+            toggle_or_cycle_current(screen, config);
         }
         KeyCode::Esc => {
             if !screen.search_query.is_empty() {
@@ -94,7 +94,7 @@ pub(crate) fn select_next_visible(screen: &mut SettingsScreen) {
     screen.select_next(filtered.len());
 }
 
-fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
+fn toggle_or_cycle_current(screen: &mut SettingsScreen, config: &mut AppConfig) {
     let all = all_entries(screen);
     let filtered: Vec<_> = all
         .iter()
@@ -141,13 +141,23 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                 let next_idx = (current_idx + 1) % options.len();
                 let new_value = options[next_idx];
 
-                // (iter-1900) `output_format` was the other arm here until
-                // its dead row went; with one arm left, a match is a
-                // single-match and clippy says so.
-                if entry.key == "output_style" {
-                    screen.output_style = new_value.to_string();
-                    screen.settings_snapshot.config.output_style = Some(new_value.to_string());
-                    let _ = screen.settings_snapshot.save_sync();
+                // Applies on the cycle rather than on a restart, because
+                // `set_style` is the live cell the status line reads per
+                // frame (plan 2026-11-15 U1). An unknown value cannot reach
+                // here — the options come from `SeparatorStyle::ALL` — but the
+                // helper still reports rather than panicking.
+                match entry.key {
+                    "output_style" => {
+                        screen.output_style = new_value.to_string();
+                        screen.settings_snapshot.config.output_style = Some(new_value.to_string());
+                        let _ = screen.settings_snapshot.save_sync();
+                    }
+                    "bar_style" => {
+                        if let Err(message) = screen.apply_bar_style(config, new_value) {
+                            screen.apply_error = Some(message);
+                        }
+                    }
+                    _ => {}
                 }
             }
             SettingKind::Number => {
