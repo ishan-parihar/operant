@@ -3,7 +3,9 @@
 //!
 //! Geometry and interaction vendored from jcode's session picker
 //! (`jcode-tui/src/tui/session_picker.rs`): vertical constraint stack
-//! (search row, then `Min(8)`), horizontal 40/60 split (list | preview),
+//! (search row, then `Min(8)`), horizontal split — the LIST on the left is 45%
+//! (`SPLIT` in render.rs). jcode does the reverse: 60/40 with the preview on the
+//! left. Two facts, kept separate: what operant does, and what jcode does.
 //! tokenized search with per-char highlight, a filter-mode cycle, and
 //! cached-then-refresh loading over the plan-03 mpsc pattern. What was
 //! replaced for operant: jcode loads session FILES through its own `Session`
@@ -201,6 +203,17 @@ impl PreviewFilter {
             Self::Full => Self::UserAndTurnEnd,
             Self::UserAndTurnEnd => Self::UserOnly,
             Self::UserOnly => Self::Full,
+        }
+    }
+
+    /// The short label the preview header paints, so the active filter is
+    /// visible rather than remembered. Restored (2026-11-15, session-hub plan T2): a
+    /// peer removed this as dead code; it is now painted by the preview.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full session",
+            Self::UserOnly => "your prompts",
+            Self::UserAndTurnEnd => "prompts + replies",
         }
     }
 

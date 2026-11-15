@@ -72,18 +72,17 @@ pub(crate) const CHROME_ROWS: usize = 3;
 /// carried no border glyph, which is both wrong to look at and wrong to every
 /// border-parity analysis here).
 ///
-/// The column header comes last so it sits directly above the column it names.
-/// Codex's `agent_center` renders exactly this — a dim
-/// `Tasks | Status | Updated` line so the eye knows what the right-hand columns
-/// mean — and without it a row's status is "the dim bit at the end", which is
-/// not a column, it is a guess.
+/// The column header comes last so it sits directly above the columns it
+/// names — and names THE COLUMNS THE ROW CARRIES. It used to say `Tasks`, codex's
+/// header copied over a row layout that had since changed; iteration 2343 dropped
+/// the Task column and moved the row to `#{id}  {employee}  {status}  {updated}`.
+/// A header naming a column the row does not have, and neither of the two it
+/// does, is a header that makes the pane read broken rather than full.
 fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'static>> {
     let mut items = vec![
         ListItem::new(render_header(state, inner_width)),
         ListItem::new(render_tab_bar(state, inner_width)),
     ];
-    // Right-align the two columns whose values are right-aligned in the rows,
-    // so the header sits above its own data rather than floating at the left.
     // The column header labels sit at the SAME position the row's values do:
     // immediately after the identifiers, one two-space gap each. Padding them
     // to fixed column widths is what pushed a row's `$cost` off the 48-column
@@ -91,7 +90,13 @@ fn chrome_items(state: &SessionHubState, inner_width: u16) -> Vec<ListItem<'stat
     // below it is a net loss.
     items.push(ListItem::new(Line::from(vec![
         Span::styled(
-            " Tasks",
+            " #",
+            Style::default()
+                .fg(theme_colors::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  Employee",
             Style::default()
                 .fg(theme_colors::muted())
                 .add_modifier(Modifier::BOLD),
@@ -1518,6 +1523,13 @@ fn render_preview(
             // pinned; the rest scrolls.
             match &state.preview {
                 Some((id, msgs, hidden)) if id == &row.id && !msgs.is_empty() => {
+                    // 2a — the filter must be visible, not remembered. The
+                    // preview used to lose its tool calls silently and the
+                    // operator read the result as a broken transcript.
+                    lines.push(Line::from(Span::styled(
+                        format!("— preview: {} —", state.preview_filter.label()),
+                        Style::default().fg(theme_colors::muted()),
+                    )));
                     if *hidden > 0 {
                         lines.push(Line::from(Span::styled(
                             format!("— {hidden} earlier prompt(s) not shown (tail window) —"),
@@ -1644,11 +1656,14 @@ fn render_preview(
                 // — directly beneath a banner reading "tool calls hidden (t
                 // shows them)", so the pane contradicted itself about the same
                 // key at the same time.
-                if !state.preview_filter.shows_tool_calls() {
-                    "Enter switches to this session · t shows tool calls"
-                } else {
-                    "Enter switches to this session · t hides tool calls"
-                },
+                // The footer names the ACTIVE filter, not a boolean derived
+                // from one field: `shows_tool_calls` was false for two of the
+                // three states, so `UserOnly` and `UserAndTurnEnd` were
+                // indistinguishable on screen.
+                format!(
+                    "t cycles the preview ({}) · Enter switches",
+                    state.preview_filter.label()
+                ),
                 Style::default().fg(theme_colors::accent()),
             )));
             // The scroll bound must count WRAPPED rows, not source lines: the
