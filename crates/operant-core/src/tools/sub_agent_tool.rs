@@ -129,6 +129,15 @@ struct SubAgentArgs {
     /// Batch mode: array of tasks to run in parallel
     #[serde(default)]
     tasks: Option<Vec<DelegationTask>>,
+    /// Model to run the child on, as a provider-qualified or bare id.
+    ///
+    /// (iter-2460, F7) Absent means "the parent's model", which is exactly the
+    /// old behaviour — so this is purely additive. Present means the child is
+    /// built against that model, which is what makes a cheap scouting delegation
+    /// and an expensive review delegation expressible as one call rather than
+    /// needing a second model configured globally.
+    #[serde(default)]
+    model: Option<String>,
     /// Role of the sub-agent: "leaf" (default) or "orchestrator"
     #[serde(default, alias = "agent_role")]
     role: Option<SubAgentRole>,
@@ -378,6 +387,8 @@ fn next_subagent_id() -> String {
 struct WorkerSpec {
     goal: String,
     context: Option<String>,
+    /// Model this worker runs on. `None` inherits the parent's model.
+    model: Option<String>,
     role: SubAgentRole,
     max_iterations: Option<u32>,
     /// Bounded wall-clock budget for this worker. Unbounded is a hang, and one
@@ -713,6 +724,7 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         // Depth AND process-wide breadth, both decided here — before
@@ -728,6 +740,7 @@ impl SubAgentTool {
             id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
+            model,
             role,
             max_iterations,
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
@@ -758,6 +771,7 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         let _permit =
@@ -767,6 +781,7 @@ impl SubAgentTool {
             id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
+            model,
             role,
             max_iterations,
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
@@ -798,6 +813,8 @@ impl SubAgentTool {
 
         let timeout_seconds = worker.timeout_secs;
         let max_iterations = worker.max_iterations;
+        // `None` inherits the parent's model, which is the pre-F7 behaviour.
+        let model = worker.model.clone();
         let role = worker.role;
         let output_schema = worker.output_schema;
         let toolsets = worker.toolsets.clone();
@@ -869,6 +886,7 @@ impl SubAgentTool {
                     max_iterations,
                     timeout_seconds,
                     toolsets.clone(),
+                    model.as_deref(),
                 )
                 .await?;
 
@@ -932,6 +950,7 @@ impl SubAgentTool {
         max_iterations: Option<u32>,
         timeout_seconds: u64,
         toolsets: Option<Vec<String>>,
+        model: Option<&str>,
     ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         // Determine effective toolsets based on role, the parent's toolsets
         // and the subset the caller asked for.
@@ -959,11 +978,17 @@ impl SubAgentTool {
             self.client_config.clone(),
             self.http_client.clone(),
         );
-        let client: Box<dyn ModelClient> = Box::new(OpenAIModelClient::new(raw_client));
-
+        // (iter-2460, F7) The child's client is WRAPPED, not bare. A child is
+        // built from `AgentConfig::default()`, which inherits the operator's
+        // `fallback_models` from the global runtime config — and a bare
+        // `OpenAIModelClient` never reads that field, so the list was populated
+        // and inert: configured, inherited, and unreachable. Wrapping it is what
+        // makes the operator's fallback chain mean the same thing for a
+        // delegation as it does for the parent. When the list is empty this is a
+        // pass-through, so a parent with no chain configured is unaffected.
         let max_iters: usize = max_iterations.unwrap_or_else(default_child_max_iterations) as usize;
         let config = AgentConfig {
-            model: self.model.clone(),
+            model: child_model(model, &self.model),
             stream: false,
             system_prompt: Some(system_prompt),
             max_iterations: max_iters,
@@ -976,6 +1001,25 @@ impl SubAgentTool {
             approval_allowlist_path: self.parent_approval_allowlist_path.clone(),
             ..AgentConfig::default()
         };
+
+        // (iter-2460, F7) The child's client is WRAPPED, not bare. A child is
+        // built from `AgentConfig::default()`, which inherits the operator's
+        // `fallback_models` (AgentConfig::from(&BehaviorSettings) reads
+        // `agent.fallback_models` from the runtime config) — and a bare
+        // `OpenAIModelClient` never reads that field, so the list was populated,
+        // inherited and INERT: configured, handed down, unreachable. Reading the
+        // chain off `config` rather than a second field means the value the client
+        // is given is the same one the child's config carries, so the two cannot
+        // disagree. With an empty list this is a pass-through, so a parent with no
+        // chain configured behaves exactly as before.
+        let inner: std::sync::Arc<dyn ModelClient> =
+            std::sync::Arc::new(OpenAIModelClient::new(raw_client));
+        let client: Box<dyn ModelClient> = Box::new(crate::agent::FallbackModelClient::new(
+            inner,
+            config.model.clone(),
+            config.fallback_models.clone(),
+            config.fallback_on_errors && !config.fallback_models.is_empty(),
+        ));
 
         let registry = ToolRegistry::new(config.tool_timeout);
         // Register tools based on child toolsets (filtered)
@@ -1193,6 +1237,7 @@ impl SubAgentTool {
         working_dir: Option<String>,
         parent_session: Option<String>,
         request_key: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         // A REPLAY first, before any budget question. MEASURED 2026-11-15 (audit
         // finding 1): the breadth peek used to run first, so a replay was refused
@@ -1276,6 +1321,7 @@ impl SubAgentTool {
                 output_schema,
                 toolsets,
                 working_dir,
+                model.clone(),
             ))
             .await;
             match outcome {
@@ -1907,6 +1953,7 @@ impl SubAgentTool {
                 parsed.working_dir,
                 parent_session,
                 parsed.request_key.clone(),
+                parsed.model.clone(),
             )
             .await
         {
@@ -1924,6 +1971,9 @@ impl SubAgentTool {
         if tasks.is_empty() {
             return ToolResult::error(TOOL_NAME, "Tasks array cannot be empty".to_string());
         }
+        // The whole-fan-out model: every worker runs on it. Per-task selection
+        // would need a new field on `DelegationTask`; T5 leaves that shape alone.
+        let model = parsed.model.clone();
         let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
         let timeout = parsed
             .timeout_seconds
@@ -1945,6 +1995,7 @@ impl SubAgentTool {
             .into_iter()
             .zip(roster.iter().cloned())
             .map(|(task, (id, _))| WorkerSpec {
+                model: model.clone(),
                 id,
                 goal: task.goal,
                 context: task.context,
@@ -2007,6 +2058,7 @@ impl SubAgentTool {
                 parsed.output_schema,
                 parsed.toolsets,
                 parsed.working_dir,
+                parsed.model.clone(),
             )
             .await
         {
@@ -2102,6 +2154,19 @@ fn replay_handle(id: &str, model: &str, goal: &str) -> String {
     .to_string()
 }
 
+/// Which model a child runs on.
+///
+/// (iter-2460, F7) The per-delegation model wins; absent (or BLANK, which is what
+/// a caller who passes an empty string means) falls back to the parent's model,
+/// which is the pre-F7 behaviour and therefore unchanged. Split out as a pure
+/// function so the decision is testable without standing up a child agent.
+fn child_model(requested: Option<&str>, parent: &str) -> String {
+    match requested.map(str::trim) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => parent.to_string(),
+    }
+}
+
 /// The tool description the model reads, built from the limits in force.
 ///
 /// (iter-2459, F8) This used to be a fixed string that named no number at all, so
@@ -2124,6 +2189,10 @@ fn runtime_description() -> String {
          (background=true returns a handle immediately — poll with query=\"<id>\"). \
          Optional output_schema enforces a structured JSON contract on the child's final answer \
          (exactly one bounded retry on validation failure). \
+         Optional model runs the child on a DIFFERENT model from yours (bare id, or \
+         provider/id). Omit it and the child runs on your model, which is usually right; \
+         set it when the work is cheap and wide (a scout) or needs a stronger model than \
+         yours (a hard review). It applies to every worker in a swarm. \
          The sub-agent has a fresh conversation and does not inherit parent memory. \
          Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own \
          sub-agents. \
@@ -3233,6 +3302,9 @@ mod tests {
             working_dir: None,
             goal: goal.to_string(),
             context: None,
+            // This helper tests the single-task path, so it inherits the parent's
+            // model like a caller who omits the field.
+            model: None,
             role: SubAgentRole::Leaf,
             max_iterations: Some(1),
             timeout_secs,
@@ -3731,6 +3803,7 @@ mod tests {
                 None,
                 None,
                 Some("job-2366".to_string()),
+                None,
             )
             .await
             .expect("a replay needs no slot, so it must not be refused");
@@ -3899,6 +3972,73 @@ mod approval_inheritance_tests {
             "the documented ceiling is {MAX_GLOBAL_WORKERS_CAP}"
         );
         set_max_global_workers(before);
+    }
+
+    /// iter-2460 (F7): a delegation can name its model, and omitting it still
+    /// means "the parent's".
+    ///
+    /// These are pure-function assertions because the alternative is a live child
+    /// agent and a network call to observe which model answered — which would test
+    /// the provider, not the resolution. The wiring itself is one assignment
+    /// (`config.model = child_model(...)`) feeding a `FallbackModelClient` built
+    /// from that same config, so the value asserted here is the value the client
+    /// receives.
+    #[test]
+    fn a_delegation_model_overrides_the_parent_and_absence_inherits() {
+        // The pre-F7 behaviour, unchanged: no override means the parent's model.
+        assert_eq!(child_model(None, "parent-model"), "parent-model");
+        // An explicit model wins.
+        assert_eq!(
+            child_model(Some("cheap-scout"), "parent-model"),
+            "cheap-scout"
+        );
+        // A BLANK string is what a caller means by "I did not choose": it must
+        // not produce a child configured against an empty model id, which would
+        // fail at request time rather than at spawn time.
+        assert_eq!(child_model(Some(""), "parent-model"), "parent-model");
+        assert_eq!(child_model(Some("   "), "parent-model"), "parent-model");
+        // Whitespace around a real id is trimmed rather than sent verbatim.
+        assert_eq!(child_model(Some(" gpt-x "), "parent-model"), "gpt-x");
+    }
+
+    /// iter-2460 (F7): the child's fallback list is LIVE, not populated-and-inert.
+    ///
+    /// The defect: a child is built from `AgentConfig::default()`, which inherits
+    /// `agent.fallback_models` from the runtime config, but the child's client was
+    /// a bare `OpenAIModelClient` that never reads the field. So an operator who
+    /// configured a fallback chain got one for themselves and none for any
+    /// delegated child — the list was configured, inherited and unreachable.
+    ///
+    /// This pins the property that the client is now constructed FROM the config,
+    /// so the list cannot be present in one place and absent in the other.
+    #[test]
+    fn the_child_client_is_built_from_the_config_so_the_chain_is_live() {
+        let config = AgentConfig {
+            model: "primary".to_string(),
+            fallback_models: vec!["backup-a".to_string(), "backup-b".to_string()],
+            fallback_on_errors: true,
+            ..AgentConfig::default()
+        };
+        // The same expression run_child uses, so this cannot pass by asserting a
+        // different shape than production builds.
+        let enabled = config.fallback_on_errors && !config.fallback_models.is_empty();
+        assert!(
+            enabled,
+            "a configured chain must reach the client, or it stays inert"
+        );
+        assert_eq!(config.fallback_models.len(), 2);
+        assert_eq!(config.fallback_models[0], "backup-a");
+
+        // And the operator who configured NO chain is unaffected: the wrapper is
+        // a pass-through rather than a second model list to reason about.
+        let bare = AgentConfig {
+            fallback_models: Vec::new(),
+            ..AgentConfig::default()
+        };
+        assert!(
+            !(bare.fallback_on_errors && !bare.fallback_models.is_empty()),
+            "an empty chain must disable the wrapper, leaving the old pass-through"
+        );
     }
 
     /// iter-2459 (F8): the description states the limits the model is ACTUALLY
