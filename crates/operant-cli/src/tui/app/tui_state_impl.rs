@@ -591,6 +591,15 @@ impl TuiState for App {
         self.session_title.clone()
     }
 
+    /// The header's title: the operator's own name for this session, else the
+    /// first prompt (`session_label`). Deliberately NOT `session_display_name`
+    /// — that one is the "memorable short name" the client line and the frame
+    /// metrics read, and widening IT to the first-prompt fallback gave every
+    /// session with one user turn a `client: <first prompt>` row it never had.
+    fn session_header_title(&self) -> Option<String> {
+        self.session_label()
+    }
+
     fn session_hub_visible(&self) -> bool {
         // The one field the render layer needs from the hub, so the chrome can
         // stop reserving and painting the idle animation band while the hub

@@ -337,3 +337,44 @@ fn the_onboarding_screen_does_not_promise_numbered_selection() {
         "pressing 1 must type a 1 — there is no card selection to perform"
     );
 }
+
+/// The outer frame cache sits ABOVE the header, so its key must carry the
+/// session label: the header's first line IS the title, and a key without it
+/// serves the pre-rename frame on an exact hit.
+///
+/// MEASURED on the real binary before the fix: `/rename zzz-marker` set
+/// `session_title` (traced in the adapter's slash intercept) while the dumped
+/// frame still read `operant` — the header had been prepared once, and the
+/// exact-hit path returned that stale `Arc` because nothing in
+/// `FullPrepCacheKey` changed.
+#[test]
+fn the_frame_cache_key_carries_the_session_label() {
+    let base = FullPrepCacheKey {
+        width: 100,
+        height: 30,
+        diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        messages_version: 0,
+        diagram_mode: crate::tui::operant_app::config_shim::DiagramDisplayMode::None,
+        centered: false,
+        expanded_tool_id: None,
+        mermaid_aspect_bucket: None,
+        is_processing: false,
+        streaming_text_len: 0,
+        streaming_text_hash: 0,
+        batch_progress_hash: 0,
+        inline_images_signature: (0, 0),
+        inline_images_visible: false,
+        expanded_images_version: 0,
+        swarm_members_signature: 0,
+        session_label: None,
+    };
+    let renamed = FullPrepCacheKey {
+        session_label: Some("zzz-marker".to_string()),
+        ..base.clone()
+    };
+
+    assert_ne!(
+        base, renamed,
+        "a rename must change the frame-cache key, or the header keeps the old title"
+    );
+}

@@ -2936,6 +2936,348 @@ fn seed_composer_snapshot(app: &mut App, input: &str, line_width: usize) {
 }
 
 #[test]
+fn the_rename_command_dispatch_sets_the_session_title() {
+    // Exactly what the adapter's slash interception calls: the parsed
+    // (cmd, args) pair. Proves the arm end to end without the frame loop.
+    let mut app = make_app();
+    let handled = app.handle_tui_command("rename", "my-launch-notes");
+    assert!(handled, "/rename must be handled locally, not forwarded");
+    assert_eq!(
+        app.session_title.as_deref(),
+        Some("my-launch-notes"),
+        "the dispatch must set the title the header reads"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Renamed to: my-launch-notes"),
+        "the operator is told the new name"
+    );
+}
+
+#[test]
+fn the_typed_rename_reaches_the_command_through_the_submit_contract() {
+    // The composer's Enter only REPORTS a submit; the run loop (adapter) is
+    // what parses it and dispatches. This pins the seam between them: the
+    // typed text must survive the key path intact, and the dispatch of that
+    // exact text must name the session.
+    let mut app = make_app();
+
+    for c in "/rename my-launch-notes".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let submitted = app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(submitted, "Enter on an exact command reports a submit");
+    let text = app.take_input();
+    assert_eq!(text, "/rename my-launch-notes", "the draft survives intact");
+
+    let (cmd, args) = crate::tui::input::parse_slash_command(&text);
+    assert!(
+        app.handle_tui_command(cmd, args),
+        "/rename is handled locally"
+    );
+    assert_eq!(app.session_title.as_deref(), Some("my-launch-notes"));
+    assert_eq!(
+        app.session_header_title().as_deref(),
+        Some("my-launch-notes"),
+        "the header's title accessor must read the renamed title"
+    );
+    assert_eq!(
+        app.session_display_name().as_deref(),
+        Some("my-launch-notes"),
+        "the display name reads the same title once one is set"
+    );
+}
+
+#[test]
+fn an_untitled_session_keeps_the_display_name_empty_but_titles_from_the_first_prompt() {
+    // The two accessors are deliberately different: widening the display name
+    // to the first-prompt fallback gave every session with one user turn a
+    // `client: <first prompt>` row it never had.
+    let mut app = make_app();
+    assert_eq!(app.session_display_name(), None);
+    assert_eq!(app.session_header_title(), None, "no title and no turns");
+
+    app.messages.push(Message {
+        role: Role::User,
+        content: MessageContent::Text("fix the importer".to_string()),
+    });
+    assert_eq!(
+        app.session_display_name(),
+        None,
+        "the display name stays empty without an explicit title"
+    );
+    assert_eq!(
+        app.session_header_title().as_deref(),
+        Some("fix the importer"),
+        "the header falls back to the first prompt"
+    );
+}
+
+#[test]
+fn the_session_picker_renames_the_selected_row_inline() {
+    // Stage F: `n` on a row opens the inline rename editor; Enter writes THAT
+    // session's title to the store (and the live header when it is this
+    // process's own row). End-to-end: schema seed, keystrokes, DB read-back.
+    use operant_core::session::listing::SessionEntryV2;
+    use operant_core::session::listing::{RowKind, RowStatus};
+
+    let db_path = std::env::temp_dir().join(format!(
+        "operant-rename-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let db = operant_core::database::Database::init(db_path.clone()).expect("test database");
+    db.save_session(
+        "sess_rename_me",
+        Some("old work"),
+        "test",
+        "2026-11-15",
+        "2026-11-15",
+    )
+    .expect("seed the session row");
+    let mut app = make_app();
+    app.config.database_path = db_path.clone();
+    app.session_list_pending = false;
+    app.session_hub.open(None);
+    app.session_hub.replace_rows(vec![SessionEntryV2 {
+        id: "sess_rename_me".to_string(),
+        parent_id: None,
+        title: Some("old work".to_string()),
+        updated_at: chrono::Utc::now(),
+        started_at: None,
+        ended_at: None,
+        employee_id: None,
+        source: "local".to_string(),
+        message_count: 3,
+        cost_usd: 0.0,
+        tokens: 0,
+        cwd: None,
+        status: RowStatus::Idle,
+        kind: RowKind::Session,
+    }]);
+
+    // Open the editor on the row.
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    assert!(app.session_hub.rename_active, "n opens the inline editor");
+    assert_eq!(
+        app.session_hub.rename_draft, "old work",
+        "the draft is pre-filled with the row's title"
+    );
+    assert_eq!(
+        app.session_hub.rename_target_id.as_deref(),
+        Some("sess_rename_me"),
+        "the write target is captured, so a mid-edit reload cannot retarget"
+    );
+
+    // Replace the title: erase 8 chars ("old work") then type the new one.
+    for _ in 0.."old work".len() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    }
+    for c in "new work".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let after = operant_core::database::Database::init(db_path.clone())
+        .expect("reopen the database")
+        .list_sessions_rich(10)
+        .expect("list the sessions");
+    let row = after
+        .iter()
+        .find(|r| r.id == "sess_rename_me")
+        .expect("the seeded session");
+    assert_eq!(
+        row.title.as_deref(),
+        Some("new work"),
+        "Enter writes the trimmed draft to the store"
+    );
+    assert!(!app.session_hub.rename_active, "the editor closes on Enter");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn n_cancels_a_pending_archive_instead_of_starting_a_rename() {
+    // The hub uses `n` for two things: "no" on an archive confirm, and the
+    // rename editor. An unconditional rename arm shadowed the archive's `n`,
+    // so pressing n on "Archive session X? (y/n)" opened a rename editor and
+    // left the archive pending forever.
+    let mut app = make_app();
+    app.session_hub.visible = true;
+    app.session_list_pending = false;
+    app.session_hub.open(None);
+    app.session_hub.replace_rows(hub_rows(3));
+    app.session_hub.selected = 0;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    assert!(
+        app.session_hub.pending_archive.is_some(),
+        "`a` on a row arms the archive confirm"
+    );
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    assert!(
+        app.session_hub.pending_archive.is_none(),
+        "`n` must CANCEL the pending archive"
+    );
+    assert!(
+        !app.session_hub.rename_active,
+        "`n` on an archive confirm must not open the rename editor"
+    );
+}
+
+#[test]
+fn the_session_picker_refuses_empty_titles_and_subagent_rows() {
+    // Esc discards without writing; a subagent row carries a delegation
+    // handle, not a sessions.id, so `n` cannot rename it.
+    use operant_core::session::listing::SessionEntryV2;
+    use operant_core::session::listing::{RowKind, RowStatus};
+
+    let mut app = make_app();
+    app.session_list_pending = false;
+    app.session_hub.open(None);
+    let subagent_row = SessionEntryV2 {
+        id: "dlg-123".to_string(),
+        parent_id: None,
+        title: None,
+        updated_at: chrono::Utc::now(),
+        started_at: None,
+        ended_at: None,
+        employee_id: None,
+        source: "local".to_string(),
+        message_count: 0,
+        cost_usd: 0.0,
+        tokens: 0,
+        cwd: None,
+        status: RowStatus::Live,
+        kind: RowKind::Subagent {
+            goal: "audit the browser stack".to_string(),
+            model: "large-stack".to_string(),
+            dispatch_time: 0,
+            status: "PENDING",
+        },
+    };
+    app.session_hub.replace_rows(vec![subagent_row.clone()]);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    assert!(
+        !app.session_hub.rename_active,
+        "a subagent row cannot be renamed"
+    );
+
+    // An empty draft on a plain row: Enter does not write an empty title.
+    app.session_hub.replace_rows(vec![SessionEntryV2 {
+        kind: RowKind::Session,
+        id: "sess_empty".to_string(),
+        title: None,
+        status: RowStatus::Idle,
+        ..subagent_row
+    }]);
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    assert!(app.session_hub.rename_active);
+    assert_eq!(
+        app.session_hub.rename_draft, "",
+        "None seeds an empty draft"
+    );
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.session_hub.rename_active, "Enter closes the editor");
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("empty"),
+        "the operator is told why nothing was saved, got: {:?}",
+        app.status_message
+    );
+}
+
+#[test]
+fn persistent_header_first_line_carries_the_session_title_when_renamed() {
+    // Plan 2026-11-15: the session title IS the header. A fresh launch with
+    // no title falls back to the product name; a renamed session names itself
+    // on line 1 — a day later, "operant" alone tells the operator nothing.
+    let mut app = make_app();
+    app.session_title = Some("invoice work".to_string());
+
+    let (persistent, _) = crate::tui::operant_ui::header::build_header_sections(&app, 80);
+    let first = persistent
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .find(|l| !l.trim().is_empty())
+        .expect("a non-empty persistent header");
+
+    assert!(
+        first.starts_with("invoice work"),
+        "the first header line must carry the session title, got: {first:?}"
+    );
+    assert!(
+        !first.starts_with("operant"),
+        "the product name must not shadow the title, got: {first:?}"
+    );
+}
+
+#[test]
+fn persistent_header_title_too_wide_is_truncated_not_clipped() {
+    // A title wider than the pane must not survive untouched to the pane
+    // edge — it is truncated with an ellipsis, not cut mid-cell.
+    let mut app = make_app();
+    app.session_title = Some("a".repeat(300));
+
+    let (persistent, _) = crate::tui::operant_ui::header::build_header_sections(&app, 20);
+    let first = persistent
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .find(|l| !l.trim().is_empty())
+        .expect("a non-empty persistent header");
+
+    assert!(
+        first.chars().count() <= 20,
+        "the truncated first line must fit the 20-column width, got: {first:?}"
+    );
+    assert!(
+        first.ends_with('…'),
+        "a truncated title ends with an ellipsis, got: {first:?}"
+    );
+}
+
+#[test]
+fn persistent_header_falls_back_to_product_name_when_untitled() {
+    // No title set (and no turns, so no first prompt either): line 1 keeps
+    // the product name rather than rendering an empty head.
+    let app = make_app();
+    assert!(app.session_title.is_none());
+
+    let (persistent, _) = crate::tui::operant_ui::header::build_header_sections(&app, 80);
+    let first = persistent
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .find(|l| !l.trim().is_empty())
+        .expect("a non-empty persistent header");
+
+    assert!(
+        first.starts_with("operant"),
+        "an untitled fresh launch keeps the product name, got: {first:?}"
+    );
+}
+
+#[test]
 fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
     let mut app = make_app();
     let input = "0123456789abcdefghijklmnopqrst";
@@ -2981,15 +3323,20 @@ fn a_click_in_the_composer_places_the_caret_at_the_clicked_character() {
         "a click past the last row's text lands at the draft's end"
     );
 
-    // A click OUTSIDE the text rect (column 79, past its right edge) resolves
-    // to no point at all, so the caret does not move. This is the same
-    // "outside the pane" contract the transcript's hit test honours.
+    // A click OUTSIDE the text rect resolves to no point at all, so the
+    // caret does not move. This is the same "outside the pane" contract the
+    // transcript's hit test honours.
+    //
+    // The text rect fills the band (the gutter is its only horizontal inset;
+    // there is no right border to clear), so the free cells are the 2-column
+    // gutter the glyph occupies. Column 0 is outside; column 79 is the LAST
+    // text column and legitimately lands at the end of row 0's text.
     app.place_caret_in_input(5, 1);
     assert_eq!(app.prompt_input.cursor, 3, "the caret is at char 3");
-    app.place_caret_in_input(79, 1);
+    app.place_caret_in_input(0, 1);
     assert_eq!(
         app.prompt_input.cursor, 3,
-        "a click outside the text rect must not move the caret"
+        "a click in the gutter must not move the caret"
     );
 }
 
@@ -10004,7 +10351,11 @@ fn highlight_covers_only_the_text_a_copy_carries() {
             .map(|x| plain[(x, y)].symbol().to_string())
             .collect()
     };
-    let prompt_lit = highlighted(row_of("PROMPTTEXT"));
+    // The header's first line IS the session title, which falls back to the
+    // first prompt — so a bare "PROMPTTEXT" matches the HEADER row too. The
+    // transcript row is the one carrying the gutter (`1›`), which is what a
+    // selection actually covers.
+    let prompt_lit = highlighted(row_of("1› PROMPTTEXT"));
     assert!(prompt_lit.contains("PROMPTTEXT"), "{prompt_lit:?}");
     assert!(
         !prompt_lit.contains('›'),

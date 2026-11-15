@@ -594,6 +594,16 @@ pub struct SessionHubState {
     /// Stage E archive confirm: `Some(id)` while the operator has pressed `a`
     /// on a row and is being asked to confirm before it is parked.
     pub pending_archive: Option<String>,
+    /// Stage F (2026-11-15): inline rename. `n` on the selected row opens the
+    /// editor on that row; Enter writes the new title for THAT session
+    /// (the hub's own inline arm for the operation `/rename` performs on the
+    /// open session). Esc discards. The target's id is captured at open so a
+    /// background page reload mid-edit cannot retarget the write.
+    pub rename_active: bool,
+    /// The draft being edited, pre-filled with the selected row's title.
+    pub rename_draft: String,
+    /// The row the draft will be written to. `None` between sessions.
+    pub rename_target_id: Option<String>,
     /// The id of the session THIS process is streaming into, fed by the App
     /// from the agent's own session handle.
     ///
@@ -724,6 +734,9 @@ impl SessionHubState {
             focused_subagent: None,
             branch_root: None,
             pending_archive: None,
+            rename_active: false,
+            rename_draft: String::new(),
+            rename_target_id: None,
             live_session_id: None,
             employee_filter: None,
             preview_filter: PreviewFilter::DEFAULT,
@@ -764,6 +777,9 @@ impl SessionHubState {
         self.focus = PaneFocus::Sessions;
         self.focused_subagent = None;
         self.pending_archive = None;
+        self.rename_active = false;
+        self.rename_draft.clear();
+        self.rename_target_id = None;
         self.armed_close_tap = armed_close_tap;
         self.rebuild_visible();
     }
@@ -810,6 +826,9 @@ impl SessionHubState {
         self.visible = false;
         self.focused_subagent = None;
         self.armed_close_tap = None;
+        self.rename_active = false;
+        self.rename_draft.clear();
+        self.rename_target_id = None;
     }
 
     /// Push the current delegation-registry state into the rows ALREADY in

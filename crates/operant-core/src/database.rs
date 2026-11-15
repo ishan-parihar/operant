@@ -3257,6 +3257,25 @@ impl Database {
         Ok(())
     }
 
+    /// Rename WITHOUT touching `ended_at`. The hub's inline rename arm uses
+    /// this: `updated_at` is `COALESCE(ended_at, started_at)`, so a rename that
+    /// stamped `ended_at = now` would shuffle every renamed historical session
+    /// to the top of the recency ordering and mark a session that has not
+    /// ended as ended. `/rename`'s own behaviour is unchanged.
+    pub fn update_session_title_preserving_timestamps(
+        &self,
+        session_id: &str,
+        title: &str,
+    ) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET title = ?1 WHERE id = ?2",
+            params![title, session_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to update session title: {}", e)))?;
+        Ok(())
+    }
+
     /// Generate a deterministic session title from the first user message
     /// (hermes `title_generator.py` parity — no LLM round-trip). Strips
     /// markdown/code-fence noise, collapses whitespace, truncates to a

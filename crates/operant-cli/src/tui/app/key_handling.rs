@@ -683,6 +683,77 @@ impl App {
                 self.session_hub.pending_archive = None;
                 self.set_status_notice("Archive cancelled.".to_string());
             }
+            // Inline rename (Stage F): while the editor is open it swallows
+            // plain keys, exactly like the search editor. Esc discards,
+            // Enter writes THAT row's title — the same operation the `/rename`
+            // slash command performs on the open session, aimed at the row
+            // the operator is on.
+            if self.session_hub.rename_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.session_hub.rename_active = false;
+                        self.session_hub.rename_draft.clear();
+                        self.session_hub.rename_target_id = None;
+                        self.set_status_notice("Rename discarded.".to_string());
+                    }
+                    KeyCode::Enter => {
+                        let target = self.session_hub.rename_target_id.take();
+                        let draft = self.session_hub.rename_draft.trim().to_string();
+                        self.session_hub.rename_active = false;
+                        self.session_hub.rename_draft.clear();
+                        match target {
+                            Some(id) if !draft.is_empty() => {
+                                let db_path = self.config.database_path.clone();
+                                let db_result = (|| -> anyhow::Result<()> {
+                                    let db = operant_core::database::Database::init(db_path)?;
+                                    // Preserves `ended_at`: `updated_at` is
+                                    // COALESCE(ended_at, started_at), so a
+                                    // rename must not stamp the recency order
+                                    // or mark a session ended.
+                                    db.update_session_title_preserving_timestamps(&id, &draft)?;
+                                    Ok(())
+                                })();
+                                // The header reads `session_title` for this
+                                // process's own session; keep it in step so
+                                // the line 1 moves live.
+                                if self.current_session.as_deref() == Some(id.as_str()) {
+                                    self.session_title = Some(draft.clone());
+                                }
+                                match db_result {
+                                    Ok(()) => {
+                                        // Re-list so the row and the count read
+                                        // the store, same as the archive arm.
+                                        self.session_list_pending = true;
+                                        self.set_status_notice(format!("Renamed to: {draft}"));
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "could not save the renamed title");
+                                        self.set_status_notice(
+                                            "Could not save the renamed title.".to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                self.set_status_notice(
+                                    "Cannot rename to an empty title.".to_string(),
+                                );
+                            }
+                            None => {}
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.session_hub.rename_draft.pop();
+                    }
+                    // Titles are short labels: cap the draft, like the archive
+                    // confirm's honest (not unbounded) input.
+                    KeyCode::Char(c) if self.session_hub.rename_draft.chars().count() < 100 => {
+                        self.session_hub.rename_draft.push(c);
+                    }
+                    _ => {}
+                }
+                return false;
+            }
             // Search-edit mode swallows plain keys first (jcode's
             // search_active).
             if self.session_hub.search_active {
@@ -742,6 +813,34 @@ impl App {
                 }
                 KeyCode::Char('/') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.session_hub.search_active = true;
+                }
+                // Stage F (2026-11-15): `n` opens the inline rename editor on
+                // the selected row — the picker's own arm for what `/rename`
+                // does to the open session. Subagent rows carry a delegation
+                // handle, not a `sessions.id`, so they cannot be renamed.
+                //
+                // NOT while an archive confirm is pending: there `n` is the
+                // operator's "no" (the arm below). An unconditional `n` here
+                // shadowed it — clippy's unreachable-pattern warning is what
+                // pointed at the conflict.
+                KeyCode::Char('n') if self.session_hub.pending_archive.is_none() => {
+                    let seed = self
+                        .session_hub
+                        .selected_row()
+                        .map(|row| (row.kind.clone(), row.title.clone(), row.id.clone()));
+                    match seed {
+                        Some((operant_core::session::listing::RowKind::Subagent { .. }, _, _)) => {
+                            self.set_status_notice(
+                                "Cannot rename a live subagent row.".to_string(),
+                            );
+                        }
+                        Some((_, title, id)) => {
+                            self.session_hub.rename_active = true;
+                            self.session_hub.rename_draft = title.unwrap_or_default();
+                            self.session_hub.rename_target_id = Some(id);
+                        }
+                        None => {}
+                    }
                 }
                 // Reload the preview: the recovery arm for the state the
                 // render path names explicitly ("No transcript cached —

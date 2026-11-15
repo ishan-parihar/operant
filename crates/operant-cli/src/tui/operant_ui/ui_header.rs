@@ -32,6 +32,42 @@ fn unseen_changelog_entries() -> Vec<String> {
     get_unseen_changelog_entries().clone()
 }
 
+/// Characters the session label may occupy on the header's first line:
+/// what is left of the width once the trailing badges are appended.
+///
+/// The rendered tail is `" · " + items.join(" · ")`, i.e. `3 + sum + 3*(n-1)`
+/// = `sum + 3n`, plus one column for the `" self-dev"` badge when this is a
+/// canary build. Anything wider than that leaves the LABEL no room, so the
+/// title takes the remainder — and never less than five columns, because a
+/// title squeezed to one or two is worse than one cut with an ellipsis.
+fn head_title_width(status_items: &[&str], w: usize, is_canary: bool) -> usize {
+    let badges: usize = status_items.iter().map(|i| i.chars().count()).sum();
+    let tail = if status_items.is_empty() {
+        0
+    } else {
+        badges + status_items.len() * 3
+    };
+    let self_dev = if is_canary {
+        " self-dev".chars().count()
+    } else {
+        0
+    };
+    w.saturating_sub(tail + self_dev).max(5)
+}
+
+/// Truncate to `max` chars; appends one ellipsis when the text did not fit.
+fn truncate_to_width(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let mut out: String = s.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
 pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -546,6 +582,12 @@ fn build_persistent_header_with_auth(
 ) -> Vec<Line<'static>> {
     let model = app.provider_model();
     let session_name = app.session_display_name().unwrap_or_default();
+    // The TITLE line uses the header title (title, else first prompt); the
+    // `client:` line below keeps the raw display name, so widening one does
+    // not invent a client row for the other.
+    let session_title = app.session_header_title().unwrap_or_default();
+    let session_title = session_title.trim().to_string();
+    let session_name = session_name.trim().to_string();
     let server_name = app.server_display_name();
     // The client line is identified by its session name, so show that name's
     // icon (e.g. "ram" -> 🐏). Previously a remote http/ws connection icon
@@ -612,11 +654,25 @@ fn build_persistent_header_with_auth(
         .as_deref()
         .map(|version| header_version_label(version, include_hash));
 
-    // First line: `jcode` (+ `self-dev` when running a dev/canary build),
-    // followed by any remaining status badges rendered dimly.
+    // First line: the SESSION TITLE (plan 2026-11-15 follow-up). A session
+    // the operator renamed names itself at the top of the screen; a session
+    // with no title falls back to the first prompt (session_label), so the
+    // header always says WHICH session this is, never only WHICH binary.
+    // `operant` remains the fallback for a fresh launch with no turns yet.
+    // A label wider than the pane is truncated with an ellipsis rather than
+    // clipped mid-word at the border — the same rule the composer's textarea
+    // rect learned at 28 columns.
     {
+        let head = if session_title.is_empty() {
+            "operant".to_string()
+        } else {
+            truncate_to_width(
+                &session_title,
+                head_title_width(&status_items, w, is_canary),
+            )
+        };
         let mut spans = vec![Span::styled(
-            "operant".to_string(),
+            head,
             Style::default().fg(header_name_color()).bold(),
         )];
         if is_canary {

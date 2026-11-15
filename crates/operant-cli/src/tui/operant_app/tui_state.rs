@@ -345,6 +345,12 @@ pub trait TuiState {
     fn current_session_id(&self) -> Option<String>;
     /// Session display name (memorable short name like "fox" or "oak")
     fn session_display_name(&self) -> Option<String>;
+    /// The title the HEADER's first line shows: the operator's own name for
+    /// this session, else the first prompt. Distinct from
+    /// [`Self::session_display_name`] on purpose — see `App`'s impl.
+    fn session_header_title(&self) -> Option<String> {
+        self.session_display_name()
+    }
     /// Whether the unified session hub is open (the full-frame session picker
     /// that `/session`, `/resume` and the `←←` gesture route to).
     ///

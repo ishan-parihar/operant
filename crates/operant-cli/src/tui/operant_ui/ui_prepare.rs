@@ -786,6 +786,7 @@ pub(crate) fn prepare_messages(
         inline_images_visible: app.inline_images_visible(),
         expanded_images_version: app.expanded_images_version(),
         swarm_members_signature: swarm_members_signature(&app.swarm_members_for_transcript()),
+        session_label: app.session_display_name(),
     };
 
     super::note_full_prep_request();

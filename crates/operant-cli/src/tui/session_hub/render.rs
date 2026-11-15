@@ -474,9 +474,13 @@ pub fn render_session_hub(
     area: ratatui::layout::Rect,
     ctx: &mut crate::tui::render::FrameCtx,
 ) {
+    // The rename prompt and the search prompt share this one row — the two
+    // are never live at once, and the pane has no second row to give.
+    let has_rename = state.rename_active;
     let has_search = state.search_active || !state.search_query.is_empty();
+    let has_prompt = has_rename || has_search;
     let mut v = Vec::new();
-    if has_search {
+    if has_prompt {
         v.push(Constraint::Length(1));
     }
     v.push(Constraint::Min(8));
@@ -485,32 +489,45 @@ pub fn render_session_hub(
         .constraints(v)
         .split(area);
     let mut idx = 0;
-    if has_search {
-        let search_area = chunks[idx];
+    if has_prompt {
+        let prompt_area = chunks[idx];
         idx += 1;
-        let cursor = if state.search_active { "▎" } else { "" };
+        // One row, two shapes. The rename editor and the search box are never
+        // live at once, and the pane has no second row to give — so the only
+        // difference is the icon, the text and the trailing hint.
+        let (icon, text, hint) = if has_rename {
+            // Show the TAIL of the draft: the caret sits at the end, which is
+            // the one part the operator is looking at.
+            const HINT: &str = "  Enter saves · Esc discards";
+            let room = (prompt_area.width as usize)
+                .saturating_sub(" ✎ Rename: ".chars().count() + HINT.chars().count());
+            let draft: Vec<char> = state.rename_draft.chars().collect();
+            let shown: String = if draft.len() > room && room > 0 {
+                draft[draft.len() - (room - 1)..].iter().collect()
+            } else {
+                state.rename_draft.clone()
+            };
+            (" ✎ Rename: ", shown, HINT)
+        } else {
+            let cursor = if state.search_active { "▎" } else { "" };
+            let hint = if state.search_active {
+                "  Esc to clear"
+            } else {
+                "  / to edit"
+            };
+            (" 🔍 ", format!("{}{}", state.search_query, cursor), hint)
+        };
         let line = Line::from(vec![
-            Span::styled(" 🔍 ", Style::default().fg(theme_colors::accent())),
+            Span::styled(icon, Style::default().fg(theme_colors::accent())),
             Span::styled(
-                state.search_query.clone(),
+                text,
                 Style::default()
                     .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                cursor.to_string(),
-                Style::default().fg(theme_colors::accent()),
-            ),
-            Span::styled(
-                if state.search_active {
-                    "  Esc to clear"
-                } else {
-                    "  / to edit"
-                },
-                Style::default().fg(theme_colors::muted()),
-            ),
+            Span::styled(hint, Style::default().fg(theme_colors::muted())),
         ]);
-        frame.render_widget(Paragraph::new(line), search_area);
+        frame.render_widget(Paragraph::new(line), prompt_area);
     }
     let body = chunks[idx];
     let cols = Layout::default()
@@ -542,7 +559,6 @@ fn render_list(frame: &mut Frame, state: &SessionHubState, area: ratatui::layout
 /// g`: one line that answers "where am I" AND "what changes the organisation".
 /// Stage C adds the `Group:` clause; the span vector is shaped for it now so
 /// adding it will not restructure this function.
-
 fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // (2026-11-14, audit finding 2) The header is BUILT under a budget.
     //
@@ -906,7 +922,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // toggle, and this line named neither. It is the ONE place the
                 // hub tells the operator what a key does, so it names all
                 // three.
-                "     s cycles status · e cycles employee · t hides tool calls · Esc closes",
+                "     s cycles status · e cycles employee · t hides tool calls · n renames · Esc closes",
                 Style::default().fg(theme_colors::muted()),
             ))),
         ]

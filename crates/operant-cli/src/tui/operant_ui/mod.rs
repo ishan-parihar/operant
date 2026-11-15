@@ -807,6 +807,13 @@ struct FullPrepCacheKey {
     expanded_images_version: u64,
     /// Signature of live swarm member cards embedded beneath spawn tool calls.
     swarm_members_signature: u64,
+    /// The session's label. The HEADER is part of the prepared frame, and the
+    /// header's first line IS the session title, so a rename must invalidate
+    /// this key or the outer cache serves the pre-rename frame — measured on
+    /// the real binary: `/rename zzz-marker` set `session_title` (traced in
+    /// the adapter) while the dumped frame still read `operant`, because this
+    /// key did not change and the exact-hit path returned the stale header.
+    session_label: Option<String>,
 }
 
 #[derive(Clone)]
