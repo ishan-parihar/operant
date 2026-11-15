@@ -351,6 +351,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "true",
         "Whether the turn's four exclusive spans are aggregated and emitted on the post-turn `TurnEnd` seam (deepen row 3 / RT-209). Default on. Reachable from `operant.toml` as `[agent] show_turn_attribution`. iter-1631 added the field to `AgentConfig` and filled it with a literal `true`, which made the kill switch unreachable from configuration: every construction site set true, so no operator could turn it off. A flag that cannot be set is not a kill switch, it is documentation.",
     ),
+    (
+        "agent.loop_detection_enabled",
+        "true",
+        "Whether core's cross-iteration repetition circuit breaker (an identical tool-call streak, R35) and its warning nudge are active. Default on. Reachable from `operant.toml` as `[agent] loop_detection_enabled`. iter-2462 threaded it: `AgentConfig::from(&BehaviorSettings)` filled it with a literal `true` while the field's own doc claimed facades thread the operator's switch — the identical defect iter-1631 fixed for show_turn_attribution, one line above, left next to the comment describing that fix. Set false when a workflow legitimately repeats the same call.",
+    ),
     ("agent.stream", "true", "<no note>"),
     ("agent.system_prompt", "None", "<no note>"),
     ("agent.tool_progress", "ToolProgressMode::Auto", "<no note>"),
@@ -2008,6 +2013,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "agent.loop_detection_enabled",
+        widget: Widget::Bool,
+        live: true,
+    },
+    SettingRow {
         key: "agent.stream",
         widget: Widget::Bool,
         live: true,
@@ -3648,6 +3658,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "agent.session_reset",
     "agent.show_reasoning",
     "agent.show_turn_attribution",
+    "agent.loop_detection_enabled",
     "agent.stream",
     "agent.system_prompt",
     "agent.tool_progress",

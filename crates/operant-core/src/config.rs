@@ -764,6 +764,18 @@ pub struct BehaviorSettings {
     /// cannot be set is not a kill switch, it is documentation.
     #[serde(default = "default_true")]
     pub show_turn_attribution: bool,
+    /// Whether core's cross-iteration repetition circuit breaker (an identical
+    /// tool-call streak, R35) and its warning nudge are active.
+    ///
+    /// Reachable from `operant.toml` as `[agent] loop_detection_enabled`.
+    /// (iter-2462) `AgentConfig::loop_detection_enabled` documented itself as
+    /// "threaded from settings" while `AgentConfig::from(&BehaviorSettings)`
+    /// filled it with a literal `true` — the identical defect iter-1631 fixed for
+    /// `show_turn_attribution` directly above, left in place next to the comment
+    /// describing that fix. A flag that cannot be set is not a kill switch, it is
+    /// documentation. Default ON, so an existing config behaves as before.
+    #[serde(default = "default_true")]
+    pub loop_detection_enabled: bool,
     pub tool_progress: ToolProgressMode,
     /// Accepted but NOT ENFORCED (RT-263): the reset policy no code path
     /// reads — nothing resets a conversation when the system prompt or the
@@ -1231,6 +1243,7 @@ impl Default for BehaviorSettings {
             show_reasoning: true,
             max_trajectories: 0,
             show_turn_attribution: true,
+            loop_detection_enabled: true,
             reasoning_effort: String::new(),
             reasoning_effort_param: ReasoningEffortParam::Auto,
             tool_progress: ToolProgressMode::Auto,
@@ -4334,6 +4347,57 @@ mod rt418_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// iter-2462: the loop-detection kill switch is REACHABLE.
+    ///
+    /// The defect: `AgentConfig::from(&BehaviorSettings)` filled
+    /// `loop_detection_enabled` with a literal `true` while the field's own doc
+    /// claimed facades thread the operator's switch — the identical bug iter-1631
+    /// fixed for `show_turn_attribution`, one line above it, left sitting next to
+    /// the comment describing that fix. Every construction site set true, so no
+    /// operator could turn the breaker off.
+    ///
+    /// This asserts the property that matters: the value comes from the settings,
+    /// in BOTH directions, and defaults to ON so existing configs are unchanged.
+    #[test]
+    fn loop_detection_is_threaded_from_settings_not_hardcoded() {
+        // The default must stay ON: an operator who never set the key keeps the
+        // behaviour they had.
+        assert!(
+            BehaviorSettings::default().loop_detection_enabled,
+            "loop detection must default ON"
+        );
+
+        // OFF must reach the constructed config.
+        let off = BehaviorSettings {
+            loop_detection_enabled: false,
+            ..BehaviorSettings::default()
+        };
+        assert!(
+            !crate::agent::AgentConfig::from(&off).loop_detection_enabled,
+            "a false setting must reach AgentConfig, or the switch is decorative"
+        );
+
+        // ON must reach it too — the assertion above would also pass if the field
+        // were hardwired false.
+        let on = BehaviorSettings {
+            loop_detection_enabled: true,
+            ..BehaviorSettings::default()
+        };
+        assert!(
+            crate::agent::AgentConfig::from(&on).loop_detection_enabled,
+            "a true setting must reach AgentConfig"
+        );
+
+        // And it must survive a TOML round-trip, which is the path an operator's
+        // operant.toml actually takes.
+        let parsed: BehaviorSettings =
+            toml::from_str("loop_detection_enabled = false\n").expect("parses");
+        assert!(
+            !parsed.loop_detection_enabled,
+            "the key must be readable from operant.toml"
+        );
+    }
 
     /// The slot reader treats a blank model as absent, because the loader
     /// filters empty values and so must every reader of the same slot.

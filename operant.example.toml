@@ -178,6 +178,10 @@ max_trajectories = 0
 # which means "no attribution attempted" — a different fact from a span left
 # `Unmeasured`. Set it false if you do not want the per-turn timing recorded.
 show_turn_attribution = true
+# Core's cross-iteration repetition circuit breaker (an identical tool-call
+# streak) and its warning nudge. Default ON; set false to disable the breaker
+# when a workflow legitimately repeats the same call.
+loop_detection_enabled = true
 # Largest share of `context_window` that ONE tool result may occupy before its
 # bulk is withheld behind an explicit marker (iter-357). The kept head, the
 # token count, the per-token price and the number of tokens removed are all
