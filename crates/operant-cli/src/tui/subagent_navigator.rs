@@ -51,11 +51,13 @@ pub struct SubagentNavigatorState {
     pub selected: usize,
     /// `true` = flat descendant list (codex/jcode), `false` = parent/child tree.
     pub flat: bool,
+    /// (audit finding) There is deliberately no row freeze. The plan asked for
+    /// omp's `#frozenRank`, but this surface is a SNAPSHOT: `open` collects the
+    /// rows once and nothing refreshes them while it is open, so there is no
+    /// re-sort to freeze. Add the freeze with the refresh that needs it.
+    ///
     /// The session this surface was opened for. `None` means it never mounted.
     pub session_id: Option<String>,
-    /// The row order when the surface opened (omp's `#frozenRank`): a status
-    /// change must not re-sort rows under the operator's cursor.
-    frozen_order: Vec<String>,
 }
 
 impl SubagentNavigatorState {
@@ -73,7 +75,6 @@ impl SubagentNavigatorState {
         // `flat: false`, so the first mount opened in tree view.
         self.flat = true;
         self.entries = records;
-        self.frozen_order = self.entries.iter().map(|e| e.id.clone()).collect();
         self.selected = 0;
         self.visible = true;
         true
@@ -82,7 +83,6 @@ impl SubagentNavigatorState {
     pub fn close(&mut self) {
         self.visible = false;
         self.entries.clear();
-        self.frozen_order.clear();
         self.session_id = None;
         self.selected = 0;
     }
@@ -162,20 +162,6 @@ pub fn descendants(
         }
     }
     out
-}
-
-/// Order entries by the frozen opening order, so a status change cannot re-sort
-/// rows under the cursor (omp's `#frozenRank`).
-pub fn apply_frozen_order(entries: &mut Vec<NavigatorEntry>, order: &[String]) {
-    if order.is_empty() {
-        return;
-    }
-    entries.sort_by_key(|e| {
-        order
-            .iter()
-            .position(|id| id == &e.id)
-            .unwrap_or(usize::MAX)
-    });
 }
 
 /// Draw the navigator: one row per descendant, indented by depth in tree view.

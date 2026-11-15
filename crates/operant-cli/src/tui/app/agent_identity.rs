@@ -129,12 +129,16 @@ impl App {
         if self.session_model_seeded {
             return;
         }
-        self.session_model_seeded = true;
-        self.session_model = None;
-        self.session_model_role = None;
+        // (audit finding) Only claim the seed ran when there was a session to
+        // seed. Marking it done with no session id meant a session whose id
+        // arrives later never seeded, and the flag then misreported what
+        // happened to the next reader.
         let Some(session_id) = self.current_session.clone() else {
             return;
         };
+        self.session_model_seeded = true;
+        self.session_model = None;
+        self.session_model_role = None;
         let db_path = self.config.database_path.clone();
         let Ok(db) = operant_core::database::Database::init(db_path) else {
             return;

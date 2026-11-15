@@ -18366,3 +18366,32 @@ fn a_fresh_launch_with_no_title_and_no_turns_keeps_the_product_name() {
         "an untitled session with no turns renders the product name, got: {first:?}"
     );
 }
+
+// ── the session-model seed flag (audit finding) ─────────────────────────────
+mod seed_flag_tests {
+    use super::*;
+
+    /// The seed must not claim it ran when there was no session to seed: a
+    /// session whose id arrives later would then never seed, and the flag would
+    /// misreport what happened.
+    #[test]
+    fn the_seed_flag_stays_clear_when_there_is_no_session() {
+        let mut app = make_app();
+        app.current_session = None;
+        app.session_model_seeded = false;
+        app.seed_session_model_from_row();
+        assert!(
+            !app.session_model_seeded,
+            "with no session id the seed has not run, so the flag must stay clear"
+        );
+        assert!(app.session_model.is_none());
+
+        // And it still seeds once a session exists.
+        app.current_session = Some("sess-seed".to_string());
+        app.seed_session_model_from_row();
+        assert!(
+            app.session_model_seeded,
+            "with a session id the seed runs and marks itself done"
+        );
+    }
+}

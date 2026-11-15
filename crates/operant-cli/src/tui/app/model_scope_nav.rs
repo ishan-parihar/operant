@@ -43,6 +43,17 @@ impl App {
     /// Put a scope in force: the picker's `filtered` becomes the scope's
     /// selection, intersected with the operator's filter text.
     pub fn apply_model_scope(&mut self, scope: ModelScope) -> ModelScope {
+        // (audit finding) The scope axis is a MODELS-page axis. The picker
+        // handler serves the effort picker too, and an effort row is neither a
+        // role nor a provider's model, so applying a scope there selected zero
+        // rows and blanked the list for two presses. A control on the wrong
+        // surface must refuse rather than empty it.
+        if !matches!(
+            self.inline_interactive.as_ref().map(|picker| picker.kind),
+            Some(crate::tui::operant_app::tui_fns::PickerKind::Model)
+        ) {
+            return scope;
+        }
         self.model_scope = scope.clone();
         let needle = self
             .inline_interactive
@@ -216,6 +227,46 @@ mod tests {
         assert!(
             names(&app).is_empty(),
             "a role row is an assignment, not a provider's model list"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_kind_tests {
+    use super::*;
+    use crate::tui::app::tests::make_app;
+    use crate::tui::model_scope::ModelScope;
+    use crate::tui::operant_app::tui_fns::{InlineInteractiveState, PickerKind};
+
+    /// (audit finding) The scope axis is a models-page axis. The picker handler
+    /// serves the effort picker too, and an effort row is neither a role nor a
+    /// provider's model, so an unguarded scope selection emptied the effort list.
+    #[test]
+    fn a_scope_never_applies_to_the_effort_picker() {
+        let mut app = make_app();
+        app.inline_interactive = Some(InlineInteractiveState {
+            kind: PickerKind::Effort,
+            entries: Vec::new(),
+            filtered: vec![0, 1, 2],
+            selected: 1,
+            column: 0,
+            filter: String::new(),
+            loading: false,
+            preview: false,
+        });
+        let scope = app.apply_model_scope(ModelScope::Roles);
+        assert_eq!(scope, ModelScope::Roles, "the scope is still reported");
+        let picker = app.inline_interactive.as_ref().expect("picker");
+        assert_eq!(
+            picker.filtered,
+            vec![0, 1, 2],
+            "the effort picker's rows must survive a stray scope press"
+        );
+        assert_eq!(picker.selected, 1, "the cursor must not move either");
+        assert!(
+            !matches!(app.model_scope, ModelScope::Roles),
+            "and the App must not adopt a scope the surface cannot show: {:?}",
+            app.model_scope
         );
     }
 }

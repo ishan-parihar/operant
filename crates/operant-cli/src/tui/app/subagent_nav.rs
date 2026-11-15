@@ -56,10 +56,21 @@ impl App {
                 .iter()
                 .filter_map(|r| r.session_id.clone().map(|s| (r.delegation_id.clone(), s))),
         );
+        // (audit finding) Index the ledger once. The lookup below ran per
+        // descendant over every record in a home-wide file (n x m) on the
+        // interface thread; the ledger merges across processes now, so it only
+        // grows.
+        let by_id: std::collections::HashMap<
+            &str,
+            &operant_core::tools::async_delegation::AsyncDelegationRecord,
+        > = records
+            .iter()
+            .map(|record| (record.delegation_id.as_str(), record))
+            .collect();
         let mut entries: Vec<NavigatorEntry> = descendants(&root, &edges, &session_ids)
             .into_iter()
             .filter_map(|(delegation_id, depth, parent)| {
-                let record = records.iter().find(|r| r.delegation_id == delegation_id)?;
+                let record = by_id.get(delegation_id.as_str()).copied()?;
                 Some(NavigatorEntry {
                     id: delegation_id,
                     goal: record.goal.clone(),
@@ -114,9 +125,10 @@ impl App {
         };
         self.session_hub.focused_subagent = Some(entry.id.clone());
         self.subagent_navigator.close();
-        self.set_status_notice(format!(
-            "focused subagent {}",
-            &entry.id[..entry.id.len().min(8)]
-        ));
+        // (audit finding) A BYTE offset into a string panics when the cut lands
+        // inside a multi-byte character. Ids minted by `new_id` are ASCII, but
+        // the id comes from the ledger, so the truncation walks chars instead.
+        let short: String = entry.id.chars().take(8).collect();
+        self.set_status_notice(format!("focused subagent {short}"));
     }
 }

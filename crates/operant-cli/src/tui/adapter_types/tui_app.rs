@@ -2159,6 +2159,12 @@ impl TuiApp {
         {
             agent.set_model(model.clone());
             let applied = agent.model().to_string();
+            // (audit finding) Remember what it was: the row write below opens and
+            // migrates the operator's live database, so it must not run when the
+            // model did not actually change. `agent.model()` is what the request
+            // will use, so a no-op switch (the same id re-applied) is detectable
+            // here rather than by comparing the operator's words to the config.
+            let unchanged = app.model_name == applied;
             app.model_name = applied.clone();
             app.session_model = Some(applied.clone());
             if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {
@@ -2171,7 +2177,7 @@ impl TuiApp {
             app.last_observed_prompt_tokens = None;
             // The session row carries the model and the role it was switched
             // through; the role is what a resume restores.
-            if let Some(session_id) = app.current_session.clone() {
+            if !unchanged && let Some(session_id) = app.current_session.clone() {
                 let db_path = app.config.database_path.clone();
                 if let Ok(db) = operant_core::database::Database::init(db_path) {
                     let role = app.session_model_role.clone();
