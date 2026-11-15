@@ -1115,12 +1115,17 @@ fn parse_args(args: &Value) -> ParsedArgs {
         .to_string();
 
     let mut out = ParsedArgs {
-        action,
+        action: action.clone(),
         working_dir,
         commit_hash: String::new(),
         file_path: None,
     };
-    if out.action == "restore" {
+    // `commit_hash` is read by BOTH the `restore` and the `diff` arm, so the
+    // condition names both. Gating it on `restore` alone is what let the `diff`
+    // arm keep its own snake_case-only read — a second site the first guard
+    // never reached, because the guard drove `parse_args` and `diff` did not
+    // call it. One condition here covers every arm that needs the field.
+    if action == "restore" || action == "diff" {
         out.commit_hash = args
             .get("commit_hash")
             .or_else(|| args.get("commitHash"))
@@ -1279,10 +1284,12 @@ impl OperantTool for CheckpointTool {
                 }
             }
             "diff" => {
-                let commit_hash = args
-                    .get("commit_hash")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                // `commit_hash` comes from the shared parse, not a second read
+                // here. `parse_args` fills it for `restore` AND `diff`, so both
+                // arms resolve the spelling once — a duplicate read in this arm
+                // is exactly how the camelCase spelling stayed broken here after
+                // the restore arm was fixed.
+                let commit_hash = parsed.commit_hash.as_str();
 
                 match manager.diff_for(session_id.as_deref(), working_dir, commit_hash) {
                     Ok(diff) => ToolResult::success(
@@ -1397,6 +1404,19 @@ mod tests {
         let parsed = parse_args(&args);
         assert_eq!(parsed.file_path.as_deref(), Some("a.rs"));
         assert_eq!(parsed.commit_hash, "abc123");
+
+        // `diff` needs the commit hash too. A first version of this guard drove
+        // only the `restore` arm, and the `diff` arm kept its own snake_case
+        // read — so a schema-following `diff` compared against "" and showed the
+        // whole tree. The arm that shares the parse must be the arm the guard
+        // drives.
+        for key in ["commit_hash", "commitHash"] {
+            let parsed = parse_args(&serde_json::json!({ "action": "diff", key: "abc123" }));
+            assert_eq!(
+                parsed.commit_hash, "abc123",
+                "the diff arm must read the commit hash from {key}"
+            );
+        }
 
         // workingDir is read on every arm.
         assert_eq!(

@@ -268,6 +268,25 @@ impl HomeAssistantTool {
         Self
     }
 
+    /// Read the optional entity target.
+    ///
+    /// Both spellings: the schema advertises `entityId`
+    /// (`rename_all = "camelCase"`) and `tools::normalize_arg_keys` reconciles
+    /// them at the dispatch seam. Every handler that takes an entity reads it
+    /// here, so the spelling is resolved in one place rather than per arm.
+    ///
+    /// It matters most for `call_service`, where the field is OPTIONAL: without
+    /// the dual read a schema-following call silently drops the entity target
+    /// and addresses the whole DOMAIN instead of the one entity — a wrong
+    /// result, not an error. Neither handler has an offline observable through
+    /// `execute` (both reach a credential or network gate first), so the parse
+    /// is its own seam and the guard drives it directly.
+    fn requested_entity(args: &Value) -> Option<&str> {
+        args.get("entity_id")
+            .or_else(|| args.get("entityId"))
+            .and_then(|v| v.as_str())
+    }
+
     // -----------------------------------------------------------------------
     // Action: list_entities
     // -----------------------------------------------------------------------
@@ -343,14 +362,8 @@ impl HomeAssistantTool {
     ///
     /// Returns full state including all attributes, last_changed, and last_updated.
     async fn handle_get_state(&self, args: &Value) -> ToolResult {
-        // Both spellings: the schema advertises `entityId`
-        // (`rename_all = "camelCase"`) and `tools::normalize_arg_keys`
-        // reconciles them at the dispatch seam.
-        let entity_id = match args
-            .get("entity_id")
-            .or_else(|| args.get("entityId"))
-            .and_then(|v| v.as_str())
-        {
+        // Both spellings; see `requested_entity`.
+        let entity_id = match Self::requested_entity(&args) {
             Some(e) => e,
             None => {
                 return ToolResult::error("ha_get_state", "Missing required parameter: entity_id");
@@ -642,17 +655,9 @@ impl HomeAssistantTool {
             );
         }
 
-        // Validate entity_id if provided.
-        //
-        // Both spellings: the schema advertises `entityId`
-        // (`rename_all = "camelCase"`) and `tools::normalize_arg_keys`
-        // reconciles them at the dispatch seam. OPTIONAL here, so without the
-        // rescue a schema-following call would silently drop the entity target
-        // and address the whole domain instead of the one entity.
-        let entity_id = args
-            .get("entity_id")
-            .or_else(|| args.get("entityId"))
-            .and_then(|v| v.as_str());
+        // Validate entity_id if provided. See `requested_entity` for why both
+        // spellings are read there.
+        let entity_id = Self::requested_entity(&args);
         if let Some(eid) = entity_id
             && !ENTITY_ID_RE.is_match(eid)
         {
@@ -967,29 +972,29 @@ mod tests {
     /// handlers read `entity_id`, so the two agreed only because
     /// `tools::normalize_arg_keys` adds a twin at the dispatch seam.
     ///
-    /// These tests call `execute` DIRECTLY, which bypasses that rescue — so
-    /// without the dual read here, a schema-following call fails with "missing
-    /// entity_id". That is the observable, and it needs no network.
-    #[tokio::test]
-    async fn the_state_readers_take_the_entity_id_in_both_spellings() {
-        let tool = HomeAssistantTool::new();
-        // The snake_case spelling stays the error-free path when the entity is
-        // well-formed and unreachable-but-valid; what matters here is that the
-        // camelCase spelling does NOT trip the "missing" guard.
+    /// The guard drives `requested_entity` directly, because neither handler has
+    /// an offline observable: `get_state` and `call_service` both reach a
+    /// credential or network gate before the parsed value changes the result. An
+    /// earlier draft drove `execute` and asserted on the absence of a "missing"
+    /// error — that passed under the mutation, because `call_service`'s entity
+    /// field is optional and its credential gate returns first. A guard that
+    /// cannot see the value asserts nothing, so the parse is the seam.
+    #[test]
+    fn the_entity_readers_take_the_entity_id_in_both_spellings() {
         for key in ["entity_id", "entityId"] {
-            let result = tool
-                .execute(
-                    json!({ "action": "get_state", key: "light.kitchen" }),
-                    ToolContext::default(),
-                )
-                .await;
-            if let Some(err) = result.error.clone() {
-                assert!(
-                    !err.contains("Missing required parameter"),
-                    "the reader must take the entity id from {key}: {err}"
-                );
-            }
+            let args = json!({ "action": "call_service", "domain": "light", key: "light.kitchen" });
+            assert_eq!(
+                HomeAssistantTool::requested_entity(&args),
+                Some("light.kitchen"),
+                "the reader must take the entity id from {key}"
+            );
         }
+        // Absent means "no entity target" — the whole-domain default must stay
+        // reachable, or `call_service` could never address a domain.
+        assert_eq!(
+            HomeAssistantTool::requested_entity(&json!({ "action": "call_service" })),
+            None
+        );
     }
 
     #[tokio::test]
