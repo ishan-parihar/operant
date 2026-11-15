@@ -11,16 +11,25 @@ const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 impl App {
     /// The composer's text width in columns, as the visual-row model sees it.
     ///
+    /// This MUST be the number the painter wraps at, not a local approximation.
+    /// It used to be `area.width - 4`, but the painter wraps at
+    /// `textarea_rect(area).width - send_mode_reserved_width` — two columns
+    /// wider whenever no send-mode icon is showing. A caret on a row that only
+    /// exists at the painter's width had no row above it by the arrows' model,
+    /// so Up recalled history instead of walking the line the operator could see
+    /// (operator report 2026-11-15: "only moves the prompt history, not the
+    /// cursor in the input box"). One function now answers it for both.
+    ///
     /// `last_input_area` is published by `render_app` after `operant_ui::draw`
     /// (chunks[7]), so it is real in production and zero before the first frame.
     /// A zero width means the composer has never been laid out, and the visual
     /// model is undefined there — callers must treat `0` as "cannot walk", never
     /// as "walk zero columns".
-    ///
-    /// The `4` is the composer's own chrome (border + padding), the same
-    /// deduction the renderer uses for its wrap points.
-    fn composer_width(&self) -> usize {
-        self.last_input_area.get().width.saturating_sub(4) as usize
+    pub(crate) fn composer_width(&self) -> usize {
+        crate::tui::operant_ui::input_ui::composer_text_width(
+            self,
+            self.last_input_area.get().width,
+        )
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {

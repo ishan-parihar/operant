@@ -18078,3 +18078,112 @@ mod subagent_navigator_tests {
         );
     }
 }
+
+// ---- red team 5 (2026-11-15): the arrows' width vs the painter's width ----
+
+/// THE BUG the operator reported: "Using up/dn arrows, only moves the prompt
+/// history, not the cursor in the input box."
+///
+/// The arrow keys' visual-row model needs the width the text is PAINTED at. They
+/// used `area.width - 4`, but the painter wraps at `textarea_rect(area).width -
+/// send_mode_reserved_width`, which is `area.width - 2 - reserved`. With no
+/// send-mode icon (the common case) that is TWO columns wider than the arrows
+/// assumed, so a caret on a row that exists only at the painter's width had no
+/// row above it and Up recalled the prompt history.
+///
+/// This pins the one number both must use.
+#[test]
+fn the_arrows_and_the_painter_agree_on_the_composers_width() {
+    let mut app = make_app();
+    for area_width in [20u16, 40, 60, 80, 96, 110, 120, 160, 200] {
+        app.last_input_area
+            .set(ratatui::layout::Rect::new(0, 0, area_width, 12));
+        // The App's OWN helper -- the one the arrow arms call.
+        let arrows = app.composer_width();
+        let painter = {
+            // The painter's own arithmetic, spelled out from ui_input.rs:565.
+            let padded = crate::tui::operant_ui::composer::textarea_rect(
+                ratatui::layout::Rect::new(0, 0, area_width, u16::MAX),
+            );
+            padded.width as usize
+        };
+        assert_eq!(
+            arrows, painter,
+            "at area width {area_width} the caret's model and the painter disagree"
+        );
+    }
+}
+
+/// And the case that actually broke: a caret on a row the OLD width could not
+/// see. A 79-column line in an 80-column composer is TWO painted rows but ONE row
+/// at `80 - 4 = 76`. Up must walk from the second row to the first.
+#[test]
+fn up_walks_a_row_that_only_exists_at_the_painters_width() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 12));
+    app.prompt_input.replace_text("z".repeat(79));
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    // The OLD width (area - 4 = 76) makes this ONE row, which is the bug: the
+    // caret cannot walk and Up recalls. The painter's width (78) makes it two.
+    assert_eq!(
+        app.prompt_input.cursor_visual_pos(78).0,
+        1,
+        "a 79-column line at the PAINTER's width is two visual rows"
+    );
+    let width = app.composer_width();
+    assert_eq!(
+        width, 78,
+        "the arrows must use the painter's width, got {width}"
+    );
+    assert_eq!(
+        app.prompt_input.cursor_visual_pos(width).0,
+        1,
+        "and so the caret's model sees the second row"
+    );
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Up must walk to the row above, not recall history"
+    );
+    assert_eq!(
+        app.prompt_input.cursor_visual_pos(width).0,
+        0,
+        "the caret is now on the first row"
+    );
+}
+
+/// Is `last_input_area` really published in production? The whole Up/Down
+/// visual-walk depends on it: a zero width means "never laid out" and the walk
+/// is skipped, so Up falls straight through to history -- which is EXACTLY the
+/// operator's symptom. Assert the render path publishes a real width.
+#[test]
+fn the_render_path_publishes_a_usable_input_area_width() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = make_app();
+    // Before any draw the cell is zero, by design.
+    assert_eq!(app.last_input_area.get().width, 0, "no frame yet");
+
+    let mut terminal = Terminal::new(TestBackend::new(110, 40)).expect("terminal");
+    terminal
+        .draw(|frame| crate::tui::render::render_app(frame, &app))
+        .expect("draw");
+
+    let width = app.last_input_area.get().width;
+    eprintln!("PROBE published input width: {width}");
+    assert!(
+        width > 0,
+        "the render path must publish the composer's rect"
+    );
+    assert!(
+        app.composer_width() > 0,
+        "and the arrows must see a usable width, got {}",
+        app.composer_width()
+    );
+}

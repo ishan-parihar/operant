@@ -502,6 +502,28 @@ pub(super) fn send_mode_reserved_width(app: &dyn TuiState) -> usize {
     send_mode_columns(icon)
 }
 
+/// The column width the composer's text is actually WRAPPED AND PAINTED at.
+///
+/// This is the ONE number the caret's visual-row model must use. The arrow keys
+/// used to compute their own (`area.width - 4`), which is a different number:
+/// the painter wraps at `textarea_rect(area).width - reserved_width`, i.e.
+/// `area.width - GUTTER_COLS(2) - reserved_width`. With no send-mode icon
+/// `reserved_width` is 0, so the painter wraps TWO COLUMNS WIDER than the arrows
+/// assumed. A caret on a row that only exists at the painter's width therefore
+/// had no row above it by the arrows' model, and Up recalled the prompt history
+/// instead of walking the line the operator could see (operator report
+/// 2026-11-15: "only moves the prompt history, not the cursor in the input
+/// box").
+///
+/// Deriving it from the same rect and the same reservation the painter uses is
+/// what makes "wrapped to width" and "painted at width" the same number by
+/// construction, so the two can never drift again.
+pub(crate) fn composer_text_width(app: &dyn TuiState, area_width: u16) -> usize {
+    let padded =
+        crate::tui::operant_ui::composer::textarea_rect(Rect::new(0, 0, area_width, u16::MAX));
+    (padded.width as usize).saturating_sub(send_mode_reserved_width(app))
+}
+
 /// The columns the send-mode glyph takes from the composer's text area.
 ///
 /// The glyph's DISPLAY width — the columns it paints — plus one column of
