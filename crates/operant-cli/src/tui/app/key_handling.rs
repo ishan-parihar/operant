@@ -9,6 +9,20 @@ use super::*;
 const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 
 impl App {
+    /// The composer's text width in columns, as the visual-row model sees it.
+    ///
+    /// `last_input_area` is published by `render_app` after `operant_ui::draw`
+    /// (chunks[7]), so it is real in production and zero before the first frame.
+    /// A zero width means the composer has never been laid out, and the visual
+    /// model is undefined there — callers must treat `0` as "cannot walk", never
+    /// as "walk zero columns".
+    ///
+    /// The `4` is the composer's own chrome (border + padding), the same
+    /// deduction the renderer uses for its wrap points.
+    fn composer_width(&self) -> usize {
+        self.last_input_area.get().width.saturating_sub(4) as usize
+    }
+
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         // ── F12: toggle debug overlay (highest priority, never blocked) ──
         if key.code == KeyCode::F(12) {
@@ -2534,15 +2548,13 @@ impl App {
                     )
                 {
                     // Shift+Up in visual mode: extend selection up
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     self.prompt_input.move_visual_up(width);
                 } else if key.modifiers.contains(KeyModifiers::SHIFT) {
                     // jcode textarea selection in normal mode: anchor + extend
                     // up one visual row (vim Visual keeps its own path above).
                     self.prompt_input.selection_begin_or_extend();
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     self.prompt_input.move_visual_up(width);
                 } else if self.prompt_input.history_is_live() {
                     // (2026-10-25) Browsing wins over the popup (OMP
@@ -2581,8 +2593,7 @@ impl App {
                     // did nothing at all). A zero width means the composer has
                     // never been laid out, so the visual model is undefined and
                     // nothing is recalled.
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     let walked = width > 0 && self.prompt_input.move_visual_up(width);
                     if !walked && !self.prompt_input.history.is_empty() {
                         self.prompt_input.history_up();
@@ -2600,15 +2611,13 @@ impl App {
                     )
                 {
                     // Shift+Down in visual mode: extend selection down
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     self.prompt_input.move_visual_down(width);
                 } else if key.modifiers.contains(KeyModifiers::SHIFT) {
                     // jcode textarea selection in normal mode: anchor + extend
                     // down one visual row (vim Visual keeps its own path above).
                     self.prompt_input.selection_begin_or_extend();
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     self.prompt_input.move_visual_down(width);
                 } else if self.prompt_input.history_is_live() {
                     // (2026-10-25) Browsing wins over the popup (OMP
@@ -2635,8 +2644,7 @@ impl App {
                     // The old `!text.contains('\n')` guard made Down a DEAD key
                     // on any single-line draft, wrapped or not: the caret sat on
                     // row 0 of a 4-row wrapped draft and did not move.
-                    let area = self.last_input_area.get();
-                    let width = area.width.saturating_sub(4) as usize;
+                    let width = self.composer_width();
                     self.prompt_input.move_visual_down(width);
                 }
                 self.refresh_prompt_input();

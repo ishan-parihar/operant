@@ -17669,3 +17669,285 @@ mod session_model_tests {
         assert_eq!(app.session_model_role.as_deref(), Some("slow"));
     }
 }
+
+// ---- red team 4 (2026-11-15): attacking iter-2353's execution ----
+
+/// ATTACK A (real gap, measured and then decided). iter-2353's rule is "Up
+/// walks the composer's lines first, and reaches history only from the top
+/// row". But `history_is_live()` is checked BEFORE the visual walk, so a
+/// RECALLED MULTI-LINE entry has the caret at its top-start (iter-2353) and Up
+/// steps the ladder immediately. The entry's own lines are therefore
+/// unreachable -- by either rule.
+///
+/// This is the 2026-11-12 decision, deliberately kept (a browse must keep
+/// stepping so the operator can walk back out), and it is documented rather than
+/// accidental. What was missing is that the plan never SAID so: the ledger row
+/// claimed "both arms try the walk first", which is false during a browse. The
+/// row is corrected in this iteration; this test pins which rule wins.
+#[test]
+fn a_recalled_multiline_entry_steps_the_ladder_instead_of_being_walked() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 40, 12));
+    app.prompt_input.history = vec![
+        "oldest".to_string(),
+        "a recalled entry\nwith several lines\nof its own".to_string(),
+    ];
+    app.prompt_input.history_up(); // -> the multi-line entry, caret at top-start
+    assert_eq!(app.prompt_input.cursor, 0, "iter-2353: top-start");
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "the ladder wins over walking (2026-11-12 decision, documented here)"
+    );
+    assert_eq!(
+        app.prompt_input.text, "oldest",
+        "so the recalled entry's own lines are unreachable"
+    );
+}
+
+/// The same entry IS reachable again after walking out to the draft, and the
+/// draft is never lost. This is the reassurance the gap needs: unreachable to
+/// WALK, never unreachable to SEE.
+#[test]
+fn a_recalled_entry_can_be_revisited_and_the_draft_always_returns() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 40, 12));
+    app.prompt_input.history.clone_from(&vec![
+        "oldest".to_string(),
+        "line1\nline2\nline3".to_string(),
+    ]);
+    app.prompt_input.replace_text("my draft".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.text, "line1\nline2\nline3");
+    for _ in 0..4 {
+        app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+        if app.prompt_input.history_pos.is_none() {
+            break;
+        }
+    }
+    assert_eq!(app.prompt_input.text, "my draft", "the draft comes back");
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        app.prompt_input.text, "line1\nline2\nline3",
+        "and the entry is reachable again"
+    );
+}
+
+/// ATTACK B. An edited recall ends the browse (RT-560), so the next Up starts a
+/// FRESH browse. The plan never tested that the operator's EDIT survives that.
+/// It does: the edit is captured as the draft and comes back on the way out.
+#[test]
+fn an_edited_recall_survives_the_fresh_browse_it_triggers() {
+    let mut app = make_app();
+    app.prompt_input.history.clone_from(&vec![
+        "oldest".to_string(),
+        "entry\nline2\nline3".to_string(),
+    ]);
+    app.prompt_input.history_up();
+    app.prompt_input.insert_char('!');
+    assert!(
+        !app.prompt_input.history_is_live(),
+        "the edit ended the browse"
+    );
+
+    // Up starts a fresh browse from the edit.
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    // Walk all the way out.
+    for _ in 0..6 {
+        app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+        if app.prompt_input.history_pos.is_none() {
+            break;
+        }
+    }
+
+    assert!(
+        app.prompt_input.text.starts_with('!'),
+        "the operator's edit must come back, got {:?}",
+        app.prompt_input.text
+    );
+}
+
+/// ATTACK C. The realistic version of the operator's report: a five-line PASTE
+/// at a normal terminal width. iter-2353's fix must make Up walk four rows
+/// before it reaches the ladder.
+#[test]
+fn up_walks_a_paste_four_rows_at_a_realistic_width() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 100, 8));
+    app.prompt_input
+        .replace_text("alpha\nbeta\ngamma\ndelta\nepsilon".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["old".to_string()];
+
+    let mut walked = 0;
+    for _ in 0..10 {
+        let before = app.prompt_input.cursor;
+        app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+        if app.prompt_input.history_pos.is_some() {
+            break;
+        }
+        assert!(
+            app.prompt_input.cursor < before,
+            "each Up must move the caret"
+        );
+        walked += 1;
+    }
+
+    assert_eq!(walked, 4, "a 5-line paste walks 4 rows before the ladder");
+    assert_eq!(app.prompt_input.history_pos, Some(0), "then the ladder");
+}
+
+/// ATTACK D. The width deduction is `area.width - 4`. If that is wrong the wrap
+/// points are wrong and the walk lands on the wrong rows. Pin the arithmetic at
+/// a narrow width where it matters most.
+#[test]
+fn the_width_deduction_is_the_composer_chrome() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 20, 6));
+    app.prompt_input.replace_text("x".repeat(60));
+    app.prompt_input.cursor = app.prompt_input.text.len();
+
+    // 20 - 4 = 16 columns: a 60-char line wraps to 4 rows.
+    assert_eq!(app.prompt_input.cursor_visual_pos(16).0, 3);
+    // (composer_width is private to the module; the deduction is pinned by
+    // the walk tests, which would land on the wrong rows if it changed.)
+}
+
+/// ATTACK E. A zero-width composer (never laid out) must not read as "walk zero
+/// columns" -- the walk must be skipped so Up falls through to the ladder. This
+/// is the one case iter-2353's `width > 0` guard exists for.
+#[test]
+fn a_never_laid_out_composer_skips_the_walk_entirely() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 0, 0));
+    app.prompt_input.replace_text("a draft".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = vec!["an older prompt".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(0),
+        "with no layout the caret cannot walk, so Up recalls"
+    );
+}
+
+/// ATTACK F. Vim Normal mode must obey the same rule. It is a different editing
+/// model, but Up is Up, and the operator does not switch models to change what
+/// an arrow key means.
+#[test]
+fn up_walks_a_line_in_vim_normal_mode_too() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 40, 12));
+    app.prompt_input
+        .replace_text("one\ntwo\nthree\nfour".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.vim_mode = crate::prompt_input::VimMode::Normal;
+    app.prompt_input.history = vec!["old".to_string()];
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert!(
+        app.prompt_input.history_pos.is_none(),
+        "Up walks a line in vim Normal mode too"
+    );
+    assert!(
+        app.prompt_input.cursor < "one\ntwo\nthree\nfour".len(),
+        "and the caret actually moved"
+    );
+}
+
+/// ATTACK G, operational. The queue iter-2353 un-gated must be DELIVERABLE, not
+/// merely storable: queue with no agent, then submit, and the text must reach the
+/// submission exactly once.
+#[test]
+fn a_queue_made_without_an_agent_is_delivered_exactly_once() {
+    let mut app = make_app();
+    app.steer_queue_handle = None;
+    app.is_streaming = false;
+    app.prompt_input.replace_text("park this".to_string());
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert_eq!(app.next_turn_queue.len(), 1, "it queued");
+
+    let pending = app.take_pending_queued_messages();
+
+    assert_eq!(pending, vec!["park this".to_string()], "it is deliverable");
+    assert!(
+        app.next_turn_queue.is_empty(),
+        "taking drains the queue exactly once"
+    );
+}
+
+/// ATTACK H, operational. The hint recommends `/queue <text>` when the terminal
+/// cannot deliver the chord. That fallback must actually work with no agent --
+/// it goes through the same un-gated function, so this pins the whole chain.
+#[test]
+fn the_slash_queue_fallback_works_without_an_agent() {
+    let mut app = make_app();
+    app.steer_queue_handle = None;
+
+    let handled = app.handle_tui_command("queue", "park this");
+
+    assert!(handled, "/queue must be handled");
+    assert_eq!(app.next_turn_queue, vec!["park this".to_string()]);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|s| s.starts_with("Queued")),
+        "the operator must be told it worked, got {:?}",
+        app.status_message
+    );
+}
+
+/// ATTACK J. A single-line draft with no history at all: Up is a no-op. That is
+/// standard readline, but pin it so it is a decision rather than an accident.
+#[test]
+fn up_with_no_history_and_one_row_is_silently_inert() {
+    let mut app = make_app();
+    app.last_input_area
+        .set(ratatui::layout::Rect::new(0, 0, 80, 5));
+    app.prompt_input.replace_text("one line".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history = Vec::new();
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+
+    assert!(
+        app.status_message.is_none(),
+        "no spurious notice for an ordinary readline no-op"
+    );
+    assert_eq!(app.prompt_input.text, "one line");
+}
+
+/// ATTACK K. Down's ladder exit must put the caret at the bottom-end of the
+/// DRAFT, not of the entry being left -- the operator was editing there.
+#[test]
+fn down_out_of_the_ladder_returns_to_the_drafts_end() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["oldest".to_string()];
+    app.prompt_input.replace_text("my draft".to_string());
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.prompt_input.history_up();
+
+    app.prompt_input.history_down();
+
+    assert_eq!(app.prompt_input.history_pos, None, "out of the ladder");
+    assert_eq!(
+        app.prompt_input.cursor,
+        app.prompt_input.text.len(),
+        "the caret is at the draft's end"
+    );
+}

@@ -3870,3 +3870,49 @@ mod composer_hint_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod red_team_hint_tests {
+    use super::composer_hint;
+    use crate::tui::app::App;
+    use operant_core::config::AppConfig;
+
+    fn make_app() -> App {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let settings = crate::tui::adapter_types::config::Settings::default();
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        let command_registry = crate::commands::CommandRegistry::new();
+        App::new(
+            AppConfig::default(),
+            settings,
+            cost_tracker,
+            command_registry,
+        )
+    }
+
+    /// RED TEAM 2026-11-15, operational gap: without the kitty keyboard
+    /// protocol the hint offers `/queue <text>` for the queue (correct) but says
+    /// NOTHING about Shift+Enter, which is lost in exactly the same terminals.
+    /// The operator's report names both keys, so a hint that recovers one of two
+    /// is half a hint.
+    #[test]
+    fn the_unenhanced_hint_says_nothing_about_a_chord_it_cannot_deliver() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.keyboard_enhanced = false;
+        app.prompt_input
+            .replace_text("then check the tests".to_string());
+
+        let hint = composer_hint(&app).unwrap_or_default();
+        assert!(
+            hint.contains("/queue"),
+            "it recovers the queue with the slash command: {hint:?}"
+        );
+        assert!(
+            !hint.to_lowercase().contains("shift"),
+            "it must not promise Shift+Enter, which this terminal cannot deliver: {hint:?}"
+        );
+    }
+}

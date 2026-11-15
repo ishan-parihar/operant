@@ -4,7 +4,48 @@
 
 use super::*;
 
+/// Which end of a recalled buffer the caret belongs at. Going BACK in time
+/// (Up) lands at the top-start; going FORWARD (Down) lands at the bottom-end,
+/// and so does the exit back to the operator's own draft.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecallEdge {
+    Top,
+    Bottom,
+}
+
 impl PromptInputState {
+    /// Install a recalled buffer into the composer, wholesale.
+    ///
+    /// This is the ONE place a ladder step writes the buffer, so the three
+    /// invariants that every step must hold are stated once instead of three
+    /// times:
+    ///
+    /// 1. **The paste store dies with the text.** The recalled entry is plain
+    ///    text and carries no store of its own, so any store from the buffer it
+    ///    replaced is an orphan (red-team 2, 2026-11-14; probed).
+    /// 2. **The caret goes to the edge the GESTURE implies.** Up (back) →
+    ///    top-start, Down (forward) → bottom-end, so an entry reads the way it
+    ///    was reached (operator report 2026-11-14; RT-574).
+    /// 3. **A recall never re-opens the typeahead popup.** Only a TYPED trigger
+    ///    character does that; a recall that opened the popup stranded browsing
+    ///    in slash-completions (2026-10-25).
+    fn install_recall(&mut self, text: &str, edge: RecallEdge) {
+        self.pending_pastes.clear();
+        self.text = text.to_string();
+        self.cursor = match edge {
+            RecallEdge::Top => 0,
+            RecallEdge::Bottom => self.text.len(),
+        };
+        // A recall starts a new vertical run, so a saved column from a
+        // previous one cannot drag the caret sideways (RT-561).
+        self.preferred_col = None;
+        self.history_recall = Some(self.text.clone());
+        self.update_token_estimate();
+        self.suppress_suggestions_once = true;
+        self.suggestions.clear();
+        self.suggestion_index = None;
+    }
+
     /// Navigate history up (older).
     pub fn history_up(&mut self) {
         if self.history.is_empty() {
@@ -32,35 +73,13 @@ impl PromptInputState {
             }
         }
         if let Some(pos) = self.history_pos {
-            // The recalled entry replaces the text WHOLESALE and carries no
-            // store of its own: an entry is plain text, and the entry we were
-            // browsing may still have had a live paste store behind it. Drop
-            // the store with the text. The orphan this prevents is not a
-            // mis-delivery — the label numbering hands the next paste its own
-            // token, so the payload is never swapped — it is the invariant:
-            // the store is the only thing between `[Pasted ~N lines]` and the
-            // model, and it must not describe a buffer it was never in.
-            // (red-team 2, 2026-11-14; probed, see the audit §2.)
-            self.pending_pastes.clear();
-            self.text = self.history[pos].clone();
             // Going BACK in time, the caret belongs at the TOP-START: the
             // operator pressed Up to reach an older prompt, and an entry that
             // opens with the caret at its end reads as "this is the newest
             // line", which is the opposite of the gesture. It also makes the
             // next Up walk the entry's own first row instead of immediately
             // stepping further back (operator report 2026-11-14).
-            self.cursor = 0;
-            self.preferred_col = None;
-            self.history_recall = Some(self.text.clone());
-            self.update_token_estimate();
-            // (2026-10-25) A recalled `/…` entry must not re-open the
-            // typeahead popup — that is what stranded history browsing in
-            // slash-completions (the next Up/Down fed the popup instead of
-            // stepping history). OMP opens autocomplete only on a TYPED
-            // trigger character; recall is programmatic.
-            self.suppress_suggestions_once = true;
-            self.suggestions.clear();
-            self.suggestion_index = None;
+            self.install_recall(&self.history[pos].clone(), RecallEdge::Top);
         }
     }
 
@@ -75,32 +94,19 @@ impl PromptInputState {
             None => {}
             Some(n) if n + 1 >= self.history.len() => {
                 self.history_pos = None;
-                self.pending_pastes.clear();
-                self.text = self.history_draft.clone();
                 // Back to the draft: the caret belongs at the BOTTOM-END,
-                // where the operator left it (operator report 2026-11-14).
-                self.cursor = self.text.len();
-                self.preferred_col = None;
+                // where the operator left it, and the draft is no longer a
+                // recall (there is no entry to be "live" against).
+                let draft = self.history_draft.clone();
+                self.install_recall(&draft, RecallEdge::Bottom);
                 self.history_recall = None;
-                self.update_token_estimate();
-                self.suppress_suggestions_once = true;
-                self.suggestions.clear();
-                self.suggestion_index = None;
             }
             Some(n) => {
                 self.history_pos = Some(n + 1);
-                self.pending_pastes.clear();
-                self.text = self.history[n + 1].clone();
                 // Going FORWARD in time, the caret belongs at the BOTTOM-END:
                 // Down reaches toward the present, and the tail is where the
                 // operator's eye is after walking back up through an entry.
-                self.cursor = self.text.len();
-                self.preferred_col = None;
-                self.history_recall = Some(self.text.clone());
-                self.update_token_estimate();
-                self.suppress_suggestions_once = true;
-                self.suggestions.clear();
-                self.suggestion_index = None;
+                self.install_recall(&self.history[n + 1].clone(), RecallEdge::Bottom);
             }
         }
     }
