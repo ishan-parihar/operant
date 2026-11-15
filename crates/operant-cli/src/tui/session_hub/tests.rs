@@ -1055,8 +1055,8 @@ fn the_header_without_a_total_still_counts_the_rows() {
 fn the_tab_counts_follow_the_rows_and_the_filters() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("analyst".to_string(), "Analyst".to_string()),
-        ("premiere".to_string(), "Premiere".to_string()),
+        ("analyst".to_string(), "Analyst".to_string(), 0),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
     ]);
     hub.replace_rows(vec![
         row("s1", None, Some("premiere")),
@@ -1106,8 +1106,8 @@ fn the_tab_counts_follow_the_rows_and_the_filters() {
 fn the_employee_cycle_drops_the_store_counts() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("ann".to_string(), "Ann".to_string()),
-        ("bo".to_string(), "Bo".to_string()),
+        ("ann".to_string(), "Ann".to_string(), 0),
+        ("bo".to_string(), "Bo".to_string(), 0),
     ]);
     hub.replace_rows(vec![
         row("s1", None, Some("ann")),
@@ -1624,8 +1624,8 @@ fn a_heavy_row_keeps_its_date_and_the_cost_lives_in_the_preview() {
 fn the_employee_axis_offers_the_roster() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("premiere".to_string(), "Premiere".to_string()),
-        ("governor".to_string(), "Governor".to_string()),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
+        ("governor".to_string(), "Governor".to_string(), 0),
     ]);
     // A page that carries NO roster seat at all — the live shape.
     hub.replace_rows(vec![row("s1", None, Some("emp-cron_abc123"))]);
@@ -1645,10 +1645,59 @@ fn the_employee_axis_offers_the_roster() {
 #[test]
 fn the_employee_chip_names_the_employee_not_the_id() {
     let mut hub = SessionHubState::new();
-    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string(), 0)]);
     hub.replace_rows(vec![row("s1", None, None)]);
     hub.cycle_employee();
-    assert_eq!(hub.employee_filter_label(), Some("Premiere"));
+    assert_eq!(hub.employee_filter_label(), Some("Premiere · 0"));
+}
+
+/// (session-hub plan T1) An engaged employee whose sessions are all outside the
+/// loaded page — or that has none at all — must render an explicit empty state
+/// naming the seat, and the chip must carry the count that made it empty.
+/// A blank pane with a silent `e` chip reads as a broken picker.
+#[test]
+fn an_empty_employee_filter_says_which_seat_it_is_empty_for() {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![row("s1", None, None)]); // personal session: no employee tag
+    hub.set_employee_roster(vec![
+        ("analyst".to_string(), "Analyst".to_string(), 2),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
+    ]);
+
+    hub.cycle_employee(); // analyst — the row does NOT belong to analyst, so: empty
+    assert_eq!(hub.employee_filter(), Some("analyst"));
+    assert!(
+        hub.visible_rows().is_empty(),
+        "the analyst seat holds no listed rows, so this axis is empty"
+    );
+    assert_eq!(hub.employee_filter_label(), Some("Analyst · 2"));
+
+    // The pane must SAY that it is the analyst seat that is empty — following
+    // the empty-state branch that renders `No sessions for {label} yet`.
+    use crate::tui::debug::debug_hub::buffer_rows;
+    use crate::tui::render::FrameCtx;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut terminal = Terminal::new(TestBackend::new(FRAME_WIDTH, 40)).unwrap();
+    let mut ctx = FrameCtx {
+        size: ratatui::layout::Rect::new(0, 0, FRAME_WIDTH, 40),
+        preview_max_scroll: None,
+        stop: false,
+    };
+    terminal
+        .draw(|f| {
+            super::render::render_session_hub(f, &hub, f.area(), &mut ctx);
+        })
+        .unwrap();
+    let pane: String = buffer_rows(terminal.backend().buffer())
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        pane.contains("No sessions for Analyst · 2 yet"),
+        "the empty state must name the seat and its count:\n{pane}"
+    );
 }
 
 /// A delegation is the agent's own work, not another seat's: it must stay
@@ -1660,7 +1709,7 @@ fn the_employee_chip_names_the_employee_not_the_id() {
 #[test]
 fn a_running_delegation_survives_the_employee_filter() {
     let mut hub = SessionHubState::new();
-    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string(), 0)]);
     hub.replace_rows(vec![
         row("s1", None, Some("premiere")),
         subagent_row("dlg-1", "audit the tests", "pending"),
@@ -1683,7 +1732,7 @@ fn a_running_delegation_survives_the_employee_filter() {
 fn reopening_the_hub_resets_the_scope() {
     let mut hub = SessionHubState::new();
     hub.replace_rows(vec![row("s1", None, None), row("s2", None, None)]);
-    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string(), 0)]);
     hub.cycle_employee();
     hub.filter_mode = HubFilterMode::CurrentBranch;
     hub.search_query = "old".to_string();
@@ -2063,12 +2112,12 @@ fn the_tool_calls_come_back_with_another_keypress() {
 fn the_employee_filter_selects_one_employee_by_identity() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("analyst".to_string(), "Analyst".to_string()),
-        ("premiere".to_string(), "Premiere".to_string()),
+        ("analyst".to_string(), "Analyst".to_string(), 0),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
     ]);
     hub.set_employee_roster(vec![
-        ("analyst".to_string(), "Analyst".to_string()),
-        ("premiere".to_string(), "Premiere".to_string()),
+        ("analyst".to_string(), "Analyst".to_string(), 0),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
     ]);
     hub.replace_rows(vec![
         row("s1", Some("premiere work"), Some("premiere")),
@@ -2092,8 +2141,8 @@ fn the_employee_filter_selects_one_employee_by_identity() {
 fn the_employee_cycle_returns_to_every_employee() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("analyst".to_string(), "Analyst".to_string()),
-        ("premiere".to_string(), "Premiere".to_string()),
+        ("analyst".to_string(), "Analyst".to_string(), 0),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
     ]);
     hub.replace_rows(vec![
         row("s1", None, Some("premiere")),
@@ -2126,8 +2175,8 @@ fn the_employee_cycle_returns_to_every_employee() {
 fn the_employee_cycle_lists_the_roster_not_the_page() {
     let mut hub = SessionHubState::new();
     hub.set_employee_roster(vec![
-        ("premiere".to_string(), "Premiere".to_string()),
-        ("quiet".to_string(), "Quiet Seat".to_string()),
+        ("premiere".to_string(), "Premiere".to_string(), 0),
+        ("quiet".to_string(), "Quiet Seat".to_string(), 0),
     ]);
     hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
     hub.cycle_employee();
@@ -2153,7 +2202,7 @@ fn the_tab_counts_honour_the_employee_axis() {
     let mut hub = SessionHubState::new();
     let mut live = row("s1", None, Some("premiere"));
     live.status = RowStatus::Live;
-    hub.set_employee_roster(vec![("analyst".to_string(), "Analyst".to_string())]);
+    hub.set_employee_roster(vec![("analyst".to_string(), "Analyst".to_string(), 0)]);
     hub.replace_rows(vec![live, row("s2", None, Some("analyst"))]);
     hub.cycle_employee();
     assert_eq!(hub.employee_filter(), Some("analyst"));
@@ -2175,7 +2224,7 @@ fn the_tab_counts_honour_the_employee_axis() {
 #[test]
 fn the_header_names_the_engaged_employee() {
     let mut hub = SessionHubState::new();
-    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string())]);
+    hub.set_employee_roster(vec![("premiere".to_string(), "Premiere".to_string(), 0)]);
     hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
     let (list, _) = hub_rows_with(&mut hub);
     assert!(
