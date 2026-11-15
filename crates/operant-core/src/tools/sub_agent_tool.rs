@@ -587,6 +587,15 @@ pub struct SubAgentTool {
     client_config: ClientConfig,
     http_client: Client,
     model: String,
+    /// The PARENT's token bucket, so a child shares it instead of building a
+    /// fresh one.
+    ///
+    /// (iter-2461, F9) Each child used to call
+    /// `OpenAIClient::from_shared_http_client`, which shared the HTTP client and
+    /// NOT the limiter: it constructed a new `RateLimiter` with its own
+    /// `remaining: capacity`. N workers therefore enforced N independent copies of
+    /// `[client.rate_limit]` — the operator set a global ceiling and got N times it.
+    rate_limiter: crate::rate_limiter::RateLimiter,
     /// Parent's current depth (0 = root agent)
     parent_depth: u32,
     /// Parent's enabled toolsets
@@ -671,6 +680,9 @@ impl SubAgentTool {
             client_config: parent_client.config_clone(),
             http_client: parent_client.http_client_clone(),
             model: model.into(),
+            // Cloning the limiter clones an `Arc<Mutex<HashMap<..>>>`, so the
+            // parent and every child draw from the SAME buckets.
+            rate_limiter: parent_client.rate_limiter().clone(),
             parent_depth,
             parent_toolsets,
             parent_disabled_tools,
@@ -974,9 +986,13 @@ impl SubAgentTool {
             system_prompt
         };
 
-        let raw_client = OpenAIClient::from_shared_http_client(
+        // The child shares the PARENT'S token bucket (iter-2461, F9). Sharing only
+        // the HTTP client would give every worker its own full bucket, so N workers
+        // would enforce N copies of a limit the operator believes is global.
+        let raw_client = OpenAIClient::from_shared_http_client_and_limiter(
             self.client_config.clone(),
             self.http_client.clone(),
+            self.rate_limiter.clone(),
         );
         // (iter-2460, F7) The child's client is WRAPPED, not bare. A child is
         // built from `AgentConfig::default()`, which inherits the operator's
@@ -1375,6 +1391,7 @@ impl SubAgentTool {
             client_config: self.client_config.clone(),
             http_client: self.http_client.clone(),
             model: self.model.clone(),
+            rate_limiter: self.rate_limiter.clone(),
             parent_depth: self.parent_depth,
             parent_toolsets: self.parent_toolsets.clone(),
             parent_disabled_tools: self.parent_disabled_tools.clone(),
@@ -1534,9 +1551,12 @@ impl SubAgentTool {
         // "delegation" iff the effective role is orchestrator (see
         // compute_child_toolsets).
         if toolset_set.contains("delegation") {
-            let raw_client = OpenAIClient::from_shared_http_client(
+            // Same shared bucket as `run_child` (iter-2461, F9) — a nested
+            // orchestrator's child must not get a fresh full allowance either.
+            let raw_client = OpenAIClient::from_shared_http_client_and_limiter(
                 self.client_config.clone(),
                 self.http_client.clone(),
+                self.rate_limiter.clone(),
             );
             let child = SubAgentTool::with_parent_tool_policy(
                 &raw_client,
@@ -3972,6 +3992,58 @@ mod approval_inheritance_tests {
             "the documented ceiling is {MAX_GLOBAL_WORKERS_CAP}"
         );
         set_max_global_workers(before);
+    }
+
+    /// iter-2461 (F9): N children draw from ONE bucket, not N private ones.
+    ///
+    /// The defect: the old `OpenAIClient::from_shared_http_client` shared the HTTP
+    /// client and NOT the token bucket — it constructed a fresh `RateLimiter` with
+    /// its own `remaining: capacity`. A delegated child got one per worker, so a
+    /// swarm of 6 enforced 6 INDEPENDENT copies of `[client.rate_limit]`: the
+    /// operator configured a global ceiling and got 6 times it, while every
+    /// individual slot looked correct from the inside. Nothing in one client's
+    /// behaviour reveals the multiplication — only the aggregate does.
+    ///
+    /// This asserts the aggregate: two clients built through the child path share
+    /// one bucket, so tokens spent by one are gone for the other.
+    #[tokio::test]
+    async fn two_children_share_one_rate_limit_bucket() {
+        let parent = crate::rate_limiter::RateLimiter::new(4, 1.0);
+        // The child path: build two clients against the SAME limiter, exactly as
+        // run_child now does via `from_shared_http_client_and_limiter`.
+        let a = OpenAIClient::from_shared_http_client_and_limiter(
+            ClientConfig::default(),
+            reqwest::Client::new(),
+            parent.clone(),
+        );
+        let b = OpenAIClient::from_shared_http_client_and_limiter(
+            ClientConfig::default(),
+            reqwest::Client::new(),
+            parent.clone(),
+        );
+
+        let before = a.rate_limiter().get_status("m").await;
+        assert_eq!(before.limit, 4, "the configured capacity is 4");
+
+        // Drain through client A until the bucket refuses.
+        let mut spent = 0;
+        while a.rate_limiter().check_rate_limit("m").await.is_ok() {
+            spent += 1;
+            assert!(spent <= 4, "the bucket must refuse past its capacity");
+        }
+        assert_eq!(spent, 4, "client A spent the whole bucket");
+
+        // Client B must see the SAME empty bucket. Before this fix it would have
+        // had its own full one and still been admitting — which is the defect.
+        assert!(
+            b.rate_limiter().check_rate_limit("m").await.is_err(),
+            "a second child must not get a fresh allowance: the bucket is shared"
+        );
+        let after = b.rate_limiter().get_status("m").await;
+        assert_eq!(
+            after.remaining, 0,
+            "both clients must observe the same remaining count"
+        );
     }
 
     /// iter-2460 (F7): a delegation can name its model, and omitting it still
