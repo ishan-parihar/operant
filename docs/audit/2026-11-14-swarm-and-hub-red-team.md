@@ -48,6 +48,36 @@
 > byte-identical but for one filter, and a bare `30` restating
 > `MIN_WORKER_TIMEOUT_SECONDS`) — iter-2378.
 >
+> **FIFTH PASS (2026-11-15, the tool-argument seam).** The fourth pass closed on
+> the delegation core, so this one walked the seam every tool call crosses: how
+> a schema spelling becomes a value a parser reads.
+>
+> | # | finding | landed as |
+> |---|---|---|
+> | 1 | five tools' camelCase schema spelling resolved only because `tools::normalize_arg_keys` rewrote their input at the dispatch seam, so the property lived in a different file from the parsers — and for the four OPTIONAL fields the failure mode is a wrong result, not an error (`checkpoint`'s `file_path` restores the whole directory; `skills_tool`'s returns the overview; `home_assistant`'s `entity_id` addresses the domain; `send_message`'s `message_thread_id` posts to the default topic) | iter-2398 |
+>
+> Each parser now reads both spellings itself, with a test driving both, and
+> **mutation was proven on all five** — removing any single dual-read fails its
+> test with the field named.
+>
+> **The fifth pass withdrew its own first finding.** It opened by proposing
+> `#[serde(alias)]` on the five argument structs, on the model of iter-2385's
+> `session_search` fix. That was wrong: those five structs are schema-only
+> (`ToolSchema::from_type::<T>`) and are never deserialized, so the attribute
+> would have been inert. The compile gate found it — removing the `dead_code`
+> `expect` surfaced `fields action, via, to, message, media and
+> message_thread_id are never read`, which is what proved the struct is not the
+> parse path. The real seam is the hand-written `args.get(..)` chain, and that
+> is what the fix moved.
+>
+> Two smaller notes. The rescue at `tools.rs:500` is **load-bearing, not
+> defensive** — it is the only thing joining the two spellings today, which is
+> why each parser now carries the property itself rather than relying on it.
+> And an early guard draft asserted a camelCase call through
+> `SendMessageTool::execute` and passed under the mutation, because `action`,
+> `via` and `to` are single words that no normalization touches: a false guard,
+> replaced rather than kept green.
+>
 > **FOURTH PASS (2026-11-15, self-red-team of the landed bytes).** A pass over
 > the thirteen iterations above asked, for each fix, which input shape reaches
 > the guard while the defect survives. One real defect came out of it:
