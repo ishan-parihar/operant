@@ -2380,9 +2380,6 @@ fn render_system_message_uses_connection_card_for_reconnect_status() {
 }
 
 #[test]
-#[test]
-#[test]
-#[test]
 fn render_tool_message_prefers_subagent_title_with_model() {
     let msg = DisplayMessage {
         role: "tool".to_string(),
@@ -3803,8 +3800,6 @@ fn render_tool_message_memory_store_centered_mode_left_aligns_with_padding() {
 }
 
 #[test]
-#[test]
-#[test]
 fn render_agentgrep_output_body_borders_each_line() {
     let content = "crates/foo.rs\n  symbols: 1 matched\n    - fn bar @ 1-5";
     let lines = super::render_agentgrep_output_body(content, 120);
@@ -3895,7 +3890,6 @@ fn render_assistant_message_plan_card_wraps_instead_of_truncating() {
     crate::tui::operant_app::markdown::set_center_code_blocks(saved);
 }
 
-#[test]
 #[test]
 fn render_empty_todo_tool_result_collapses_to_compact_line() {
     let msg = DisplayMessage {

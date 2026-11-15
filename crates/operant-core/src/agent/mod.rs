@@ -1844,7 +1844,6 @@ mod tests {
         assert_eq!(agent.seat_id(), None);
     }
 
-    #[test]
     /// (iter-2211) The posture is PER SESSION: the override lives on the
     /// agent, so two chats (two agents) hold independent postures. The old
     /// process-global static made one chat's `/ponytail` flip every chat in

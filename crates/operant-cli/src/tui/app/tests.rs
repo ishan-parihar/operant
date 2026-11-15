@@ -11136,7 +11136,6 @@ fn resume_picks_the_session_the_agent_switches_to() {
 mod rename_on_load_tests {
     use super::*;
 
-    #[test]
     /// (audit 2026-11-14, finding 1) `Show more` APPENDS. The load flag is
     /// read at the spawn and CONSUMED at the drain; when the spawn consumed it
     /// too, the drain always saw `false` and the next page replaced the list
