@@ -1858,11 +1858,19 @@ impl App {
                     return true;
                 }
                 let skills_dir = self.config.skills.root_dir.clone();
-                // The vendor roots — the installed integrations AND the
-                // plugin roots. The ponytail-only root this used to wire
-                // dropped every plugin skill from the overlay + typeahead
-                // until a restart.
-                let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
+                // The RESOLVED roots, the same list the boot path and the
+                // in-loop tools read — vendor roots, `[skills] extra_roots`
+                // AND the project root.
+                //
+                // This built `vendor_skill_roots(config)` alone, which is the
+                // pool + integrations + plugin roots and nothing else. So a
+                // rescan NARROWED the surface below what boot offered it: an
+                // operator with configured extra roots lost them from the
+                // `/skills` overlay and from `$` / `/skill` completion until
+                // they restarted the process. A refresh that silently drops
+                // configuration is worse than no refresh.
+                let resolved = crate::skill_roots::skill_roots(&self.config);
+                let vendor_roots = resolved.as_paths();
                 let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
                 for root in &vendor_roots {
                     mgr.add_extra_root(Some(root.clone()));
@@ -1881,17 +1889,22 @@ impl App {
                         if self.skills_view.selected >= count {
                             self.skills_view.selected = 0;
                         }
-                        // ONE registration for both name tiers — the invocable
-                        // pool with the vendor roots — so a rescan and a
-                        // fresh start offer exactly the same names.
+                        // ONE registration for both name tiers over the
+                        // RESOLVED roots — so a rescan and a fresh start offer
+                        // exactly the same names, including a skill that lives
+                        // only in `[skills] extra_roots` or the project root.
+                        // The two-argument `register_invocable_skills` form
+                        // this used to call concatenates the pool and the
+                        // vendor roots and stops there: its own docstring says
+                        // it cannot see `extra_roots`, which is precisely how a
+                        // rescan narrowed the popup below what boot offered.
                         let bundle_names =
                             operant_core::agent::skill_bundle::refresh_skill_bundles()
                                 .keys()
                                 .map(|k| k.trim_start_matches('/').to_string())
                                 .collect();
-                        crate::tui::prompt_input::register_invocable_skills(
-                            &skills_dir,
-                            &vendor_roots,
+                        crate::tui::prompt_input::register_invocable_skills_in(
+                            &resolved,
                             bundle_names,
                         );
                         self.set_status_notice(format!(

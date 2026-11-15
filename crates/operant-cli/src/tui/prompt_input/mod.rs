@@ -32,11 +32,12 @@ pub use ghost::GhostText;
 pub use kill_ring::KillRing;
 pub use paste::{detect_pasted_path, expand_paste_placeholders};
 pub use prediction::{EngineHandle, EngineReply, spawn as spawn_word_predictor};
+#[cfg(test)]
+pub(crate) use typeahead::skill_mention_names_for_test;
 pub use typeahead::{
     AcceptForSubmitOutcome, FileSuggestJob, FileSuggestResult, PendingFileQuery, TypeaheadSource,
     TypeaheadSuggestion, active_file_query, active_file_token, compute_typeahead,
-    fuzzy_file_suggestions, parse_file_ref_token, register_invocable_skills,
-    register_invocable_skills_in,
+    fuzzy_file_suggestions, parse_file_ref_token, register_invocable_skills_in,
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
 pub use visual::{VisualRow, wrap_input_rows};

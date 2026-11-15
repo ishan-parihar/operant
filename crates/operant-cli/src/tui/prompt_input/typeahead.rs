@@ -476,6 +476,14 @@ static SKILL_MENTION_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<(String
 /// expansion resolves against (`build_skill_invocation_message_in` takes the
 /// same roots).
 ///
+/// **The pool-plus-vendor-roots form. It CANNOT see `[skills] extra_roots`
+/// or the project root** — see [`register_invocable_skills_in`], which is
+/// what every production path now uses. It is kept because a caller that
+/// genuinely has no resolver (the typeahead tests, and any surface holding
+/// only two root arguments) still needs a way to populate the snapshot; a
+/// surface that CAN resolve roots must use the `_in` form, or it will narrow
+/// the popup the moment configuration carries a root this form omits.
+///
 /// One pool for both name tiers — `/skill <Tab>` and the `$` mention popup —
 /// so the popup can never be a SUBSET of what the expander would run. A
 /// vendor skill typed in full always resolved; before this it simply never
@@ -532,6 +540,19 @@ pub(super) fn set_skill_mentions(entries: Vec<(String, String)>) {
     let mut snapshot = snapshot.write().unwrap_or_else(|e| e.into_inner());
     snapshot.clear();
     snapshot.extend(entries);
+}
+
+/// The skill names currently in the `$` mention snapshot.
+///
+/// The rescan regression test needs to assert what the popup will offer AFTER
+/// a refresh, and the snapshot is the only reader of that state. A production
+/// surface should not read this — the popup is the seam — but a test that
+/// wants to know "did the refresh keep this skill" has no other way to ask.
+#[cfg(test)]
+pub(crate) fn skill_mention_names_for_test() -> Vec<String> {
+    let snapshot = SKILL_MENTION_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
+    let snapshot = snapshot.read().unwrap_or_else(|e| e.into_inner());
+    snapshot.iter().map(|(n, _)| n.clone()).collect()
 }
 
 /// Compute `$skill` mention completions for the live token under the cursor.

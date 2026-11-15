@@ -18394,3 +18394,64 @@ mod seed_flag_tests {
         );
     }
 }
+
+/// **`/reload-skills` must not narrow the composer's skill pool below what
+/// boot offered.**
+///
+/// The rescan handler built its roots as `vendor_skill_roots(config)` alone,
+/// which is the pool + integrations + plugin roots and nothing else. It then
+/// re-registered the popup through the two-argument
+/// `register_invocable_skills(pool, vendor_roots)` — a form whose own
+/// docstring says it cannot see `[skills] extra_roots` or the project root.
+///
+/// The consequence: an operator who configures `extra_roots` and then runs
+/// `/reload-skills` loses every skill from those roots out of `$` completion
+/// and `/skill <Tab>` until they restart the process. A refresh that silently
+/// drops configuration is worse than no refresh.
+///
+/// MUTATION-PROVEN: reverting either the resolver call or the `_in`
+/// registration drops the extra-root skill from the snapshot and fails this.
+#[test]
+fn reload_skills_keeps_a_skill_that_lives_only_in_extra_roots() {
+    let mut app = make_app();
+
+    let extra = std::env::temp_dir().join(format!(
+        "operant_rescan_extra_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let skill_dir = extra.join("rescan-only-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: rescan-only-skill\ndescription: only reachable through an extra root\n---\n\n# rescan-only-skill\n",
+    )
+    .unwrap();
+
+    // Seed the snapshot the way boot does: the operator's roots PLUS the extra
+    // root, so the skill is present before the rescan.
+    let before = crate::skill_roots::skill_roots(&app.config);
+    let mut with_extra = before.clone();
+    with_extra.roots.push(extra.clone());
+    crate::tui::prompt_input::register_invocable_skills_in(&with_extra, Vec::new());
+
+    // Point the config at the extra root and rescan.
+    app.config.skills.extra_roots = vec![extra.clone()];
+    assert!(
+        app.handle_tui_command("reload-skills", ""),
+        "/reload-skills is a handled command"
+    );
+
+    // The snapshot AFTER the rescan must still offer the extra-root skill.
+    let names: Vec<String> = crate::tui::prompt_input::skill_mention_names_for_test();
+    assert!(
+        names.iter().any(|n| n == "rescan-only-skill"),
+        "a rescan must not drop a skill that lives only in [skills] extra_roots; \
+         the popup offered {names:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&extra);
+}
