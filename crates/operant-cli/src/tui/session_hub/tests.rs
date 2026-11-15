@@ -1780,36 +1780,36 @@ fn the_preview_header_is_pinned_while_the_transcript_scrolls() {
     );
 }
 
-/// The `t` clause in the preview's footer must say what the key does NOW.
+/// The preview's footer must name the ACTIVE filter, and the pane must
+/// show it — all three states, not two.
 ///
-/// (audit finding 7) It read "t hides tool calls" unconditionally — directly
-/// beneath a banner reading "tool calls hidden (t shows them)", so the pane
-/// contradicted itself about the same key at the same time.
+/// (audit finding 7) The footer used to say what `t` hides or shows derived
+/// from `shows_tool_calls`, which is false for both `UserOnly` and
+/// `UserAndTurnEnd` — the default mode and the prompts-only mode were
+/// indistinguishable on screen. The footer now names the state the filter is in.
 #[test]
-fn the_preview_footer_says_what_t_does_now() {
+fn the_preview_footer_names_all_three_filter_states() {
     let mut hub = SessionHubState::new();
     hub.replace_rows(vec![row("s1", Some("work"), None)]);
     hub.apply_preview("s1", vec![msg("user", "hi"), msg("assistant", "done")], 0);
-    // FULL first: the default is prompts+replies, where the key would already
-    // read "shows".
-    hub.preview_filter = PreviewFilter::Full;
-    let plain = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
-    assert!(
-        plain.contains("t hides tool calls"),
-        "with nothing hidden the key HIDES: {plain}"
-    );
-    // Full -> UserAndTurnEnd.
-    hub.cycle_preview_filter();
-    assert_eq!(hub.preview_filter, PreviewFilter::UserAndTurnEnd);
-    let hidden = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
-    assert!(
-        hidden.contains("t shows tool calls"),
-        "with them hidden the key SHOWS: {hidden}"
-    );
-    assert!(
-        !hidden.contains("hides tool calls"),
-        "the pane must not contradict itself: {hidden}"
-    );
+    const STATES: [(PreviewFilter, &str); 3] = [
+        (PreviewFilter::Full, "full session"),
+        (PreviewFilter::UserAndTurnEnd, "prompts + replies"),
+        (PreviewFilter::UserOnly, "your prompts"),
+    ];
+    for (filter, label) in STATES {
+        hub.preview_filter = filter;
+        let pane = preview_pane(vec![row("s1", Some("work"), None)], 0, &mut hub).join("\n");
+        assert!(
+            pane.contains(&format!("t cycles the preview ({label})")),
+            "the footer must name the {label} state:\n{pane}"
+        );
+        // T2 names its own traffic: the filter is visible at the top of the preview.
+        assert!(
+            pane.contains(&format!("— preview: {label} —")),
+            "the preview must paint its own filter label:\n{pane}"
+        );
+    }
 }
 
 /// Hiding the tool rows must not leave holes in the visible numbering.
@@ -3794,8 +3794,8 @@ fn every_stages_claim_holds_on_one_drawn_hub() {
         "Stage A: the tab bar must show the live count for `all`\n{joined}"
     );
     assert!(
-        joined.contains("Tasks") && joined.contains("Status") && joined.contains("Updated"),
-        "Stage B: the column header must name all three columns\n{joined}"
+        joined.contains("Employee") && joined.contains("Status") && joined.contains("Updated"),
+        "Stage B: the column header must name the columns the row carries\n{joined}"
     );
 
     // ── Stage C: the group heading and its count ──
