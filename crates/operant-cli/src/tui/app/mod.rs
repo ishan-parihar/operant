@@ -847,6 +847,21 @@ pub struct App {
     pub import_config_dialog: ImportConfigDialogState,
     /// Ctrl+K command palette overlay.
     pub command_palette: DialogSelectState,
+    /// The CURRENT session's model, when it has been switched away from the
+    /// config's.
+    ///
+    /// (session-hub plan M5) Session-scoped on purpose: the config's
+    /// `agent.model` is the DEFAULT a new session starts from, and choosing a
+    /// model for one conversation must not silently re-point every other one.
+    /// Seeded from the session row at the first submit (only when the row's
+    /// switch carries a role), and never written back to the config.
+    pub session_model: Option<String>,
+    /// The role the session's model switch was made through, when it was made
+    /// through one. This is the restore key: a plain temporary switch is
+    /// deliberately NOT restored on resume.
+    pub session_model_role: Option<String>,
+    /// Whether the session model has been seeded from the row this run.
+    pub session_model_seeded: bool,
     /// The acting seat for the CURRENT session, or `None` when the session
     /// runs unbound.
     ///

@@ -170,6 +170,28 @@ impl App {
         }
     }
 
+    /// `/model set-default`: make the CURRENT session's model the config's.
+    ///
+    /// (session-hub plan M5) The one path that writes `config.agent.model`.
+    /// Switching is session-scoped; persisting is this, deliberately.
+    pub(super) fn persist_session_model_as_default(&mut self) {
+        let model = self
+            .session_model
+            .clone()
+            .unwrap_or_else(|| self.model_name.clone());
+        if model.trim().is_empty() {
+            self.set_status_notice("no model to make the default".to_string());
+            return;
+        }
+        match operant_core::config::persist_config_key("agent.model", &model) {
+            Ok(path) => {
+                self.config.agent.model = model.clone();
+                self.set_status_notice(format!("Model: {model} (persisted to {})", path.display()))
+            }
+            Err(e) => self.set_status_notice(format!("Model: {model} (persist failed: {e})")),
+        }
+    }
+
     /// The models the operator can pick right now: the configured `[agent] model`
     /// and `fallback_models`.
     ///

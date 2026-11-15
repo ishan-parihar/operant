@@ -1144,6 +1144,24 @@ impl TuiApp {
         }
     }
 
+    /// Seed the session's model from the session row (first submit of a run),
+    /// then push it onto the agent.
+    ///
+    /// (session-hub plan M5) omp's restore rule, deliberately: a session-scoped
+    /// switch is restored on resume ONLY when the change carried a role
+    /// (`session-context.ts:139-156`). A plain experiment has no role to restore
+    /// under, so it dies with the session — the config's model stays the default
+    /// for the next one.
+    fn sync_session_model_to_agent(
+        &mut self,
+        agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
+    ) {
+        self.app.seed_session_model_from_row();
+        if let Some(model) = self.app.session_model.clone() {
+            agent.set_model(model);
+        }
+    }
+
     async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
@@ -1169,6 +1187,7 @@ impl TuiApp {
         // `/agent`) resumes under its own instructions; after that the App's
         // copy is the authority until the session changes.
         self.sync_acting_seat_to_agent(agent);
+        self.sync_session_model_to_agent(agent);
         // User activity cancels any pending idle recap (omp parity: the
         // recap exists to greet a returning user, never to interrupt one).
         if let Some(activity) = &self.app.recap_activity {
@@ -1972,6 +1991,12 @@ impl TuiApp {
                 app.acting_seat = None;
                 app.acting_charter = None;
                 app.acting_seat_seeded = false;
+                // (session-hub plan M5) The model is session-scoped too: the
+                // next session re-seeds from its own row, and only when that
+                // row's switch carries a role.
+                app.session_model = None;
+                app.session_model_role = None;
+                app.session_model_seeded = false;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -2020,6 +2045,12 @@ impl TuiApp {
                 app.acting_seat = None;
                 app.acting_charter = None;
                 app.acting_seat_seeded = false;
+                // (session-hub plan M5) The model is session-scoped too: the
+                // next session re-seeds from its own row, and only when that
+                // row's switch carries a role.
+                app.session_model = None;
+                app.session_model_role = None;
+                app.session_model_seeded = false;
                 let conv = agent.conversation().await;
                 Self::rebuild_display_from_agent(app, conv);
                 app.clear_tool_blocks();
@@ -2113,16 +2144,23 @@ impl TuiApp {
             agent.set_endpoint(&base_url, api_key.as_deref());
         }
         // (plan 05A) model switch: ONE source of truth — the agent applies
-        // it, and the display (model_name, config, context window, cost
-        // tracker) refreshes FROM the agent, never from a parallel copy.
-        // Persist through the surgical writer (plan 09): agent.model only.
+        // it, and the display (model_name, context window, cost tracker)
+        // refreshes FROM the agent, never from a parallel copy.
+        //
+        // (session-hub plan M5) The switch is SESSION-SCOPED. It used to write
+        // `app.config.agent.model` and persist it through the surgical writer,
+        // so trying a model for one conversation silently re-pointed every
+        // other session and there was no way back without remembering what was
+        // there. Now: the agent applies it, the session row records it, and
+        // the config is untouched — persisting is a separate, explicit act
+        // (`/model set-default`).
         if let Some(model) = std::mem::take(&mut app.pending_model)
             && let Some(agent) = agent
         {
             agent.set_model(model.clone());
             let applied = agent.model().to_string();
             app.model_name = applied.clone();
-            app.config.agent.model = applied.clone();
+            app.session_model = Some(applied.clone());
             if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {
                 tracker.set_model(&applied);
             }
@@ -2131,13 +2169,16 @@ impl TuiApp {
             // measurement is stale, so the warning bar must not keep it.
             app.context_used_tokens = 0;
             app.last_observed_prompt_tokens = None;
-            match operant_core::config::persist_config_key("agent.model", &applied) {
-                Ok(path) => app.set_status_notice(format!(
-                    "Model: {applied} (persisted to {})",
-                    path.display()
-                )),
-                Err(e) => app.set_status_notice(format!("Model: {applied} (persist failed: {e})")),
+            // The session row carries the model and the role it was switched
+            // through; the role is what a resume restores.
+            if let Some(session_id) = app.current_session.clone() {
+                let db_path = app.config.database_path.clone();
+                if let Ok(db) = operant_core::database::Database::init(db_path) {
+                    let role = app.session_model_role.clone();
+                    let _ = db.set_session_model(&session_id, &applied, role.as_deref());
+                }
             }
+            app.set_status_notice(format!("Model: {applied} (this session only)"));
         }
         if std::mem::take(&mut app.pending_compact) {
             let Some(agent) = agent else {

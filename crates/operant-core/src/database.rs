@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id TEXT,
     model TEXT,
     model_config TEXT,
+    -- (session-hub plan M5) The ROLE a session-scoped model switch was made
+    -- through, when it was made through one. A plain temporary switch writes
+    -- NULL here and is deliberately NOT restored on resume; a role switch
+    -- carries the role and is.
+    model_role TEXT,
     system_prompt TEXT,
     parent_session_id TEXT,
     started_at TEXT NOT NULL,
@@ -2034,6 +2039,47 @@ impl Database {
             );
         }
         Ok(out)
+    }
+
+    /// Stamp the session's model and the role it was switched through.
+    ///
+    /// (session-hub plan M5) The session's own model — never the config's. The
+    /// role is the restore key: omp restores a session-scoped switch only when
+    /// the last change carried a role, and a plain experiment dies with the
+    /// session (`session-context.ts:139-156`).
+    pub fn set_session_model(
+        &self,
+        session_id: &str,
+        model: &str,
+        role: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE sessions SET model = ?2, model_role = ?3 WHERE id = ?1",
+            params![session_id, model, role],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to stamp session model: {}", e)))?;
+        Ok(())
+    }
+
+    /// The session's model and the role it was switched through, if any.
+    ///
+    /// `Ok(None)` is a session that never switched; `Some((model, None))` is a
+    /// session whose switch was plain and must not be restored.
+    pub fn get_session_model(&self, session_id: &str) -> Result<Option<(String, Option<String>)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT model, model_role FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare get_session_model: {}", e)))?;
+        let row = stmt
+            .query_row(params![session_id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .ok();
+        Ok(row.and_then(|(model, role)| model.map(|m| (m, role))))
     }
 
     /// Read the bylaws seat bound to a session row, if any.
@@ -6180,7 +6226,13 @@ mod tests {
                     "executive",
                     "You are Premiere.",
                 ),
-                ("emp-analyst", "Analyst", "analyst", "research", "You are Analyst."),
+                (
+                    "emp-analyst",
+                    "Analyst",
+                    "analyst",
+                    "research",
+                    "You are Analyst.",
+                ),
             ] {
                 conn.execute(
                     "INSERT INTO employees (employee_id, name, role, department, \

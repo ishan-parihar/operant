@@ -762,6 +762,23 @@ impl App {
                     self.open_model_picker_inline("");
                     return true;
                 }
+                // (session-hub plan M5) Persisting is a SEPARATE act from
+                // switching: `/model set-default` writes the session's current
+                // model into `config.agent.model`, so a switch the operator
+                // likes can be made the default for new sessions without ever
+                // having been made the default silently.
+                if selector.eq_ignore_ascii_case("set-default") {
+                    self.persist_session_model_as_default();
+                    return true;
+                }
+                // A role selector records the role, because the row's restore
+                // key is the role and not the model.
+                if let Some(role) = selector.strip_prefix('@') {
+                    let role_name = role.split(':').next().unwrap_or(role).trim();
+                    self.session_model_role = Some(role_name.to_string());
+                } else {
+                    self.session_model_role = None;
+                }
                 let available = self.configured_model_ids();
                 match crate::tui::model_selector::resolve(selector, &available) {
                     Ok(resolved) if resolved.is_empty() => self.open_model_picker_inline(""),
@@ -3247,11 +3264,13 @@ mod tests {
         );
     }
 
-    /// (plan 05A) a model pick must reach the AGENT and persist — the old
-    /// confirm path updated only the display copy, so requests kept using
-    /// the old model forever.
+    /// (plan 05A, revised by model plan M5) a model pick must reach the AGENT,
+    /// refresh the display, and stay SESSION-SCOPED: the old drain also wrote
+    /// `config.agent.model` and persisted it, so trying a model for one
+    /// conversation silently re-pointed every other session. Persisting is
+    /// `/model set-default`, a separate act.
     #[tokio::test]
-    async fn model_pick_drain_switches_the_agent_and_persists() {
+    async fn model_pick_drain_switches_the_agent_and_leaves_the_config_alone() {
         let dir = tempfile::tempdir().expect("tempdir");
         // RT-208: `persist_config_key` writes into the PROCESS-GLOBAL
         // `LOADED_CONFIG_PATH`, which every `load_app_config` overwrites. In
@@ -3298,12 +3317,20 @@ mod tests {
             app.model_name, "small-stack",
             "display refreshed from the agent"
         );
-        assert_eq!(app.config.agent.model, "small-stack");
+        assert_eq!(
+            app.config.agent.model, "old-model",
+            "a session-scoped switch must NOT rewrite the config's default"
+        );
+        assert_eq!(
+            app.session_model.as_deref(),
+            Some("small-stack"),
+            "the session carries its own model"
+        );
         assert!(app.pending_model.is_none(), "consumed");
         let persisted = std::fs::read_to_string(&cfg_path).expect("re-read");
         assert!(
-            persisted.contains("small-stack"),
-            "the pick persists through the surgical writer: {persisted}"
+            !persisted.contains("small-stack"),
+            "the pick must not reach the config file: {persisted}"
         );
         assert!(
             !persisted.contains("[pk]"),

@@ -78,10 +78,8 @@ impl App {
                 }
             })
             .collect();
-        self.agent_picker = crate::tui::dialog_select::DialogSelectState::new(
-            "Acting employee",
-            items,
-        );
+        self.agent_picker =
+            crate::tui::dialog_select::DialogSelectState::new("Acting employee", items);
         self.agent_picker.open();
     }
 
@@ -104,9 +102,9 @@ impl App {
         self.acting_charter = charter;
         if let Some(session_id) = self.current_session.clone() {
             let db_path = self.config.database_path.clone();
-            match operant_core::database::Database::init(db_path).and_then(|db| {
-                db.set_session_employee(&session_id, &record.employee_id)
-            }) {
+            match operant_core::database::Database::init(db_path)
+                .and_then(|db| db.set_session_employee(&session_id, &record.employee_id))
+            {
                 Ok(()) => {}
                 Err(error) => {
                     self.set_status_notice(format!(
@@ -118,6 +116,39 @@ impl App {
             }
         }
         self.set_status_notice(format!("acting as {name} (this session only)"));
+    }
+
+    /// Seed the session's model from the session row, once per run.
+    ///
+    /// (session-hub plan M5) The restore rule is omp's, deliberately: a
+    /// session-scoped switch is restored on resume ONLY when the change carried
+    /// a role (`session-context.ts:139-156`). A plain experiment has no role to
+    /// restore under, so it dies with the session and the config's model stays
+    /// the default for the next one.
+    pub fn seed_session_model_from_row(&mut self) {
+        if self.session_model_seeded {
+            return;
+        }
+        self.session_model_seeded = true;
+        self.session_model = None;
+        self.session_model_role = None;
+        let Some(session_id) = self.current_session.clone() else {
+            return;
+        };
+        let db_path = self.config.database_path.clone();
+        let Ok(db) = operant_core::database::Database::init(db_path) else {
+            return;
+        };
+        let Ok(Some((model, role))) = db.get_session_model(&session_id) else {
+            return;
+        };
+        if role.is_none() {
+            // A plain switch is not restorable: it was an experiment, and the
+            // session that ran it is the only place it belonged.
+            return;
+        }
+        self.session_model = Some(model);
+        self.session_model_role = role;
     }
 
     /// `/agent <seat>` — quick switch by id or by name, case-insensitively.

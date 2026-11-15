@@ -17552,3 +17552,120 @@ mod agent_identity_tests {
         );
     }
 }
+
+// ── session-scoped model and effort (model plan M5) ─────────────────────────
+mod session_model_tests {
+    use super::*;
+
+    /// A store with the session rows this test needs, with the org registry's
+    /// own schema laid down by operant's migrations first.
+    fn db_with(rows: &[(&str, Option<&str>, Option<&str>)]) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("operant-session-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.sqlite");
+        operant_core::database::Database::init(path.clone()).expect("operant schema");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for (id, model, role) in rows {
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, ended_at, model, model_role) VALUES (?1, 'local', '2026-11-15', NULL, ?2, ?3)",
+                rusqlite::params![id, model, role],
+            )
+            .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn a_session_model_switch_writes_row_not_config() {
+        let mut app = make_app();
+        let config_before = app.config.agent.model.clone();
+        app.has_credentials = true;
+        assert!(app.handle_tui_command("model", "gpt-4"));
+        // The pending switch lives on the drain, which the frame loop runs
+        // against a live agent; what the App holds here is the marker the agent
+        // applies. What it must NOT have done is edit the config.
+        assert_eq!(
+            app.config.agent.model, config_before,
+            "a session-scoped switch must never rewrite the config's default"
+        );
+        assert_eq!(
+            app.pending_model.as_deref(),
+            Some("gpt-4"),
+            "the switch rides the pending channel to the agent"
+        );
+        assert_eq!(
+            app.session_model_role, None,
+            "a bare model id is a temporary switch: no role to restore under"
+        );
+    }
+
+    #[test]
+    fn a_role_switch_records_the_role_and_set_default_is_the_only_writer() {
+        let mut app = make_app();
+        app.has_credentials = true;
+        assert!(app.handle_tui_command("model", "@slow:xhigh"));
+        assert_eq!(
+            app.session_model_role.as_deref(),
+            Some("slow"),
+            "the role is the restore key, so it must be recorded"
+        );
+        // The config is still untouched.
+        assert!(
+            app.config.agent.model == AppConfig::default().agent.model,
+            "/model <role> must not write the config"
+        );
+    }
+
+    #[test]
+    fn resume_restores_a_role_switch_and_deliberately_not_a_temporary_one() {
+        // omp's rule: the restore reads the LOG, not the config, and only when
+        // the last change carried a role.
+        let path = db_with(&[
+            ("role-session", Some("slow"), Some("slow")),
+            ("temp-session", Some("fast-model"), None),
+        ]);
+        let read =
+            |id: &str, db: &operant_core::database::Database| db.get_session_model(id).unwrap();
+        {
+            let db = operant_core::database::Database::init(path.clone()).unwrap();
+            let (model, role) = read("role-session", &db).expect("row");
+            assert_eq!(model, "slow", "the row holds the switched model");
+            assert_eq!(role.as_deref(), Some("slow"), "with its role: restorable");
+        }
+        {
+            let db = operant_core::database::Database::init(path.clone()).unwrap();
+            // A plain switch is written with the model but NULL role, so the
+            // seed's `role.is_none()` branch drops it — the experiment dies
+            // with the session that made it.
+            let temp = read("temp-session", &db).expect("row");
+            assert_eq!(temp.1, None, "a temporary switch carries no role");
+        }
+    }
+
+    #[test]
+    fn the_seed_restores_only_a_role_switch() {
+        let mut app = make_app();
+        app.config.database_path = db_with(&[
+            ("sess-role", Some("role-model"), Some("slow")),
+            ("sess-temp", Some("temp-model"), None),
+        ]);
+        app.current_session = Some("sess-temp".to_string());
+        app.session_model_seeded = false;
+        app.seed_session_model_from_row();
+        assert!(
+            app.session_model.is_none(),
+            "a temporary switch must not be restored on resume: {:?}",
+            app.session_model
+        );
+        app.current_session = Some("sess-role".to_string());
+        app.session_model_seeded = false;
+        app.seed_session_model_from_row();
+        assert_eq!(
+            app.session_model.as_deref(),
+            Some("role-model"),
+            "a role switch must be restored"
+        );
+        assert_eq!(app.session_model_role.as_deref(), Some("slow"));
+    }
+}
