@@ -3774,8 +3774,14 @@ mod composer_hint_tests {
             "a status line with content is still filled"
         );
         // The arms the earlier test pinned must not move.
-        assert!(!status_row_fills(true, 0, 5), "a zero-height row has nothing to fill");
-        assert!(!status_row_fills(false, 1, 5), "a collapsed layout is not filled");
+        assert!(
+            !status_row_fills(true, 0, 5),
+            "a zero-height row has nothing to fill"
+        );
+        assert!(
+            !status_row_fills(false, 1, 5),
+            "a collapsed layout is not filled"
+        );
     }
 
     /// THE INPUT AREA CARRIES ONLY THE OPERATOR'S TEXT.

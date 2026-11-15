@@ -56,6 +56,30 @@ use crate::tui::theme_colors;
 /// surface, not a transcript — the full goal stays in the tool block.
 const GOAL_PREVIEW: usize = 56;
 
+/// How long a SETTLED row stays on screen before it is suppressed.
+///
+/// (plan 2026-11-15 B1) MEASURED: the live ledger on this box held 50 records,
+/// every one terminal (`completed`/`failed`), and `rows_area` sized itself to
+/// the full row count — so the dock claimed the WHOLE messages band at every
+/// terminal height and the header, the transcript and the composer's status row
+/// were all painted over. The operator saw it as "an overlay of dlg-<id> as the
+/// delegated stale log". It is not an overlay; it is a task log that never
+/// forgets.
+///
+/// A finished row is still useful for a moment — long enough to read what it
+/// said — and is history after that. 10 minutes is the same order as the
+/// transient-notice TTL; the number is a hygiene rule with one right answer, not
+/// an operator preference, so it is a constant and not a config key.
+const STALE_AFTER_SECS: u64 = 600;
+
+/// Most settled rows rendered at once before the rest fold into a `+N more` row.
+///
+/// The same idiom the todos widget and the info-widget dock already use
+/// (`info_widget_frame::more`): a status surface shows what fits and names the
+/// remainder rather than growing without bound. 3 matches both, so the dock
+/// cannot drift from the two surfaces an operator already reads.
+const DOCK_MAX_ROWS: usize = 3;
+
 /// Wall-clock unix seconds, saturating. A clock reading earlier than the unix
 /// epoch yields 0 rather than panicking; the only cost is a zero elapsed,
 /// which is the honest reading of an impossible clock anyway.
@@ -140,6 +164,20 @@ impl BackgroundTask {
     /// True while the row still claims work is in progress.
     pub fn is_live(&self) -> bool {
         !self.state.is_terminal()
+    }
+
+    /// Seconds since this row SETTLED, or since dispatch while it is still live.
+    ///
+    /// (plan 2026-11-15 B1) Deliberately not `elapsed_secs`: for a settled row
+    /// that measures how long the work RAN, which is frozen at its
+    /// `finished_at` and never advances. The staleness rule needs the opposite
+    /// clock — how long ago the row stopped being news — which for a settled row
+    /// is `now - finished_at` and for a live row is its age.
+    pub fn age_secs(&self, now: u64) -> u64 {
+        match self.finished_at {
+            Some(at) => now.saturating_sub(at),
+            None => now.saturating_sub(self.started_at),
+        }
     }
 
     /// Settle the row, recording when its lifecycle ended.
@@ -279,6 +317,29 @@ fn detail_of(rec: &AsyncDelegationRecord) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Which rows the dock shows, and how many are folded away.
+///
+/// (plan 2026-11-15 B1) Two rules, in order:
+///
+/// 1. **Suppress stale.** A row that settled more than [`STALE_AFTER_SECS`] ago
+///    is history, not status. A LIVE row is never suppressed however old it is —
+///    a long-running child is exactly what the operator is watching for.
+/// 2. **Cap the recent.** At most [`DOCK_MAX_ROWS`] of what survives, newest
+///    first; the rest become one `+N more` row.
+///
+/// Extracted as a pure function because the dock's defect is an unbounded count,
+/// and a count cannot be asserted through a live frame whose height and record
+/// set both vary. `rows` is already newest-first (`list_records` sorts by
+/// `dispatch_time` descending, and `sync_from` preserves that arrival order).
+pub fn visible_rows(rows: &[BackgroundTask], now: u64) -> (Vec<&BackgroundTask>, usize) {
+    let fresh: Vec<&BackgroundTask> = rows
+        .iter()
+        .filter(|row| row.is_live() || row.age_secs(now) <= STALE_AFTER_SECS)
+        .collect();
+    let shown = fresh.len().min(DOCK_MAX_ROWS);
+    (fresh[..shown].to_vec(), fresh.len() - shown)
+}
+
 /// Paint the rows into `area`, one task per row, capped to the available
 /// height so a long history of finished tasks can never push the transcript
 /// off-screen. `now` is a wall-clock reading.
@@ -289,11 +350,27 @@ pub fn render_rows(frame: &mut Frame, area: Rect, rows: &[BackgroundTask], now: 
     if area.height == 0 || rows.is_empty() {
         return;
     }
-    let start = rows.len().saturating_sub(usize::from(area.height));
-    let lines: Vec<Line> = rows[start..]
+    let (visible, hidden) = visible_rows(rows, now);
+    if visible.is_empty() && hidden == 0 {
+        // Every row is stale: a task log with nothing current to say renders
+        // nothing at all rather than an empty frame.
+        return;
+    }
+
+    let mut lines: Vec<Line> = visible
         .iter()
         .map(|row| Line::from(row_spans(row, now)))
         .collect();
+    if hidden > 0 {
+        lines.push(Line::from(vec![Span::styled(
+            format!("+{hidden} more"),
+            Style::default().fg(theme_colors::muted()),
+        )]));
+    }
+
+    // The caller reserved exactly this many rows (it derives the count from the
+    // same `visible_rows`), so the paragraph and the rect agree by construction —
+    // no clamp here to drift out of step with `rows_area`.
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -305,7 +382,7 @@ const BOTTOM_INSET: u16 = 1;
 /// actually present, and clamped so a tiny terminal cannot overflow or
 /// underflow. Returns a zero-height rect when there is nothing to draw, which
 /// `render_rows` treats as a no-op.
-pub fn rows_area(area: Rect, row_count: usize) -> Rect {
+pub fn rows_area(area: Rect, row_count: usize, header_height: u16) -> Rect {
     if row_count == 0 || area.height == 0 || area.width == 0 {
         return Rect {
             x: area.x,
@@ -314,9 +391,27 @@ pub fn rows_area(area: Rect, row_count: usize) -> Rect {
             height: 0,
         };
     }
-    let height = u16::try_from(row_count)
-        .unwrap_or(u16::MAX)
-        .min(area.height);
+    // (plan 2026-11-15 B1) The header is a TRANSCRIPT SECTION, so it occupies
+    // the top of this same band. Reserving its height is what stops the dock
+    // from painting over it — measured: 50 terminal records claimed all 30 rows
+    // of a 30-row band, header included.
+    //
+    // The header's height is a FRAME property (its wrapped-line count), not a
+    // viewport one, so it does not move with scroll and this is not a
+    // scroll-derived guard. A constant floor would be wrong: band 7 and band 30
+    // share a header and need different answers.
+    let usable = area.height.saturating_sub(header_height + BOTTOM_INSET);
+    if usable == 0 {
+        // No room for a transcript: a launch screen is not a place to show a
+        // task log. Render nothing rather than cover the header.
+        return Rect {
+            x: area.x,
+            y: area.y,
+            width: 0,
+            height: 0,
+        };
+    }
+    let height = u16::try_from(row_count).unwrap_or(u16::MAX).min(usable);
     Rect {
         x: area.x,
         y: area.y + area.height.saturating_sub(height + BOTTOM_INSET),
@@ -545,19 +640,28 @@ mod tests {
             width: 20,
             height: 6,
         };
-        // More rows than fit: clamped to the full height, offset by the inset.
-        let many = rows_area(area, 99);
-        assert_eq!(many.height, 6);
+        // More rows than fit: clamped to the room left after the header and the
+        // bottom inset, so the inset row really is blank.
+        //
+        // (plan 2026-11-15 B1) This assertion used to expect the FULL height (6)
+        // on the reasoning that the inset sat below the rect. It did not: at
+        // height 6 in a 6-row area the rect was y=0..6 and the "inset" fell
+        // outside the container entirely, so the rows sat flush against the
+        // separator — the exact thing BOTTOM_INSET's own doc says must not
+        // happen. `y + height + 1 == area.y + area.height` below is the contract;
+        // the old expectation contradicted it.
+        let many = rows_area(area, 99, 0);
+        assert_eq!(many.height, 5);
         assert!(many.y + many.height <= area.y + area.height);
 
         // Fewer rows than fit: sits just above the bottom inset.
-        let few = rows_area(area, 2);
+        let few = rows_area(area, 2, 0);
         assert_eq!(few.height, 2);
         assert_eq!(few.x, area.x);
         assert_eq!(few.y + few.height + 1, area.y + area.height);
 
         // Nothing to draw is a zero-height no-op, never a panic.
-        assert_eq!(rows_area(area, 0).height, 0);
+        assert_eq!(rows_area(area, 0, 0).height, 0);
         // Degenerate areas must not underflow.
         let tiny = Rect {
             x: 0,
@@ -565,13 +669,180 @@ mod tests {
             width: 0,
             height: 0,
         };
-        assert_eq!(rows_area(tiny, 3).height, 0);
+        assert_eq!(rows_area(tiny, 3, 0).height, 0);
+        // A one-row band cannot hold a row AND the inset, so it renders nothing
+        // rather than sitting flush against the separator. (plan 2026-11-15 B1:
+        // this used to expect 1, which put the rows in the only row there was
+        // and left the inset with nowhere to go.)
         let one_row = Rect {
             x: 0,
             y: 0,
             width: 10,
             height: 1,
         };
-        assert_eq!(rows_area(one_row, 5).height, 1);
+        assert_eq!(rows_area(one_row, 5, 0).height, 0);
+        // Two rows is the smallest band that can show one row and keep the inset.
+        let two_rows = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+        assert_eq!(rows_area(two_rows, 5, 0).height, 1);
+    }
+
+    /// (plan 2026-11-15 B1) THE LAUNCH-SCREEN DEFECT.
+    ///
+    /// The header is a transcript section inside the messages band, and the dock
+    /// used to be sized to the full row count — so with the 50 terminal records
+    /// the live ledger held, the dock claimed every row of the band and painted
+    /// over the header (measured: band 7/9/12/20/30/50 all covered it).
+    ///
+    /// Two things must hold now: the dock never enters the header's rows, and a
+    /// band that cannot spare room renders nothing rather than covering them.
+    #[test]
+    fn the_dock_never_paints_over_the_header() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 30,
+        };
+        let header = 7u16;
+
+        // Whatever the row count, the top row stays below the header.
+        for rows in [1usize, 3, 10, 50, 500] {
+            let dock = rows_area(area, rows, header);
+            assert!(
+                dock.y >= header,
+                "with {rows} rows the dock starts at y={} but the header ends at \
+                 {header} — it would paint over the header",
+                dock.y
+            );
+        }
+
+        // A band exactly as tall as the header has no room: render nothing.
+        let launch = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: header,
+        };
+        let dock = rows_area(launch, 3, header);
+        assert_eq!(dock.height, 0, "a band the size of the header has no room");
+        assert_eq!(dock.width, 0, "a zero-height rect must not carry width");
+
+        // One row of headroom still leaves the header clear.
+        let tight = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: header + 2,
+        };
+        let dock = rows_area(tight, 3, header);
+        assert!(dock.y >= header, "the dock still cleared the header");
+        assert!(dock.height <= 1, "only the spare row is usable");
+    }
+
+    /// (plan 2026-11-15 B1) A cap-only fix does not work, and this is the case
+    /// that proves it: a plain cap at band 7-10 still reaches the header.
+    ///
+    /// This is the assertion the plan's own enumeration called out — a constant
+    /// floor and a plain cap both fail here, which is why the reservation is
+    /// keyed on the header's height.
+    #[test]
+    fn a_short_band_renders_no_dock_rather_than_a_stale_log() {
+        let header = 7u16;
+        for band in [header, header + 1] {
+            let area = Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: band,
+            };
+            let dock = rows_area(area, DOCK_MAX_ROWS + 1, header);
+            assert_eq!(
+                dock.height, 0,
+                "band {band} with a {header}-row header must render nothing"
+            );
+        }
+    }
+
+    /// (plan 2026-11-15 B1) A settled row is history after [`STALE_AFTER_SECS`];
+    /// a LIVE row is never suppressed however old it is.
+    #[test]
+    fn stale_rows_are_suppressed_and_live_ones_never_are() {
+        const NOW: u64 = 10_000;
+
+        // A row that settled just inside the window is kept; one just outside is
+        // dropped. The boundary is asserted from both sides.
+        let fresh = settled(
+            "dlg-fresh",
+            "just finished",
+            NOW - 10,
+            AsyncDelegationStatus::Completed,
+            "done",
+        );
+        let stale = settled(
+            "dlg-stale",
+            "long finished",
+            NOW - STALE_AFTER_SECS - 60,
+            AsyncDelegationStatus::Failed,
+            "too old",
+        );
+        // A live row dispatched before the window still shows: it is what the
+        // operator is watching for.
+        let live = pending("dlg-live", "still working", NOW - 9_999);
+
+        let registry = BackgroundTaskRegistry::new();
+        registry.sync_from(&[fresh, stale, live], NOW);
+        let rows = registry.rows();
+
+        let (visible, hidden) = visible_rows(&rows, NOW);
+        let ids: Vec<&str> = visible.iter().map(|row| row.id.as_str()).collect();
+        assert!(ids.contains(&"dlg-fresh"), "a fresh row is shown: {ids:?}");
+        assert!(
+            ids.contains(&"dlg-live"),
+            "a LIVE row is never suppressed: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"dlg-stale"),
+            "a settled row older than the window is suppressed: {ids:?}"
+        );
+        assert_eq!(hidden, 0, "nothing was folded away: {ids:?}");
+    }
+
+    /// (plan 2026-11-15 B1) More survivors than [`DOCK_MAX_ROWS`] fold into one
+    /// `+N more` row — the idiom the todos widget and the info-widget dock use.
+    #[test]
+    fn the_recent_rows_are_capped_and_the_rest_named() {
+        const NOW: u64 = 10_000;
+        let records: Vec<AsyncDelegationRecord> = (0..10)
+            .map(|i| {
+                settled(
+                    &format!("dlg-{i}"),
+                    &format!("task {i}"),
+                    NOW - 100 + i,
+                    AsyncDelegationStatus::Completed,
+                    "done",
+                )
+            })
+            .collect();
+
+        let registry = BackgroundTaskRegistry::new();
+        registry.sync_from(&records, NOW);
+        let rows = registry.rows();
+
+        let (visible, hidden) = visible_rows(&rows, NOW);
+        assert_eq!(
+            visible.len(),
+            DOCK_MAX_ROWS,
+            "only {DOCK_MAX_ROWS} rows render"
+        );
+        assert_eq!(
+            hidden,
+            10 - DOCK_MAX_ROWS,
+            "the rest are named, not dropped"
+        );
     }
 }

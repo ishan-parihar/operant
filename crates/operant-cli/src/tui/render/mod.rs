@@ -109,16 +109,27 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     app.background_tasks.refresh();
     let bg_rows = app.background_tasks.rows();
     if !bg_rows.is_empty() {
+        let now = crate::tui::background_tasks::now_unix_secs();
+        // (plan 2026-11-15 B1) Reserve the rows actually RENDERED, not the row
+        // count in the registry. Stale rows are suppressed and the rest fold into
+        // one "+N more" row, so reserving `bg_rows.len()` would claim space the
+        // dock no longer paints — the other half of the original defect, where a
+        // registry holding 50 terminal records made the dock claim the whole band.
+        let (visible, hidden) = crate::tui::background_tasks::visible_rows(&bg_rows, now);
+        let reserved = visible.len() + usize::from(hidden > 0);
+        // The header is a transcript section inside this same band, so its height
+        // is what the dock must not paint over. When the transcript is collapsed
+        // `draw_messages` is deliberately skipped, so the published frame can be
+        // stale — the band's own geometry is then not authoritative and
+        // `rows_area` renders nothing for a band it cannot spare.
+        let header_height =
+            crate::tui::operant_ui::last_chat_frame().map_or(0, |frame| frame.header_height());
         let bg_area = crate::tui::background_tasks::rows_area(
             crate::tui::operant_ui::message_area(),
-            bg_rows.len(),
+            reserved,
+            header_height,
         );
-        crate::tui::background_tasks::render_rows(
-            frame,
-            bg_area,
-            &bg_rows,
-            crate::tui::background_tasks::now_unix_secs(),
-        );
+        crate::tui::background_tasks::render_rows(frame, bg_area, &bg_rows, now);
     }
 
     // ---- operant-only overlays ------------------------------------------

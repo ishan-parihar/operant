@@ -533,7 +533,10 @@ mod tests {
                     .saturating_sub(strip.height)
                     .saturating_sub(1);
                 for row_count in 0..=max_rows {
-                    let rows = background_tasks::rows_area(area, usize::from(row_count));
+                    // (plan 2026-11-15 B1) `rows_area` also reserves the header
+                    // now; this guard is about the pinned strip, so it passes a
+                    // zero header and keeps testing what it was written for.
+                    let rows = background_tasks::rows_area(area, usize::from(row_count), 0);
                     assert!(
                         !strip.intersects(rows),
                         "strip overlaps {row_count} task rows: {what} (rows {rows:?})"

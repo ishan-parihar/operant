@@ -209,6 +209,22 @@ impl PreparedChatFrame {
             .min()
     }
 
+    /// How many wrapped rows the HEADER section occupies, `0` when the frame has
+    /// no header (a replayed body-only frame).
+    ///
+    /// (plan 2026-11-15 B1) The header is a transcript section, so it occupies
+    /// the top of the messages band — the same rect the background-task dock
+    /// docks into. A consumer reserving room for the transcript needs this
+    /// number to avoid painting over the header. It is a property of the FRAME
+    /// (the wrapped line count), not of the viewport, so it does not move with
+    /// scroll.
+    pub fn header_height(&self) -> u16 {
+        self.sections
+            .iter()
+            .find(|section| section.kind == PreparedSectionKind::Header)
+            .map_or(0, |section| section.prepared.wrapped_lines.len() as u16)
+    }
+
     pub fn from_sections(sections: Vec<(PreparedSectionKind, Arc<PreparedMessages>)>) -> Self {
         let mut prepared_sections = Vec::new();
         let mut line_start = 0usize;
