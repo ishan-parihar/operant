@@ -492,3 +492,91 @@ A guard is not evidence until it has been observed to fail. "Mutation proven"
 means the fix's *behaviour* was restored; it does not mean the guard *reached* the
 branch. The cheap test is to delete the fix entirely and count the reds — a guard
 that stays green is a guard that was never written, whatever it asserts.
+
+---
+
+## Part 7 — Ninth pass: the parallel-agent architecture measured as a whole
+
+**Tree:** `origin/main @ 9c2daeb4`, re-derived on `f9288504` before editing (a
+peer landed `iter-2404` in between, touching `agent/mod.rs`).
+
+**Question this pass asked:** the prior passes audited *mechanisms* — a cap, a
+walk, a guard. This one asked the architecture question the request names: how
+many parallel-agent execution paths exist, and do they share one budget or
+enforce one each?
+
+### The three paths, and the one budget they share
+
+| Path | Concurrency gate | Retention ledger |
+|---|---|---|
+| Single child (`call`, `call_with_session`) | `SpawnPermit::reserve(1, depth)` | — |
+| Foreground swarm (`run_swarm`) | reserve all N, then `buffer_unordered(min(batch_cap, admitted))` | `foreground_swarm` |
+| Background (`dispatch_background`) | pending cap 3, then the same permit | `async_delegation` |
+
+**No double-counting, and no bypass.** `LIVE_WORKERS: AtomicUsize` (default 6,
+cap 32) is the only bound on concurrent model streams, and every path reaches it
+through `SpawnPermit`. `MAX_CONCURRENT_CHILDREN` is `min`'d against
+`admitted_slots` at `sub_agent_tool.rs:1049`, so the per-batch cap can only
+narrow the pool the global guard already admitted, never widen it.
+
+**The two caps measure different things.** `DEFAULT_MAX_ASYNC_CHILDREN = 3` is a
+*pending* cap read from the registry under its lock (`try_create_record`), not a
+second concurrency budget. That separation is what bounds the ledger: 50 terminal
++ 3 pending = **53 rows** worst case, not 53 x N sessions.
+
+### Finding 1 — one retention rule, four implementations (fixed, iter-2418)
+
+"Keep the newest 50 terminal rows, ordered by `(completed_time, id)`" was written
+out four times: `merge_records`, `recover_interrupted`, `prune`, and
+`foreground_swarm::prune`.
+
+**Re-derived before fixing, and the first claim was wrong.** The pass initially
+reported all four as agreeing. They did not: `recover_interrupted` sorted by
+`completed_time.unwrap_or(dispatch_time)` ALONE
+(`sort_by_key(|r| Reverse(...))`), while `merge_records` and `prune` both broke
+the tie on the id. So a restart recovering two delegations finished in the same
+second kept whichever the file listed first, and the live path would have kept
+the other — one ledger, two survivors, depending on which code path cut.
+
+**A second claim was also checked and withdrawn.** `recover_interrupted` counts
+ALL rows against the cap while the others count terminal only, which reads as a
+live disagreement. It is not: `settle_interrupted` converts every Pending row to
+Failed *before* the cap runs, so by then the two sets are identical. A probe was
+built to demonstrate the divergence and discarded when the ordering was read.
+
+The rule now lives in one `enforce_terminal_cap`, and `prune` adapts it to a map
+rather than reimplementing it. `foreground_swarm::prune` stays separate — a
+different record type with a `&str` status.
+
+### Finding 2 — eight duplicated `#[test]` attributes (fixed, iter-2419)
+
+Eight redundant attributes across five functions. **The first measurement was
+wrong:** an adjacency scan (`line[i] == line[i+1] == "#[test]"`) found 3 sites,
+because four of the eight sit ABOVE a doc comment rather than beside their twin.
+Counting by walking back from each `fn` to its attribute block finds all five.
+Recorded because the same shortcut would undercount any attribute-shape sweep.
+
+### The rule this pass adds to the checklist
+
+**A vacuous guard is produced by a fixture that agrees with the bug.** The new
+tiebreak guard passed with the fix deleted on its first draft: the fixture
+supplied rows in ASCENDING id order, a stable sort on equal keys preserves input
+order, so the fixed rule and the broken rule cut the same row. The fixture now
+hands rows over in DESCENDING order, so an implementation that keeps input order
+keeps the wrong end of the range. A guard over an ordering must make the two
+candidate orders disagree, or it measures nothing.
+
+### Confirmed sound this pass
+
+- **`iter-2417`'s deletion of `apply_frozen_order` is correct.** The surface is
+  a snapshot: `open` is the only writer of `entries`, and while it is visible
+  `key_handling.rs:590` consumes every key and returns early, so the `←` gesture
+  that calls `open` cannot re-enter. The removed freeze was dead code.
+- **`iter-2416`'s `flock` has no lock-order inversion.** `persist()` takes the
+  ledger lock then the registry lock; all four call sites (355, 596, 609, 622)
+  are outside the registry lock. A reverse-order path would deadlock the TUI
+  against the gateway.
+- **Cancellation closes the operator's rows.** When the swarm deadline drops
+  in-flight futures, `run_swarm` synthesises a `CutOff` outcome for every
+  unreported worker and the caller writes each row as `"cut_off"` — no row is
+  left reading "running" forever.
