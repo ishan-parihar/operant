@@ -18,6 +18,7 @@ mod mouse;
 mod prompt;
 mod providers;
 mod redraw_reason;
+mod role_cycle;
 mod scroll_anchor;
 pub(crate) mod scroll_emit;
 mod subagent_nav;

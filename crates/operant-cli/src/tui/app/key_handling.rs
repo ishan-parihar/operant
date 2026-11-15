@@ -3446,14 +3446,25 @@ impl App {
                 self.cycle_model_scope();
                 true
             }
+            KeyCode::Char('N')
+                if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                self.cycle_favorite_model();
+                true
+            }
             KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_favorite_model();
                 true
             }
             // Shift+Tab arrives as BackTab — crossterm folds the shift in, so
             // there is no separate Char arm to write.
+            //
+            // (model plan M6, the role-cycle key) Shift+Tab cycles the
+            // conversation model through the models the ROLES are configured
+            // with — the operator's chosen chord. It was favourite-cycling, which
+            // moves to Ctrl+Shift+N, the sibling of Ctrl+N (add/remove).
             KeyCode::BackTab => {
-                self.cycle_favorite_model();
+                self.cycle_role_models();
                 true
             }
             KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
