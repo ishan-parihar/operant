@@ -718,6 +718,16 @@ impl OperantAgent {
         // `recap_idle_seconds = 0` handed `sleep` an already-elapsed
         // duration and produced a recap after EVERY turn instead of never.
         // A zero window is off, not instant.
+        //
+        // The SECTION's own flag is checked at the same choke point, so both
+        // hosts get it and the two cannot disagree: `RecapConfig::is_enabled`
+        // resolves the absent flag to the old window rule, so a config that sets
+        // nothing behaves exactly as it did. `[recap] enabled = false` now turns
+        // the engine off without the operator having to find `recap_idle_seconds`
+        // in another section.
+        if !slot.is_enabled(idle) {
+            return crate::recap::RecapActivity::disabled();
+        }
         if idle.is_zero() {
             return crate::recap::RecapActivity::disabled();
         }

@@ -142,6 +142,35 @@ pub struct RecapConfig {
     /// that sets nothing must produce exactly the prompt it always did.
     #[serde(default)]
     pub instructions: String,
+    /// The on/off axis, IN THIS SECTION.
+    ///
+    /// RECAP's switch used to be `agent.recap_idle_seconds = 0` — a different
+    /// section from the model and the instructions. An operator reading
+    /// `[recap]` saw two knobs and no way to turn the engine off, and the live
+    /// operator config on this host has no `[recap]` section at all, so recap
+    /// ran on the PRIMARY model while the advisor beside it ran on
+    /// `small-stack`.
+    ///
+    /// `None` (the default) means "follow the idle window", which is exactly the
+    /// old behaviour: a non-zero window is on, a zero window is off. `Some(false)`
+    /// turns it off regardless of the window; `Some(true)` with a zero window
+    /// stays off, because there is no cadence to run on.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+impl RecapConfig {
+    /// Is the engine on, given the idle window?
+    ///
+    /// One resolution, so the section's flag and the host's window cannot
+    /// disagree: an absent flag defers to the window, an explicit `false` wins
+    /// over it, and an explicit `true` still needs a window to run on.
+    pub fn is_enabled(&self, idle: std::time::Duration) -> bool {
+        match self.enabled {
+            Some(false) => false,
+            Some(true) | None => !idle.is_zero(),
+        }
+    }
 }
 
 /// Spawn the idle-recap engine. Call once per agent session; only call when
@@ -585,5 +614,58 @@ mod tests {
             !handle.is_disabled(),
             "a 240s window must attach a live engine, or the recap never runs at all"
         );
+    }
+    /// The resolution rule: an ABSENT flag defers to the window, so a config
+    /// that sets nothing behaves exactly as it did before this field existed.
+    #[test]
+    fn an_absent_flag_follows_the_window() {
+        let cfg = RecapConfig::default();
+        assert!(
+            cfg.is_enabled(Duration::from_secs(240)),
+            "the default config with a window is on, exactly as before"
+        );
+        assert!(
+            !cfg.is_enabled(Duration::ZERO),
+            "a zero window is still off, exactly as before"
+        );
+    }
+
+    /// An explicit `false` wins over a live window — the point of the field: an
+    /// operator can stop the engine from INSIDE `[recap]`.
+    #[test]
+    fn an_explicit_false_disables_the_engine() {
+        let cfg = RecapConfig {
+            enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(
+            !cfg.is_enabled(Duration::from_secs(240)),
+            "`[recap] enabled = false` must win over recap_idle_seconds = 240"
+        );
+    }
+
+    /// An explicit `true` still needs a window: there is no cadence to run on
+    /// with a zero idle, so `enabled = true` alone must not produce a recap
+    /// after every turn.
+    #[test]
+    fn an_explicit_true_still_needs_a_window() {
+        let cfg = RecapConfig {
+            enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(cfg.is_enabled(Duration::from_secs(240)));
+        assert!(
+            !cfg.is_enabled(Duration::ZERO),
+            "enabled = true with no window has no cadence, so it stays off"
+        );
+    }
+
+    /// The flag parses from TOML in the section the operator edits.
+    #[test]
+    fn the_flag_parses_from_the_recap_section() {
+        let cfg: RecapConfig = toml::from_str("enabled = false\n").expect("parse");
+        assert_eq!(cfg.enabled, Some(false));
+        let cfg: RecapConfig = toml::from_str("").expect("parse");
+        assert_eq!(cfg.enabled, None, "absent is None, not Some(true)");
     }
 }

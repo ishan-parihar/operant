@@ -374,6 +374,10 @@ enabled = false
 # lets you change WHAT it says. Empty (default) = the primary model on the
 # primary route, and the built-in prompt unchanged.
 [recap]
+# Master switch. Omit it to follow recap_idle_seconds (a non-zero window is on,
+# a zero window is off), which is the historical behaviour. Set it to false to
+# stop the engine without hunting for the window in [agent].
+# enabled = true
 # [recap.model]
 # model = ""
 # base_url = ""

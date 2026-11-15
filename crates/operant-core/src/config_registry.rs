@@ -1217,6 +1217,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Service selectors used when scope = \"services\".",
     ),
     (
+        "recap.enabled",
+        "<RecapConfig::default()>",
+        "The on/off axis, IN THIS SECTION. RECAP's switch used to be `agent.recap_idle_seconds = 0` — a different section from the model and the instructions. An operator reading `[recap]` saw two knobs and no way to turn the engine off, and the live operator config on this host has no `[recap]` section at all, so recap ran on the PRIMARY model while the advisor beside it ran on `small-stack`. `None` (the default) means \"follow the idle window\", which is exactly the old behaviour: a non-zero window is on, a zero window is off. `Some(false)` turns it off regardless of the window; `Some(true)` with a zero window stays off, because there is no cadence to run on.",
+    ),
+    (
         "recap.instructions",
         "<RecapConfig::default()>",
         "Freeform instructions APPENDED to the recap prompt (audit iter-2345). The four background context engines are each supposed to be tunable on three axes — on/off, the model, and the response shape. RECAP had the first two and not the third: `RECAP_INSTRUCTION` was a `const`, so the only way to change what a recap says was a rebuild. Empty (the default) is byte-identical to before, which is the point — a session that sets nothing must produce exactly the prompt it always did.",
@@ -1870,6 +1875,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "proxy.no_proxy",
     "proxy.scope",
     "proxy.services",
+    "recap.enabled",
     "recap.instructions",
     "recap.model",
     "recap.model.api_key",
