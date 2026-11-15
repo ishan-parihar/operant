@@ -546,30 +546,27 @@ fn compute_skill_mention_suggestions(input: &str) -> Vec<TypeaheadSuggestion> {
     let query = token.query.to_lowercase();
     let snapshot = SKILL_MENTION_SNAPSHOT.get_or_init(|| std::sync::RwLock::new(Vec::new()));
     let entries = snapshot.read().unwrap_or_else(|e| e.into_inner());
-    // A skill is matched on its NAME and on its DESCRIPTION. The description is
-    // already displayed beside every row, so hiding it from the match was
-    // backwards: a caller who remembers "the one about PDF forms" had to guess
-    // the name to find it. Name hits sort before description hits, so an exact
-    // name is never buried under a description coincidence.
-    let mut matched: Vec<&(String, String)> = entries
-        .iter()
-        .filter(|(name, description)| {
-            query.is_empty()
-                || name.to_lowercase().contains(&query)
-                || description.to_lowercase().contains(&query)
-        })
-        .collect();
-    matched.sort_by_key(|(name, _)| !name.to_lowercase().contains(&query));
-    matched
+    // ONE ranking, owned by core and shared with `operant skills search` and
+    // the gateway picker: exact name, then prefix, then substring, then
+    // description.
+    //
+    // This popup used to carry its own two-tier copy — `name.contains` or
+    // `description.contains`, sorted by a single boolean — which ranked a name
+    // SUBSTRING above a name PREFIX. Measured on a corpus of `jsonpath`
+    // (prefix) and `aio-json-dump` (substring, sorting alphabetically first):
+    // the core matcher returned `[jsonpath, aio-json-dump]`, this popup
+    // returned `[aio-json-dump, jsonpath]`. Same query, two orderings, and the
+    // operator had no way to know which surface they were typing into.
+    let ranked = operant_core::skill_mentions::rank_skill_entries(&entries, &query, 20);
+    ranked
         .into_iter()
-        .take(20)
         .map(|(name, description)| {
             TypeaheadSuggestion::skill_ref(
                 format!("${name}"),
                 if description.is_empty() {
                     "skill".to_string()
                 } else {
-                    description.clone()
+                    description
                 },
             )
         })

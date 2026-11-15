@@ -291,22 +291,12 @@ pub fn search_skills_in(
     }
     let mut matched: Vec<(u8, String, String)> = Vec::new();
     for (name, description) in loadable_skills_in(roots) {
-        let lowered = name.to_lowercase();
-        // The tiers are NAMED so the ordering stays legible: an exact name wins,
-        // then a name prefix, then a name substring, then a description match
-        // last. Searching by what a skill DOES was silently impossible before
-        // this tier existed -- `jsonpath` returned nothing for a skill whose
-        // whole description was "query and filter nested JSON documents", so the
-        // only way to find a skill was to already know its name.
-        let tier = if lowered == needle {
-            0
-        } else if lowered.starts_with(&needle) {
-            1
-        } else if lowered.contains(&needle) {
-            2
-        } else if description.to_lowercase().contains(&needle) {
-            3
-        } else {
+        // The SAME tiers `rank_skill_entries` applies to the popup's snapshot.
+        // Searching by what a skill DOES was silently impossible before this
+        // tier existed -- `jsonpath` returned nothing for a skill whose whole
+        // description was "query and filter nested JSON documents", so the only
+        // way to find a skill was to already know its name.
+        let Some(tier) = skill_match_tier(&name, &description, &needle) else {
             continue;
         };
         matched.push((tier, name, description));
@@ -317,6 +307,61 @@ pub fn search_skills_in(
         .take(limit)
         .map(|(_, name, description)| (name, description))
         .collect()
+}
+
+/// Rank `(name, description)` pairs for a query and bound the result.
+///
+/// The ONE ranking, exposed for the surfaces that already hold their entries
+/// in memory (the TUI's `$` popup snapshot) rather than on disk. `search_skills_in`
+/// is the same tiers over a `SkillRoots`; this is the same tiers over a list,
+/// so the popup and `operant skills search` cannot order the same query
+/// differently.
+///
+/// **An empty query returns every entry, unranked.** That is the browse case --
+/// `$` with nothing typed offers the whole catalogue, and `search_skills_in`
+/// rejects an empty needle outright. The split is deliberate: a browse is an
+/// inventory, a search is a ranking.
+#[must_use]
+pub fn rank_skill_entries(
+    entries: &[(String, String)],
+    query: &str,
+    limit: usize,
+) -> Vec<(String, String)> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return entries.iter().take(limit).cloned().collect();
+    }
+    let mut matched: Vec<(u8, &str, &str)> = entries
+        .iter()
+        .filter_map(|(name, description)| {
+            let tier = skill_match_tier(name, description, &needle)?;
+            Some((tier, name.as_str(), description.as_str()))
+        })
+        .collect();
+    matched.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    matched
+        .into_iter()
+        .take(limit)
+        .map(|(_, name, description)| (name.to_string(), description.to_string()))
+        .collect()
+}
+
+/// The tier `name`/`description` earn for `needle`, or `None` for no match.
+/// Extracted so the ranking has ONE definition rather than one per surface.
+#[must_use]
+fn skill_match_tier(name: &str, description: &str, needle: &str) -> Option<u8> {
+    let lowered = name.to_lowercase();
+    if lowered == needle {
+        Some(0)
+    } else if lowered.starts_with(needle) {
+        Some(1)
+    } else if lowered.contains(needle) {
+        Some(2)
+    } else if description.to_lowercase().contains(needle) {
+        Some(3)
+    } else {
+        None
+    }
 }
 
 /// The flat root list the pair-form helpers consume: the pool first, then the

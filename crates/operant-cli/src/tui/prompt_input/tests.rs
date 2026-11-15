@@ -2807,6 +2807,94 @@ fn a_skill_mention_name_hit_sorts_ahead_of_a_description_hit() {
     );
 }
 
+/// **The `$` popup and `operant skills search` must rank a query the SAME way.**
+///
+/// The popup used to carry its own two-tier copy -- `name.contains` or
+/// `description.contains`, sorted by one boolean. Both rows here are name
+/// hits, so both keyed EQUAL and a stable sort left them in snapshot order:
+/// the old popup had no way to tell a prefix from a substring at all.
+///
+/// Measured over `jsonpath` (prefix) and `aio-json-dump` (substring) handed
+/// over in that order:
+///
+/// ```text
+/// core search_skills_in: [jsonpath, aio-json-dump]   <- prefix wins
+/// old popup:             [aio-json-dump, jsonpath]   <- snapshot order wins
+/// ```
+///
+/// MUTATION-PROOF: restoring the old `sort_by_key` boolean, or reversing the
+/// tier order, returns the snapshot order and fails this.
+#[test]
+fn a_skill_mention_prefix_ranks_above_a_substring_alphabetically_first() {
+    // Registered in the REVERSE of alphabetical order, which is what a
+    // directory walk (the snapshot's actual source) can hand over. That is
+    // what makes this discriminate: the old code returns
+    // `[aio-json-dump, jsonpath]` because that is the order it was given,
+    // while the tiers return `[jsonpath, aio-json-dump]` because a prefix
+    // outranks a substring.
+    let _guard = register_mention_skills(&[
+        ("aio-json-dump", "dump the whole json"),
+        ("jsonpath", "navigate JSON with a path expression"),
+    ]);
+    let cmds: [(&str, &str); 0] = [];
+
+    let s = compute_typeahead("$json", &cmds, &UsageStore::default(), 15, false);
+    let order: Vec<&str> = s.iter().map(|x| x.text.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["$jsonpath", "$aio-json-dump"],
+        "a name prefix must outrank a name substring even when the substring \
+         is offered first: {order:?}"
+    );
+}
+
+/// **The two surfaces are the SAME ranking, not merely compatible ones.**
+///
+/// A test per surface would both pass while the surfaces disagree -- which is
+/// exactly how the divergence shipped. This asserts the popup's order over a
+/// corpus against `rank_skill_entries`'s order over the same corpus, so a
+/// drift in either fails here rather than in production.
+#[test]
+fn the_popup_and_the_core_ranking_agree_over_the_same_corpus() {
+    let corpus = [
+        // Reverse alphabetical, with the description-only hit in the middle:
+        // the order the snapshot is handed, so neither surface can pass by
+        // simply inheriting it.
+        (
+            "aio-json-dump".to_string(),
+            "dump an entire json".to_string(),
+        ),
+        (
+            "aaa-mentions".to_string(),
+            "a linter that also validates json".to_string(),
+        ),
+        (
+            "jsonpath".to_string(),
+            "navigate JSON with a path".to_string(),
+        ),
+    ];
+
+    let _guard = register_mention_skills(
+        &corpus
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_str()))
+            .collect::<Vec<(&str, &str)>>(),
+    );
+    let cmds: [(&str, &str); 0] = [];
+    let popup: Vec<String> = compute_typeahead("$json", &cmds, &UsageStore::default(), 15, false)
+        .into_iter()
+        .map(|x| x.text.trim_start_matches('$').to_string())
+        .collect();
+
+    let core = operant_core::skill_mentions::rank_skill_entries(&corpus, "json", 20);
+    let core: Vec<String> = core.into_iter().map(|(n, _)| n).collect();
+
+    assert_eq!(
+        popup, core,
+        "the popup must offer the core's order for the same corpus"
+    );
+}
+
 #[test]
 fn typeahead_skill_mentions_complete_mid_sentence() {
     let _guard = register_mention_skills(&[
