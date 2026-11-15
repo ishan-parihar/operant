@@ -323,7 +323,7 @@ references. The two things the references have that this tree does not are both
 codex's `SessionIsolation` typed capability stripping (this tree isolates by
 building a fresh `TurnContext` per child).
 
-### Finding 1 (must fix) — the durable ledger can drop a LIVE delegation
+### Finding 1 (must fix) — the durable ledger can drop a LIVE delegation — **CLOSED iter-2403**
 
 `crates/operant-core/src/tools/async_delegation.rs:214-217` (`merge_records`)
 
@@ -350,7 +350,7 @@ building a fresh `TurnContext` per child).
   list) and the session hub cannot show it, and a restart forgets work the
   operator is still waiting on. Nothing errors — the row is simply absent.
 
-### Finding 2 (should fix) — the navigator's tree view can never show depth 2
+### Finding 2 (should fix) — the navigator's tree view can never show depth 2 — **CLOSED iter-2404**
 
 `crates/operant-cli/src/tui/app/subagent_nav.rs:29-37` (edge construction)
 
@@ -399,3 +399,34 @@ Still open: J2 (the `Show more` row) and F4's hub-side count wiring. Both need
 the list pane's row model and the hub's count cache, which were in another
 agent's hands while these slices ran; they are named here so the next slice does
 not rediscover them.
+
+## Part 5 — Execution of the seventh pass (2026-11-15)
+
+Both findings are closed, one commit each, each mutation-proven, each with a
+guard that fails on the pre-fix bytes.
+
+| finding | iteration | change | gate |
+|---|---|---|---|
+| 1 (must fix) | **iter-2403** (`2838f6e4`) | `merge_records` counts only non-Pending rows against `MAX_RETAINED_TERMINAL`, and cuts only from that subset — `prune()`'s rule, applied on the persist path | 3 new guards; 17/3 under the mutation, 18/0 with the fix; `async_delegation` 18/18 |
+| 2 (should fix) | **iter-2404** (`69eb7ccc`) | the navigator adds the `delegation → its own session` hop, transparent to depth; `descendants` takes the session ids as a pass-through set | 1 new guard; fails without the edge extension, passes with it; `subagent_navigator` 5/5 |
+
+Both iterations: `cargo check --workspace --all-targets` **0 errors**.
+
+**Two things the execution corrected in the audit itself.**
+
+- Finding 2's fix was first written as a plain extra edge, which made every
+  grandchild render one column too far right and named an invisible session as
+  its parent. The new guard caught it (`left: 3, right: 2`) before the commit, and
+  the hop is now transparent to depth — a depth is what indents a *visible* row,
+  and a session has no row.
+- Finding 1's third guard was written to assert the cap still cuts, and its first
+  arithmetic was wrong (`term-004` is cut, not kept: 55 terminal rows against a
+  cap of 50 cut five). That is the audit's own arithmetic, not the system's, and
+  it is why the negative case is worth pinning separately — a guard that only
+  proves "nothing is cut" would pass on a fix that disabled the cap entirely.
+
+**Residual, not fixed here.** `recover_interrupted` has the same
+`truncate(MAX_RETAINED_TERMINAL)` shape at `:250`, but it is safe by ordering:
+`settle_interrupted` runs first and marks every Pending row Failed, so by the time
+the truncate runs there is nothing live to drop. Recorded rather than changed,
+because a change there would be unguarded work on a path that is not defective.
