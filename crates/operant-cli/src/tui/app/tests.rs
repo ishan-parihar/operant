@@ -18606,4 +18606,116 @@ mod bar_command_tests {
             "with no session the gallery must be empty, not unscoped"
         );
     }
+
+    /// (plan 2026-11-16 T3) THE REPLY MUST SHOW THE STYLE, NOT JUST NAME IT.
+    ///
+    /// The operator's second report: "/bar command is still not working
+    /// properly." It WAS applying — verified by `bar_with_an_argument_applies_
+    /// the_style` — but the reply named only the key, and on an idle session
+    /// the status row renders NOTHING for six of the eight styles. MEASURED:
+    /// `add_caps` on an empty line yields `""` for dot, slash, pipe, block,
+    /// none and ascii, because a separator only exists BETWEEN two segments and
+    /// an idle row has one (the tip, and only 12s of every 90). So an operator
+    /// who ran `/bar slash` had no way to tell a working change from a dead
+    /// command — the notice was the only evidence available, and it carried
+    /// none.
+    ///
+    /// The fix is that the notice carries the glyph. This asserts the glyph
+    /// reaches the string, so a future edit that drops it fails here rather
+    /// than in front of an operator.
+    #[test]
+    fn the_bar_notice_shows_the_style_it_applied() {
+        use crate::tui::status_line::style::SeparatorStyle;
+
+        // Restore whatever was in force so a parallel test is unaffected.
+        let before = crate::tui::status_line::style::style();
+
+        for style in SeparatorStyle::ALL {
+            let mut app = make_app();
+            // A bare `/bar` too: it reports the style ALREADY in force, and it
+            // is the arm most likely to be edited because it has no persist
+            // branch to keep in step. Testing only `/bar <style>` left a
+            // mutation that dropped the preview from the reply GREEN, because
+            // `make_app` has no config path and so never reaches the `Ok` arm.
+            assert!(app.handle_tui_command("bar", style.key()));
+            let applied = app.status_message.clone().unwrap_or_default();
+            assert!(
+                applied.contains(style.glyph()),
+                "/bar {} must SHOW its glyph; the notice was {:?}",
+                style.key(),
+                applied
+            );
+
+            let mut bare = make_app();
+            crate::tui::status_line::style::set_style(Some(*style));
+            assert!(bare.handle_tui_command("bar", ""));
+            let notice = bare.status_message.clone().unwrap_or_default();
+            let glyph = style.glyph();
+            assert!(
+                notice.contains(glyph),
+                "/bar {} must SHOW its glyph so the operator can see the change; \
+                 the notice was {:?}",
+                style.key(),
+                notice
+            );
+        }
+
+        crate::tui::status_line::style::set_style(Some(before));
+    }
+
+    /// A style that renders as whitespace must still be visible in the reply —
+    /// `none`'s glyph is a single space, so an unframed sample would read as a
+    /// hole in the sentence. The preview brackets it for exactly this reason.
+    #[test]
+    fn the_preview_brackets_a_whitespace_only_style() {
+        let none = crate::tui::status_line::style::SeparatorStyle::None;
+        let preview = crate::tui::status_line::style::preview(none);
+        assert!(
+            preview.starts_with('a') && preview.ends_with('b'),
+            "the sample must name its own edges when the glyph is blank: {preview:?}"
+        );
+    }
+
+    /// (plan 2026-11-16 T3) `/bar <style>` MUST REACH THE TOML.
+    ///
+    /// MEASURED, not assumed. The write goes through
+    /// `persist_config_key_at(path, "tui.bar_style", key)` — the same seam the
+    /// settings-screen row uses — but the seam is only reachable when
+    /// `config.config_path` is populated, and `make_app()` leaves it `None`.
+    /// Every other `/bar` test therefore exercises the "applied for this
+    /// session, but not persisted" branch and would stay green if the persist
+    /// call were deleted outright.
+    ///
+    /// This one supplies a real path and reads the file back, so a regression
+    /// that silently stopped persisting fails here.
+    #[test]
+    fn bar_with_an_argument_writes_the_toml() {
+        // Under the manifest, not `std::env::temp_dir()`: a sandboxed run can
+        // have a read-only /var/tmp, and a test that fails for that reason
+        // teaches the next agent to delete it.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("barpersist{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch dir under the manifest");
+        let path = dir.join("operant.toml");
+        std::fs::write(&path, "[tui]\ntheme = \"dark\"\n").expect("seed the config");
+
+        let _cfg_guard = operant_core::config::config_path_test_guard();
+        let mut app = make_app();
+        app.config.config_path = Some(path.clone());
+
+        assert!(app.handle_tui_command("bar", "pipe"));
+        let written = std::fs::read_to_string(&path).expect("the config is readable");
+        assert!(
+            written.contains("bar_style = \"pipe\""),
+            "/bar pipe must write tui.bar_style; the file was:\n{written}"
+        );
+        // The operator's own keys survive the write — a persist that rewrote the
+        // whole file would drop every other setting.
+        assert!(
+            written.contains("theme = \"dark\""),
+            "the pre-existing key must survive: {written}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

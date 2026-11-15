@@ -557,16 +557,23 @@ impl App {
             // screen and reaching into it from here would make the settings
             // screen's writer private-debt rather than a seam.
             "bar" => {
-                use crate::tui::status_line::style::SeparatorStyle;
+                use crate::tui::status_line::style::{self as bar_style_cell, SeparatorStyle};
+                // The style rendered as a sample, so the reply is the evidence
+                // the change took — see `bar_style_cell::preview`.
+                let bar_preview = |style: SeparatorStyle| bar_style_cell::preview(style);
                 let requested = args.trim();
                 if requested.is_empty() {
-                    let current = crate::tui::status_line::style::style().key();
+                    let style = crate::tui::status_line::style::style();
                     let known = SeparatorStyle::ALL
                         .iter()
                         .map(|s| s.key())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    self.set_status_notice(format!("Status bar style: {current} — /bar <{known}>"));
+                    self.set_status_notice(format!(
+                        "Status bar style: {} [{}] — /bar <{known}>",
+                        style.key(),
+                        bar_preview(style),
+                    ));
                     return true;
                 }
                 let (style, known) = SeparatorStyle::parse(requested);
@@ -598,16 +605,21 @@ impl App {
                     },
                 ) {
                     Ok(_) => {
-                        self.set_status_notice(format!("Status bar style: {}", style.key()));
+                        self.set_status_notice(format!(
+                            "Status bar style: {} [{}]",
+                            style.key(),
+                            bar_preview(style),
+                        ));
                     }
                     // Applied for this session, not persisted — said out loud,
                     // because a setting that silently reverts on restart reads as
                     // a broken command rather than an unwritable config.
                     Err(e) => {
                         self.set_status_notice(format!(
-                            "Status bar style: {} — applied for this session, but not \
-                             persisted: {e}",
-                            style.key()
+                            "Status bar style: {} [{}] — applied for this session, but \
+                             not persisted: {e}",
+                            style.key(),
+                            bar_preview(style),
                         ));
                     }
                 }

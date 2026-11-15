@@ -180,6 +180,28 @@ pub fn style() -> SeparatorStyle {
         .unwrap_or(SeparatorStyle::Dot)
 }
 
+/// A one-line sample of what `style` draws, for a command's reply.
+///
+/// (plan 2026-11-16 T3) WHY THIS EXISTS. `/bar <style>` applied correctly and
+/// the operator still reported it "not working properly" — because on an idle
+/// session the status row has ZERO separators. A separator only exists BETWEEN
+/// two segments, and `draw_status` yields a single empty span when idle; the
+/// composer hint adds one boundary, but only while a tip is showing, which is
+/// 12 seconds of every 90 (`STATUS_TIP_SHOW_SECONDS` / `_PERIOD_SECONDS`).
+///
+/// So for most of the time the honest result of a style change is "nothing
+/// moved on screen", and a reply that named only the key gave the operator no
+/// way to tell a working change from a dead command. Showing the glyph makes
+/// the command's own output the evidence that it took.
+///
+/// The sample is `a<glyph>b` rather than a bare glyph: three of the eight
+/// styles (`slash`, `pipe`, `ascii`) are punctuation that reads as a typo
+/// without a neighbour to sit between, and `none` is a single space, which
+/// would render as an empty gap in the notice.
+pub fn preview(style: SeparatorStyle) -> String {
+    format!("a{}b", style.glyph())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
