@@ -1258,12 +1258,20 @@ mod ledger_merge_tests {
     /// ledger of 51 live delegations lost the oldest on the persist that should
     /// have recorded it. The two paths disagreeing was the defect: liveness is
     /// what decides whether a row may be cut.
+    ///
+    /// The terminal set must EXCEED the cap, or the branch under test never
+    /// runs: a first draft used exactly `MAX_RETAINED_TERMINAL` rows, and with
+    /// the whole retention block deleted from the source this test still passed.
+    /// A guard that passes with the fix removed is not a guard.
+    /// MEASURED 2026-11-15 (eighth-pass audit, finding 1).
     #[test]
     fn a_pending_record_is_never_cut_by_the_merge_retention_cap() {
         let _guard = test_lock().lock().unwrap();
         __test_reset_registry();
-        // A full ledger of terminal rows, all NEWER than the pending one.
-        let prior: Vec<AsyncDelegationRecord> = (0..MAX_RETAINED_TERMINAL as u64)
+        // MORE than a cap-ful of terminal rows, all NEWER than the pending one,
+        // so the retention branch is entered and the pending row is the oldest
+        // thing in the set by the truncate key.
+        let prior: Vec<AsyncDelegationRecord> = (0..(MAX_RETAINED_TERMINAL as u64 + 5))
             .map(|i| {
                 record(
                     &format!("term-{i:03}"),
@@ -1294,32 +1302,75 @@ mod ledger_merge_tests {
             merged.iter().any(|r| r.delegation_id == "live-pending"),
             "a Pending record must survive the merge cap: it is not terminal history"
         );
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|r| r.status != AsyncDelegationStatus::Pending)
+                .count(),
+            MAX_RETAINED_TERMINAL,
+            "the terminal rows were still capped, so the branch really ran"
+        );
     }
 
-    /// The same rule from the other side: when every row is live there is no
-    /// terminal row to bound, so the cap must cut nothing at all.
+    /// Pending rows do not count against a cap that bounds TERMINAL rows, even
+    /// when the terminal rows are over the cap and the branch is running.
+    ///
+    /// The first draft of this test used an all-Pending ledger, which cannot
+    /// fail: the branch is gated on `terminal.len()`, and an all-Pending set has
+    /// `terminal.len() == 0`, so nothing is ever cut and the assertion holds for
+    /// any implementation — including one with no retention at all. The shape
+    /// that can fail is a ledger where the terminal rows DO exceed the cap and
+    /// the Pending rows are numerous: an implementation that counts the whole set
+    /// (the iter-2406 defect) truncates the live rows away.
+    /// MEASURED 2026-11-15 (eighth-pass audit, finding 1).
     #[test]
-    fn an_all_pending_ledger_is_not_truncated_by_the_merge_cap() {
+    fn pending_rows_do_not_count_against_the_terminal_cap() {
         let _guard = test_lock().lock().unwrap();
         __test_reset_registry();
-        let prior: Vec<AsyncDelegationRecord> = (0..(MAX_RETAINED_TERMINAL as u64 + 1))
+        // Terminal rows over the cap, so the retention branch is entered.
+        let mut prior: Vec<AsyncDelegationRecord> = (0..(MAX_RETAINED_TERMINAL as u64 + 5))
             .map(|i| {
                 record(
-                    &format!("live-{i:03}"),
-                    AsyncDelegationStatus::Pending,
-                    "running",
-                    1000 + i,
-                    None,
+                    &format!("term-{i:03}"),
+                    AsyncDelegationStatus::Completed,
+                    "finished work",
+                    2000 + i,
+                    Some(2000 + i),
                     None,
                 )
             })
             .collect();
+        // Plus live rows, interleaved OLDER than the terminal ones, so an
+        // implementation that counts the whole set cuts these first.
+        for i in 0..5u64 {
+            prior.push(record(
+                &format!("live-{i:03}"),
+                AsyncDelegationStatus::Pending,
+                "running",
+                1000 + i,
+                None,
+                None,
+            ));
+        }
         let merged = merge_records(prior, Vec::new());
         drop(_guard);
+        let live: Vec<&str> = merged
+            .iter()
+            .filter(|r| r.status == AsyncDelegationStatus::Pending)
+            .map(|r| r.delegation_id.as_str())
+            .collect();
         assert_eq!(
-            merged.len(),
-            MAX_RETAINED_TERMINAL + 1,
-            "a ledger of only-Pending rows has nothing terminal to prune"
+            live.len(),
+            5,
+            "no live row may be cut, however far the terminal rows exceed the cap"
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|r| r.status != AsyncDelegationStatus::Pending)
+                .count(),
+            MAX_RETAINED_TERMINAL,
+            "the terminal rows were still capped, so the branch really ran"
         );
     }
 
