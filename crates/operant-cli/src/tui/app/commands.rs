@@ -532,7 +532,11 @@ impl App {
                 true
             }
 
-            "config" | "settings" => {
+            // `setting` is the spelling operators reach for, and an
+            // unregistered name falls through every dispatch gate and reaches the
+            // MODEL as prompt text — which reads as "the panel does not exist"
+            // rather than "that command is spelled differently".
+            "config" | "settings" | "setting" => {
                 self.settings_screen.open(self.config.agent.context_window, &self.config);
                 true
             }

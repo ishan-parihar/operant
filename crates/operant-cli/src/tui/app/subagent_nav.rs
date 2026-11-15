@@ -13,6 +13,57 @@ use super::*;
 use crate::tui::subagent_navigator::{NavigatorEntry, descendants};
 
 impl App {
+    /// The delegation ids that belong to THIS session: its descendants, plus any
+    /// registry-only child it spawned that the ledger has not recorded yet.
+    ///
+    /// `None` when there is no current session, which every caller must read as
+    /// "show nothing" rather than "show everything": the delegation registry is
+    /// process-wide, and an unscoped read is how a fresh session came to list
+    /// another session's subagents as its own (the inline swarm gallery did
+    /// exactly that). One walk, two surfaces — the navigator modal and the inline
+    /// gallery — because two scoping rules is how they drift apart.
+    pub(super) fn session_descendant_ids(&self) -> Option<std::collections::HashSet<String>> {
+        let root = self.current_session.as_ref()?;
+        let records = operant_core::tools::async_delegation::list_records();
+        let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // The parent edge is the child's `parent_session_id`; a record with none
+        // is a top-level delegation this session did not spawn.
+        let mut edges: Vec<(String, String)> = records
+            .iter()
+            .filter_map(|r| {
+                r.parent_session_id
+                    .clone()
+                    .map(|parent| (parent, r.delegation_id.clone()))
+            })
+            .collect();
+        // A delegation is not a session: the child it spawned runs in its OWN
+        // session, so the next hop is `delegation → that session`. The session
+        // ids are TRANSPARENT — the hop connects the tree without spending a
+        // depth level, because a session has no row of its own.
+        let session_ids: Vec<&str> = records
+            .iter()
+            .filter_map(|r| r.session_id.as_deref())
+            .collect();
+        edges.extend(
+            records
+                .iter()
+                .filter_map(|r| r.session_id.clone().map(|s| (r.delegation_id.clone(), s))),
+        );
+
+        for (delegation_id, _depth, _parent) in descendants(root, &edges, &session_ids) {
+            ids.insert(delegation_id);
+        }
+        // A registry-only child (dispatched in-process, not yet in the ledger) is
+        // still this session's child: the registry carries the same edge.
+        for record in &records {
+            if record.parent_session_id.as_deref() == Some(root.as_str()) {
+                ids.insert(record.delegation_id.clone());
+            }
+        }
+        Some(ids)
+    }
+
     /// Mount the navigator over this session's own descendants, or refuse.
     ///
     /// Returns `true` when the surface mounted. An empty roster never mounts

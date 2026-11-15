@@ -14004,10 +14004,25 @@ fn a_settled_delegation_stops_lighting_its_todo() {
 fn a_live_delegation_feeds_the_inline_swarm_gallery() {
     let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
-    let delegation_id =
-        operant_core::tools::async_delegation::create_record("audit the tests", "gpt-5.4");
+    // (iter-2438) The gallery is SESSION-SCOPED: the delegation registry is
+    // process-wide, and an unscoped read is how a fresh session came to list
+    // another session's subagents as its own. `create_record` carries no parent
+    // edge, so the fixture names the dispatching session the way a real dispatch
+    // does, and the App must have one to be scoped against.
+    const SESSION: &str = "sess-gallery-test";
+    let delegation_id = operant_core::tools::async_delegation::try_create_record(
+        "audit the tests",
+        "gpt-5.4",
+        16,
+        Some(SESSION),
+        None,
+    )
+    .expect("a free slot")
+    .id()
+    .to_string();
 
     let mut app = make_app();
+    app.current_session = Some(SESSION.to_string());
     // The model names the dispatch handle on the todo it delegated, which is
     // the join this whole surface rests on.
     app.todos = vec![crate::tui::operant_app::todo::TodoItem {
@@ -14060,10 +14075,26 @@ fn a_live_delegation_feeds_the_inline_swarm_gallery() {
 fn gallery_counts_are_scoped_to_each_child() {
     let _registry = registry_lock();
     let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
-    let first = operant_core::tools::async_delegation::create_record("first job", "m1");
-    let second = operant_core::tools::async_delegation::create_record("second job", "m2");
+    // Session-scoped like the test above (iter-2438): both children belong to the
+    // session the App is scoped to, or the gallery correctly shows nothing.
+    const SESSION: &str = "sess-gallery-test";
+    let admit = |goal: &str, model: &str| {
+        operant_core::tools::async_delegation::try_create_record(
+            goal,
+            model,
+            16,
+            Some(SESSION),
+            None,
+        )
+        .expect("a free slot")
+        .id()
+        .to_string()
+    };
+    let first = admit("first job", "m1");
+    let second = admit("second job", "m2");
 
     let mut app = make_app();
+    app.current_session = Some(SESSION.to_string());
     let make = |id: &str, assigned: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
         content: format!("{id} work"),
         status: status.to_string(),
@@ -18517,6 +18548,60 @@ mod bar_command_tests {
         assert!(
             notice.contains("Unknown bar style") && notice.contains("dot"),
             "the refusal names the vocabulary: {notice:?}"
+        );
+    }
+    /// A record belonging to ANOTHER session must never reach this session's gallery.
+    ///
+    /// The registry is one process-wide map and the delegation ledger is one file for
+    /// the whole home, so the producer's only defence is the scope it applies. This
+    /// is the guard for the bug the operator reported: a fresh session opened with
+    /// another session's subagent rows already in the strip, because the read was
+    /// unscoped. It pins the two halves of the rule — an unparented record and a
+    /// record parented to a DIFFERENT session are both foreign — and the positive
+    /// case, so the guard cannot be satisfied by returning nothing at all.
+    #[test]
+    fn a_foreign_sessions_subagent_never_reaches_the_gallery() {
+        let _registry = registry_lock();
+        let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
+        const MINE: &str = "sess-mine";
+        const THEIRS: &str = "sess-theirs";
+        let admit = |parent: Option<&str>| {
+            operant_core::tools::async_delegation::try_create_record("job", "m", 16, parent, None)
+                .expect("a free slot")
+                .id()
+                .to_string()
+        };
+
+        let mine = admit(Some(MINE));
+        let theirs = admit(Some(THEIRS));
+        let unattributed = admit(None);
+
+        let mut app = make_app();
+        app.current_session = Some(MINE.to_string());
+        let shown: Vec<String> = app
+            .swarm_gallery_members(false)
+            .map(|m| m.session_id)
+            .collect();
+
+        assert!(
+            shown.contains(&mine),
+            "this session's own child must be shown: {shown:?}"
+        );
+        assert!(
+            !shown.contains(&theirs),
+            "a child of ANOTHER session must not be shown: {shown:?}"
+        );
+        assert!(
+            !shown.contains(&unattributed),
+            "a record with no parent edge is not provably this session's: {shown:?}"
+        );
+
+        // No session at all means nothing to scope against: an empty strip is honest,
+        // a foreign one is not.
+        app.current_session = None;
+        assert!(
+            app.swarm_gallery_members(false).next().is_none(),
+            "with no session the gallery must be empty, not unscoped"
         );
     }
 }

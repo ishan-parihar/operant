@@ -255,7 +255,7 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
         return;
     }
 
-// (plan 2026-11-15 T1) THE THEME PICKER SHOWED ONLY 6 OF 8 THEMES.
+    // (plan 2026-11-15 T1) THE THEME PICKER SHOWED ONLY 6 OF 8 THEMES.
     //
     // MEASURED by rendering the real screen and reading the buffer back: at
     // every terminal height from 20 to 50 the modal was exactly 16 rows tall
@@ -308,7 +308,7 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     )));
     lines.push(Line::from(""));
 
-// (plan 2026-11-15 T1) A short terminal cannot fit the whole result even now,
+    // (plan 2026-11-15 T1) A short terminal cannot fit the whole result even now,
     // so the list scrolls to keep the SELECTION visible. Without this the
     // modal's clamp silently hides whatever falls past the last row — the
     // original defect in a different guise: an operator who arrows down to a
@@ -319,16 +319,16 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     // catalogue. Two lines per row (row + spacer), so capacity is measured in
     // themes rather than lines.
     // The query line and its spacer occupy the first TWO body rows (pushed
-        // above this loop), so the theme window is what remains — counting the
-        // whole body would let the window run one theme past the bottom and
-        // push the selection off-screen, which is the very thing this guards.
-        let capacity = layout
-            .body_area
-            .height
-            .saturating_sub(2)
-            .checked_div(2)
-            .unwrap_or(1)
-            .max(1) as usize;
+    // above this loop), so the theme window is what remains — counting the
+    // whole body would let the window run one theme past the bottom and
+    // push the selection off-screen, which is the very thing this guards.
+    let capacity = layout
+        .body_area
+        .height
+        .saturating_sub(2)
+        .checked_div(2)
+        .unwrap_or(1)
+        .max(1) as usize;
     let first = if screen.selected_idx >= capacity {
         screen.selected_idx + 1 - capacity
     } else {
@@ -592,7 +592,10 @@ mod tests {
         let mut screen = ThemeScreen::new();
         screen.open("default");
         let total = screen.visible_themes().len();
-        assert!(total > 8, "the catalogue is expected to outgrow one screen: {total}");
+        assert!(
+            total > 8,
+            "the catalogue is expected to outgrow one screen: {total}"
+        );
 
         // A terminal too short for the whole list, so the window must scroll.
         let backend = TestBackend::new(90, 20);
@@ -667,6 +670,50 @@ mod tests {
             "the selected theme ({last_name}) must scroll into view on a short \
              terminal, not be clipped away"
         );
+    }
+    /// The picker must be able to REACH every palette on a short terminal.
+    ///
+    /// Two agents fixed the unbounded list independently (this surface, plan
+    /// 2026-11-15 T1, and iter-2439); what neither added was the guard, and the
+    /// defect is invisible without one: the cursor moves whether or not the row is
+    /// painted, so the operator sees the swatch of whatever row sits at the top
+    /// and concludes the palette list is broken. This walks all 108 rows at
+    /// 80x24 and requires the selected row's LABEL — the string the row actually
+    /// paints, not the theme name — to be in the buffer.
+    ///
+    /// MUTATION PROVEN: removing `.skip(first).take(capacity)` from the render
+    /// fails this at step 6, "Deuteranopia".
+    #[test]
+    fn every_theme_is_reachable_on_a_short_terminal() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut screen = ThemeScreen::new();
+        screen.open("default");
+        let total = screen.themes.len();
+        assert!(total > 100, "the bundled palettes are listed: {total}");
+
+        for step in 0..total {
+            screen.select_next();
+            terminal
+                .draw(|frame| {
+                    super::render_theme_screen(frame, &screen, frame.area());
+                })
+                .unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol().to_string())
+                .collect::<String>();
+            let selected = screen.selected().expect("a selected row").label.clone();
+            assert!(
+                rendered.contains(&selected),
+                "step {step}: theme {selected:?} must be painted at 80x24 — the \
+                 window let the selection run off the end of the list"
+            );
+        }
     }
 }

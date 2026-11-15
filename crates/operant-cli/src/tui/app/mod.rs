@@ -1381,6 +1381,18 @@ impl App {
         } else {
             operant_core::tools::async_delegation::list_records()
         };
+        // (iter-2438) SCOPE TO THIS SESSION. The registry is process-wide and the
+        // ledger is one file for the whole home, so an unscoped read listed every
+        // session's children as this session's own: a fresh session opened with
+        // another session's subagent logs already in the strip. `None` (no current
+        // session) yields NO rows — an empty strip is honest, a foreign one is not.
+        let records: Vec<_> = match self.session_descendant_ids() {
+            Some(mine) => records
+                .into_iter()
+                .filter(|rec| mine.contains(&rec.delegation_id))
+                .collect(),
+            None => Vec::new(),
+        };
         records
             .into_iter()
             .map(move |rec| {
