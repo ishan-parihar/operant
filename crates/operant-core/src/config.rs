@@ -821,7 +821,11 @@ pub struct BehaviorSettings {
     /// protected floor above a 32,000-token window. The skills that fit are
     /// advertised; the rest are dropped and the drop is stated in the block.
     ///
-    /// 0 means the built-in default (4,000 tokens).
+    /// 0 (the default) means DERIVE it: one eighth of the resolved context
+    /// window, floored at 4,000 tokens. It used to mean a flat 4,000, which is
+    /// one eighth of a 32k window and a quarter of the 128k default -- so the
+    /// catalogue a default install advertised was sized for a window four times
+    /// smaller than the one it actually has.
     #[serde(default = "default_advertised_skills_token_budget")]
     pub advertised_skills_token_budget: usize,
 
@@ -1101,8 +1105,18 @@ fn default_max_tool_result_total_share() -> f64 {
     crate::context_management::DEFAULT_MAX_TOOL_RESULT_TOTAL_SHARE
 }
 
+/// 0 -- "derive it", not the 32k-era constant.
+///
+/// This used to return [`ADVERTISED_SKILLS_TOKEN_BUDGET`] (4 000), which made
+/// the field's own `0 = default` contract unreachable: every config carried
+/// 4 000 explicitly, so the value could never be derived from anything. 4 000
+/// is exactly one eighth of a 32k window and a quarter of the 128k default, so
+/// a default install was advertising a 32k-sized catalogue into a 128k window.
+/// Returning 0 hands the decision to
+/// [`context_management::advertised_skills_budget`], which floors at the same
+/// 4 000 so nothing can end up worse off than before.
 fn default_advertised_skills_token_budget() -> usize {
-    crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+    0
 }
 
 /// The recalled-memory block's default ceiling (audit iter-2345). Same value as

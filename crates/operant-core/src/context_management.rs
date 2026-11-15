@@ -1821,6 +1821,46 @@ pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
 /// rest are dropped, and the drop is stated in the block itself.
 pub const ADVERTISED_SKILLS_TOKEN_BUDGET: usize = 4_000;
 
+/// The share of the context window the advertised-skills block may claim when
+/// the operator has not set an explicit budget.
+///
+/// [`ADVERTISED_SKILLS_TOKEN_BUDGET`] is a flat 4 000, which is a sensible
+/// number against a 32k window and a bad one against the 128k default
+/// ([`crate::context_window::DEFAULT_CONTEXT_WINDOW`]): it advertises ~105
+/// clipped skills and then starts deleting, even though a 128k window has room
+/// for three times that. A flat ceiling cannot tell a 32k route from a 1M one.
+///
+/// The historical 4 000 is NOT an arbitrary number: it is exactly one eighth
+/// of a 32,000-token window. That is the tell -- the constant was calibrated
+/// against the 32k context era and never revisited when the default window
+/// became 128k ([`crate::context_window::DEFAULT_CONTEXT_WINDOW`]), so a modern
+/// route advertises a 32k-sized catalogue into a four-times-larger window.
+/// Keeping the 1/8 share makes the block scale with the window instead of
+/// against it, and makes the old constant fall out at the old window size.
+pub const ADVERTISED_SKILLS_WINDOW_SHARE_NUM: usize = 1;
+pub const ADVERTISED_SKILLS_WINDOW_SHARE_DEN: usize = 8;
+
+/// The budget for the advertised-skills block: the operator's explicit number
+/// when set, else a share of the context window, floored at the historical
+/// 4 000 so a tiny window still advertises a useful catalogue and never
+/// advertises LESS than the flat constant did.
+///
+/// A `context_window` of 0 means "not configured"; the flat constant is the
+/// answer there, which keeps the old behaviour for every caller that has not
+/// resolved a window.
+#[must_use]
+pub fn advertised_skills_budget(explicit: usize, context_window: usize) -> usize {
+    if explicit > 0 {
+        return explicit;
+    }
+    if context_window == 0 {
+        return ADVERTISED_SKILLS_TOKEN_BUDGET;
+    }
+    let share = context_window.saturating_mul(ADVERTISED_SKILLS_WINDOW_SHARE_NUM)
+        / ADVERTISED_SKILLS_WINDOW_SHARE_DEN;
+    share.max(ADVERTISED_SKILLS_TOKEN_BUDGET)
+}
+
 /// The characters of a skill description the advertised block shows.
 ///
 /// This is the missing half of the ceiling. Without it the block spends the
@@ -3691,6 +3731,100 @@ mod tests {
                 ttl
             ),
             Some("prompt cache idle past its TTL")
+        );
+    }
+
+    // ── window-scaled advertised-skills budget (iter-2395) ─────────────
+
+    /// The historical flat constant was NOT arbitrary: it is exactly one
+    /// eighth of a 32,000-token window. That makes it a share, not a magic
+    /// number, and pins the reconstruction.
+    #[test]
+    fn the_historical_flat_constant_is_one_eighth_of_a_32k_window() {
+        assert_eq!(32_000 / 8, ADVERTISED_SKILLS_TOKEN_BUDGET);
+    }
+
+    /// An explicit operator budget always wins -- it is the one lever that
+    /// covers a route no catalog knows.
+    #[test]
+    fn an_explicit_budget_beats_the_window_share() {
+        assert_eq!(advertised_skills_budget(500, 1_048_576), 500);
+        assert_eq!(advertised_skills_budget(9_000, 32_000), 9_000);
+    }
+
+    /// The bug this fixes: at the 128k default the block was still budgeted for
+    /// a 32k window, so it advertised ~105 clipped skills into a window that had
+    /// room for several times that. The share must grow with the window.
+    #[test]
+    fn a_larger_window_advertises_more_skills() {
+        let at_32k = advertised_skills_budget(0, 32_000);
+        let at_128k = advertised_skills_budget(0, 128_000);
+        let at_1m = advertised_skills_budget(0, 1_048_576);
+        assert_eq!(
+            at_32k, ADVERTISED_SKILLS_TOKEN_BUDGET,
+            "the old window keeps the old number"
+        );
+        assert!(
+            at_128k > at_32k,
+            "128k must beat 32k: {at_128k} vs {at_32k}"
+        );
+        assert!(at_1m > at_128k, "1M must beat 128k: {at_1m} vs {at_128k}");
+    }
+
+    /// The floor matters: a tiny window must never advertise LESS than the flat
+    /// constant did, or a 16k route would show a smaller catalogue than before
+    /// this change.
+    #[test]
+    fn the_budget_never_falls_below_the_flat_constant() {
+        assert_eq!(
+            advertised_skills_budget(0, 16_000),
+            ADVERTISED_SKILLS_TOKEN_BUDGET
+        );
+        assert_eq!(
+            advertised_skills_budget(0, 8_000),
+            ADVERTISED_SKILLS_TOKEN_BUDGET
+        );
+    }
+
+    /// An unconfigured window (0) keeps the historical behaviour exactly, so a
+    /// caller that has not resolved one sees no change.
+    #[test]
+    fn an_unconfigured_window_keeps_the_flat_constant() {
+        assert_eq!(
+            advertised_skills_budget(0, 0),
+            ADVERTISED_SKILLS_TOKEN_BUDGET
+        );
+    }
+
+    /// THE defect this fixes, measured: at the default window the budget must
+    /// cover a realistic catalogue that the old flat constant truncated.
+    ///
+    /// 310 clipped skills cost ~12 090 tokens. The old 4 000 budget fit
+    /// ~105 of them; the window-scaled budget must fit the whole set.
+    #[test]
+    fn the_default_window_advertises_a_full_real_catalogue() {
+        let budget = advertised_skills_budget(0, crate::context_window::DEFAULT_CONTEXT_WINDOW);
+        let rows: Vec<(String, String)> = (0..310)
+            .map(|i| (format!("skill-{i:03}"), "x".repeat(120)))
+            .collect();
+        let mut used = 0usize;
+        let mut advertised = 0usize;
+        for (name, desc) in &rows {
+            let line = format!(
+                "  <skill name=\"{}\">{}</skill>\n",
+                name,
+                clip_skill_description(desc)
+            );
+            let cost = estimate_tokens(&line);
+            if used + cost > budget {
+                continue;
+            }
+            used += cost;
+            advertised += 1;
+        }
+        assert_eq!(
+            advertised, 310,
+            "the default window must advertise a 310-skill catalogue in full; only {advertised} fit against a {budget}-token budget"
         );
     }
 

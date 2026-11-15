@@ -2013,31 +2013,32 @@ mod tests {
 
         let prefix = agent.build_frozen_prefix();
         let advertised = prefix.matches("<skill name=\"").count();
-        assert!(
-            advertised > 0,
-            "the block must still advertise the skills that fit"
-        );
-        assert!(
-            advertised < 300,
-            "the block must NOT advertise every skill: {advertised} of 300"
-        );
-        // The ceiling is a TOKEN budget, so the cost is what matters.
+        // The block must fit inside the ceiling, whatever the catalogue size.
+        // The ceiling itself is DERIVED from the resolved window (iter-2395), so
+        // at the 128k default this fixture fits in full; the drop path is pinned
+        // by `the_advertised_block_drops_skills_on_a_small_window` below.
         let block = prefix
             .split("<available_skills>")
             .nth(1)
             .and_then(|rest| rest.split("</available_skills>").next())
             .expect("the block");
         let tokens = crate::context_management::estimate_tokens(block);
-        assert!(
-            tokens <= crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET,
-            "the advertised block costs {tokens} tokens, over the \
-             {} ceiling",
-            crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
+        let ceiling = crate::context_management::advertised_skills_budget(
+            0,
+            agent.effective_context_window(),
         );
         assert!(
-            prefix.contains("were not advertised") || prefix.contains("not advertised"),
-            "the block must SAY that skills were dropped: {}",
-            &prefix[prefix.len().saturating_sub(400)..]
+            tokens <= ceiling,
+            "the advertised block costs {tokens} tokens, over the {ceiling} ceiling"
+        );
+        assert_eq!(
+            advertised, 300,
+            "a 300-skill catalogue fits the default window's budget in full; only \
+             {advertised} were advertised"
+        );
+        assert!(
+            !prefix.contains("not advertised"),
+            "nothing was dropped, so the block must not claim a drop"
         );
 
         // THE CLIP, pinned where it matters. This fixture's descriptions are
@@ -2070,6 +2071,131 @@ mod tests {
             longest_row_desc <= crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS,
             "an advertised description is {longest_row_desc} chars, over the {} budget: the clip did not run on every row",
             crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS
+        );
+    }
+
+    /// The advertised block is budgeted against the RESOLVED window, not the
+    /// config field. `config.context_window` is `AUTOMATIC` (0) on a default
+    /// install, so a budget derived from the field would pin every default
+    /// install to the 32k-era flat constant and make the window share inert --
+    /// the exact silent failure this asserts against.
+    ///
+    /// MUTATION-PROOF: reading `config.context_window` instead of
+    /// `effective_context_window()` drops the advertised count back to ~67 and
+    /// fails the bound.
+    #[tokio::test]
+    async fn the_advertised_budget_follows_the_resolved_window_not_the_config_field() {
+        use crate::skills::SkillManager;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skills_dir = dir.path().join("skills");
+        let mut manager = SkillManager::new(skills_dir.clone());
+        for i in 0..300 {
+            let name = format!("skill-{i:03}");
+            let skill_dir = skills_dir.join(&name);
+            std::fs::create_dir_all(&skill_dir).expect("skill dir");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: {}\n---\n\nbody\n",
+                    "x".repeat(200)
+                ),
+            )
+            .expect("skill file");
+        }
+        manager.load_all().expect("skills load");
+
+        let db = Database::init(dir.path().join("skills.sqlite")).expect("db");
+        let agent = OperantAgent::new(
+            AgentConfig {
+                // AUTOMATIC: the resolved cell answers with the 128k default.
+                context_window: crate::context_window::AUTOMATIC,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_skill_manager(manager);
+
+        assert_eq!(
+            agent.effective_context_window(),
+            crate::context_window::DEFAULT_CONTEXT_WINDOW,
+            "the fixture must really be on the default window"
+        );
+        let prefix = agent.build_frozen_prefix();
+        let advertised = prefix.matches("<skill name=\"").count();
+
+        // Against a 4 000 flat budget this fixture advertises ~67 skills; the
+        // 128k window's 1/8 share is 16 000, which covers the whole catalogue.
+        assert!(
+            advertised >= 280,
+            "a 300-skill catalogue must be advertised in full at the default window; \
+             only {advertised} fit, which means the budget is still the 32k-era flat constant"
+        );
+    }
+
+    /// The drop path still exists, and still says so. The ceiling became a
+    /// share of the window (iter-2395), which means a SMALL window must still
+    /// drop skills -- and the block must still tell the model they exist,
+    /// because a skill it cannot see is one it will never pick.
+    ///
+    /// MUTATION-PROOF: deleting the drop notice fails the `contains` below.
+    #[tokio::test]
+    async fn the_advertised_block_drops_skills_on_a_small_window_and_says_so() {
+        use crate::skills::SkillManager;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skills_dir = dir.path().join("skills");
+        let mut manager = SkillManager::new(skills_dir.clone());
+        for i in 0..300 {
+            let name = format!("skill-{i:03}");
+            let skill_dir = skills_dir.join(&name);
+            std::fs::create_dir_all(&skill_dir).expect("skill dir");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: {}\n---\n\nbody\n",
+                    "x".repeat(200)
+                ),
+            )
+            .expect("skill file");
+        }
+        manager.load_all().expect("skills load");
+
+        let db = Database::init(dir.path().join("skills.sqlite")).expect("db");
+        // A 16k window: 1/8 is 2 000, floored at 4 000, so this fixture must
+        // drop. (A 16k route is unusual but it is what an old local model
+        // reports, and it is the case the flat constant used to cover alone.)
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 16_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_skill_manager(manager);
+
+        let prefix = agent.build_frozen_prefix();
+        let advertised = prefix.matches("<skill name=\"").count();
+        assert!(
+            advertised < 300,
+            "a 16k window cannot hold 300 clipped skills: {advertised} advertised"
+        );
+        assert!(
+            advertised > 0,
+            "the block must still advertise the skills that fit"
+        );
+        assert!(
+            prefix.contains("were not advertised") || prefix.contains("not advertised"),
+            "the block must SAY that skills were dropped: {}",
+            &prefix[prefix.len().saturating_sub(400)..]
         );
     }
 

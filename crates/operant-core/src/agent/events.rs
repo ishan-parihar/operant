@@ -1224,11 +1224,16 @@ impl OperantAgent {
                 // turn. The skills that fit are advertised; the rest are
                 // DROPPED and the drop is visible, because a skill the model
                 // cannot see is a skill it will never pick.
-                let budget = if self.config.advertised_skills_token_budget > 0 {
-                    self.config.advertised_skills_token_budget
-                } else {
-                    crate::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
-                };
+                // `effective_context_window`, NOT `config.context_window`: the
+                // config field is `AUTOMATIC` (0) until a window is resolved
+                // from the provider, so reading the field directly would pin
+                // every default install to the 32k-era flat constant and make
+                // the share inert. The resolved cell is the value every other
+                // budget in this agent already builds against.
+                let budget = crate::context_management::advertised_skills_budget(
+                    self.config.advertised_skills_token_budget,
+                    self.effective_context_window(),
+                );
                 let mut used = 0usize;
                 let mut advertised = 0usize;
                 let mut dropped = 0usize;
