@@ -41,18 +41,47 @@ const MAX_TRAJECTORIES_KEPT: usize = 200;
 /// `MEMORY_REVIEW_PROMPT` instructs it to return a `Memory candidate: <fact>` line
 /// for a foreground turn to act on, so its final text IS its output. Only an
 /// empty report on both sides surfaces nothing.
+/// Which iteration should carry the "you are out of budget, report now" message.
+///
+/// Extracted because the arm that uses it lives inside an async daemon and has no
+/// test seam -- and it shipped WRONG for exactly that reason: it fired on the LAST
+/// iteration, whose request is built and then never sent, so the model never saw
+/// the instruction and the "one turn to report" was zero turns.
+///
+/// The message must ride the SECOND-TO-LAST iteration, so the last iteration's
+/// request carries it and the model answers after being told to stop. A cap of 0 or
+/// 1 has no such index, and `None` is the honest answer there: with a single
+/// iteration there is no earlier request to carry a warning, and warning the model
+/// in the same breath as the work it is already doing cannot change that turn.
+pub(crate) fn finalize_iteration(iter: usize, max_iterations: usize) -> bool {
+    max_iterations >= 2 && iter + 1 == max_iterations - 1
+}
+
 pub(crate) fn review_notification(actions: &[String], last_round_text: &str) -> Option<String> {
-    if !actions.is_empty() {
-        return Some(format!(
-            "💾 Self-improvement review: {}",
-            actions.join(" · ")
-        ));
-    }
-    let report = last_round_text.trim();
-    if report.is_empty() {
-        None
+    // BOTH halves, not one or the other. The first version returned the actions
+    // and dropped the text whenever `actions` was non-empty, which lost the
+    // memory candidate on the COMBINED lane: its prompt says memory writes are
+    // refused exactly as the memory-only lane's does, so it writes a SKILL (which
+    // populates `actions`) and still returns a `Memory candidate:` line. The
+    // candidate is the only output a foreground turn can act on, so dropping it
+    // on the busier lane is the worse half to lose.
+    //
+    // Order: the writes first (what the review DID), then the report (what it
+    // wants the operator to act on).
+    let actions_text = if actions.is_empty() {
+        String::new()
     } else {
-        Some(format!("💾 Self-improvement review: {}", report))
+        actions.join(" · ")
+    };
+    let report = last_round_text.trim();
+
+    match (actions_text.is_empty(), report.is_empty()) {
+        (false, false) => Some(format!(
+            "💾 Self-improvement review: {actions_text}\n{report}"
+        )),
+        (false, true) => Some(format!("💾 Self-improvement review: {actions_text}")),
+        (true, false) => Some(format!("💾 Self-improvement review: {report}")),
+        (true, true) => None,
     }
 }
 
@@ -750,10 +779,23 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         // The message is appended as a USER turn so the model sees
                         // it as an instruction from the host rather than as its own
                         // reasoning.
-                        if review_iter + 1 == MAX_REVIEW_ITERATIONS {
+                        // THE PENULTIMATE ITERATION, not the last one. This said
+                        // `review_iter + 1 == MAX_REVIEW_ITERATIONS`, which pushed
+                        // the message onto a request that was never sent: the loop
+                        // ran that iteration's tools and exited, so the model never
+                        // saw the instruction and the fix delivered ZERO turns
+                        // rather than the one it was written to give.
+                        //
+                        // At the penultimate index the message rides the LAST
+                        // iteration's request, which is the one the model answers
+                        // after being told to stop. `MAX_REVIEW_ITERATIONS` must be
+                        // at least 2 for there to be a penultimate index; the
+                        // saturating_sub below keeps a 1-iteration cap from
+                        // underflowing into a message that can never be sent.
+                        if finalize_iteration(review_iter, MAX_REVIEW_ITERATIONS) {
                             info!(
                                 session_id = %session_id,
-                                "Background review reached its last iteration — asking for the result now"
+                                "Background review is nearly out of iterations — asking for the result now"
                             );
                             review_messages.push(Message::user(
                                 "You are out of iteration budget. Do not make any more tool \
@@ -1195,11 +1237,19 @@ mod tests {
     /// A review that WROTE reports what it wrote.
     #[test]
     fn a_review_that_wrote_reports_its_writes() {
+        // This test used to assert that the final text is DROPPED whenever there
+        // are actions ("ignored final text"), which pinned the defect rather than
+        // the rule: the combined lane writes a skill and returns its
+        // `Memory candidate:` line in that same text, so dropping it lost the
+        // only output a foreground turn can act on. The writes still lead.
         let actions = vec!["memory: saved a preference".to_string()];
-        let note = review_notification(&actions, "ignored final text");
+        let note = review_notification(&actions, "Memory candidate: a fact.");
         assert_eq!(
             note.as_deref(),
-            Some("💾 Self-improvement review: memory: saved a preference")
+            Some(
+                "💾 Self-improvement review: memory: saved a preference\n\
+                 Memory candidate: a fact."
+            )
         );
     }
 
@@ -1230,5 +1280,107 @@ mod tests {
     fn an_empty_review_surfaces_nothing() {
         assert_eq!(review_notification(&[], ""), None);
         assert_eq!(review_notification(&[], "   \n  "), None);
+    }
+    /// BOTH halves reach the operator when a lane writes AND reports.
+    ///
+    /// The first version returned the actions and dropped the text whenever
+    /// `actions` was non-empty. The COMBINED lane writes skills (populating
+    /// `actions`) and still returns a `Memory candidate:` line, because its prompt
+    /// refuses memory writes exactly as the memory-only lane's does -- so the
+    /// candidate was lost on the busier lane, which is the worse half to lose.
+    #[test]
+    fn a_candidate_survives_a_lane_that_also_wrote() {
+        let actions = vec!["skill_manage: updated the skill \"plan\"".to_string()];
+        let note = review_notification(
+            &actions,
+            "Memory candidate: the operator prefers terse diffs.",
+        );
+        let note = note.expect("both halves are present, so there is something to surface");
+        assert!(
+            note.contains("skill_manage"),
+            "the writes must still be reported: {note:?}"
+        );
+        assert!(
+            note.contains("Memory candidate"),
+            "the candidate must survive a lane that also wrote: {note:?}"
+        );
+    }
+
+    /// The existing three cases are unchanged by the concatenation.
+    #[test]
+    fn the_notification_still_covers_writes_only_text_only_and_neither() {
+        assert_eq!(
+            review_notification(&["memory_store: saved".to_string()], "").as_deref(),
+            Some("💾 Self-improvement review: memory_store: saved")
+        );
+        assert_eq!(
+            review_notification(&[], "Memory candidate: a fact.").as_deref(),
+            Some("💾 Self-improvement review: Memory candidate: a fact.")
+        );
+        assert_eq!(review_notification(&[], "   "), None);
+    }
+
+    /// A zero budget means the built-in ceiling, not "drop everything".
+    ///
+    /// The sibling `fit_to_token_budget` documents 0 as unset; this one used to
+    /// return an EMPTY view for a 0 budget, because `total <= 0` is false for any
+    /// non-empty view and the keep loop then broke on the first message.
+    #[test]
+    fn a_zero_budget_fits_to_the_builtin_ceiling() {
+        let view = vec![
+            Message::user("a short message"),
+            Message::assistant("a short answer"),
+        ];
+        // `Message` has no PartialEq, so assert the PROPERTY rather than the
+        // value: a 0 budget must keep everything, not empty the view. An empty
+        // result is the defect being guarded.
+        let zero = crate::context_management::fit_messages_to_token_budget(view.clone(), 0);
+        assert_eq!(
+            zero.len(),
+            view.len(),
+            "0 must mean the built-in ceiling, not 'drop everything'"
+        );
+    }
+    /// The finalize message rides the SECOND-TO-LAST iteration, so a request is
+    /// still built after it and the model can answer.
+    ///
+    /// It shipped on the LAST iteration first: that request is built and then the
+    /// loop exits, so the model never saw the instruction and the fix delivered
+    /// ZERO turns while reading as if it gave one. This test is the seam that was
+    /// missing, which is why the bug survived a green suite.
+    #[test]
+    fn the_finalize_message_rides_an_iteration_that_is_still_sent() {
+        // A five-iteration cap: the message goes on iteration 3 (0-based), and
+        // iteration 4 is the one that answers it.
+        for iter in 0..5 {
+            assert_eq!(
+                finalize_iteration(iter, 5),
+                iter == 3,
+                "iteration {iter} of a 5-cap must carry the message only at the penultimate index"
+            );
+        }
+    }
+
+    /// The LAST iteration must never be the carrier: its request is built and then
+    /// the loop ends, so the message would never reach the model.
+    #[test]
+    fn the_last_iteration_never_carries_the_finalize_message() {
+        for max in [2usize, 3, 5, 8] {
+            assert!(
+                !finalize_iteration(max - 1, max),
+                "the last iteration of a {max}-cap must not carry the message"
+            );
+        }
+    }
+
+    /// A cap with no earlier iteration has no carrier, and says so rather than
+    /// firing on the only iteration it has.
+    #[test]
+    fn a_single_iteration_cap_has_no_finalize_turn() {
+        assert!(
+            !finalize_iteration(0, 1),
+            "one iteration cannot warn itself"
+        );
+        assert!(!finalize_iteration(0, 0), "no iterations, no carrier");
     }
 }

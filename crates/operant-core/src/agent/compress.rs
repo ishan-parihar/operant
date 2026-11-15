@@ -3,7 +3,7 @@
 use crate::client::{Message, Role, Usage};
 use crate::schema::ToolSchema;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::*;
 
@@ -487,137 +487,35 @@ impl OperantAgent {
         }
     }
 
-    /// Fold one closed span of the conversation into a durable compartment.
-    ///
-    /// The historian rung of the preflight ladder. Returns the messages
-    /// unchanged on EVERY path that cannot complete a fold, because a
-    /// compaction rung must never be the reason a turn fails: no session id, no
-    /// database row for the span, an unsafe span, a model that will not answer.
-    ///
-    /// The span is expressed as POSITIONS in the live message list, and the
-    /// positions are validated against the session's stored row count before any
-    /// model call. The list is hydrated in `timestamp ASC, id ASC` order, which
-    /// is the same order the compartment query reads back, so a position maps to
-    /// one row deterministically — and a count that disagrees means the live list
-    /// and the store have diverged, which is a reason to fold nothing rather than
-    /// to fold the wrong span.
-    pub(crate) async fn preflight_historian_fold(
-        &self,
-        messages: Vec<Message>,
-        max_span: usize,
-    ) -> Vec<Message> {
-        let Some(session_id) = self.session_id() else {
-            return messages;
-        };
-        // The anchor comes from the STORE, never from the model: the next span
-        // starts after the last one actually committed. A model's self-report is
-        // validated against this, not trusted for it.
-        let last_covered = match self.database.last_compartment_span_end(&session_id) {
-            Ok(value) => value.map(|v| v as usize),
-            Err(e) => {
-                warn!(error = %e, "historian: anchor read failed — rung passes through");
-                return messages;
-            }
-        };
-
-        let plan = crate::historian::plan_span(&messages, last_covered);
-        let (start, end) = match plan {
-            crate::historian::SpanPlan::Fold { start, end } => (start, end),
-            crate::historian::SpanPlan::Skip(reason) => {
-                debug!(reason = reason.as_str(), "historian: nothing to fold");
-                return messages;
-            }
-        };
-
-        // The span must be a real span of STORED rows, or the fold would
-        // summarize positions the store does not have.
-        let span_len = end.saturating_sub(start) + 1;
-        if span_len > max_span {
-            debug!(
-                span = span_len,
-                max_span, "historian: span exceeds the one-call ceiling — left for the next pass"
-            );
-            return messages;
-        }
-
-        // The idempotency key. Written BESIDE the fold rather than read before it:
-        // `idx_compartments_hash` is UNIQUE, so `insert_compartment` is the
-        // enforcement, and a read-then-write pre-check would add a race without
-        // adding safety. The consequence of not pre-checking is one wasted model
-        // call when a span is already folded — visible, bounded, and cheaper than
-        // a correctness hole.
-        let hash = crate::historian::fold_hash(&session_id, start, end, &messages);
-
-        // The model call. The span is rendered through the shared advisory
-        // view builder, which folds tool calls and previews results, so the
-        // historian sees the same provider-safe shape the advisor does.
-        let span: Vec<Message> = messages[start..=end].to_vec();
-        let view = crate::context_management::fit_messages_to_token_budget(
-            crate::moa::build_advisory_messages(&span),
-            crate::historian::HISTORIAN_VIEW_TOKEN_BUDGET,
-        );
-        if view.is_empty() {
-            warn!(
-                start,
-                end, "historian: the span emptied under the view budget — folded nothing"
-            );
-            return messages;
-        }
-        let mut request = vec![Message::system(crate::historian::historian_system_prompt())];
-        request.extend(view);
-        request.push(Message::user(crate::historian::HISTORIAN_INSTRUCTION));
-
-        let model = self.effective_model().to_string();
-        let reply = match self
-            .client
-            .chat(crate::agent::model_client::ChatRequest::new(model, request).with_stream(false))
-            .await
-        {
-            Ok(response) => response
-                .choices
-                .iter()
-                .find_map(|c| c.message.content.clone())
-                .unwrap_or_default(),
-            Err(e) => {
-                warn!(error = %e, "historian: the fold call failed — rung passes through");
-                return messages;
-            }
-        };
-        let body = crate::historian::parse_compartment(&reply);
-        if body.is_none() {
-            warn!("historian: the reply carried no compartment body — rung passes through");
-            return messages;
-        }
-
-        let record = crate::database::CompartmentRecord {
-            session_id: session_id.clone(),
-            span_start: start as i64,
-            span_end: end as i64,
-            tier: crate::historian::DEFAULT_COMPARTMENT_TIER,
-            body: body.unwrap_or_default(),
-            importance: crate::historian::DEFAULT_COMPARTMENT_IMPORTANCE,
-            source_hash: hash,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        match self.database.insert_compartment(&record) {
-            Ok(true) => {
-                info!(
-                    start,
-                    end, "historian: folded a closed span into a durable compartment"
-                );
-            }
-            Ok(false) => {
-                debug!(
-                    start,
-                    end, "historian: a concurrent fold won the span — not stored twice"
-                );
-            }
-            Err(e) => {
-                warn!(error = %e, "historian: the compartment write failed — rung passes through");
-            }
-        }
-        messages
-    }
+    // (iter-2404) `preflight_historian_fold` was DELETED here, and this note is
+    // the reason, so the next reader does not re-add it.
+    //
+    // It folded a closed span of the conversation into a durable `compartments`
+    // row and returned the message list UNCHANGED. Two independent defects:
+    //
+    // 1. IT SAVED NOTHING. The rung's own comment said "leaves the message list
+    //    pointing at it", but nothing pointed at it: `compartments_for_session`
+    //    had ZERO callers, so a stored summary was never read back into a
+    //    request. The messages stayed in the request, the anchor advanced past
+    //    them, and they were never folded again AND never removed -- a paid model
+    //    call whose output no request ever saw.
+    //
+    // 2. THE ANCHOR WAS POSITIONAL INTO A REWRITTEN LIST. Compartments stored
+    //    `span_start`/`span_end` as POSITIONS in the live message list, but the
+    //    summarizer (rung 4, immediately upstream) replaces the middle with one
+    //    message BEFORE this rung runs. So the anchor recorded on turn N referred
+    //    to positions in a list that no longer existed on turn N+1: the planner
+    //    would skip live messages or re-fold already-summarized ones.
+    //
+    // Neither is fixable by substitution. `Message` carries no stable id, so a
+    // compartment cannot be keyed to the rows it summarizes; that is a redesign
+    // of the message type, not a repair of this rung.
+    //
+    // The TABLE and the PURE LOGIC in `historian.rs` are kept: the store, the
+    // span planner, the no-progress guard and the fold hash are all correct and
+    // independently useful, and a future design that keys compartments to stable
+    // ids can reuse them unchanged. What was deleted is the rung that could not
+    // work.
 
     /// Compact a request list back under the hard context cap.
     ///

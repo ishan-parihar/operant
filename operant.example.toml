@@ -227,9 +227,11 @@ context_compression = false
 # folded span, and the rungs below already fit the request. Turn it on for
 # sessions long enough that the lossy rungs are degrading a conversation you
 # still want.
+# PARKED -- the historian rung was removed (iter-2404) and these two keys now
+# read nothing. They are accepted so an existing operant.toml still parses, and
+# have no effect. Do not set them expecting a fold.
 # context_historian = false
-# The largest span one fold call may cover, in messages (0 = the built-in 200).
-# Bounds ONE call, not the backlog: the backlog is folded in successive passes.
+# context_historian_max_span = 0
 # context_historian_max_span = 0
 # Share of the window above which @file:/@folder: injection is refused, and the
 # share above which it is warned about (0 = the built-in 0.50 / 0.25).

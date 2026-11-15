@@ -380,7 +380,26 @@ pub fn fit_to_token_budget(text: &str, budget_tokens: usize) -> String {
 /// NEWEST message alone busts the budget the result is EMPTY rather than one
 /// over-budget message: a caller that sends a single oversized message has
 /// gained nothing and still pays for it.
+/// The ceiling a caller gets when it passes 0 ("unset").
+///
+/// Matches the advisor's and recap's view ceilings: all three are the same class
+/// of disposable side call over the same class of transcript.
+pub const DEFAULT_FITMED_VIEW_TOKEN_BUDGET: usize = 8_000;
+
 pub fn fit_messages_to_token_budget(view: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
+    // 0 means "the caller's built-in default", the same convention
+    // `fit_to_token_budget` documents fifteen lines up. Without this, a 0 budget
+    // made `total <= 0` false for any non-empty view and then broke out of the
+    // keep loop on the first message, returning an EMPTY view -- "unset" silently
+    // read as "drop everything". Every caller passes a constant today, so this is
+    // a trap for the next caller rather than a live defect; the convention should
+    // be uniform across the two siblings or the difference will be found the hard
+    // way.
+    let budget_tokens = if budget_tokens == 0 {
+        DEFAULT_FITMED_VIEW_TOKEN_BUDGET
+    } else {
+        budget_tokens
+    };
     let total: usize = view.iter().map(|m| estimate_tokens(&m.content)).sum();
     if total <= budget_tokens {
         return view;

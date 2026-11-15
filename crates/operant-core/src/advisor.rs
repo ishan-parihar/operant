@@ -664,15 +664,28 @@ pub fn spawn_advisor(
             // The advisor is the same class of side call over the same class of
             // disposable view and did not have it. The cut is the shared
             // helper, so this is one policy rather than a second copy.
+            // TWO different reasons a view can be empty, and they need different
+            // words in the log. `build_advisory_messages` SKIPS empty user
+            // messages, so a delta of only blank turns is empty BEFORE the budget
+            // is applied -- reporting that as "emptied by the budget" sends an
+            // operator after a budget that had nothing to do with it.
+            if view.is_empty() {
+                tracing::debug!(
+                    session = %session_id,
+                    "advisor: the delta carried no renderable content — nothing to review"
+                );
+                st.cursor.store(messages.len() as u64, Ordering::Relaxed);
+                continue;
+            }
+            // Now the fit. An empty RESULT means the NEWEST message alone out-busts
+            // the budget -- a huge pasted log, one assistant turn echoing a file.
+            // Advancing past it is right (the next turn is different material), but
+            // reviewing an empty view would ask the model to advise on nothing,
+            // which produces a confident note about no evidence.
             let view = crate::context_management::fit_messages_to_token_budget(
                 view,
                 ADVISOR_VIEW_TOKEN_BUDGET,
             );
-            // An empty fitted view means the NEWEST message alone out-busts the
-            // budget — a huge pasted log, one assistant turn echoing a file.
-            // Advancing past it is right (the next turn is different material),
-            // but reviewing an empty view would ask the model to advise on
-            // nothing, which produces a confident note about no evidence.
             if view.is_empty() {
                 tracing::warn!(
                     session = %session_id,

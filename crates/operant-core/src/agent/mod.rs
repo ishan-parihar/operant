@@ -218,11 +218,21 @@ pub struct AgentConfig {
     /// construction; the rung still needs an attached embedder
     /// (`with_semantic_embedder`) or it degrades to recency.
     pub context_semantic_compaction: bool,
-    /// Run the historian rung: fold closed spans into durable compartments.
-    /// (`agent.context_historian`)
+    /// PARKED: the historian rung was DELETED (iter-2404) and this reads nothing.
+    ///
+    /// It used to gate `preflight_historian_fold`, which stored a summary and left
+    /// the message list unchanged -- so it saved no tokens, and its positional
+    /// anchor went stale the moment the summarizer rewrote the list upstream. The
+    /// rung is gone; the `compartments` table and `historian.rs`'s pure logic stay
+    /// for a future design that keys compartments to stable message ids.
+    ///
+    /// The field stays because `AppConfig` carries `deny_unknown_fields`: deleting
+    /// it would make an existing `operant.toml` that sets it fail to parse. It is
+    /// accepted and ignored, and a future design should either wire it or remove it
+    /// together with the example entry.
     pub context_historian: bool,
-    /// One fold call's ceiling in messages; 0 = the built-in
-    /// (`agent.context_historian_max_span`).
+    /// PARKED with [`Self::context_historian`] -- see the note there. One fold
+    /// call's ceiling in messages; 0 = the built-in.
     pub context_historian_max_span: usize,
     /// Most groups the semantic rung will embed; 0 = the built-in cap.
     pub context_semantic_max_groups: usize,

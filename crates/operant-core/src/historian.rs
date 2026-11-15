@@ -179,7 +179,19 @@ pub const MAX_SPAN_MESSAGES: usize = 200;
 /// separated from its `tool_result`, because a lone half is a malformed history
 /// the providers reject. The same invariant the eviction pass keeps, for the same
 /// reason, computed with the same helper.
-pub fn plan_span(messages: &[Message], last_covered: Option<usize>) -> SpanPlan {
+pub fn plan_span(messages: &[Message], last_covered: Option<usize>, max_span: usize) -> SpanPlan {
+    // The ceiling is a PARAMETER, not the constant. It used to read
+    // `MAX_SPAN_MESSAGES` directly, so the operator's
+    // `agent.context_historian_max_span` was checked AFTER planning and could
+    // only ever SHRINK a span: setting it to 500 behaved identically to 200. A
+    // knob that works in one direction only is a constant with a lie attached.
+    // A caller passing 0 means "use the built-in ceiling", which is the
+    // convention every other knob in this tree follows for "unset".
+    let max_span = if max_span == 0 {
+        MAX_SPAN_MESSAGES
+    } else {
+        max_span
+    };
     let start = match last_covered {
         Some(covered) => covered.saturating_add(1),
         None => 0,
@@ -204,12 +216,12 @@ pub fn plan_span(messages: &[Message], last_covered: Option<usize>) -> SpanPlan 
         // Stop if taking this group would exceed the span ceiling; a group
         // larger than the ceiling is taken whole anyway, because the alternative
         // (splitting it) produces a malformed history.
-        if group_end - start > MAX_SPAN_MESSAGES && end > start {
+        if group_end - start > max_span && end > start {
             break;
         }
         end = group_end - 1; // inclusive
         i = group_end;
-        if group_end - start >= MAX_SPAN_MESSAGES {
+        if group_end - start >= max_span {
             break;
         }
     }
@@ -388,7 +400,7 @@ mod tests {
     #[test]
     fn a_short_history_is_skipped_not_folded() {
         let msgs = vec![user("one"), assistant("two")];
-        let plan = plan_span(&msgs, None);
+        let plan = plan_span(&msgs, None, MAX_SPAN_MESSAGES);
         assert_eq!(plan, SpanPlan::Skip(SkipReason::TooFewMessages));
         assert_eq!(
             skip_reason(&plan),
@@ -415,7 +427,7 @@ mod tests {
         msgs.push(tool_result("call-1"));
         msgs.push(assistant("done"));
 
-        let SpanPlan::Fold { end, .. } = plan_span(&msgs, None) else {
+        let SpanPlan::Fold { end, .. } = plan_span(&msgs, None, MAX_SPAN_MESSAGES) else {
             panic!("a foldable history must fold");
         };
         // The end must be a position whose message is NOT a tool_use awaiting
@@ -439,7 +451,7 @@ mod tests {
         }
         msgs.push(user("the question nobody has answered"));
 
-        let SpanPlan::Fold { start, end } = plan_span(&msgs, None) else {
+        let SpanPlan::Fold { start, end } = plan_span(&msgs, None, MAX_SPAN_MESSAGES) else {
             panic!("the earlier turns are still foldable");
         };
         assert_eq!(start, 0);
@@ -460,7 +472,7 @@ mod tests {
         }
         msgs.push(tool_use("call-1")); // result has not arrived
 
-        let SpanPlan::Fold { end, .. } = plan_span(&msgs, None) else {
+        let SpanPlan::Fold { end, .. } = plan_span(&msgs, None, MAX_SPAN_MESSAGES) else {
             panic!("the earlier turns are still foldable");
         };
         assert_eq!(end, 11, "the fold stops before the unanswered call");
@@ -474,7 +486,7 @@ mod tests {
             msgs.push(user(&format!("q{i}")));
             msgs.push(assistant(&format!("a{i}")));
         }
-        let SpanPlan::Fold { start, .. } = plan_span(&msgs, Some(11)) else {
+        let SpanPlan::Fold { start, .. } = plan_span(&msgs, Some(11), MAX_SPAN_MESSAGES) else {
             panic!("a covered span of 12 leaves plenty to fold");
         };
         assert_eq!(start, 12, "one past the covered end");
@@ -656,5 +668,53 @@ mod tests {
         assert_eq!(parse_compartment(""), None);
         assert_eq!(parse_compartment("   \n\n  "), None);
         assert_eq!(parse_compartment("```\n\n```"), None);
+    }
+    /// The ceiling is authoritative in BOTH directions.
+    ///
+    /// The first version read `MAX_SPAN_MESSAGES` inside `plan_span`, so the
+    /// operator's `context_historian_max_span` was applied only as a post-hoc
+    /// check: lowering it worked, RAISING it above 200 changed nothing. A knob
+    /// that works one way only is a constant with a lie attached.
+    #[test]
+    fn the_ceiling_binds_upward_as_well_as_downward() {
+        let mut msgs = Vec::new();
+        for i in 0..120 {
+            msgs.push(Message::user(format!("q{i}")));
+            msgs.push(Message::assistant(format!("a{i}")));
+        }
+        // 240 messages. A ceiling of 300 is ABOVE the built-in 200, so the old
+        // code capped at 200 and this span would be 200 long.
+        let wide = plan_span(&msgs, None, 300);
+        let SpanPlan::Fold { end, .. } = wide else {
+            panic!("a 240-message history must fold under a 300 ceiling");
+        };
+        assert!(
+            end > 199,
+            "a 300 ceiling must be able to fold past the built-in 200 (end was {end})"
+        );
+
+        // A ceiling of 10 binds downward, as before.
+        let narrow = plan_span(&msgs, None, 10);
+        let SpanPlan::Fold { end, .. } = narrow else {
+            panic!("a 10-message ceiling still folds a short span");
+        };
+        assert!(end < 10, "a 10 ceiling must stop near 10 (end was {end})");
+    }
+
+    /// A ceiling of 0 means "the built-in ceiling", the convention every other
+    /// knob in this tree uses for unset.
+    #[test]
+    fn a_zero_ceiling_means_the_builtin_one() {
+        let mut msgs = Vec::new();
+        for i in 0..40 {
+            msgs.push(Message::user(format!("q{i}")));
+            msgs.push(Message::assistant(format!("a{i}")));
+        }
+        let zero = plan_span(&msgs, None, 0);
+        let builtin = plan_span(&msgs, None, MAX_SPAN_MESSAGES);
+        assert_eq!(
+            zero, builtin,
+            "0 must resolve to the built-in ceiling, not to 'fold nothing'"
+        );
     }
 }

@@ -69,7 +69,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "agent.advertised_skills_token_budget",
         "default_advertised_skills_token_budget()",
-        "The token ceiling on the advertised-skills block in the frozen prefix. The block rides every request inside the system message, which is PROTECTED: it can never be evicted. Without a ceiling the installed skill count decides whether every turn can run at all — 99 skills cost ~7,000 tokens here, and a 500-skill install would put the protected floor above a 32,000-token window. The skills that fit are advertised; the rest are dropped and the drop is stated in the block. 0 means the built-in default (4,000 tokens).",
+        "The token ceiling on the advertised-skills block in the frozen prefix. The block rides every request inside the system message, which is PROTECTED: it can never be evicted. Without a ceiling the installed skill count decides whether every turn can run at all — 99 skills cost ~7,000 tokens here, and a 500-skill install would put the protected floor above a 32,000-token window. The skills that fit are advertised; the rest are dropped and the drop is stated in the block. 0 (the default) means DERIVE it: one eighth of the resolved context window, floored at 4,000 tokens. It used to mean a flat 4,000, which is one eighth of a 32k window and a quarter of the 128k default -- so the catalogue a default install advertised was sized for a window four times smaller than the one it actually has.",
     ),
     (
         "agent.context_budget_tokens",
