@@ -2047,6 +2047,18 @@ impl App {
                     && self.prompt_input.is_empty()
                     && self.prompt_input.cursor == 0
                     && !self.is_streaming;
+                // (session-hub plan T6) A fresh session (no messages): one ← opens
+                // the hub — that is the gesture the operator asked for. The
+                // double-tap path below is the universal opener on a session with
+                // history; with text or mid-cursor, ← stays a cursor move and
+                // neither applies.
+                let fresh_session = self.messages.is_empty();
+                if gesture_candidate && fresh_session {
+                    self.session_hub.open(Some(std::time::Instant::now()));
+                    self.session_list_pending = true;
+                    self.last_left_tap_at = None;
+                    return false;
+                }
                 if gesture_candidate {
                     let opened = match self.last_left_tap_at {
                         Some(t) => {

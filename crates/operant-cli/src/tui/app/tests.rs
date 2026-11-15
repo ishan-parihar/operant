@@ -3198,8 +3198,12 @@ mod left_tap_gesture_tests {
     }
 
     #[test]
-    fn double_left_opens_the_hub_armed() {
+    fn double_left_opens_the_hub_armed_on_a_session_with_history() {
         let mut app = make_app();
+        // History: a session that HAS messages keeps the double-tap opener.
+        app.messages.push(
+            Message::user("the first ask".to_string()),
+        );
         app.handle_key_event(left());
         assert!(!app.session_hub.visible, "the first tap only arms");
         tap_gap();
@@ -3213,8 +3217,27 @@ mod left_tap_gesture_tests {
     }
 
     #[test]
+    fn one_left_on_a_fresh_session_opens_the_hub() {
+        // (session-hub plan T6) A brand-new session: one ← opens.
+        let mut app = make_app();
+        assert!(app.messages.is_empty(), "make_app is a fresh session");
+        app.handle_key_event(left());
+        assert!(
+            app.session_hub.visible,
+            "one ← on a fresh session with an empty composer opens the hub"
+        );
+        assert!(
+            app.session_hub.armed_close_tap.is_some(),
+            "the single-tap open is armed: ONE further ← closes it"
+        );
+        assert!(app.session_list_pending, "rows load on open");
+    }
+
+    #[test]
     fn one_further_left_closes_the_armed_hub() {
         let mut app = make_app();
+        app.messages
+            .push(Message::user("the first ask".to_string()));
         app.handle_key_event(left());
         tap_gap();
         app.handle_key_event(left());
@@ -3228,6 +3251,8 @@ mod left_tap_gesture_tests {
     fn a_burst_under_40ms_never_fires() {
         // Two taps < 40ms apart are a key-repeat burst, not a gesture.
         let mut app = make_app();
+        app.messages
+            .push(Message::user("the first ask".to_string()));
         app.handle_key_event(left());
         // No gap: the immediate second tap is a burst.
         app.handle_key_event(left());
@@ -3241,6 +3266,8 @@ mod left_tap_gesture_tests {
     #[test]
     fn a_gap_over_500ms_is_two_single_taps() {
         let mut app = make_app();
+        app.messages
+            .push(Message::user("the first ask".to_string()));
         app.handle_key_event(left());
         // Backdate the arm past the ceiling: the next tap is a fresh first
         // tap, not the gesture's second.
@@ -3257,6 +3284,10 @@ mod left_tap_gesture_tests {
     #[test]
     fn left_with_text_in_the_composer_disarms() {
         let mut app = make_app();
+        // History: this test exercises the disarm path, which is defined for
+        // sessions WITH messages (fresh sessions open on a single tap).
+        app.messages
+            .push(Message::user("the first ask".to_string()));
         app.handle_key_event(left());
         app.prompt_input.insert_char('a');
         app.handle_key_event(left());
