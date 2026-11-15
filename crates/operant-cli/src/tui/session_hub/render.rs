@@ -297,6 +297,55 @@ pub fn relative_time(updated_at: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// jcode's `compact_dir()` — the path rendered in the row's directory cell.
+///
+/// The rule is jcode's, ported: `~` for `$HOME`, the path as-is at or under 28
+/// cells, otherwise trailing components with a `…/` prefix, never a half-cut
+/// component; final fallback `…/<head>…`.
+pub(super) fn compact_dir(path: &str) -> String {
+    compact_dir_at(path, 28)
+}
+
+/// jcode's rule with an explicit cell budget. Never a half-cut component; the
+/// final fragment may exceed the budget only in the fallback `…/<head>…`.
+pub(super) fn compact_dir_at(path: &str, max: usize) -> String {
+    let s = abbreviate_home(path);
+    if s.chars().count() <= max {
+        return s;
+    }
+    let components: Vec<&str> = s.split('/').filter(|c| !c.is_empty()).collect();
+    let mut suffix: Vec<&str> = Vec::new();
+    for comp in components.iter().rev() {
+        let mut next = Vec::with_capacity(suffix.len() + 1);
+        next.push(*comp);
+        next.extend_from_slice(&suffix);
+        let joined = format!("…/{}", next.join("/"));
+        if joined.chars().count() <= max {
+            suffix = next;
+        } else {
+            break;
+        }
+    }
+    if suffix.is_empty() {
+        let head = components.last().copied().unwrap_or(s.as_str());
+        return format!("…/{head}…");
+    }
+    format!("…/{}", suffix.join("/"))
+}
+
+fn abbreviate_home(path: &str) -> String {
+    if let Some(home) = dirs::home_dir() {
+        let home_str = home.display().to_string();
+        if path == home_str {
+            return "~".to_string();
+        }
+        if let Some(rest) = path.strip_prefix(&(home_str + "/")) {
+            return format!("~/{rest}");
+        }
+    }
+    path.to_string()
+}
+
 fn status_glyph(status: RowStatus) -> &'static str {
     match status {
         RowStatus::Live => "⚡",
@@ -908,56 +957,30 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         .add_modifier(Modifier::BOLD),
                     (false, false) => Style::default().fg(theme_colors::text()),
                 };
-                // (2026-11-13, audit finding 1) The session's DIRECTORY, as a
-                // qualifier on the TITLE line.
-                //
-                // MEASURED, and this took three tries to get right, which is
-                // worth recording. The directory did not fit the META line —
-                // that line carries the id, employee, message count, tokens,
-                // status, age and cost, and a realistic row measures 38 cells
-                // against the pane's 46 inner columns before the directory is
-                // even considered. The metric model then made it worse: the
-                // model's fixed allowance over-estimates the row's real slack
-                // by ~3 cells, so a "fits" decision made from the model hid a
-                // basename that in fact fitted.
-                //
-                // The TITLE line has its own budget (the title is one string,
-                // and the pane clips it), so the directory rides there: it
-                // qualifies the title the operator is already scanning, and it
-                // is dropped when the title leaves no room — never at the
-                // cost of the metrics, which are the reason the operator
-                // opened the list.
-                //
-                // It is the BASENAME, not the path: the full path lives in the
-                // preview's `project:` line (codex's details pane prints the
-                // thread's cwd the same way). `cwd` was never written by any
-                // production path before this audit, so this qualifier was
-                // silent on every row for the hub's whole life; the write
-                // landed at turn_context.rs beside the seat stamp.
+                // (2026-11-15, session-hub plan T3) The DIRECTORY gets its own
+                // clamped cell on the META line. It used to be the basename on
+                // the title line, dropped whenever the title left no room — so
+                // it varied row to row, and two different on-leaf directories
+                // were indistinguishable. Compact is now jcode's rule; the path
+                // is clamped at 15 cells and the cell rides the meta line like
+                // every other field; the id ladder below treats it as occupied
+                // width, so the id yields to it, as planned.
                 //
                 // It is NOT repeated when the hub is already grouped by
-                // directory: the section heading IS the path, and printing it
-                // again per row is the same mistake Stage B made with the
-                // delegation status (`pending  pending`).
-                let directory_shown = state.group_mode != HubGroupMode::Directory
-                    && row.cwd.as_deref().is_some_and(|c| !c.is_empty());
-                let dir_tag: String = row
+                // directory: the section heading IS the path.
+                let dir_compact: Option<String> = row
                     .cwd
                     .as_deref()
-                    .filter(|_| directory_shown)
-                    .map(|c| {
-                        let base = std::path::Path::new(c)
-                            .file_name()
-                            .map(|f| f.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| c.to_string());
-                        format!("  \u{1f4c2} {base}")
-                    })
-                    .unwrap_or_default();
-                // The directory qualifies the TITLE, on the title line's own
-                // budget: the meta line cannot carry it (MEASURED above), and
-                // the title line is where the operator is already looking. It
-                // is dropped when the title leaves no room, and never at the
-                // cost of the metrics.
+                    .filter(|c| !c.is_empty() && state.group_mode != HubGroupMode::Directory)
+                    .map(compact_dir);
+                let dir_cell: Option<String> = dir_compact.map(|c| {
+                    let clipped = compact_dir_at(&c, 12);
+                    format!("  \u{1f4c2} {clipped}")
+                });
+                let dir_width = dir_cell
+                    .as_ref()
+                    .map(|c| c.chars().count() + 1)
+                    .unwrap_or(0);
                 let title_text = row_title(row);
                 // The status glyph rides the title line, so it is part of the
                 // line's width (audit finding 16).
@@ -979,16 +1002,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // is TWO cells and the status glyph is another 3-4, so both
                 // the tag and the prefix have to be measured in cells.
                 let title_line_cells = crate::tui::render::utils::display_width(&title_text)
-                    + crate::tui::render::utils::display_width(&status_prefix)
-                    + crate::tui::render::utils::display_width(&dir_tag);
-                let dir_span = if !dir_tag.is_empty() && title_line_cells <= inner_width as usize {
-                    Some(Span::styled(
-                        dir_tag.clone(),
-                        Style::default().fg(theme_colors::muted()),
-                    ))
-                } else {
-                    None
-                };
+                    + crate::tui::render::utils::display_width(&status_prefix);
                 spans.extend(highlight_spans(
                     &title_text,
                     &tokens,
@@ -997,9 +1011,6 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                         .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 ));
-                if let Some(d) = dir_span {
-                    spans.push(d);
-                }
                 // (2026-10-29) The operator could not see the session's ID,
                 // employee, message count or tokens: the meta was ONE appended
                 // span, and the list is 40% of the frame, so a 100+ column
@@ -1084,7 +1095,8 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 let metrics_width = emp.chars().count()
                     + row.status.label().chars().count()
                     + absolute_date(row.updated_at).chars().count()
-                    + 8;
+                    + 8
+                    + dir_width;
                 // Drop the status column BEFORE shrinking the id: the header
                 // above already names it (Stage B), so it is the one field here
                 // the row can afford to lose. Shrinking the id first would burn
@@ -1151,10 +1163,16 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // in the directory grouping's headings, which is the same
                 // recoverability argument the ladder already makes for status.
                 let mut meta_spans = vec![
-                    // ID first: it is the row's handle, and the one thing an
-                    // operator is never otherwise shown on screen.
                     Span::styled(
                         format!("#{short_id}"),
+                        Style::default().fg(theme_colors::muted()),
+                    ),
+                    Span::styled(
+                        if let Some(cell) = dir_cell.as_ref() {
+                            cell.clone()
+                        } else {
+                            String::new()
+                        },
                         Style::default().fg(theme_colors::muted()),
                     ),
                     // The badge is dropped when the line cannot hold it

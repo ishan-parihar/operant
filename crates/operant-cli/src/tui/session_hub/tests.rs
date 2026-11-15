@@ -1571,6 +1571,72 @@ fn the_directory_qualifier_is_not_clipped_mid_word() {
     );
 }
 
+/// jcode's `compact_dir` rule, made executable for the row cell.
+#[test]
+fn compact_dir_follows_jcodes_rule() {
+    use crate::tui::session_hub::render::compact_dir;
+    assert_eq!(compact_dir("/x/y/z"), "/x/y/z", "short paths are unchanged");
+    let home = dirs::home_dir().unwrap_or_default();
+    let home_str = home.display().to_string();
+    assert_eq!(compact_dir(&home_str), "~", "$HOME collapses to ~");
+    let deep = format!("{home_str}/Documents/github/my-projects/operant");
+    let compact = compact_dir(&deep);
+    assert!(
+        compact.starts_with("…/") || compact.starts_with('~'),
+        "a long path is compacted with a prefix: {compact}"
+    );
+    assert!(
+        !compact.contains("Documents"),
+        "the path must not contain a half-cut parent component: {compact}"
+    );
+    // The fallback never half-cuts a component either.
+    let fallback = compact_dir(&format!(
+        "{home_str}/a-very-long-component-name-of-more-than-28-cells/leaf"
+    ));
+    assert!(
+        !fallback.ends_with("fin"),
+        "fallback must not half-cut: {fallback}"
+    );
+}
+
+/// T3 done-when: the current-directory predicate counts a worktree of the
+/// current repository, not only the literal path.
+#[test]
+fn the_current_dir_tab_counts_a_linked_worktree() {
+    let root = std::env::temp_dir().join(format!("operant-wt-test-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let out = std::process::Command::new("git")
+        .args(["-C", root.to_str().unwrap()])
+        .args(["init", "-q"])
+        .output()
+        .expect("git init");
+    assert!(out.status.success());
+    let out = std::process::Command::new("git")
+        .args(["-C", root.to_str().unwrap()])
+        .args(["-c", "user.email=test@invalid", "-c", "user.name=test"])
+        .args(["commit", "--allow-empty", "-q", "-m", "init"])
+        .output()
+        .expect("git commit");
+    assert!(out.status.success());
+    // Two worktrees of one repo share a common dir.
+    let wt = root.join("linked");
+    let out = std::process::Command::new("git")
+        .args(["-C", root.to_str().unwrap()])
+        .args(["worktree", "add", "--detach", "-q", wt.to_str().unwrap()])
+        .output()
+        .expect("git worktree add");
+    assert!(out.status.success());
+    assert!(
+        crate::tui::session_hub::dirs_match(root.to_str().unwrap(), wt.to_str().unwrap()),
+        "a linked worktree must match its main checkout"
+    );
+    assert!(
+        !crate::tui::session_hub::dirs_match("/tmp", "/var"),
+        "unrelated directories must not match"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A heavy row keeps its DATE, and the cost moved to the preview.
 ///
 /// (audit finding 17, then plan iteration 2) The ladder ended at a 3-character

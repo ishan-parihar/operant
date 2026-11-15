@@ -387,12 +387,87 @@ pub(super) fn row_matches_filter(
         HubFilterMode::Ready => matches!(r.status, RowStatus::Idle),
         // "Inactive" is parked on purpose.
         HubFilterMode::Inactive => matches!(r.status, RowStatus::Archived),
-        HubFilterMode::CurrentDir => r.cwd.as_deref().zip(cwd).is_some_and(|(a, b)| a == b),
+        HubFilterMode::CurrentDir => r
+            .cwd
+            .as_deref()
+            .zip(cwd)
+            .is_some_and(|(a, b)| dirs_match(a, b)),
         HubFilterMode::CurrentBranch => match branch_root {
             Some(root) => r.id == root || r.parent_id.as_deref() == Some(root),
             None => true,
         },
     }
+}
+
+/// jcode's project predicate for the `c` tab: same directory, or one inside the
+/// other, or sharing a git common dir (a linked worktree shares the main
+/// working tree's git directory). Never matches everything when the current
+/// directory is `$HOME` (a `~` match would be "everything under home").
+///
+/// The common-dir computation is memoized per directory within the process.
+pub(super) fn dirs_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_path = std::path::Path::new(a);
+    let b_path = std::path::Path::new(b);
+    // One inside the other.
+    if let Some(home) = dirs::home_dir() {
+        if std::path::Path::new(a) == home || std::path::Path::new(b) == home {
+            return a == b;
+        }
+    }
+    if a_path.starts_with(b_path) || b_path.starts_with(a_path) {
+        // A bare prefix like `/home/ishanp/Documents` ⊂ `/home/ishanp/Documents/x`
+        // is what the subdirectory rule wants.
+        return true;
+    }
+    match (git_common_dir(a_path), git_common_dir(b_path)) {
+        (Some(a2), Some(b2)) => a2 == b2,
+        _ => false,
+    }
+}
+
+fn git_common_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<std::path::PathBuf, Option<std::path::PathBuf>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(cached) = CACHE.with(|c| c.borrow().get(dir).cloned()) {
+        return cached;
+    }
+    let result = (|| {
+        let output = std::process::Command::new("git")
+            .args(["-C", dir.to_str()?])
+            .args(["rev-parse", "--git-common-dir"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let common = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let common_path = std::path::PathBuf::from(&common);
+        // git returns the common dir relative to the worktree root; make it absolute.
+        let absolute = if common_path.is_absolute() {
+            common_path
+        } else {
+            std::process::Command::new("git")
+                .args(["-C", dir.to_str()?])
+                .args(["rev-parse", "--show-toplevel"])
+                .output()
+                .map(|o| {
+                    let top = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    std::path::PathBuf::from(top).join(&common)
+                })
+                .ok()?
+        };
+        Some(std::fs::canonicalize(&absolute).unwrap_or(absolute))
+    })();
+    CACHE.with(|c| c.borrow_mut().insert(dir.to_path_buf(), result.clone()));
+    result
 }
 
 /// One rendered message in the preview pane (jcode's `PreviewMessage`,
