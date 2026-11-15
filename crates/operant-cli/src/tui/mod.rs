@@ -115,6 +115,7 @@ pub mod slash_usage;
 pub mod space;
 pub mod stats_dialog;
 pub mod status_line;
+pub mod subagent_navigator;
 pub mod terminal_setup;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;

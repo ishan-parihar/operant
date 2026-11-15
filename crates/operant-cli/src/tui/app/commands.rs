@@ -1403,6 +1403,12 @@ impl App {
                 self.open_effort_picker_inline(args);
                 true
             }
+            "subagents" => {
+                // session-hub plan T7: the subagent navigator. Session-scoped,
+                // so it refuses to mount on a session with no children.
+                self.open_subagent_navigator();
+                true
+            }
             "agent" => {
                 // session-hub plan T4: /agent with no argument opens the
                 // roster picker (label · department · role · session count).

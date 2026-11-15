@@ -576,6 +576,20 @@ impl App {
             return false;
         }
 
+        // Subagent navigator (`/subagents`): Esc closes, `t` toggles flat/tree,
+        // Enter focuses the selected child.
+        if self.subagent_navigator.visible {
+            match key.code {
+                KeyCode::Esc => self.subagent_navigator.close(),
+                KeyCode::Up => self.subagent_navigator.move_up(),
+                KeyCode::Down => self.subagent_navigator.move_down(),
+                KeyCode::Char('t') => self.subagent_navigator.toggle_view(),
+                KeyCode::Enter => self.focus_navigator_selection(),
+                _ => {}
+            }
+            return false;
+        }
+
         // Identity picker (`Shift+Tab`, `/agent`) — one row per seat on the
         // roster, label · department · role · session count.
         if self.agent_picker.visible {

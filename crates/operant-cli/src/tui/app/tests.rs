@@ -17951,3 +17951,130 @@ fn down_out_of_the_ladder_returns_to_the_drafts_end() {
         "the caret is at the draft's end"
     );
 }
+
+// ── the subagent navigator (session-hub plan T7) ────────────────────────────
+mod subagent_navigator_tests {
+    use super::*;
+    use operant_core::tools::async_delegation::{DelegationAdmission, try_create_record};
+
+    /// Reset the process-global registry and create one child under `parent`.
+    /// Returns the delegation id.
+    fn spawn_child(parent: &str, goal: &str) -> String {
+        match try_create_record(goal, "test-model", 64, Some(parent), None) {
+            Ok(DelegationAdmission::Created(id)) => id,
+            Ok(DelegationAdmission::Reused(id)) => id,
+            Err(e) => panic!("the child must be admitted: {e:?}"),
+        }
+    }
+
+    fn reset() {
+        let _guard = operant_core::tools::async_delegation::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+    }
+
+    #[test]
+    fn the_navigator_lists_this_session_children_and_not_another_sessions() {
+        let _guard = operant_core::tools::async_delegation::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+        let mine_a = spawn_child("sess-root", "first ask");
+        let mine_b = spawn_child("sess-root", "second ask");
+        let _theirs = spawn_child("sess-other", "a different session's child");
+
+        let mut app = make_app();
+        app.current_session = Some("sess-root".to_string());
+        assert!(app.open_subagent_navigator(), "the roster is not empty");
+        let ids: Vec<&str> = app
+            .subagent_navigator
+            .entries
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 2, "exactly this session's children: {ids:?}");
+        assert!(ids.contains(&mine_a.as_str()));
+        assert!(ids.contains(&mine_b.as_str()));
+        assert!(
+            !ids.iter()
+                .any(|id| id.starts_with("dlg-") && *id == _theirs),
+            "a child of a DIFFERENT session must not appear: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_with_no_children_never_mounts() {
+        reset();
+        let mut app = make_app();
+        app.current_session = Some("sess-lonely".to_string());
+        assert!(
+            !app.open_subagent_navigator(),
+            "an empty roster must refuse to mount"
+        );
+        assert!(!app.subagent_navigator.visible);
+    }
+
+    #[test]
+    fn the_toggle_indents_by_depth_in_tree_and_not_in_flat() {
+        // Hold the registry lock for the WHOLE test: a parallel test that
+        // resets the registry between our reset and our walk would otherwise
+        // empty the roster underneath us.
+        let _guard = operant_core::tools::async_delegation::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+        let child = spawn_child("sess-root", "the only child");
+        let mut app = make_app();
+        app.current_session = Some("sess-root".to_string());
+        assert!(app.open_subagent_navigator());
+        let depth = app
+            .subagent_navigator
+            .entries
+            .iter()
+            .find(|e| e.id == child)
+            .expect("the child is listed")
+            .depth;
+
+        // Flat (codex/jcode default): no indent.
+        assert!(
+            app.subagent_navigator.flat,
+            "the flat default is the majority"
+        );
+        let flat_indent = app
+            .subagent_navigator
+            .entries
+            .iter()
+            .find(|e| e.id == child)
+            .map(|e| app.subagent_navigator.indent(e));
+        assert_eq!(flat_indent, Some(0), "the flat view does not indent");
+
+        // `t`: parent/child tree, indented by the depth the walk found.
+        app.subagent_navigator.toggle_view();
+        assert!(!app.subagent_navigator.flat);
+        let tree_indent = app
+            .subagent_navigator
+            .entries
+            .iter()
+            .find(|e| e.id == child)
+            .map(|e| app.subagent_navigator.indent(e));
+        assert_eq!(tree_indent, Some(depth), "one hop = one indent");
+    }
+
+    #[test]
+    fn the_walk_is_cycle_safe_and_excludes_the_root() {
+        use crate::tui::subagent_navigator::descendants;
+        // A ledger with a cycle: root → a → root.
+        let edges = vec![
+            ("sess-root".to_string(), "dlg-a".to_string()),
+            ("dlg-a".to_string(), "sess-root".to_string()),
+        ];
+        let found = descendants("sess-root", &edges);
+        assert_eq!(found.len(), 1, "the cycle must not duplicate or hang");
+        assert_eq!(found[0].0, "dlg-a");
+        assert!(
+            !found.iter().any(|(id, ..)| id == "sess-root"),
+            "the root must never be its own descendant"
+        );
+    }
+}

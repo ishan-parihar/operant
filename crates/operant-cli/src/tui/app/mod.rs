@@ -2,6 +2,7 @@
 
 mod agent_events;
 mod agent_identity;
+mod subagent_nav;
 mod channel_drains;
 mod commands;
 mod dialog_routing;
@@ -875,6 +876,9 @@ pub struct App {
     /// The acting seat's charter (the org system prompt), kept in step with
     /// `acting_seat` so the pair is atomic for prompt-cache purposes.
     pub acting_charter: Option<String>,
+    /// The subagent navigator (`/subagents`, `←` on a session with live
+    /// children): this session's own descendants, as their own surface.
+    pub subagent_navigator: crate::tui::subagent_navigator::SubagentNavigatorState,
     /// The identity picker (`Shift+Tab`, `/agent`): one row per seat on the
     /// roster — label, department, role — with the charter to apply.
     pub agent_picker: DialogSelectState,
