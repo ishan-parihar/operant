@@ -500,6 +500,15 @@ fn is_plain_relative_path(name: &str) -> bool {
 }
 
 /// Manages skill discovery, loading, and lifecycle.
+///
+/// (iter-2366) `Clone` so a caller that has already WALKED the skills tree can
+/// hand the parsed result to several agents. `/reload-skills` in the gateway
+/// used to re-run `load_all()` once per agent slot — about 3,800 file reads per
+/// walk by that code's own figure, so a 32-slot reload did ~120,000 blocking
+/// reads on the async runtime for N identical results. The clone duplicates the
+/// parsed map (which is what each slot holds today anyway); it does not re-read
+/// a single file.
+#[derive(Clone)]
 pub struct SkillManager {
     /// Root directory containing skill subdirectories
     pub skills_dir: PathBuf,
@@ -1070,6 +1079,53 @@ fn current_platform() -> &'static str {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// iter-2366: a cloned manager lists exactly what the original lists.
+    ///
+    /// `/reload-skills` used to re-run `load_all()` once per agent slot — about
+    /// 3,800 file reads per walk, on the async runtime, for N identical results.
+    /// It now walks once and clones the parsed manager into the other slots, so
+    /// the clone has to be a faithful copy: same skills, same problems, same
+    /// truncation flag. A hand-written `Clone` that forgot `issues` or
+    /// `truncated` would make a reload silently lie on every slot after the
+    /// first.
+    #[test]
+    fn a_cloned_manager_reports_the_same_skills_and_the_same_problems() {
+        let root = make_temp_dir();
+        let skill_dir = root.join("demo");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo\ndescription: a demo skill\n---\n\nbody\n",
+        )
+        .expect("skill file");
+
+        let mut manager = SkillManager::new(root.clone());
+        let loaded = manager.load_all().expect("load_all");
+        assert!(
+            !loaded.is_empty(),
+            "the fixture must load at least one skill"
+        );
+
+        let clone = manager.clone();
+        assert_eq!(
+            clone.list().len(),
+            manager.list().len(),
+            "a clone must list the same number of skills"
+        );
+        assert_eq!(
+            clone.issues().len(),
+            manager.issues().len(),
+            "a clone must carry the same load problems"
+        );
+        assert_eq!(
+            clone.is_truncated(),
+            manager.is_truncated(),
+            "a clone must carry the same walk-cap flag"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     use std::sync::atomic::{AtomicU64, Ordering};
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);

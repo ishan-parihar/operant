@@ -43,17 +43,14 @@ pub async fn run_stdio_server(handler: Arc<dyn AcpHandler>) -> Result<()> {
 /// The socket file is removed on the way out, so a restarted daemon can
 /// bind the same path.
 pub async fn run_socket_server(handler: Arc<dyn AcpHandler>, path: &std::path::Path) -> Result<()> {
-    // A stale socket file from a killed daemon would make bind() fail with
-    // "address already in use" — and the daemon would refuse to start for a
-    // file nobody is listening on any more.
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let listener = tokio::net::UnixListener::bind(path)
-        .map_err(|e| anyhow::anyhow!("Failed to bind the ACP socket {}: {e}", path.display()))?;
+    // (iter-2366) A path with a LIVE server behind it is a refusal, not a
+    // takeover. This server has no single-instance lock of its own, so the old
+    // `remove_file(path)`-then-bind let it steal the GATEWAY's session socket:
+    // unlink the daemon's inode, bind here, and every `operant chat --attach`
+    // silently starts speaking JSON-RPC to ACP. The shared helper probes first
+    // and clears only a path nobody answers on, so restarting after a killed
+    // server still works.
+    let listener = crate::session_server::bind_unless_live(path).await?;
     tracing::info!(socket = %path.display(), "ACP socket server listening");
 
     let sessions = std::sync::Arc::new(crate::acp::SessionRegistry::new());

@@ -89,10 +89,26 @@ struct TrackedProcess {
 }
 
 impl TrackedProcess {
+    /// This process's snapshot, with the OS asked whether it is still alive.
+    ///
+    /// (iter-2366) The snapshot used to be a pure clone of the stored status,
+    /// so a child killed from OUTSIDE — another terminal, the OOM reaper — kept
+    /// reporting `Running` with a dead pid until the detached `wait()` task
+    /// happened to be polled. On a runtime that is shutting down that task never
+    /// runs, so the row read `Running` forever and `process list` told the model
+    /// a corpse was alive. The kernel is the only authority on that, so it is
+    /// asked here.
     fn snapshot(&self) -> ProcessSession {
         let mut s = self.session.clone();
         if let Ok(out) = self.output.try_read() {
             s.output_buffer = out.clone();
+        }
+        if s.status == ProcessStatus::Running
+            && let Some(pid) = s.pid
+            && !crate::active_sessions::process_is_running(pid)
+        {
+            s.status = ProcessStatus::Exited;
+            s.exit_code = None;
         }
         s
     }

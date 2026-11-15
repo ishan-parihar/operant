@@ -3391,10 +3391,7 @@ impl App {
                     let slot = self.models_panel.assigning;
                     self.models_panel.cancel_assign();
                     if let Some(slot) = slot {
-                        self.set_status_notice(format!(
-                            "assigning {} — pick a model",
-                            slot.name()
-                        ));
+                        self.set_status_notice(format!("assigning {} — pick a model", slot.name()));
                     }
                     self.open_model_picker_inline("");
                 }
@@ -3428,10 +3425,10 @@ impl App {
                     // is "unassigned" in the config, so the slot falls back to
                     // `auto` rather than being written as a blank model name.
                     match operant_core::config::persist_config_key(key_path, "") {
-                        Ok(path) => self.models_panel.notice = Some(format!(
-                            "cleared {key_path} ({})",
-                            path.display()
-                        )),
+                        Ok(path) => {
+                            self.models_panel.notice =
+                                Some(format!("cleared {key_path} ({})", path.display()))
+                        }
                         Err(error) => {
                             self.models_panel.notice =
                                 Some(format!("could not clear {key_path}: {error}"));

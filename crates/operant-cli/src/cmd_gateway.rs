@@ -206,26 +206,134 @@ pub(crate) fn classify_runtime(
     }
 }
 
+/// Whether a server is actually answering on `path`, and if not, why.
+///
+/// (iter-2366) `Path::exists()` answers a different question. A socket file left
+/// by a SIGKILLed daemon exists, so status said "bound" while every
+/// `chat --attach` got ECONNREFUSED. A connect that succeeds is the only
+/// evidence that a listener is behind the path; one that is refused means the
+/// file is stale.
+fn socket_state(path: &std::path::Path) -> &'static str {
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(_answered) => "bound",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "not bound",
+        // ECONNREFUSED, ENOTSOCK and friends: the file is there, nobody is home.
+        Err(_) => "stale socket file",
+    }
+}
+
+/// How a pid answered `kill(pid, 0)`.
+///
+/// (iter-2366) The pid file is the ONLY cross-process liveness signal this
+/// CLI has, and it used to be read as a boolean: `kill -0` through a shelled
+/// `kill`, success or failure. That collapses four different facts into
+/// two, and two of the collapsed pairs cost a daemon:
+///
+/// - `EPERM` means the process EXISTS and belongs to another user. Read as
+///   "dead", `gateway status` reported "not running" and then DELETED the pid
+///   file of a daemon that was still serving — after which `gateway stop`
+///   could not find it and it had to be killed by hand.
+/// - a zombie answers `kill -0` with success, so it read as "running" forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PidProbe {
+    /// No such process (`ESRCH`), or a pid this build cannot ask about.
+    Gone,
+    /// The process exists and this user may signal it.
+    Alive,
+    /// The process exists but belongs to another user (`EPERM`).
+    Forbidden,
+    /// The process has exited and its parent has not reaped it.
+    Zombie,
+}
+
+/// Ask the kernel what a pid is, without shelling out.
+pub(crate) fn probe_pid(pid: u32) -> PidProbe {
+    // pid 0 addresses the CALLER'S PROCESS GROUP, so `kill -0 0` always
+    // succeeds: a PID file holding a 0 would read as "alive" forever.
+    // (RT-518 — the dashboard's cross-process check reads this.)
+    if pid == 0 {
+        return PidProbe::Gone;
+    }
+    // SAFETY: `kill` with signal 0 performs the permission and existence
+    // checks and sends nothing. A bad pid is reported by the return value.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return match process_state(pid) {
+            Some('Z') => PidProbe::Zombie,
+            _ => PidProbe::Alive,
+        };
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::EPERM) => PidProbe::Forbidden,
+        _ => PidProbe::Gone,
+    }
+}
+
+/// The single-letter process state from `/proc/<pid>/stat`, if it is readable.
+///
+/// `comm` is parenthesised and may itself contain spaces and `)`, so the
+/// state is parsed from the LAST `)` rather than by splitting on whitespace.
+fn process_state(pid: u32) -> Option<char> {
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    raw.rsplit_once(')')?.1.trim_start().chars().next()
+}
+
+/// Whether `pid` looks like THIS program's gateway daemon.
+///
+/// (iter-2366) `kill_gateway_by_pid_file` sent SIGTERM to whatever the pid
+/// file named. The file survives a crash or an OOM kill — only the clean stop
+/// path removes it — so a recycled pid made `operant gateway stop` signal an
+/// unrelated process and report success. The cmdline is the cheapest honest
+/// identity check: the daemon is `operant gateway run`, so argv must carry
+/// both words. A process that matches neither that nor our own executable is
+/// refused rather than signalled.
+fn pid_is_gateway(pid: u32) -> bool {
+    if let Ok(exe) = std::fs::read_link(format!("/proc/{pid}/exe"))
+        && let Ok(me) = std::env::current_exe()
+        && exe == me
+    {
+        return true;
+    }
+    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    let args: Vec<String> = raw
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect();
+    args.iter().any(|a| a == "gateway") && args.iter().any(|a| a == "run")
+}
+
 /// The pid in the PID file, when that process is still alive.
+///
+/// `Forbidden` counts as alive: the process exists, and this build cannot
+/// prove otherwise.
 pub(crate) fn alive_pid_from_file(pid_path: &std::path::Path) -> Option<u32> {
     let pid: u32 = std::fs::read_to_string(pid_path)
         .ok()?
         .trim()
         .parse()
         .ok()?;
-    // pid 0 addresses the CALLER'S PROCESS GROUP, so `kill -0 0` always
-    // succeeds: a PID file holding a 0 would read as "alive" forever.
-    // (RT-518 — the dashboard's cross-process check reads this.)
-    if pid == 0 {
-        return None;
+    match probe_pid(pid) {
+        PidProbe::Alive | PidProbe::Forbidden => Some(pid),
+        PidProbe::Gone | PidProbe::Zombie => None,
     }
-    let alive = std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    alive.then_some(pid)
+}
+
+/// Whether the pid file provably names a process that no longer exists.
+///
+/// The ONLY condition under which a caller may delete it. `Forbidden` is not
+/// that condition (finding 24), and neither is a parse failure — a file this
+/// build cannot read is left for the operator.
+pub(crate) fn pid_file_is_stale(pid_path: &std::path::Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(pid_path) else {
+        return false;
+    };
+    let Ok(pid) = raw.trim().parse::<u32>() else {
+        return false;
+    };
+    probe_pid(pid) == PidProbe::Gone
 }
 
 /// The main pid of the gateway systemd unit, when the unit is active.
@@ -324,7 +432,13 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     let systemd_pid = systemd_gateway_pid();
     let runtime = classify_runtime(pid_file_pid, systemd_pid);
 
-    if runtime == GatewayRuntime::NotRunning && pid_path.exists() {
+    if runtime == GatewayRuntime::NotRunning && pid_path.exists() && pid_file_is_stale(&pid_path) {
+        // (iter-2366) Only a PROVABLY absent process may take the pid file
+        // with it. The old condition deleted it whenever the runtime read
+        // NotRunning, which is also what an EPERM on another user's daemon
+        // looks like — so `gateway status` used to strip the pid file off a
+        // daemon that was still serving, and `gateway stop` could then no
+        // longer find it.
         let _ = std::fs::remove_file(&pid_path);
     }
     let running = matches!(runtime, GatewayRuntime::Running { .. });
@@ -345,10 +459,10 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
             },
             "admins": gw.admins,
             "socket": {
-                "path": operant_core::session_client::default_socket_path()
+                "path": crate::gateway_runner::recorded_socket_path()
                     .display()
                     .to_string(),
-                "bound": operant_core::session_client::default_socket_path().exists(),
+                "bound": socket_state(&crate::gateway_runner::recorded_socket_path()) == "bound",
             },
             "running": running,
             "pid_file": pid_path.display().to_string(),
@@ -438,13 +552,27 @@ fn cmd_status(config: &AppConfig, deep: bool, json: bool) -> Result<()> {
     // needs its PATH — which the status never named, so the operator's first
     // question ("can I attach?") was unanswerable from the tool meant to answer
     // it.
-    let socket = operant_core::session_client::default_socket_path();
-    let socket_state = if socket.exists() {
-        "bound"
-    } else {
-        "not bound"
-    };
-    println!("Socket:    {} ({socket_state})", socket.display());
+    let socket = crate::gateway_runner::recorded_socket_path();
+    let socket_status = socket_state(&socket);
+    println!("Socket:    {} ({socket_status})", socket.display());
+
+    // (iter-2366) Name a home divergence rather than describing the wrong
+    // daemon. The per-home flock cannot stop a second daemon that resolves a
+    // different `operant_home()`, so this CLI can be reporting on a daemon that
+    // is not the one the operator thinks they are talking to.
+    match crate::gateway_runner::recorded_home() {
+        Some(recorded)
+            if recorded != operant_core::platform::operant_home().display().to_string() =>
+        {
+            println!(
+                "Home:      {} (this CLI resolved {} — a daemon in another home may be the \
+                 one you want; see $HERMES_HOME)",
+                recorded,
+                operant_core::platform::operant_home().display()
+            );
+        }
+        _ => {}
+    }
 
     match runtime {
         GatewayRuntime::Running { pid, source } => {
@@ -554,16 +682,38 @@ pub(crate) fn cmd_install(_config: &AppConfig, force: bool, system: bool) -> Res
     let unit_path = std::path::PathBuf::from(&unit_dir).join("operant-gateway.service");
 
     if unit_path.exists() && !force {
+        // (iter-2366) A unit whose ExecStart names a DIFFERENT binary is stale,
+        // not installed. The unit's `ExecStart` is `current_exe()` frozen at
+        // install time, so moving or reinstalling the binary and then running
+        // `operant service install` used to print "already installed" and leave
+        // the unit pointing at a path that may no longer exist — and
+        // `service status` reported that as "inactive", indistinguishable from a
+        // unit that was never installed. Rewriting a stale path needs no
+        // `--force`: the operator asked for the service to point at the binary
+        // they are running.
+        let installed = std::fs::read_to_string(&unit_path).unwrap_or_default();
+        let names_this_binary = installed
+            .lines()
+            .find(|line| line.trim_start().starts_with("ExecStart="))
+            .is_some_and(|line| line.contains(&operant_bin.display().to_string()));
+        if names_this_binary {
+            println!(
+                "Gateway service already installed at: {}",
+                unit_path.display()
+            );
+            println!("Use --force to reinstall.");
+            println!();
+            println!("To enable and start:");
+            println!("  systemctl --{} enable operant-gateway", scope_label);
+            println!("  systemctl --{} start operant-gateway", scope_label);
+            return Ok(());
+        }
         println!(
-            "Gateway service already installed at: {}",
-            unit_path.display()
+            "The installed unit at {} points at a different binary than this one ({}). \
+             Rewriting it.",
+            unit_path.display(),
+            operant_bin.display()
         );
-        println!("Use --force to reinstall.");
-        println!();
-        println!("To enable and start:");
-        println!("  systemctl --{} enable operant-gateway", scope_label);
-        println!("  systemctl --{} start operant-gateway", scope_label);
-        return Ok(());
     }
 
     std::fs::create_dir_all(&unit_dir).context("Failed to create systemd unit directory")?;
@@ -618,7 +768,15 @@ async fn cmd_run(config: &AppConfig, socket: Option<std::path::PathBuf>) -> Resu
     let started = crate::gateway_runner::is_running().await;
     println!("{msg}");
     if !started {
-        return Ok(());
+        // (iter-2366) The refusal must FAIL, not succeed. This used to
+        // `return Ok(())`, so the process exited 0 — and the installed unit is
+        // `Restart=always` with `StartLimitIntervalSec=0`, which disables
+        // systemd's start-rate limit. A refusal therefore became a 5-second
+        // restart loop that `operant service status` reports as `active`
+        // (it is: activating/auto-restart), while the operator believes
+        // systemd supervises the daemon they are running by hand. A non-zero
+        // exit is what lets `Restart=on-failure` and the start limit apply.
+        anyhow::bail!("{msg}");
     }
     // The gateway's interrupted-session notice (plan 2026-11-02, P1).
     //
@@ -787,16 +945,69 @@ fn kill_gateway_by_pid_file() -> bool {
     let Ok(pid) = pid_str.trim().parse::<u32>() else {
         return false;
     };
+    // (iter-2366) Identify before signalling. The pid file survives a crash
+    // and an OOM kill — only the clean stop path removes it — so a recycled
+    // pid made this send SIGTERM to whatever the kernel had reused it for and
+    // then print "Gateway process (n) killed." A pid this build cannot prove
+    // is the gateway is refused, and the file is left for `gateway status`.
+    match probe_pid(pid) {
+        PidProbe::Gone => {
+            println!("No gateway process is running (stale pid file: {pid}).");
+            let _ = std::fs::remove_file(&pid_path);
+            return false;
+        }
+        PidProbe::Zombie => {
+            println!("Gateway process ({pid}) has already exited but was not reaped.");
+            let _ = std::fs::remove_file(&pid_path);
+            return false;
+        }
+        PidProbe::Alive | PidProbe::Forbidden => {}
+    }
+    if !pid_is_gateway(pid) {
+        println!(
+            "Refusing to signal pid {pid}: it is not an `operant gateway run` process \
+             (the pid file is stale, or the pid was recycled). Remove {} by hand \
+             if you are sure it is stale.",
+            pid_path.display()
+        );
+        return false;
+    }
     let killed = std::process::Command::new("kill")
         .arg(pid.to_string())
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-    if killed {
-        println!("Gateway process ({}) killed.", pid);
-        let _ = std::fs::remove_file(&pid_path);
+    if !killed {
+        return false;
     }
-    killed
+    println!("Gateway process ({pid}) signalled; waiting for it to stop.");
+    // (iter-2366) Wait for the EXIT, then take the file. `stop_gateway` drains
+    // for up to 30 s before the process goes away, and the daemon removes this
+    // file itself at the end of that (`gateway_runner.rs`). Removing it the
+    // instant the signal is sent opened a window in which `gateway status`
+    // said "not running" while the daemon was still draining AND still holding
+    // the flock — so an immediate `gateway run` was refused by a daemon no
+    // surface admitted existed. 50 × 100 ms covers the common case; a daemon
+    // with a slow turn to drain keeps its file, and the next status cleans it.
+    for _ in 0..50 {
+        match probe_pid(pid) {
+            PidProbe::Gone | PidProbe::Zombie => break,
+            PidProbe::Alive | PidProbe::Forbidden => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    if matches!(probe_pid(pid), PidProbe::Gone | PidProbe::Zombie) {
+        println!("Gateway process ({pid}) stopped.");
+        let _ = std::fs::remove_file(&pid_path);
+        true
+    } else {
+        println!(
+            "Gateway process ({pid}) is still shutting down — it may be draining a turn. \
+             Run `operant gateway status` to check."
+        );
+        false
+    }
 }
 
 /// Restart the gateway service.

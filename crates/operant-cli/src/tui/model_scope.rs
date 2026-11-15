@@ -97,11 +97,7 @@ pub fn contains(scope: &ModelScope, entry: &PickerEntry, recent: &[&str]) -> boo
 }
 
 /// The indices of the rows a scope selects, in body order.
-pub fn select(
-    scope: &ModelScope,
-    entries: &[PickerEntry],
-    recent: &[&str],
-) -> Vec<usize> {
+pub fn select(scope: &ModelScope, entries: &[PickerEntry], recent: &[&str]) -> Vec<usize> {
     entries
         .iter()
         .enumerate()
@@ -185,7 +181,12 @@ mod tests {
             "the role row is the Roles scope"
         );
         assert!(
-            select(&ModelScope::Provider("Anthropic".to_string()), &entries, &[]).is_empty(),
+            select(
+                &ModelScope::Provider("Anthropic".to_string()),
+                &entries,
+                &[]
+            )
+            .is_empty(),
             "a role row is an assignment, not a provider's model list"
         );
     }
@@ -196,7 +197,11 @@ mod tests {
         // names: the operator looking for either finds it.
         let entries = vec![model_row("vendor/model", &["OpenRouter", "vendor"], false)];
         assert_eq!(
-            select(&ModelScope::Provider("OpenRouter".to_string()), &entries, &[]),
+            select(
+                &ModelScope::Provider("OpenRouter".to_string()),
+                &entries,
+                &[]
+            ),
             vec![0]
         );
         assert_eq!(

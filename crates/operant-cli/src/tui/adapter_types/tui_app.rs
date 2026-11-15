@@ -42,6 +42,15 @@ pub struct TuiApp {
     /// `None` is the ordinary TUI: this process builds the agent and the
     /// events come from it.
     attach_socket: Option<std::path::PathBuf>,
+    /// (iter-2366) The session to adopt on attach, from `--as`.
+    ///
+    /// Without it the client adopts `client.sessions.first()` — a lexicographic
+    /// sort of the sessions currently loaded in slots, at most one per slot. So
+    /// a second attach could not reach session #5 at all. `LoadHistory` is the
+    /// one message that both subscribes a client to a named session and answers
+    /// with what it already holds, so naming the session is enough: the connect
+    /// path sends it and the transcript comes back.
+    attach_as: Option<String>,
 }
 
 impl TuiApp {
@@ -154,6 +163,7 @@ impl TuiApp {
             attach_client: None,
             attach_session: None,
             attach_socket: None,
+            attach_as: None,
         })
     }
 
@@ -165,6 +175,14 @@ impl TuiApp {
     #[must_use]
     pub fn attaching(mut self, socket: std::path::PathBuf) -> Self {
         self.attach_socket = Some(socket);
+        self
+    }
+
+    /// Adopt a NAMED session on attach rather than whichever one the server
+    /// lists first (iter-2366). See [`Self::attach_as`].
+    #[must_use]
+    pub fn attaching_as(mut self, session_id: impl Into<String>) -> Self {
+        self.attach_as = Some(session_id.into());
         self
     }
 
@@ -193,85 +211,142 @@ impl TuiApp {
             > = std::sync::Arc::new(tokio::sync::Mutex::new(None));
             self.attach_client = Some(std::sync::Arc::clone(&client_slot));
             let session_slot: std::sync::Arc<std::sync::Mutex<Option<String>>> =
-                std::sync::Arc::new(std::sync::Mutex::new(None));
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    // (iter-2366) `--as` seeds the session BEFORE the connect, so
+                    // the adopt-first-session fallback below is skipped and the
+                    // `LoadHistory` on connect names the session the operator
+                    // asked for. Without it the client took `sessions.first()`.
+                    self.attach_as.clone(),
+                ));
             self.attach_session = Some(std::sync::Arc::clone(&session_slot));
             tokio::spawn(async move {
-                match operant_core::session_client::SessionClient::connect(&socket).await {
-                    Ok(client) => {
-                        // The session the server named at hello is the one
-                        // this client addresses; a server holding no sessions
-                        // falls back to a fresh id.
-                        if let Some(session) = client.sessions.first().cloned()
-                            && let Ok(mut held) = session_slot.lock()
+                // (iter-2366) REATTACH, do not give up.
+                //
+                // This was a one-shot: read until the server closed the socket,
+                // print one red card and stop. But the daemon restarts on every
+                // deploy and under the unit's `Restart=always` (AGENTS.md
+                // records ~1017 start/stop events in 24 hours), so a single
+                // restart silently detached every operator's terminal and the
+                // only advice on offer was "re-run with --attach to rejoin".
+                // The socket is a window onto a session that outlives the
+                // connection, so the window is re-opened instead.
+                //
+                // The session id is KEPT across the reconnect and re-sent as a
+                // `LoadHistory`: that message both re-subscribes this client to
+                // the session's events and backfills the transcript, so the
+                // operator comes back to the conversation they were in rather
+                // than to a stranger's — or to a fresh row named "attached".
+                let mut backoff_ms: u64 = 250;
+                let mut first_drop_noticed = false;
+                loop {
+                    let client = match operant_core::session_client::SessionClient::connect(&socket)
+                        .await
+                    {
+                        Ok(client) => client,
+                        Err(error) => {
+                            if !first_drop_noticed {
+                                first_drop_noticed = true;
+                                let _ = tx
+                                    .send(operant_core::agent::AgentEvent::Error {
+                                        error: format!(
+                                            "the session server is unreachable ({error}) — \
+                                             retrying"
+                                        ),
+                                    })
+                                    .await;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            backoff_ms = (backoff_ms * 2).min(2_000);
+                            continue;
+                        }
+                    };
+                    // The session this client addresses: the one it already
+                    // held, else the first the server named. A server holding
+                    // no sessions leaves it empty, which is the one case the
+                    // submit path has to fall back for.
+                    {
+                        let mut held = session_slot.lock().unwrap_or_else(|e| e.into_inner());
+                        if held.is_none()
+                            && let Some(session) = client.sessions.first().cloned()
                         {
                             *held = Some(session);
                         }
-                        // One task reads, the other writes: the halves are the
-                        // socket's own, so the write never waits behind a read.
-                        let (mut reader, writer) = client.into_split();
-                        *client_slot.lock().await = Some(writer);
-                        loop {
-                            // Three outcomes, not two: a message, a closed
-                            // connection, or a line this build cannot read. The
-                            // third used to be reported as the second, so a
-                            // protocol mismatch sent the operator looking for a
-                            // restart that never happened.
-                            let message = match reader.recv().await {
-                                Ok(Some(message)) => message,
-                                Ok(None) => break,
-                                Err(error) => {
-                                    tracing::warn!(
-                                        error = %error,
-                                        "the session server sent a line this build cannot read"
-                                    );
-                                    continue;
+                    }
+                    backoff_ms = 250;
+                    // One task reads, the other writes: the halves are the
+                    // socket's own, so the write never waits behind a read.
+                    let (mut reader, writer) = client.into_split();
+                    *client_slot.lock().await = Some(writer);
+                    // Re-attach to THIS session: `LoadHistory` is the one
+                    // message that subscribes a client to a session's events
+                    // AND answers with what the session already holds, so a
+                    // reconnect loses neither the stream nor the transcript.
+                    if let Some(session) = session_slot.lock().ok().and_then(|held| held.clone()) {
+                        let mut guard = client_slot.lock().await;
+                        if let Some(writer) = guard.as_mut() {
+                            let _ = writer
+                                .send(&WireMessage::LoadHistory {
+                                    session_id: session,
+                                })
+                                .await;
+                        }
+                    }
+                    if first_drop_noticed {
+                        first_drop_noticed = false;
+                        let _ = tx
+                            .send(operant_core::agent::AgentEvent::Error {
+                                error: "reconnected to the session server".to_string(),
+                            })
+                            .await;
+                    }
+                    loop {
+                        // Three outcomes, not two: a message, a closed
+                        // connection, or a line this build cannot read. The
+                        // third used to be reported as the second, so a
+                        // protocol mismatch sent the operator looking for a
+                        // restart that never happened.
+                        let message = match reader.recv().await {
+                            Ok(Some(message)) => message,
+                            Ok(None) => break,
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error,
+                                    "the session server sent a line this build cannot read"
+                                );
+                                continue;
+                            }
+                        };
+                        match message {
+                            WireMessage::HelloOk { .. } => {}
+                            WireMessage::Event { event, .. } => {
+                                if tx.send(event).await.is_err() {
+                                    // The render half is gone: the TUI is
+                                    // shutting down, so stop reconnecting.
+                                    return;
                                 }
-                            };
-                            match message {
-                                WireMessage::HelloOk { .. } => {}
-                                WireMessage::Event { event, .. } => {
-                                    if tx.send(event).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                WireMessage::Error { message, .. } => {
+                            }
+                            WireMessage::Error { message, .. } => {
+                                let _ = tx
+                                    .send(operant_core::agent::AgentEvent::Error { error: message })
+                                    .await;
+                            }
+                            WireMessage::History { messages, .. } => {
+                                for line in messages {
                                     let _ = tx
-                                        .send(operant_core::agent::AgentEvent::Error {
-                                            error: message,
+                                        .send(operant_core::agent::AgentEvent::Content {
+                                            text: format!("{line}\n"),
                                         })
                                         .await;
                                 }
-                                WireMessage::History { messages, .. } => {
-                                    for line in messages {
-                                        let _ = tx
-                                            .send(operant_core::agent::AgentEvent::Content {
-                                                text: format!("{line}\n"),
-                                            })
-                                            .await;
-                                    }
-                                }
-                                _ => {}
                             }
+                            _ => {}
                         }
-                        // The server closed the connection (a restart, or a
-                        // stop). Say so: a terminal that looks attached and is
-                        // not is worse than one that says the server went away.
-                        *client_slot.lock().await = None;
-                        let _ = tx
-                            .send(operant_core::agent::AgentEvent::Error {
-                                error: "the session server closed the connection — \
-                                        re-run with --attach to rejoin"
-                                    .to_string(),
-                            })
-                            .await;
                     }
-                    Err(error) => {
-                        let _ = tx
-                            .send(operant_core::agent::AgentEvent::Error {
-                                error: format!("cannot attach to the session server: {error}"),
-                            })
-                            .await;
-                    }
+                    // The server closed the connection (a restart, or a stop).
+                    // Drop the write half so a prompt submitted before the
+                    // reconnect lands on a truthful "not attached" rather than
+                    // a dead socket, then go round again.
+                    *client_slot.lock().await = None;
                 }
             });
         }
@@ -1069,6 +1144,43 @@ impl TuiApp {
             .as_ref()
             .and_then(|cell| cell.lock().ok().and_then(|held| held.clone()))
             .unwrap_or_else(|| "attached".to_string());
+
+        // (iter-2366) `/stop` over the socket is a CANCEL, not a prompt.
+        //
+        // `WireMessage::Cancel` has had a server-side handler since RT-542 and
+        // no client ever sent it. Locally `/stop` sets the interrupt flag the
+        // turn loop polls; attached, there is no local agent and no flag, so the
+        // only honest stop is the one the server already understands. This is
+        // the smallest piece of the unwired protocol: no new key binding, and it
+        // reuses the slash command the operator already types. `turn_id: None`
+        // is the documented "whatever is running" case, and the handler reads it
+        // that way.
+        if text.trim() == "/stop" {
+            let message = operant_core::session_protocol::WireMessage::Cancel {
+                session_id,
+                turn_id: None,
+            };
+            let mut guard = client.lock().await;
+            match guard.as_mut() {
+                Some(client) => {
+                    if let Err(error) = client.send(&message).await {
+                        self.app
+                            .set_status_notice(format!("cannot reach the session server: {error}"));
+                    } else {
+                        self.app.set_status_notice(
+                            "stop sent — the server will end the running turn".to_string(),
+                        );
+                    }
+                }
+                None => {
+                    self.app.set_status_notice(
+                        "the session server closed the connection — re-run with --attach to rejoin"
+                            .to_string(),
+                    );
+                }
+            }
+            return;
+        }
         self.app.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(text.clone()),
@@ -1080,6 +1192,56 @@ impl TuiApp {
             self.app.streaming_text.clear();
             self.app.streaming_thinking.clear();
         }
+        // (iter-2366) `/switch <id>` moves this client to another session.
+        //
+        // Named `switch`, not `session`: the local command table already owns
+        // `session`/`resume` (`tui/app/commands.rs:734`) for picking up a stored
+        // conversation on disk, and a second meaning under one word is the kind
+        // of collision that reads fine in review and fails at the keyboard. The
+        // name also matches the server's own variant.
+        //
+        // The server's `Switch` is literally `LoadHistory`
+        // (`WireMessage::Switch { session_id } => self.handle(LoadHistory { .. })`),
+        // and the session a turn runs in is the id the CLIENT puts on its next
+        // `Prompt` — the server binds the slot per turn from that id. So a switch
+        // is two client-side acts: adopt the new id, and ask for its transcript
+        // so the operator sees the conversation they just joined. No new wire
+        // variant and no server change.
+        if let Some(target) = text
+            .strip_prefix("/switch ")
+            .map(str::trim)
+            .filter(|target| !target.is_empty() && target.split_whitespace().count() == 1)
+        {
+            if let Some(cell) = self.attach_session.as_ref()
+                && let Ok(mut held) = cell.lock()
+            {
+                *held = Some(target.to_string());
+            }
+            let switch = operant_core::session_protocol::WireMessage::LoadHistory {
+                session_id: target.to_string(),
+            };
+            let mut guard = client.lock().await;
+            match guard.as_mut() {
+                Some(client) => {
+                    if let Err(error) = client.send(&switch).await {
+                        self.app
+                            .set_status_notice(format!("cannot reach the session server: {error}"));
+                    } else {
+                        self.app.set_status_notice(format!(
+                            "switched to session `{target}` — its history follows"
+                        ));
+                    }
+                }
+                None => {
+                    self.app.set_status_notice(
+                        "the session server closed the connection — re-run with --attach to rejoin"
+                            .to_string(),
+                    );
+                }
+            }
+            return;
+        }
+
         let message = if streaming {
             operant_core::session_protocol::WireMessage::Steer { session_id, text }
         } else {
@@ -1115,19 +1277,18 @@ impl TuiApp {
     ) {
         if !self.app.acting_seat_seeded {
             self.app.acting_seat_seeded = true;
-            if let Some(session_id) = self.app.current_session.clone() {
-                let db_path = self.app.config.database_path.clone();
-                if let Ok(db) = operant_core::database::Database::init(db_path) {
-                    if let Ok(Some(seed)) = db.get_session_employee(&session_id) {
-                        // Read the seeded seat's charter so the pair is atomic.
-                        if let Ok(roster) = db.list_employee_roster() {
-                            if let Some(record) = roster.iter().find(|r| r.employee_id == seed) {
-                                self.app.acting_charter = record.system_prompt.clone();
-                            }
-                        }
-                        self.app.acting_seat = Some(seed);
-                    }
+            if let Some(session_id) = self.app.current_session.clone()
+                && let Ok(db) =
+                    operant_core::database::Database::init(self.app.config.database_path.clone())
+                && let Ok(Some(seed)) = db.get_session_employee(&session_id)
+            {
+                // Read the seeded seat's charter so the pair is atomic.
+                if let Ok(roster) = db.list_employee_roster()
+                    && let Some(record) = roster.iter().find(|r| r.employee_id == seed)
+                {
+                    self.app.acting_charter = record.system_prompt.clone();
                 }
+                self.app.acting_seat = Some(seed);
             }
         }
         match self.app.acting_seat.clone() {
@@ -1390,6 +1551,8 @@ impl TuiApp {
                                 input_preview: None,
                                 seat_escalation: None,
                                 unattended: false,
+                                // (iter-2366) The session this ask belongs to.
+                                session_id: None,
                                 response_tx: tx,
                             });
                     }
@@ -2894,7 +3057,6 @@ mod rebuild_replay_tests {
 
 #[cfg(test)]
 mod attach_tests {
-    use super::*;
     use operant_core::agent::AgentEvent;
     use operant_core::session_protocol::{PROTOCOL_VERSION, WireMessage, encode};
 

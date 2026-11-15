@@ -1669,6 +1669,23 @@ impl McpStdioClient {
                     request_id = request_id,
                     "discarded an MCP response for an already-completed request"
                 );
+                // (iter-2366) An orphan does NOT count toward the drain cap.
+                //
+                // The cap exists to catch a DESYNCHRONISED stream — a server
+                // answering with ids this client never issued. A response for a
+                // request that has already completed is the opposite: it is the
+                // expected residue of a call that was CANCELLED after its request
+                // line was written (the agent's own tool timeout used to do this
+                // routinely — see `is_mcp_tool`). Counting those meant 64 ordinary
+                // cancellations made the 65th, perfectly healthy call fail with
+                // "produced 64 responses without one for request N", which is the
+                // failure this cap was written to diagnose, reached by the
+                // ordinary path.
+                //
+                // What still counts: a response parked for a later request, or
+                // anything else the loop cannot account for. Those are the shapes
+                // a desync actually takes.
+                continue;
             }
 
             drained += 1;
@@ -2447,19 +2464,41 @@ impl OperantTool for McpNamespacedTool {
 /// came from so one server can be torn out without the others.
 type RegistryEntries = Vec<(String, String)>;
 
+/// The `(server, tool)` names this manager synced, PER REGISTRY.
+///
+/// (iter-2366) A single shared `Vec` could not answer "what is registered in
+/// THIS registry", because one manager serves several (one per agent slot).
+/// `sync_tools_to_registry` drained the shared list, unregistered those names
+/// from whichever registry it was handed, and then wrote back the drained
+/// entries PLUS its own — so the list grew by one full copy of every tool name
+/// per sync pass. A 32-slot gateway booted at ~32·N entries and every
+/// `/reload-mcp` multiplied it again, with no ceiling. Keyed by registry
+/// identity, the set stays one copy per registry, and a removal can still find
+/// every registry that holds the name.
+type RegistryNames = Vec<(usize, RegistryEntries)>;
+
 /// A registry in the manager's list of served registries (RT-517).
 ///
 /// The manager derives `Debug` and `ToolRegistry` does not implement it
 /// (its tool map holds trait objects), so the list carries an entry that
 /// names the registry without printing it.
 #[derive(Clone)]
-struct RegistryEntry(ToolRegistry);
+struct RegistryEntry {
+    registry: ToolRegistry,
+    /// A stable id for this registry, assigned on first sync (iter-2366).
+    ///
+    /// `ToolRegistry` has no identity of its own to key a per-registry name
+    /// set by, and `Arc::as_ptr` on the inner map would do for equality but not
+    /// for a readable key. The counter is process-local and only ever used to
+    /// tell two served registries apart.
+    id: usize,
+}
 
 impl std::ops::Deref for RegistryEntry {
     type Target = ToolRegistry;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.registry
     }
 }
 
@@ -2481,7 +2520,7 @@ pub struct McpManager {
     /// server's tools: the registry is shared, so the manager cannot
     /// simply drop every name (that would take the other servers' live
     /// tools with it).
-    registered_tool_names: Arc<RwLock<RegistryEntries>>,
+    registered_tool_names: Arc<RwLock<RegistryNames>>,
     /// Whether this manager already has a stdio watchdog (RT-517).
     ///
     /// One watchdog per MANAGER: two registry builds over one manager used
@@ -2728,10 +2767,19 @@ impl McpManager {
         // brought the server back. The other servers' tools stay.
         let removed_names: Vec<String> = {
             let mut prev = self.registered_tool_names.write().await;
-            let (mine, rest): (RegistryEntries, RegistryEntries) =
-                prev.drain(..).partition(|(server, _)| server == name);
-            *prev = rest;
-            mine.into_iter().map(|(_server, tool)| tool).collect()
+            let mut removed: Vec<String> = Vec::new();
+            for (_registry_id, entries) in prev.iter_mut() {
+                let (mine, rest): (RegistryEntries, RegistryEntries) = std::mem::take(entries)
+                    .into_iter()
+                    .partition(|(server, _)| server == name);
+                *entries = rest;
+                for (_server, tool) in mine {
+                    if !removed.contains(&tool) {
+                        removed.push(tool);
+                    }
+                }
+            }
+            removed
         };
         // Every registry this manager serves, not just the last one synced
         // (RT-517): a stale entry in ANY of them is a tool that reaches a
@@ -2788,21 +2836,36 @@ impl McpManager {
         // server's tools OUT of it (RT-516) — and out of EVERY other
         // registry this manager serves (RT-517: one manager, many
         // registries).
-        {
+        let registry_id = {
             let mut registries = self.registries.write().await;
-            if !registries.iter().any(|other| other.ptr_eq(registry)) {
-                registries.push(RegistryEntry(registry.clone()));
+            if let Some(existing) = registries.iter().find(|other| other.ptr_eq(registry)) {
+                existing.id
+            } else {
+                let id = registries.len();
+                registries.push(RegistryEntry {
+                    registry: registry.clone(),
+                    id,
+                });
+                id
             }
-        }
+        };
 
         // Unregister the previously synced tools — from THE REGISTRY BEING
         // SYNCED, which is the one whose copy is being replaced. The other
         // registries this manager serves keep their own copies: they were
         // synced at their own time, and a removal takes the tools out of
         // all of them (see `remove_server`).
+        //
+        // (iter-2366) ONLY THIS REGISTRY'S names are drained. A single shared
+        // list used to hand back every registry's entries here, which were then
+        // unregistered from a registry that never held them and re-pushed below
+        // — one extra copy of the whole tool set per sync pass, forever.
         let mut prev_names: RegistryEntries = {
             let mut names = self.registered_tool_names.write().await;
-            names.drain(..).collect()
+            match names.iter_mut().find(|(id, _)| *id == registry_id) {
+                Some((_, entries)) => std::mem::take(entries),
+                None => Vec::new(),
+            }
         };
         for (_server, name) in prev_names.iter() {
             registry.unregister(name).await;
@@ -2836,9 +2899,16 @@ impl McpManager {
                 }
             }
         }
-        // The names this manager synced, so a later removal can take out
-        // exactly this server's tools (RT-516).
-        *self.registered_tool_names.write().await = prev_names;
+        // The names this manager synced, FOR THIS REGISTRY, so a later removal
+        // can take out exactly this server's tools (RT-516) without disturbing
+        // the copy another registry holds.
+        {
+            let mut names = self.registered_tool_names.write().await;
+            match names.iter_mut().find(|(id, _)| *id == registry_id) {
+                Some((_, entries)) => *entries = prev_names,
+                None => names.push((registry_id, prev_names)),
+            }
+        }
         registered
     }
 
@@ -4627,6 +4697,81 @@ for line in sys.stdin:
         assert!(
             text.contains("without one for request"),
             "the failure must name the drain, got: {text}"
+        );
+    }
+
+    /// iter-2366: ORPHANS of completed requests do not count toward the drain cap.
+    ///
+    /// A cancelled call has already written its request line, so its response
+    /// arrives later, for an id that has come and gone. The agent's tool timeout
+    /// used to cancel MCP calls routinely, so this is the ORDINARY case, and
+    /// counting it meant 64 ordinary cancellations made the 65th, perfectly
+    /// healthy call fail with "produced 64 responses without one for request N"
+    /// — the desync failure reached by the normal path.
+    ///
+    /// The companion test above proves the cap still fires for the shape a
+    /// desync actually takes: ids this client never issued.
+    #[tokio::test]
+    async fn orphaned_responses_do_not_exhaust_the_drain_cap() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_mcp_orphans_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("orphans.py");
+        std::fs::write(
+            &script,
+            r#"import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'orphans', 'version': '1.0'}}
+        out = rid
+    elif mid == 'tools/list':
+        result = {'tools': []}
+        out = rid
+    else:
+        # First: 70 responses for an id that has already completed (the
+        # cancelled-call residue). More than MCP_MAX_RESPONSE_DRAIN.
+        for _ in range(70):
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'stale': True}}) + chr(10))
+        sys.stdout.flush()
+        # Then the real answer.
+        result = {'content': [{'type': 'text', 'text': 'ok'}]}
+        out = rid
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': out, 'result': result}) + chr(10))
+    sys.stdout.flush()
+"#,
+        )
+        .expect("write orphan server");
+        let client = McpStdioClient::new(
+            "python3",
+            vec![script.to_string_lossy().to_string()],
+            std::collections::HashMap::new(),
+        );
+        client.connect().await.expect("handshake");
+
+        let result = client
+            .call_tool("echo", serde_json::json!({}))
+            .await
+            .expect("orphans of completed requests must not fail a healthy call");
+        assert!(
+            !result.is_null(),
+            "the healthy call must return its real result, got {result:?}"
         );
     }
 }

@@ -286,10 +286,13 @@ pub async fn register_builtin_tools_with_sub_agent(
         database.clone(),
         cron_db,
         kanban_db,
-        mcp_manager,
+        mcp_manager.clone(),
         skills_autoload,
     )
     .await?;
+    // (iter-2366) The delegate tool shares the same manager, so a child reaches
+    // the same live MCP children rather than spawning its own.
+    let child_mcp_manager = mcp_manager;
     registry
         .register(
             SubAgentTool::with_parent_tool_policy(
@@ -302,7 +305,10 @@ pub async fn register_builtin_tools_with_sub_agent(
                 database,
                 event_tx,
             )
-            .with_parent_approval(parent_approval_allowlist, parent_approval_allowlist_path),
+            .with_parent_approval(parent_approval_allowlist, parent_approval_allowlist_path)
+            // (iter-2366) Children share the parent's MCP children. Without
+            // this a delegated agent had builtins and no MCP surface at all.
+            .with_mcp_manager_opt(child_mcp_manager),
         )
         .await?;
     Ok(())

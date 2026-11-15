@@ -1420,11 +1420,13 @@ mod tests {
 
         // workingDir is read on every arm.
         assert_eq!(
-            parse_args(&serde_json::json!({ "action": "list", "workingDir": "/tmp/x" })).working_dir,
+            parse_args(&serde_json::json!({ "action": "list", "workingDir": "/tmp/x" }))
+                .working_dir,
             "/tmp/x"
         );
         assert_eq!(
-            parse_args(&serde_json::json!({ "action": "list", "working_dir": "/tmp/y" })).working_dir,
+            parse_args(&serde_json::json!({ "action": "list", "working_dir": "/tmp/y" }))
+                .working_dir,
             "/tmp/y"
         );
     }

@@ -312,21 +312,19 @@ impl SettingsScreen {
                 // than written somewhere the loader will not read it.
                 _ => {
                     if !operant_core::config_registry::KNOWN_KEYS.contains(&field.as_str()) {
-                        unread.push(format!("{field}"));
+                        unread.push(field.clone());
                         continue;
                     }
                     if let Err(error) =
                         operant_core::config::persist_config_key(field, value.as_str())
                     {
-                        self.persist_warning =
-                            Some(format!("{field} could not be saved: {error}"));
+                        self.persist_warning = Some(format!("{field} could not be saved: {error}"));
                         continue;
                     }
                     // The key set is fixed for the process (it comes from a
                     // `static` registry), so the leak is bounded and one-time
                     // per distinct key rather than per frame.
-                    let key: &'static str =
-                        Box::leak(field.clone().into_boxed_str());
+                    let key: &'static str = Box::leak(field.clone().into_boxed_str());
                     self.config_values.insert(key, value.clone());
                     wrote_config_key = true;
                 }
@@ -350,9 +348,7 @@ impl SettingsScreen {
         // whatever path this process loaded, and an environment that has no file
         // at all is a sandbox or a test, not a failed reload. Warning there
         // would report a problem the operator cannot act on.
-        if wrote_config_key
-            && let Some(path) = operant_core::config::loaded_config_path()
-        {
+        if wrote_config_key && let Some(path) = operant_core::config::loaded_config_path() {
             match operant_core::config::load_app_config(Some(path.as_path())) {
                 Ok(loaded) => {
                     operant_core::config::install_runtime_config(loaded.config.clone());

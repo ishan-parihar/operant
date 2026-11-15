@@ -42,25 +42,65 @@ pub trait SessionHandler: Send + Sync + 'static {
     }
 }
 
-/// Serve the session protocol over a UNIX socket until the process ends.
+/// Create the parent directory and bind `path` UNLESS a live server already
+/// answers there.
 ///
-/// A stale socket file from a killed server is removed before the bind, so a
-/// restarted server can take the same path. Every connection is served on its
-/// own task, so one slow client cannot block another.
-pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf) -> Result<()> {
-    // A stale socket file would make bind() fail with "address already in use"
-    // — and the server would refuse to start for a file nobody is listening on
-    // any more. The same rule the ACP socket server follows.
-    let socket = path.as_path();
-    if socket.exists() {
-        let _ = std::fs::remove_file(socket);
-    }
+/// (iter-2366) The bind used to begin with an unconditional
+/// `remove_file(path)`, which made the socket stealable. The ACP server has no
+/// single-instance lock of its own, so
+/// `operant acp server --socket <the gateway's socket>` unlinked the live
+/// daemon's inode and bound its own JSON-RPC listener at the same path. The
+/// daemon kept serving the orphaned inode and logged nothing, every
+/// `operant chat --attach` then spoke to ACP, and `gateway status` still
+/// printed `(bound)` because that is a bare `Path::exists()`.
+///
+/// So a path with something LISTENING on it is a refusal, and only a path that
+/// provably has nobody behind it is cleared — which is what keeps a restart
+/// after SIGKILL working.
+///
+/// Residual, stated rather than hidden: there is a window between the probe
+/// and the bind in which a second starter can take the path. The gateway
+/// daemon's own `flock` closes that for `gateway run`; the ACP server has no
+/// such lock, so two ACP starts can still race. Closing it needs the same flock
+/// discipline plumbed through `acp`.
+pub(crate) async fn bind_unless_live(socket: &std::path::Path) -> Result<tokio::net::UnixListener> {
     if let Some(parent) = socket.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let listener = tokio::net::UnixListener::bind(socket).map_err(|e| {
-        anyhow::anyhow!("Failed to bind the session socket {}: {e}", path.display())
-    })?;
+    if socket.exists() {
+        match tokio::net::UnixStream::connect(socket).await {
+            Ok(_answered) => {
+                anyhow::bail!(
+                    "{} is already served by another process — refusing to take it \
+                     over. Stop that process, or pass a different path.",
+                    socket.display()
+                );
+            }
+            // Nobody is listening. A server that was killed leaves the file
+            // behind, and bind() would fail with "address already in use"
+            // until it is cleared — which is the case this branch is for.
+            Err(_) => {
+                let _ = std::fs::remove_file(socket);
+            }
+        }
+    }
+    tokio::net::UnixListener::bind(socket).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to bind the session socket {}: {e}",
+            socket.display()
+        )
+    })
+}
+
+/// Serve the session protocol over a UNIX socket until the process ends.
+///
+/// A stale socket file from a killed server is removed before the bind, so a
+/// restarted server can take the same path. A path a live server already serves
+/// is REFUSED, not taken — see [`bind_unless_live`]. Every connection is served
+/// on its own task, so one slow client cannot block another.
+pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf) -> Result<()> {
+    let socket = path.as_path();
+    let listener = bind_unless_live(socket).await?;
     // 0600: the socket carries full control of the agent and its tools. The
     // default umask gives the socket 0755, which is only safe because the
     // operant home happens to be 0700 — an operator who binds /tmp/session.sock
@@ -120,10 +160,7 @@ where
         // streams without waiting for the client to speak.
         let line = match &mut subscription {
             Some(rx) => {
-                let read = async {
-                    let next = lines.next_line().await;
-                    next
-                };
+                let read = async { lines.next_line().await };
                 tokio::select! {
                     received = rx.recv() => {
                         match received {
@@ -233,7 +270,6 @@ where
 mod tests {
     use super::*;
     use crate::session_protocol::WireMessage;
-    use tokio::io::AsyncReadExt;
 
     /// A handler that counts what it was asked and answers every hello.
     #[derive(Default)]
@@ -469,6 +505,59 @@ mod tests {
                 other => panic!("{name} must receive an event, got {other:?}"),
             }
         }
+
+        server.abort();
+    }
+
+    /// (iter-2366) A LIVE socket path may not be taken over.
+    ///
+    /// This is the ACP-steals-the-gateway defect, reduced to its smallest
+    /// reproduction: with a server listening at `path`, a second bind at the
+    /// same path must FAIL and the first must still be reachable. The old
+    /// unconditional `remove_file` made the second bind succeed, which is how
+    /// `operant acp server --socket <the daemon's socket>` detached every
+    /// attached terminal without either process logging anything.
+    #[tokio::test]
+    async fn a_live_socket_path_is_refused_not_taken_over() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("session.sock");
+        let handler = Arc::new(CountingHandler::default());
+        let server = tokio::spawn(run_session_socket(handler, path.clone()));
+        for _ in 0..200 {
+            if path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(path.exists(), "the first server must bind its socket");
+
+        // The second bind is the takeover attempt.
+        let second = bind_unless_live(&path).await;
+        assert!(
+            second.is_err(),
+            "a second server must be REFUSED a path another process is serving"
+        );
+        let message = second.expect_err("the bind must have failed").to_string();
+        assert!(
+            message.contains("already served"),
+            "the refusal must say the path is already served, got: {message}"
+        );
+
+        // And the first server is untouched: the client it serves still works.
+        let mut stream = tokio::net::UnixStream::connect(&path)
+            .await
+            .expect("the first server must still accept connections");
+        let hello = encode(&WireMessage::Hello, PROTOCOL_VERSION).expect("hello encodes");
+        stream.write_all(hello.as_bytes()).await.expect("write");
+        stream.write_all(b"\n").await.expect("write");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read");
+        let reply = decode(&line, PROTOCOL_VERSION).expect("the reply must decode");
+        assert!(
+            matches!(reply, WireMessage::HelloOk { .. }),
+            "the surviving server must still answer, got {reply:?}"
+        );
 
         server.abort();
     }

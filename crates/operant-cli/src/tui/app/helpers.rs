@@ -17,14 +17,13 @@ use crate::tui::overlays::HelpEntry;
 /// GATEWAY's table; feeding the TUI's typeahead from it meant suggestions
 /// for commands that were never wired (the 18-command "not yet wired" list)
 /// and no suggestions for commands that were.
-pub fn tui_slash_command_data(
-    vendor_skill_commands: &[(String, String)],
-) -> Vec<(String, String)> {
+pub fn tui_slash_command_data(vendor_skill_commands: &[(String, String)]) -> Vec<(String, String)> {
     // The typeahead matcher prefixes the slash itself — the rows carry
     // bare names (the same convention COMMAND_REGISTRY used).
-    let mut rows: Vec<(String, String)> = crate::tui::operant_app::app::locally_suggested_command_rows()
-        .map(|(name, help)| (name.trim_start_matches('/').to_string(), help.to_string()))
-        .collect();
+    let mut rows: Vec<(String, String)> =
+        crate::tui::operant_app::app::locally_suggested_command_rows()
+            .map(|(name, help)| (name.trim_start_matches('/').to_string(), help.to_string()))
+            .collect();
     // The vendor skills are commands too: `/ponytail-audit` runs the skill
     // (iter-2159). They are computed ONCE (the App caches them) — the
     // typeahead runs on every keystroke, and a skills scan per keystroke
@@ -35,7 +34,8 @@ pub fn tui_slash_command_data(
     // and the vendor skill of the same name stays behind `/skill
     // ponytail`. Without this the palette would carry the name TWICE and
     // the typeahead would offer an entry the built-in owns.
-    let builtin_names: std::collections::HashSet<String> = rows.iter().map(|(name, _)| name.clone()).collect();
+    let builtin_names: std::collections::HashSet<String> =
+        rows.iter().map(|(name, _)| name.clone()).collect();
     for (name, description) in vendor_skill_commands {
         if builtin_names.contains(name) {
             continue;

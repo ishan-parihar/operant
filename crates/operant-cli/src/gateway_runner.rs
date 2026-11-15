@@ -96,6 +96,36 @@ fn should_record_stream_delivery(message_id: &str) -> bool {
     !message_id.is_empty()
 }
 
+/// What a permission ask with NO channel to prompt on should get.
+///
+/// (iter-2366) Extracted so the decision has a test. This is the one arm that
+/// decides whether an operator is asked before one of their tools runs, and it
+/// had no test at all.
+///
+/// In this process the arm is reached by exactly one kind of turn: an ATTENDED
+/// turn with no channel — a turn started over the session socket. A channel turn
+/// always has `current_channel` set by the dispatch loop before it runs, and the
+/// cron agent sets `unattended`, so it is decided by
+/// [`unattended_no_channel_verdict`] instead.
+///
+/// An unattended ask keeps its posture consult (an operator who set `yolo`
+/// accepted auto-approval for cron). An ATTENDED ask is DENIED: the old code
+/// sent `AllowSession`, which meant a tool the same operator would be prompted
+/// for on Telegram ran unapproved the moment they used `operant chat --attach`
+/// — attaching silently removed the human veto.
+fn no_channel_verdict(
+    unattended: bool,
+    posture_raw: &str,
+) -> operant_core::agent::ToolPermissionResponse {
+    use operant_core::agent::ToolPermissionResponse;
+    if unattended {
+        // The posture consult above already ran and did not object.
+        return ToolPermissionResponse::AllowSession;
+    }
+    let _ = posture_raw;
+    ToolPermissionResponse::Deny
+}
+
 fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
     use operant_core::org::seat_policy::SeatMode;
     use std::str::FromStr;
@@ -418,7 +448,7 @@ fn truncate_preview_value(value: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod unattended_posture_tests {
-    use super::unattended_no_channel_verdict;
+    use super::{no_channel_verdict, unattended_no_channel_verdict};
 
     #[test]
     fn yolo_keeps_the_legacy_auto_approve() {
@@ -450,6 +480,55 @@ mod unattended_posture_tests {
             panic!("a typo'd posture must deny");
         };
         assert!(reason.contains("fail-closed"), "got: {reason}");
+    }
+
+    /// iter-2366: an ATTENDED ask with nobody to ask is DENIED.
+    ///
+    /// This is the arm a turn started over the session socket reaches. It used
+    /// to send `AllowSession`, so a tool the same operator would be prompted for
+    /// on a channel ran unapproved the moment they used `operant chat --attach`:
+    /// attaching silently removed the human veto. The decision now lives in a
+    /// named function with this test, because it is the one place that decides
+    /// whether an operator is asked before one of their tools runs.
+    #[test]
+    fn an_attended_ask_with_no_channel_is_denied_not_auto_approved() {
+        use operant_core::agent::ToolPermissionResponse;
+        assert!(
+            matches!(
+                no_channel_verdict(false, "yolo"),
+                ToolPermissionResponse::Deny
+            ),
+            "an attended ask with no channel must be DENIED, whatever the posture"
+        );
+        assert!(
+            matches!(
+                no_channel_verdict(false, "standard"),
+                ToolPermissionResponse::Deny
+            ),
+            "the posture must not reopen an attended ask"
+        );
+    }
+
+    /// An UNATTENDED ask keeps the posture consult: `yolo` is the shipped
+    /// default and the operator who chose it accepted auto-approval for cron.
+    #[test]
+    fn an_unattended_ask_keeps_its_posture_behaviour() {
+        use operant_core::agent::ToolPermissionResponse;
+        assert!(
+            matches!(
+                no_channel_verdict(true, "yolo"),
+                ToolPermissionResponse::AllowSession
+            ),
+            "yolo must still auto-approve an UNATTENDED ask"
+        );
+        // The receiver consults `unattended_no_channel_verdict` first and only
+        // reaches this function when it did not object, so the governing modes
+        // never arrive here. Asserted so the seam cannot be inverted silently.
+        assert!(
+            unattended_no_channel_verdict("standard").is_some(),
+            "a governing posture must deny the unattended ask BEFORE this function"
+        );
+        let _ = ToolPermissionResponse::Deny;
     }
 }
 
@@ -2275,6 +2354,51 @@ fn pid_file_path() -> std::path::PathBuf {
     operant_core::platform::operant_home().join("gateway.pid")
 }
 
+/// Where the daemon records the socket path it actually bound (iter-2366).
+///
+/// A sidecar beside the pid file rather than a field inside it: the pid file is
+/// read by `kill -0` callers that parse it as a bare integer, and widening that
+/// format would break every one of them for a fact only `gateway status` wants.
+pub(crate) fn socket_path_file() -> std::path::PathBuf {
+    operant_core::platform::operant_home().join("gateway.sock")
+}
+
+/// The home this daemon resolved, as recorded at start (iter-2366).
+///
+/// Detection, not prevention. The per-home `flock` only stops a second daemon
+/// that resolves the SAME home, and `operant_home()` follows `$HERMES_HOME` and
+/// the mutable active profile — so a daemon started from a shell with a
+/// different `HERMES_HOME` than the systemd unit's produces two daemons that
+/// each believe they hold the machine. Recording the home lets `gateway status`
+/// say which daemon this CLI is actually talking to, instead of silently
+/// describing the wrong one. A machine-wide flock would prevent it outright and
+/// was tried and reverted: it is one fixed path, so it serialised the gateway
+/// tests that start several daemons in one process with distinct homes.
+pub(crate) fn home_file() -> std::path::PathBuf {
+    operant_core::platform::operant_home().join("gateway.home")
+}
+
+/// The home the running daemon recorded, or `None` when it predates this file.
+pub(crate) fn recorded_home() -> Option<String> {
+    std::fs::read_to_string(home_file())
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+/// The socket path this daemon bound, as recorded at start.
+///
+/// Falls back to the default path when there is no sidecar: a daemon started
+/// before this file existed, or one whose write failed, is served at the
+/// default, which is what every client recomputes anyway.
+pub(crate) fn recorded_socket_path() -> std::path::PathBuf {
+    let path = socket_path_file();
+    match std::fs::read_to_string(&path) {
+        Ok(raw) if !raw.trim().is_empty() => std::path::PathBuf::from(raw.trim()),
+        _ => operant_core::session_client::default_socket_path(),
+    }
+}
+
 /// The exclusive daemon lock beside the pid file. A SECOND `gateway run`
 /// used to start unconditionally: `start_gateway` checked only the
 /// in-process `RUNNER` static, never the pid file, so two daemons
@@ -2644,28 +2768,18 @@ impl SessionBus {
         }
     }
 
-    /// The sender for a session, created on first use.
-    ///
-    /// NO pruning here: `publish` calls this for every agent event, and a
-    /// `retain` over the whole map made each event O(sessions) — the hot path
-    /// got slower exactly as the session count grew, which is the scale the
-    /// socket exists for.
-    fn sender_for(&self, session_id: &str) -> broadcast::Sender<WireMessage> {
-        let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
-        senders
-            .entry(session_id.to_string())
-            .or_insert_with(|| broadcast::channel(256).0)
-            .clone()
-    }
-
     /// Subscribe a client to a session, dropping the senders nobody reads.
     ///
-    /// The map is keyed by a session id ANY client can name (a `LoadHistory`
-    /// for a made-up id subscribes to it), so without this it grows for as long
-    /// as the daemon lives and each entry is a 256-slot ring. A client joining
-    /// is rare; a turn emitting an event is not.
+    /// This is the ONLY place a sender is created (iter-2366). The map is keyed
+    /// by a session id ANY client can name (a `LoadHistory` for a made-up id
+    /// subscribes to it), so without the `retain` below it grows for as long as
+    /// the daemon lives and each entry is a 256-slot ring. A client joining is
+    /// rare; a turn emitting an event is not.
     fn subscribe(&self, session_id: &str) -> broadcast::Receiver<WireMessage> {
-        let mut senders = self.senders.lock().expect("the bus lock is not poisoned");
+        // A poisoned bus lock must not take the gateway down: the map is
+        // recoverable state, so drop the poison like every other lock site
+        // in this file (`unwrap_or_else(|e| e.into_inner())`).
+        let mut senders = self.senders.lock().unwrap_or_else(|e| e.into_inner());
         senders.retain(|_, sender| sender.receiver_count() > 0);
         let sender = senders
             .entry(session_id.to_string())
@@ -2674,9 +2788,24 @@ impl SessionBus {
     }
 
     /// Publish one agent event to the session's subscribers.
+    ///
+    /// (iter-2366) A READ-ONLY lookup, not an insert. `sender_for` used to be
+    /// called from here, so every session id that ever emitted an event got a
+    /// 256-slot broadcast ring that nothing ever removed unless a client
+    /// happened to call `subscribe` — and a channel-only deployment, which is
+    /// the normal one, never does. 500 sessions × one turn each retained 500
+    /// rings for the life of the daemon, with no receiver ever attached to any
+    /// of them. An entry now exists only while someone is subscribed to it.
     fn publish(&self, session_id: &str, event: AgentEvent) {
         // A closed channel means nobody is attached; that is not an error.
-        let _ = self.sender_for(session_id).send(WireMessage::Event {
+        let senders = match self.senders.lock() {
+            Ok(senders) => senders,
+            Err(_) => return,
+        };
+        let Some(sender) = senders.get(session_id) else {
+            return;
+        };
+        let _ = sender.send(WireMessage::Event {
             session_id: session_id.to_string(),
             event,
         });
@@ -2740,22 +2869,36 @@ fn pending_permission_channel(tool_call_id: &str) -> Option<String> {
 /// channel; the tool-call id is the identity the wire carries, so the map is
 /// scanned for it. Best-effort by design: a request that is not found (already
 /// answered, already timed out) reports false rather than inventing an approval.
-fn resolve_pending_permission(tool_call_id: &str, allow: bool) -> bool {
+fn resolve_pending_permission(
+    tool_call_id: &str,
+    allow: bool,
+    requester_session: Option<&str>,
+) -> bool {
     use operant_core::agent::ToolPermissionResponse;
-    // The pending map is keyed by CHANNEL, and only channel turns write it:
-    // the permission receiver runs inside a channel turn, so a socket turn
-    // never raises an ask of its own. Matching by tool-call id alone therefore
-    // handed the socket authority over every channel's pending ask — a local
-    // process could approve a tool waiting for a human on Telegram. The socket
-    // has no channel, so it answers nothing here and says which channel does.
+    // (iter-2366) Two kinds of key now live in the pending map.
+    //
+    // A CHANNEL key belongs to a chat turn: the socket must not answer it, or a
+    // local process could approve a tool waiting for a human on Telegram (the
+    // RT-550 hardening, kept intact below).
+    //
+    // A SESSION key (`session:<id>`) belongs to a turn the socket started, and
+    // the ONLY client that may answer it is one attached to THAT session. The
+    // Approve/Deny arms carry the asking client's session id for exactly this
+    // comparison, so a socket client can answer its own ask and nobody else's.
     if let Some(channel) = pending_permission_channel(tool_call_id)
         && !channel.is_empty()
     {
-        tracing::warn!(
-            channel = %channel,
-            "an approval for a CHANNEL's pending request was refused on the socket"
-        );
-        return false;
+        let mine = requester_session
+            .map(|session| channel == format!("session:{session}"))
+            .unwrap_or(false);
+        if !mine {
+            tracing::warn!(
+                channel = %channel,
+                "an approval for a pending request was refused on the socket: \
+                 it belongs to another session or to a channel"
+            );
+            return false;
+        }
     }
     let Some(store) = PENDING_PERMISSIONS.get() else {
         return false;
@@ -2855,7 +2998,7 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
             // session a message names (see `serve_client`), so the switch needs
             // no state of its own — the answer is what the new session holds.
             WireMessage::Switch { session_id } => {
-                return self.handle(WireMessage::LoadHistory { session_id });
+                self.handle(WireMessage::LoadHistory { session_id })
             }
             // A prompt runs the turn in the SLOT that owns this session.
             //
@@ -2888,6 +3031,19 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         }];
                     }
                     _ => {}
+                }
+                // (iter-2366) The drain's admission gate. A stop interrupts the
+                // turns already running and waits for their slot locks; a turn
+                // admitted after that point would queue on the very lock being
+                // waited for and then reset the interrupt on acquiring it, so
+                // the drain could never complete and the process would exit
+                // with that turn dropped mid-await. Refuse it here, where the
+                // client can still be told why.
+                if handler.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id),
+                        message: "the gateway is stopping — the turn was not started".to_string(),
+                    }];
                 }
                 // A turn over the socket obeys the SAME gates a channel turn
                 // does. ESTOP is a pause, not a channel-only setting.
@@ -2926,6 +3082,14 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         handler.session_tracker_dir.clone(),
                         Some(max),
                     );
+                    // (iter-2366) Still synchronous, and deliberately so: this
+                    // arm is inside `SessionHandler::handle`, which is a sync
+                    // trait method, so there is no `.await` here. The blocking
+                    // directory pass now costs ONE walk instead of two (see
+                    // `ActiveSessionTracker::scan`), and moving it off the
+                    // runtime entirely means making the trait async or wrapping
+                    // the whole `handle` call in `spawn_blocking` at the
+                    // `session_server` dispatch site.
                     let running = tracker.count().unwrap_or(0);
                     if running >= max {
                         return vec![WireMessage::Error {
@@ -2957,6 +3121,31 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                         }
                         return;
                     }
+                    // (iter-2366) The SECOND half of the drain's admission
+                    // gate. The `Prompt` arm refuses a turn that arrives after
+                    // the stop begins, but a turn can already be queued on this
+                    // slot lock when the drain starts — and it reaches this
+                    // point only when the lock is finally free, which is after
+                    // the interrupted turn has released it. Letting it run
+                    // would reset the interrupt the drain is relying on and
+                    // hold the lock the drain is waiting for, so the drain
+                    // times out and this turn is dropped mid-await anyway.
+                    // Dropping it here is the difference between "refused" and
+                    // "started, ran, and was silently lost".
+                    if handler.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                        if let Ok(mut inflight) = inflight.lock() {
+                            inflight.remove(&task_session);
+                        }
+                        bus.publish(
+                            &task_session,
+                            operant_core::agent::AgentEvent::Error {
+                                error: "the gateway was stopping before this turn got a slot — \
+                                        it was not started"
+                                    .to_string(),
+                            },
+                        );
+                        return;
+                    }
                     // Now that the slot is held the turn is real, so it takes a
                     // cap slot — and if the cap filled while it waited, it says
                     // so instead of running over the limit.
@@ -2966,7 +3155,16 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                                 handler.session_tracker_dir.clone(),
                                 Some(max),
                             );
-                            if !tracker.acquire(&task_session).unwrap_or(true) {
+                            // Same reason as the count above: one blocking
+                            // directory pass off the runtime thread (iter-2366).
+                            let blocking_tracker = tracker.clone();
+                            let blocking_session = task_session.clone();
+                            let admitted = tokio::task::spawn_blocking(move || {
+                                blocking_tracker.acquire(&blocking_session).unwrap_or(true)
+                            })
+                            .await
+                            .unwrap_or(true);
+                            if !admitted {
                                 if let Ok(mut inflight) = inflight.lock() {
                                     inflight.remove(&task_session);
                                 }
@@ -3085,8 +3283,12 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                 session_id,
                 tool_call_id,
             } => vec![WireMessage::Error {
-                session_id: Some(session_id),
-                message: match resolve_pending_permission(&tool_call_id, true) {
+                session_id: Some(session_id.clone()),
+                message: match resolve_pending_permission(
+                    &tool_call_id,
+                    true,
+                    Some(session_id.as_str()),
+                ) {
                     true => "the tool call was approved".to_string(),
                     false => format!("no pending tool call named {tool_call_id}"),
                 },
@@ -3102,8 +3304,12 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     tracing::info!(session = %session_id, tool_call_id = %tool_call_id, reason, "tool call denied over the session socket");
                 }
                 vec![WireMessage::Error {
-                    session_id: Some(session_id),
-                    message: match resolve_pending_permission(&tool_call_id, false) {
+                    session_id: Some(session_id.clone()),
+                    message: match resolve_pending_permission(
+                        &tool_call_id,
+                        false,
+                        Some(session_id.as_str()),
+                    ) {
                         true => "the tool call was denied".to_string(),
                         false => format!("no pending tool call named {tool_call_id}"),
                     },
@@ -3122,6 +3328,25 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     return vec![WireMessage::Error {
                         session_id: Some(session_id),
                         message: "operant is paused — the message was not queued".to_string(),
+                    }];
+                }
+                // (iter-2366) A queue is only meaningful for a session the
+                // daemon has actually loaded. The per-session cap of 32 bounds
+                // ONE session's queue; nothing bounded the NUMBER of sessions,
+                // and this arm accepted any id a client cared to name — so a
+                // client could park 32 messages under a million invented ids
+                // and size the daemon's memory. `take_queued_messages` removes
+                // an entry only when a turn consumes it, so a name that never
+                // prompts leaves its `Vec` resident forever. A session no slot
+                // has loaded has no next turn to queue FOR.
+                let known = handler.live_session_ids().contains(&session_id);
+                if !known {
+                    return vec![WireMessage::Error {
+                        session_id: Some(session_id.clone()),
+                        message: format!(
+                            "no such live session: {session_id} — start it with a prompt before \
+                             queueing for it"
+                        ),
                     }];
                 }
                 let depth = match handler.next_turn_queue.lock() {
@@ -3398,6 +3623,20 @@ struct GatewayMessageHandler {
     /// (see the turn_lock site). Read by the stop-time log and
     /// `gateway status --deep`.
     queue_waits: tokio::sync::Mutex<QueueWaitStats>,
+    /// (iter-2366) Set for the rest of the process's life the moment a stop
+    /// begins, and read at every turn's ADMISSION.
+    ///
+    /// The drain used to interrupt the running turns and then wait for their
+    /// slot locks — but nothing stopped NEW work arriving, and the socket's
+    /// accept loop kept serving for the whole 30 s bound. A turn admitted
+    /// during the drain queued on the same slot lock the drain was waiting
+    /// for, and its first act on acquiring that lock was
+    /// `interrupt_flag().reset()` — erasing the drain's interrupt. The drain
+    /// then timed out, the process exited, and the newly-admitted turn's
+    /// future was dropped mid-await with no interrupted tail committed: the
+    /// exact loss the drain exists to prevent. A stopping gateway refuses new
+    /// turns and drops ones still queued.
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// RT-175 — the configured skills root for `/reload-skills`' rescan.
     skills_root_dir: std::path::PathBuf,
     /// `[skills] extra_roots` — the roots the operator configured beyond the
@@ -3845,6 +4084,13 @@ impl MessageHandler for GatewayMessageHandler {
     /// shared interrupt flag can only reach the turn that is actually
     /// running — the same reasoning the `/stop` command uses.
     async fn drain(&self, timeout: Duration) -> DrainOutcome {
+        // (iter-2366) Close the door BEFORE opening the drain. Nothing below
+        // can complete while new turns keep arriving: an admitted turn queues
+        // on the slot lock this function is waiting for, and its first act on
+        // getting it is to reset the interrupt that is supposed to end the
+        // previous one.
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         // (RT-508) The slots run turns concurrently, so a stopping gateway
         // must drain EVERY slot, not one turn.
         let mut running_slots: Vec<usize> = Vec::new();
@@ -5198,7 +5444,15 @@ pub async fn start_gateway(
     // semaphore, with backoff on error. When [holon] clock is on, it
     // fires `holon tick` every 2 minutes (the kernel's schedules and
     // lease sweeps — the clock belongs to the resident runtime).
-    operant_os::organs::spawn_if_configured(app_config);
+    //
+    // (iter-2366) NOT HERE. This call used to sit ABOVE the flock, so a
+    // REFUSED second daemon still started a supervisor thread: it claimed a
+    // kernel run (`holon … --prepare`), then lost the lock, printed the
+    // refusal, and the process exited — leaving that run leased with nobody to
+    // heartbeat or finish it, plus an orphaned `holon` child. Repeated under
+    // the unit's `Restart=always` that is a claim storm against the kernel.
+    // The organs belong to a daemon that actually owns the machine, so they
+    // start below, once the lock is held.
 
     // Finding 1 of the 2026-10-26 persistent-gateway audit: refuse to
     // become a SECOND daemon. The in-process RUNNER check below only covers
@@ -5220,6 +5474,11 @@ pub async fn start_gateway(
     if let Ok(mut held) = GATEWAY_DAEMON_LOCKS.lock() {
         held.push(lock_guard);
     }
+
+    // (iter-2366) The machine is ours now, so the resident organs may claim
+    // work on its behalf. Everything this daemon owns is created below this
+    // line; nothing above it survives the refusal path.
+    operant_os::organs::spawn_if_configured(app_config);
 
     init_pending_permissions();
 
@@ -5339,6 +5598,9 @@ pub async fn start_gateway(
     // audit — gateway never called with_permissions, so bash/file_write ran
     // silently without approval). The TUI wires this at adapter_types.rs:2267;
     // the gateway now mirrors it.
+    // (iter-2366) The bus, cloned for the permission receiver so a socket
+    // turn's ask can be announced to the client attached to that session.
+    let session_bus_for_perm = Some(session_bus.clone());
     let (permission_tx, mut permission_rx) =
         mpsc::channel::<operant_core::agent::ToolPermissionRequest>(8);
 
@@ -5417,7 +5679,23 @@ pub async fn start_gateway(
     let slot_count = slot_count_for(app_config.gateway.max_concurrent_sessions);
     tracing::info!(slots = slot_count, "the gateway's agent slots");
     let mut slots: Vec<AgentSlot> = Vec::with_capacity(slot_count);
-    for _ in 0..slot_count {
+    // (iter-2366) ONE model client for the whole slot pool.
+    //
+    // Each slot used to build its own `OpenAIClient` inside
+    // `create_runtime_agent_with`, and that client owns its own `RateLimiter`
+    // (`client.rs:179`) plus two reqwest clients with their own connection
+    // pools. So N slots enforced the CONFIGURED provider rate limit
+    // independently: an operator who wrote 20 requests a minute got 640 at 32
+    // slots, and the limiter protected nothing. The client carries no
+    // conversation state, so one instance serves every slot — the same hoist the
+    // memory pair already has (BUGS.md D-5).
+    //
+    // The per-slot `model_client`/`pool_registry` inside the builder is a
+    // separate hoist: it changes pool scope per provider, so it is not attempted
+    // here.
+    let shared_slot_client =
+        operant_core::client::OpenAIClient::new(crate::client_config(app_config));
+    for slot_index in 0..slot_count {
         // (RT-508 red-team, finding 1) The slot's OWN memory provider: the
         // scope cell is per provider, so two slots cannot swap each other's
         // bank mid-turn.
@@ -5454,7 +5732,7 @@ pub async fn start_gateway(
                 }
             }
         });
-        let mut agent = crate::create_runtime_agent_with(
+        let mut agent = crate::create_runtime_agent_with_client(
             app_config,
             &app_config.agent,
             None,
@@ -5462,12 +5740,27 @@ pub async fn start_gateway(
             &mcp_manager,
             &app_config.skills.root_dir,
             None, // gateway has no status bar; the agent keeps its internal registry
-            // `true`: these are the process's long-lived agents, so their
-            // LCM maintenance workers must spawn (cron passes `false`).
-            true,
+            // (iter-2366) ONLY THE FIRST slot spawns the LCM maintenance pair.
+            //
+            // This was an unconditional `true`, so a 32-slot gateway built 32
+            // long-term-consolidation engines and 32 rollup/extractor worker
+            // PAIRS — each with its own model client, each able to make LLM
+            // calls over the same conversations. That is duplicated spend and
+            // duplicated write contention on one memory store, not capacity:
+            // the maintenance is a property of the STORE, and every slot writes
+            // the same store.
+            //
+            // The cron agent already passes `false` for exactly this reason, and
+            // `create_runtime_agent_with`'s own documentation says the flag must
+            // be `false` for any SECOND agent in a process. The slot loop was
+            // the one caller that never read that.
+            slot_index == 0,
             // BUGS.md D-5 — the hoisted pair; see the comment above. The
             // slot's provider is its OWN (the scope is per provider).
             slot_memory,
+            // iter-2366: the ONE client built above the loop, so every slot
+            // shares a single rate limiter and connection pool.
+            Some(&shared_slot_client),
         )
         .await?;
         let idle = app_config.agent.recap_idle_seconds;
@@ -5696,6 +5989,7 @@ pub async fn start_gateway(
         #[cfg(feature = "plugins-wasm")]
         wasm_plugin_skill_roots: crate::plugin_tools::plugin_skill_roots(app_config),
         queue_waits: tokio::sync::Mutex::new(QueueWaitStats::default()),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -5703,7 +5997,9 @@ pub async fn start_gateway(
     // it runs a turn in the slot that owns the session, so the socket needs
     // the slots. It is bound while this process holds the daemon lock, so the
     // socket and the channels live and die together.
-    if let Some(socket) = session_socket {
+    // An owned clone, so the spawned server task can own the path without
+    // borrowing `session_socket`, which is still read at the pid-file write below.
+    if let Some(socket) = session_socket.clone() {
         let session_handler = std::sync::Arc::new(GatewaySessionHandler {
             handler: Some(std::sync::Arc::clone(&handler)),
             bus: std::sync::Arc::clone(&session_bus),
@@ -6674,10 +6970,88 @@ pub async fn start_gateway(
                         .send(operant_core::agent::ToolPermissionResponse::Deny);
                     continue;
                 }
-                tracing::warn!("No active channel for permission prompt — auto-approving");
-                let _ = req
-                    .response_tx
-                    .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+                // (iter-2366) An ATTENDED ask with nobody to ask is DENIED.
+                // See `no_channel_verdict` — the old `AllowSession` here let a
+                // session-socket turn run an operator's gated tools with no
+                // prompt at all.
+                if !req.unattended {
+                    // (iter-2366) A socket turn's ask now has a route of its own.
+                    //
+                    // With the session on the request the receiver can tell this
+                    // ask apart from a channel's, so instead of denying blind it
+                    // stores the ask under `session:<id>`, tells the attached
+                    // client which tool call is waiting, and waits 60s — the same
+                    // shape as the channel prompt. The client answers with
+                    // Approve/Deny carrying its session id, and
+                    // `resolve_pending_permission` allows exactly that pairing
+                    // while still refusing every channel ask.
+                    //
+                    // No session on the ask: deny. An ask nobody can answer must
+                    // not hang the turn.
+                    let ask_session = req.session_id.clone();
+                    match ask_session.as_deref() {
+                        Some(session) if !session.is_empty() => {
+                            let tool = req.tool_name.clone();
+                            let tool_call_id = req.tool_id.clone();
+                            tracing::info!(
+                                session = %session,
+                                tool = %tool,
+                                "a session-socket turn needs approval — queued for its \
+                                 attached client (60s)"
+                            );
+                            if let Some(bus) = session_bus_for_perm.as_ref() {
+                                bus.publish(
+                                    session,
+                                    operant_core::agent::AgentEvent::Error {
+                                        error: format!(
+                                            "permission needed for `{tool}` — send \
+                                             `/approve {tool_call_id}` or \
+                                             `/deny {tool_call_id}` within 60s"
+                                        ),
+                                    },
+                                );
+                            }
+                            pending_permissions_for_perm
+                                .lock()
+                                .await
+                                .insert(format!("session:{session}"), req);
+                            let pending_for_timeout = pending_permissions_for_perm.clone();
+                            let timeout_tool = tool;
+                            let timeout_session = session.to_string();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(Duration::from_secs(60)).await;
+                                let mut map = pending_for_timeout.lock().await;
+                                if let Some(request) =
+                                    map.remove(&format!("session:{timeout_session}"))
+                                {
+                                    tracing::warn!(
+                                        session = %timeout_session,
+                                        tool = %timeout_tool,
+                                        "a session permission ask timed out — denying"
+                                    );
+                                    if request.seat_escalation.is_some() {
+                                        resolve_seat_escalation_on_deny(&request);
+                                    }
+                                    let _ = request
+                                        .response_tx
+                                        .send(operant_core::agent::ToolPermissionResponse::Deny);
+                                }
+                            });
+                        }
+                        _ => {
+                            tracing::warn!(
+                                tool = %req.tool_name,
+                                "No active channel and no session for an ATTENDED permission \
+                                 prompt — denying. Auto-approving would grant the operator's own \
+                                 tools without the prompt a channel turn would have shown."
+                            );
+                            let _ = req
+                                .response_tx
+                                .send(no_channel_verdict(false, &unattended_posture_for_perm));
+                        }
+                    }
+                    continue;
+                }
             }
         }
         tracing::warn!("Permission request receiver exited (permission_rx closed)");
@@ -8195,6 +8569,21 @@ pub async fn start_gateway(
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&pid_path, &pid_str);
+    // (iter-2366) Record the socket this daemon actually bound.
+    //
+    // `gateway run --socket PATH` moves the socket alone: the client recomputes
+    // the DEFAULT path and `gateway status` printed only the default, so a
+    // daemon started on a non-default path was UNDISCOVERABLE — status said
+    // "(not bound)" while it was serving, and an operator had no way to learn
+    // the path to pass to `--attach`. The resolved path is a sidecar next to
+    // the pid file, so a reader that knows where the pid file is can find it.
+    let _ = std::fs::write(
+        home_file(),
+        operant_core::platform::operant_home().display().to_string(),
+    );
+    if let Some(socket) = session_socket.as_ref() {
+        let _ = std::fs::write(socket_path_file(), socket.display().to_string());
+    }
 
     // An empty admins list means every user who finds the bot can drive the
     // agent, with this process's model credentials. `operant gateway status`
@@ -8348,6 +8737,8 @@ mod pending_permissions_tests {
             input_preview: None,
             seat_escalation: None,
             unattended: false,
+            // (iter-2366) The session this ask belongs to.
+            session_id: None,
             response_tx: tx,
         }
     }
@@ -8365,6 +8756,8 @@ mod pending_permissions_tests {
         store.lock().await.insert(
             "telegram:42".to_string(),
             ToolPermissionRequest {
+                // (iter-2366) The session this ask belongs to.
+                session_id: None,
                 response_tx: tx,
                 ..make_request()
             },
@@ -8372,9 +8765,51 @@ mod pending_permissions_tests {
         store_pending_permissions(store.clone());
 
         assert!(
-            !resolve_pending_permission("t-1", true),
+            !resolve_pending_permission("t-1", true, None),
             "a channel's pending ask must not be approvable over the socket"
         );
+        // (iter-2366) A SESSION ask is the mirror image: approvable by the
+        // session it belongs to, and by no other. Reuses the store above, which
+        // the receiver would hold either way.
+        let (tx2, _rx2) = tokio::sync::oneshot::channel();
+        store.lock().await.insert(
+            "session:s1".to_string(),
+            ToolPermissionRequest {
+                session_id: Some("s1".to_string()),
+                tool_id: "t-session".to_string(),
+                response_tx: tx2,
+                ..make_request()
+            },
+        );
+
+        assert!(
+            !resolve_pending_permission("t-session", true, Some("s2")),
+            "a session's ask must not be approvable by a DIFFERENT session"
+        );
+        assert!(
+            resolve_pending_permission("t-session", true, Some("s1")),
+            "the session an ask belongs to must be able to approve it"
+        );
+        assert!(
+            !resolve_pending_permission("t-session", true, None),
+            "and a client with no session must not"
+        );
+        // The ask was consumed by the one legitimate approval.
+        assert!(
+            store.lock().await.get("session:s1").is_none(),
+            "a resolved ask must leave the pending map"
+        );
+        // Re-insert so the channel assertion below still has its ask.
+        let (tx3, _rx3) = tokio::sync::oneshot::channel();
+        store.lock().await.insert(
+            "telegram:42".to_string(),
+            ToolPermissionRequest {
+                session_id: None,
+                response_tx: tx3,
+                ..make_request()
+            },
+        );
+
         // And it is still there for the channel to answer.
         let still = store
             .lock()
@@ -8484,6 +8919,8 @@ mod pending_permissions_tests {
             input_preview: None,
             seat_escalation: None,
             unattended: false,
+            // (iter-2366) The session this ask belongs to.
+            session_id: None,
             response_tx: tx,
         };
         let store: Arc<Mutex<HashMap<String, ToolPermissionRequest>>> =

@@ -112,7 +112,9 @@ impl SendMessageTool {
     /// forum-topic id silently, and a Telegram post then lands in the default
     /// topic instead of the requested one. Reading both here costs one line and
     /// makes this tool correct on its own.
-    fn parse_send_args(args: &Value) -> Result<(&str, &str, &str, Option<&str>, Option<i64>), String> {
+    fn parse_send_args(
+        args: &Value,
+    ) -> Result<(&str, &str, &str, Option<&str>, Option<i64>), String> {
         let via = args
             .get("via")
             .and_then(|v| v.as_str())

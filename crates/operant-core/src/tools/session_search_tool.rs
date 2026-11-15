@@ -172,7 +172,10 @@ impl SessionSearchTool {
     /// error: a caller that just minted a session and is polling it should not
     /// have to distinguish "not yet" from "never".
     fn tail(&self, session_id: &str, window: usize) -> ToolResult {
-        match self.database.get_session_messages_capped(session_id, window) {
+        match self
+            .database
+            .get_session_messages_capped(session_id, window)
+        {
             Ok(messages) => {
                 let rendered: Vec<Value> = messages
                     .iter()
@@ -383,11 +386,13 @@ impl OperantTool for SessionSearchTool {
         } = match serde_json::from_value::<SessionSearchArgs>(args) {
             Ok(parsed) => parsed,
             Err(e) => {
-                return ToolResult::error("session_search", format!("Invalid arguments: {e}"))
+                return ToolResult::error("session_search", format!("Invalid arguments: {e}"));
             }
         };
 
-        let query = query.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let query = query
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let role_filter = role_filter
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
@@ -595,8 +600,7 @@ mod tests {
                 ToolContext::default(),
             )
             .await;
-        let narrow: serde_json::Value =
-            serde_json::from_str(&narrow.content).unwrap();
+        let narrow: serde_json::Value = serde_json::from_str(&narrow.content).unwrap();
         assert_eq!(narrow["messages"].as_array().unwrap().len(), 1);
 
         let empty = tool
@@ -605,7 +609,11 @@ mod tests {
                 ToolContext::default(),
             )
             .await;
-        assert!(empty.success, "an unknown session is an empty tail: {:?}", empty);
+        assert!(
+            empty.success,
+            "an unknown session is an empty tail: {:?}",
+            empty
+        );
         let empty: serde_json::Value = serde_json::from_str(&empty.content).unwrap();
         assert_eq!(empty["count"], 0);
     }
@@ -632,7 +640,11 @@ mod tests {
             ("role_filter", "roleFilter", serde_json::json!("user")),
             ("limit", "limit", serde_json::json!(2)),
             ("session_id", "sessionId", serde_json::json!("s1")),
-            ("around_message_id", "aroundMessageId", serde_json::json!(7i64)),
+            (
+                "around_message_id",
+                "aroundMessageId",
+                serde_json::json!(7i64),
+            ),
             ("window", "window", serde_json::json!(4)),
         ];
 
@@ -744,11 +756,7 @@ mod tests {
                     ToolContext::default(),
                 )
                 .await;
-            assert!(
-                scrolled.success,
-                "{key} must parse: {:?}",
-                scrolled
-            );
+            assert!(scrolled.success, "{key} must parse: {:?}", scrolled);
         }
     }
 

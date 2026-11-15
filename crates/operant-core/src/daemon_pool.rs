@@ -76,10 +76,23 @@ where
     {
         let mut handles = HANDLES.lock().expect("daemon_pool HANDLES mutex poisoned");
         if handles.len() >= MAX_TRACKED {
-            // Evict the oldest. Forgetting the handle cancels the future,
-            // but daemon tasks should be self-contained — no caller is
-            // waiting on them. This is the "pool skips idle-timeout join"
-            // semantic from hermes daemon_pool.py.
+            // Evict the oldest.
+            //
+            // (iter-2366) This used to `remove(0)` on the strength of a comment
+            // claiming that "forgetting the handle cancels the future". It does
+            // not: dropping a `tokio::task::JoinHandle` DETACHES the task, which
+            // then runs to completion untracked. The bound therefore bounded
+            // nothing — past `MAX_TRACKED` the pool stopped accounting for tasks
+            // that were still running, and `drain_for_label` could report "0
+            // completed" for a label whose daemon was still going.
+            if let Some((label, oldest)) = handles.first() {
+                tracing::warn!(
+                    label = %label,
+                    tracked = handles.len(),
+                    "daemon task limit reached — aborting the oldest tracked task"
+                );
+                oldest.abort();
+            }
             let _ = handles.remove(0);
         }
         handles.push((l, handle));

@@ -115,13 +115,13 @@ impl ReactionTool {
     /// rescue does not degrade quietly — it fails outright with "missing
     /// message_id". Reading both spellings costs one line and makes this tool
     /// correct on its own.
-    fn parse_react_args(
-        args: &Value,
-    ) -> Result<(&str, &str, &str, &str), (&'static str, String)> {
-        let via = args
-            .get("via")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ("react_to_message", "Missing required field: via".to_string()))?;
+    fn parse_react_args(args: &Value) -> Result<(&str, &str, &str, &str), (&'static str, String)> {
+        let via = args.get("via").and_then(|v| v.as_str()).ok_or_else(|| {
+            (
+                "react_to_message",
+                "Missing required field: via".to_string(),
+            )
+        })?;
         let to = args
             .get("to")
             .and_then(|v| v.as_str())
@@ -137,10 +137,12 @@ impl ReactionTool {
                         .to_string(),
                 )
             })?;
-        let emoji = args
-            .get("emoji")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ("react_to_message", "Missing required field: emoji".to_string()))?;
+        let emoji = args.get("emoji").and_then(|v| v.as_str()).ok_or_else(|| {
+            (
+                "react_to_message",
+                "Missing required field: emoji".to_string(),
+            )
+        })?;
         Ok((via, to, message_id, emoji))
     }
 

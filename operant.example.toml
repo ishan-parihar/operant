@@ -650,8 +650,14 @@ webhooks_enabled = false
 admins = []
 # Cap on concurrent gateway sessions (hermes max_concurrent_sessions parity).
 # When reached, new sessions get a refusal reply while existing holders keep
-# their slots. Unset/None = unlimited.
-# max_concurrent_sessions = 4
+# their slots.
+#
+# THIS IS ALSO THE AGENT SLOT COUNT. One slot is a full agent with its own
+# conversation, so the effective limit on simultaneous turns is
+# min(this value, 256) — an agent per slot is a RAM decision. Leave it unset
+# for the shipped default of 32. Raising it past what the machine can hold
+# buys refusals, not throughput.
+# max_concurrent_sessions = 32
 
 # How long a gateway session is kept after its last activity, in days.
 # The gateway sweeps every 6 hours and drops sessions idle for longer than

@@ -387,7 +387,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Show or set the ponytail posture (lite|full|ultra|off)",
     ),
     RegisteredCommand::public("/plugins", "Open the plugins panel"),
-    RegisteredCommand::public("/queue", "Queue a prompt for the next turn (doesn't interrupt)"),
+    RegisteredCommand::public(
+        "/queue",
+        "Queue a prompt for the next turn (doesn't interrupt)",
+    ),
     RegisteredCommand::public("/redraw", "Force a full redraw"),
     RegisteredCommand::public("/reload-mcp", "Reconnect MCP servers"),
     RegisteredCommand::public("/reload-skills", "Reload skills from disk"),
@@ -401,7 +404,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/skill", "Run a saved skill"),
     RegisteredCommand::public("/skin", "Show or switch the terminal skin"),
     RegisteredCommand::public("/status", "Show gateway and runtime status"),
-    RegisteredCommand::public("/steer", "Steer the running turn (inject a message mid-run)"),
+    RegisteredCommand::public(
+        "/steer",
+        "Steer the running turn (inject a message mid-run)",
+    ),
     RegisteredCommand::public("/stop", "Stop the running turn"),
     RegisteredCommand::public(
         "/subgoal",
@@ -678,7 +684,9 @@ mod panel_crossover_tests {
     fn every_panel_command_is_still_a_registered_command() {
         for (name, _surface) in PANEL_COMMANDS {
             assert!(
-                REGISTERED_COMMANDS.iter().any(|command| command.name == *name),
+                REGISTERED_COMMANDS
+                    .iter()
+                    .any(|command| command.name == *name),
                 "`{name}` opens a panel but is no longer a RegisteredCommand, so a \
                  channel lost it — the gateway retention depends on this row existing"
             );
@@ -712,7 +720,9 @@ mod panel_crossover_tests {
     fn the_crossover_table_names_only_commands_that_exist() {
         for (name, _) in PANEL_COMMANDS {
             assert!(
-                REGISTERED_COMMANDS.iter().any(|command| command.name == *name),
+                REGISTERED_COMMANDS
+                    .iter()
+                    .any(|command| command.name == *name),
                 "`{name}` is in the crossover table but not in the catalogue"
             );
         }
@@ -760,10 +770,7 @@ mod crossover_surface_tests {
         );
         // Locally visible is the live set less the hidden and remote-only rows.
         let hidden = REGISTERED_COMMANDS.iter().filter(|c| c.hidden).count();
-        let remote = REGISTERED_COMMANDS
-            .iter()
-            .filter(|c| c.remote_only)
-            .count();
+        let remote = REGISTERED_COMMANDS.iter().filter(|c| c.remote_only).count();
         assert_eq!(
             local.len() + hidden + remote,
             all.len(),

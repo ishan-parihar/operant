@@ -1575,6 +1575,7 @@ Six findings from the magic-context / oh-my-pi contrast audit, committed as
   git submodule this worktree does not have. 12 core + 31 CLI tests cover the
   new paths. clippy clean with --all-targets.
 
+<<<<<<< Updated upstream
 ## iter-2364 follow-up — context-lifecycle audit, red-team and remediation
 
 The audit (5 read-only studies, every finding hand-verified against `59bab8e0`)
@@ -1687,3 +1688,217 @@ bool branch) and each was caught by the compiler inside the batch, not at the
 gate. The `micro_compact` non-progress guard initially broke an existing test
 whose fixtures were 2-4 characters — real exchanges are not, and the fixture
 was corrected rather than the guard weakened.
+=======
+## iter-2345 — the parking walk dropped 23 live keys, and memory recall had no ceiling
+
+Audit: `ponytail-audit` of the context lifecycle at `6c59b3b0`, contrasted
+with magic-context and harness2. Three must-fix findings; all three shipped.
+
+1. **`KNOWN_KEYS` drift (23 live keys).** The upgrade-parking path
+   (`config_heal::split_unknown`) re-walks a config against a hand-maintained
+   list when a strict parse fails on an unknown key. Missing: all seven
+   `[advisor]` fields, `[recap].model`, the four `[agent.ponytail]` keys, the
+   four `[bylaws.budget]` keys, the four `[cli]` keys, `terminal_backend`,
+   `observability.backend`, `integrations.herdr.enabled`. Reproduced with the
+   deployed binary — `[delegation]` + `[advisor] enabled = true` parked
+   `advisor.enabled`. Guard: `every_active_example_key_is_known_to_the_parking_walk`
+   walks the example as data; it caught the author's own new key first run.
+   Post-fix live proof: that config now parks only `delegation.*`.
+
+2. **Recalled memory had no token ceiling.** Skills 4,000, kernel block 1,200
+   chars, memory nothing. Recall is count-bounded (5 + 8x3 = 29 blocks, none
+   truncated) and the session fold caps each message but not the count. The
+   tail is charged but never evictable, so an oversized recall FAILS the turn
+   typed. Fix: `agent.memory_injection_budget_tokens` (default 4,000) +
+   `fit_to_token_budget`, which reserves the marker's own cost.
+
+3. **`operant.example.toml` shipped `[delegation]` ACTIVE** but `AppConfig` has
+   no such field (`DelegationConfig` lives in the YAML CLI config). That was
+   both an invalid example and the trigger for (1). Commented out with a
+   pointer to the knobs' real home.
+
+4. **RECAP gained its missing response-shape knob:** `[recap] instructions`,
+   appended to the built-in prompt; empty reproduces it byte for byte.
+
+5. **Four tests asserted the pre-parking hard-fail contract.** Updated to
+   assert what still matters — parked, RECORDED, and not effective.
+
+Also: the audit's own finding 7 was wrong. The three `tools::` failures were
+artifacts of the audit's `TMPDIR` living inside the repo, so
+`find_project_root` walked up into `Cargo.toml`. With `TMPDIR` outside the
+repo all three pass. No code change.
+
+- Pushed `cd2695c2` to `main`; rebased twice against a fast-moving tip.
+- Core: 3,368 passed; 5 failed (`tools::kernel` — git submodule absent in this
+  worktree, pre-existing). `config::` 68/68.
+- Self-improve plugin (separate tree, symlinked live): `router.enabled: false`
+  now means "no gating", running the skill curator unconditionally via the
+  shared `spawnUnconditional` (caps extracted, not duplicated); the plugin
+  curator defaults OFF. 20/20 plugin tests pass.
+- Deployed: md5 `6b5ee0a72af1d4ac29c413afdeaacf2d`, gateway `active`, 0
+  restarts. Live: `memory_injection_budget_tokens: 4000` reads back through
+  `operant config show`; the shipped example parks 0 keys (was 12).
+
+## iter-2364 — the parking fix was in a GENERATED file
+
+Red-team of iter-2345 plus a ponytail-audit of the same surface. The
+iter-2345 fix worked; it was built on sand.
+
+1. **`KNOWN_KEYS` is GENERATED and I hand-edited it.** Running the repo's own
+   generator against the shipped tree produced 282 keys and DELETED every key
+   iter-2345 added — silently restoring the original defect. `--check` was
+   already red on main. Fixed at the root: the generator now reads every
+   settings source (not just config.rs), unwraps `Option<T>`, reads a child's
+   type from its PARENT'S BODY (a top-level `pub memory: MemorySettings` was
+   shadowing `AuxiliaryModels.memory`), walks depth 3, and emits bare top-level
+   keys. 282 -> 379 keys, regeneration idempotent, `--check` green.
+
+2. **`[compression]` and `[proxy]` had zero registry entries** and were parked
+   WHOLESALE by any config carrying one unknown key — silently disabling the
+   outbound proxy and the compression layer. Reproduced with the deployed
+   binary.
+
+3. **`fit_to_token_budget` measured before the caller escaped.** Escaping the
+   memory_context tag grows the text (16k -> 19k tokens), so a block fitted to
+   4,000 arrived at 4,766 (+19%). The wrapper's 20 tokens were uncounted. Now
+   escape-then-fit with the wrapper paid for.
+
+4. Two parking tests shared one sidecar (directory-keyed, overwrite-on-write),
+   so an assertion could pass on another test's data.
+
+5. `merge_parked` had no caller — the documented downgrade path did not exist.
+   Wired into the loader.
+
+6. The parking warning said "loaded normally" then failed to parse, for a typo
+   inside a known nested section.
+
+- Pushed `59bab8e0` to `main`; rebased onto a tip that had moved twice.
+- Core: 3,376 passed; 5 failed (`tools::kernel` — submodule absent).
+- Mutation-proven: the wrapper constant, the escape-before-fit ordering, and
+  the independent section baseline. That last one is the instructive case: the
+  guard PASSED its first mutation because it derived its expectation from the
+  generator's own list, so removing a section removed the expectation with it.
+  Re-keyed on `AppConfig`, it caught the mutation immediately.
+- Plugin (separate tree, symlinked live): the router caps are now gated on
+  `router.enabled`, so the unconditional path spends no router budget. 20/20
+  plugin tests pass; the new guard is mutation-proven. `sourceHash` changed, so
+  the service reloads on next start.
+
+## iter-2396..2403 — historian/dreamer integration (7 steps + fixture sweep)
+
+Executed the seven-step proposal. All seven shipped; step 7's finding changed on
+contact with the code (the lanes already existed), and is recorded as such.
+
+- iter-2396 compartment store: `compartments` table (v5 migration), `CompartmentRecord`,
+  `insert_compartment` (idempotent via UNIQUE index, not read-then-write),
+  `compartments_for_session`, `last_compartment_span_end`.
+- iter-2397 historian span logic (pure): `plan_span`, `validate_span`, `fold_hash`,
+  tool-group alignment, closed-span back-off. Both guards proven load-bearing by mutation.
+- iter-2398 advisor input budget: the advisor's review view was unbounded; now fitted to
+  8,000 tokens with an empty-view skip. Shared `fit_messages_to_token_budget` extracted;
+  recap's private copy now delegates to it. Proven by mutation.
+- iter-2399 `[recap] enabled`: the off switch moves into `[recap]`; absent defers to the
+  window, so existing configs are unchanged. Proven by mutation.
+- iter-2400 historian rung: rung 4b, after summarize, before lossy eviction. Behind
+  `agent.context_historian` (default OFF). Every failure passes through.
+- iter-2401 dreamer bounds: snapshot bounded by count AND tokens; iteration cap becomes
+  staged ("finalize now" on the last iteration) instead of a cliff.
+- iter-2402 memory lane: `MEMORY_REVIEW_PROMPT` tells the model it cannot write and must
+  return a `Memory candidate:` line, but `actions_taken` counts WRITES, so that lane's
+  only output was discarded on every run. Fixed via extracted `review_notification`.
+  Proven by mutation.
+- iter-2403 fixture sweep: 18 `AgentConfig` literals in tests/examples gained the two new
+  fields. Found by `--all-targets` clippy, not the lib build; swept by verified uniform
+  anchor with a replacement count, and checked by enumeration (none remaining).
+
+### Method notes
+
+- `git stash push` on an already-clean tree is a NO-OP, and the following `git stash pop`
+  then pops SOMEONE ELSE'S stash. Three peer files came back `UU`. Recovery: the files were
+  untouched by my commits (verified by diffing my own commit range), so `git checkout HEAD --
+  <files>` plus `git add` restored them byte-identical, with all 72 peer stashes intact.
+  RULE: never `git stash push` to "get a clean baseline" — check `git status` first, and if
+  it is already clean there is nothing to stash and the pop is a peer's.
+- Six test fixtures in lib + 18 in tests/examples construct `AgentConfig` field by field.
+  Adding a field to it is a tree-wide mechanical change; fix it by enumeration and anchor
+  count, never one error at a time as the compiler surfaces them.
+
+### Verification
+
+- operant-core --lib: 3,428 passed / 5 failed (the five `tools::kernel` tests needing the
+  absent submodule — pre-existing, unchanged across all eight commits).
+- 16 patched integration tests run directly: all pass (69 tests).
+- operant-cli --bin: 2,635 passed / 7 failed. My commits touch ZERO operant-cli files
+  (verified by diffing my own commit range), and 4 of the 7 fail in isolation while 3 pass —
+  all pre-existing, none attributable to this work.
+- clippy -p operant-core -p operant-cli --all-targets: clean.
+- registry: 385 keys, `--check` green.
+
+## iter-2404..2405 — remediation of the historian/dreamer red-team
+
+Executed the five findings from the red-team of iter-2396..2403. Every fix proven
+load-bearing by mutation, not assumed.
+
+- iter-2404 finding 1 (must): the historian RUNG IS DELETED. Two independent
+  defects: it returned the message list unchanged so it saved zero tokens (and
+  `compartments_for_session` had zero callers), and its span anchor was POSITIONAL
+  into a list the summarizer rewrites upstream, so it went stale every turn.
+  Not fixable by substitution: `Message` has no stable id, so a compartment cannot
+  be keyed to the rows it summarizes. The table and the pure logic in historian.rs
+  are kept; the two config keys are PARKED (accepted-and-ignored) because
+  `deny_unknown_fields` would otherwise reject an existing operant.toml.
+- iter-2404 finding 2 (must): the "finalize now" message fired on the LAST
+  iteration, whose request is built and then never sent -- so the model never saw
+  it and the fix delivered ZERO turns. Now fires on the penultimate, extracted as
+  `finalize_iteration(iter, max)` because the arm has no test seam. That missing
+  seam is WHY it shipped broken; three tests now pin it.
+- iter-2404 finding 3 (must): `review_notification` dropped the final text whenever
+  actions existed, losing the COMBINED lane's `Memory candidate:` line. Now
+  concatenates. One earlier test had pinned the defect as the rule and is corrected.
+- iter-2404 finding 4 (should): `plan_span` read the built-in ceiling directly, so
+  `context_historian_max_span` only worked DOWNWARD. Now a parameter; 0 = built-in.
+- iter-2404 finding 5 (should): the advisor's empty-view warning named the budget
+  when `build_advisory_messages` had already emptied the view by skipping blank user
+  messages. The two causes are now separated.
+- iter-2404 finding 6 (nice): `fit_messages_to_token_budget` read a 0 budget as
+  "drop everything" while its sibling documents 0 as "unset". Now follows the sibling.
+- iter-2405: the iter-2404 note patched the WRONG FILE. The operator-facing note is
+  generated from the SETTINGS struct docs in config.rs, not AgentConfig in
+  agent/mod.rs, so `config notes agent.context_historian` still described the
+  deleted rung as live. Caught by running the deployed binary, not by the gate.
+
+### Method notes
+
+- A fix inside an async daemon has no test seam, and that is how finding 2 shipped
+  through a green suite: the placement looked right, the arithmetic was right, and
+  nothing could drive it. Extract the index decision as a pure fn, then pin it.
+- When a fix ORPHANS a constant, grep the count: five historian constants had
+  exactly one reference (their own definition) after the rung was deleted. The
+  `git grep -c` count is what makes that visible.
+- An operator-facing note has ONE source. Patching the struct docs in the agent
+  module while the generator reads the settings module is a silent no-op that only
+  the running binary reveals.
+
+### Verification
+
+- operant-core --lib: 3,464 passed / 6 failed. Five are the known tools::kernel
+  tests needing the absent submodule; the sixth
+  (config::tests::lifeos_key_is_gone_from_config) passes in isolation and is the
+  documented temp-dir collision -- my diff touches config.rs only in doc comments.
+- clippy -p operant-core --all-targets: 0 errors.
+- registry: 385 keys, --check green, both historian keys now read PARKED.
+- Mutation evidence: reverting the notification to the branch form fails
+  a_candidate_survives_a_lane_that_also_wrote; restoring the last-iteration rule
+  fails all three finalize tests.
+- Deployed: ~/.local/bin/operant md5 matches the release build; gateway active,
+  NRestarts=0; doctor's 8 issues are the pre-existing environment set.
+
+### Open item handed back
+
+`historian.rs` is 720 lines with NO non-test caller, and the `compartments` table
+now has no reader or writer. They were kept "for a future design that keys
+compartments to stable message ids", which is the reasoning the audit rules reject.
+Either delete both (a migration, so it needs the operator's call) or state the
+design that will use them. Not decided unilaterally because the table exists on the
+operator's live database.
+>>>>>>> Stashed changes

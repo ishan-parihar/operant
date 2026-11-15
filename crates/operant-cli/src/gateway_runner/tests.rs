@@ -180,6 +180,7 @@ async fn record_feed_routes_channel_posts_through_the_seat_map() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         // RT-175: runtime-command handles (unused by this suite — see
         // slow_echo_handler for the rationale).
         mcp_manager: operant_core::mcp::McpManager::new(),
@@ -404,6 +405,7 @@ fn slow_echo_handler_with_slots(
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         // RT-175: runtime-command handles. Empty MCP set (no servers to
         // reconnect) and a nonexistent skills dir (a rescan loads zero
         // skills) — the tests exercise turns, not /reload-*.
@@ -495,6 +497,7 @@ fn context_exhaustion_handler(dir: &tempfile::TempDir) -> Arc<GatewayMessageHand
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -1937,6 +1940,7 @@ async fn gateway_effort_settles_into_the_agents_live_cell() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -2077,6 +2081,7 @@ async fn gateway_export_writes_this_sessions_transcript_as_markdown() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -2215,6 +2220,7 @@ async fn gateway_memory_reports_the_live_provider_and_recalls_through_it() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -2396,6 +2402,7 @@ async fn the_skill_command_sees_the_vendor_roots_the_handler_captures() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: skills_root.clone(),
@@ -2474,6 +2481,7 @@ async fn the_posture_command_settles_into_the_agents_cell() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -2564,6 +2572,7 @@ async fn gateway_search_drives_the_session_search_tool_over_the_real_store() {
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -2905,6 +2914,7 @@ fn handler_for_skills(
             std::collections::HashMap::new(),
         )),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: skills_root,
@@ -3014,6 +3024,7 @@ async fn prose_steers_the_running_turn_and_never_steals_a_question_answer() {
         running_session: std::sync::Mutex::new(HashMap::from([(session_key.clone(), 0usize)])),
         next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         cancelled_queued: Default::default(),
+        stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_manager: operant_core::mcp::McpManager::new(),
         mcp_server_configs: Vec::new(),
         skills_root_dir: dir.path().join("skills-absent"),
@@ -3192,8 +3203,8 @@ async fn the_gateway_session_socket_serves_two_clients_on_one_process() {
 #[tokio::test]
 async fn the_session_bus_routes_an_event_to_its_slot_and_no_other() {
     let bus = SessionBus::new();
-    let mut mine = bus.sender_for("s1").subscribe();
-    let mut other = bus.sender_for("s2").subscribe();
+    let mut mine = bus.subscribe("s1");
+    let mut other = bus.subscribe("s2");
 
     bus.publish(
         "s1",
@@ -3292,6 +3303,7 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
             running_session: std::sync::Mutex::new(HashMap::new()),
             next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             cancelled_queued: Default::default(),
+            stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
@@ -3450,6 +3462,7 @@ async fn a_queued_prompt_holds_no_cap_slot() {
             running_session: std::sync::Mutex::new(HashMap::new()),
             next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             cancelled_queued: Default::default(),
+            stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
@@ -3548,6 +3561,7 @@ async fn a_queued_prompt_can_be_cancelled() {
             running_session: std::sync::Mutex::new(HashMap::new()),
             next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             cancelled_queued: Default::default(),
+            stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
@@ -3641,6 +3655,7 @@ async fn the_next_turn_queue_is_bounded() {
             running_session: std::sync::Mutex::new(HashMap::new()),
             next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             cancelled_queued: Default::default(),
+            stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
@@ -3655,12 +3670,25 @@ async fn the_next_turn_queue_is_bounded() {
         socket_inflight: std::sync::Arc::default(),
     };
 
+    // (iter-2366) A queue is only meaningful for a session a slot has LOADED:
+    // the per-session cap of 32 bounds one session's queue, and nothing used to
+    // bound the NUMBER of sessions, so any id a client named could park 32
+    // messages and leave its `Vec` resident forever. Mark the session loaded
+    // before queueing for it, exactly as a real turn does.
+    const QUEUED_SESSION: &str = "queued-session";
+    if let Some(gateway) = handler.handler.as_ref()
+        && let Some(slot) = gateway.slots.slots.first()
+        && let Ok(mut held) = slot.loaded_session.try_lock()
+    {
+        *held = Some(QUEUED_SESSION.to_string());
+    }
+
     let mut last = String::new();
     for _ in 0..=MAX_QUEUED_PER_SESSION {
         let replies = operant_core::session_server::SessionHandler::handle(
             &handler,
             WireMessage::Queue {
-                session_id: "s1".to_string(),
+                session_id: QUEUED_SESSION.to_string(),
                 text: "parked".to_string(),
             },
         );
@@ -3680,7 +3708,7 @@ async fn the_next_turn_queue_is_bounded() {
             .next_turn_queue
             .lock()
             .expect("the lock")
-            .get("s1")
+            .get(QUEUED_SESSION)
             .map(|q| q.len()),
         Some(MAX_QUEUED_PER_SESSION),
         "the queue must hold exactly the bound"
@@ -3745,6 +3773,7 @@ async fn a_session_outlives_its_client_and_a_new_one_is_answered_with_its_histor
             running_session: std::sync::Mutex::new(HashMap::new()),
             next_turn_queue: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             cancelled_queued: Default::default(),
+            stopping: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mcp_manager: operant_core::mcp::McpManager::new(),
             mcp_server_configs: Vec::new(),
             skills_root_dir: dir.path().join("skills-absent"),
@@ -3865,5 +3894,145 @@ fn no_skill_surface_bypasses_the_shared_root_list() {
         offenders.is_empty(),
         "a skill surface reads the vendor roots directly and so drops \
          [skills] extra_roots — route it through `skill_roots_for`: {offenders:?}"
+    );
+}
+
+/// iter-2366: the drain CLOSES THE DOOR before it opens.
+///
+/// The drain interrupts the running turns and waits for their slot locks, but
+/// it used to keep admitting new work for the whole bound. A turn admitted
+/// during the drain queued on the very lock being waited for, and its first
+/// act on getting that lock was `interrupt_flag().reset()` — erasing the
+/// drain's interrupt, so the drain timed out and the process exited with that
+/// turn dropped mid-await and no interrupted tail committed.
+#[tokio::test]
+async fn the_drain_marks_the_gateway_stopping_before_it_waits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+
+    assert!(
+        !handler.stopping.load(std::sync::atomic::Ordering::SeqCst),
+        "a running gateway is not stopping"
+    );
+    handler.drain(Duration::from_secs(1)).await;
+    assert!(
+        handler.stopping.load(std::sync::atomic::Ordering::SeqCst),
+        "the drain must mark the gateway stopping — that is the admission gate"
+    );
+}
+
+/// iter-2366: a prompt that arrives once the drain has begun is REFUSED, with
+/// a reason the client can show.
+///
+/// The second half of the gate is the socket task's own check before it resets
+/// the interrupt; this one covers the admission path, which is where the
+/// client is still listening and can be told why.
+#[tokio::test]
+async fn a_prompt_after_the_drain_began_is_refused_not_silently_lost() {
+    use operant_core::session_protocol::{PROTOCOL_VERSION, WireMessage, decode, encode};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gateway = slow_echo_handler(&dir, 0);
+    gateway.drain(Duration::from_millis(50)).await;
+
+    let session_handler = std::sync::Arc::new(GatewaySessionHandler {
+        handler: Some(std::sync::Arc::clone(&gateway)),
+        bus: std::sync::Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
+    });
+    let socket = dir.path().join("stopping.sock");
+    let server = tokio::spawn(operant_core::session_server::run_session_socket(
+        session_handler,
+        socket.clone(),
+    ));
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(socket.exists(), "the server must bind its socket");
+
+    let mut stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("the client must connect");
+
+    async fn exchange(
+        stream: &mut tokio::net::UnixStream,
+        message: &WireMessage,
+    ) -> Result<WireMessage, String> {
+        let line = encode(message, PROTOCOL_VERSION).map_err(|e| e.to_string())?;
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        stream.write_all(b"\n").await.map_err(|e| e.to_string())?;
+        let mut reader = tokio::io::BufReader::new(&mut *stream);
+        let mut reply = String::new();
+        tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut reply))
+            .await
+            .map_err(|_| "the server did not answer".to_string())?
+            .map_err(|e| e.to_string())?;
+        decode(&reply, PROTOCOL_VERSION).map_err(|e| e.to_string())
+    }
+
+    let hello = exchange(&mut stream, &WireMessage::Hello)
+        .await
+        .expect("the hello must be answered");
+    assert!(
+        matches!(hello, WireMessage::HelloOk { .. }),
+        "the handshake must succeed, got {hello:?}"
+    );
+
+    let answer = exchange(
+        &mut stream,
+        &WireMessage::Prompt {
+            session_id: "s1".to_string(),
+            text: "hello".to_string(),
+        },
+    )
+    .await
+    .expect("the prompt must be answered, not dropped");
+
+    match answer {
+        WireMessage::Error { message, .. } => assert!(
+            message.contains("stopping"),
+            "the refusal must say the gateway is stopping, got: {message}"
+        ),
+        other => panic!("a prompt after the drain began must be refused, got {other:?}"),
+    }
+
+    server.abort();
+}
+
+/// iter-2366: publishing for a session nobody is attached to creates NOTHING.
+///
+/// `publish` used to call `sender_for`, which inserted a 256-slot broadcast ring
+/// for every session id that ever emitted an event. The only thing that ever
+/// removed one was `subscribe`'s `retain`, and a channel-only deployment — the
+/// normal one — never calls it. So 500 sessions × one turn each left 500 rings
+/// resident for the life of the daemon, each with no receiver at all.
+#[tokio::test]
+async fn publishing_without_a_subscriber_retains_no_ring() {
+    let bus = SessionBus::new();
+
+    for index in 0..50 {
+        bus.publish(
+            &format!("session-{index}"),
+            operant_core::agent::AgentEvent::Content {
+                text: "nobody is listening".to_string(),
+            },
+        );
+    }
+
+    assert!(
+        bus.senders.lock().expect("the bus lock").is_empty(),
+        "an event for a session with no subscriber must not allocate a ring: {:?}",
+        bus.senders
+            .lock()
+            .expect("the bus lock")
+            .keys()
+            .collect::<Vec<_>>()
     );
 }

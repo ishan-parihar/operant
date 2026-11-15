@@ -205,6 +205,10 @@ fn builtin_themes() -> Vec<ThemeOption> {
     // can see the row can see why it looks wrong.
     rows.extend(operator.into_iter().map(|name| {
         let pairs = crate::tui::theme_files::load(&name);
+        #[expect(
+            clippy::expect_used,
+            reason = "`default` is a built-in palette, never parsed from a file"
+        )]
         let mut palette = ColorPalette::for_theme("default").expect("default is built in");
         if let Some(pairs) = &pairs {
             let map: std::collections::BTreeMap<String, String> = pairs.iter().cloned().collect();
@@ -713,6 +717,59 @@ mod tests {
                 rendered.contains(&selected),
                 "step {step}: theme {selected:?} must be painted at 80x24 — the \
                  window let the selection run off the end of the list"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod capacity_probe {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn probe_how_many_themes_fit() {
+        let screen = ThemeScreen::new();
+        for h in [20u16, 24, 28, 30, 40, 50] {
+            let backend = TestBackend::new(90, h);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| render_theme_screen(f, &screen, f.area()))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let mut found = Vec::new();
+            for name in [
+                "Default",
+                "Dark",
+                "Light",
+                "Solarized",
+                "Nord",
+                "Dracula",
+                "Monokai",
+                "Deuteranopia",
+            ] {
+                let mut hit = false;
+                for y in 0..h {
+                    for x in 0..90u16 {
+                        let mut s = String::new();
+                        for k in 0..name.len() {
+                            if let Some(c) = buf.cell((x + k as u16, y)) {
+                                s.push_str(c.symbol());
+                            }
+                        }
+                        if s == name {
+                            hit = true;
+                        }
+                    }
+                }
+                if hit {
+                    found.push(name);
+                }
+            }
+            println!(
+                "term_h={h:2}  visible themes = {}  {:?}",
+                found.len(),
+                found
             );
         }
     }

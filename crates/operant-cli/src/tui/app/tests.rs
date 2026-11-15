@@ -6020,6 +6020,8 @@ fn shell_request(
         input_preview: Some(command.to_string()),
         seat_escalation: None,
         unattended: false,
+        // (iter-2366) The session this ask belongs to.
+        session_id: None,
         response_tx,
     };
     (request, response_rx)

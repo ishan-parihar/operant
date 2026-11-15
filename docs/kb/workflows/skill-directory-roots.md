@@ -11,3 +11,5 @@
 | skill-directory-roots-005 | done | Land the resolver + config keys + recursive walk + / grammar (iter-2260, pushed cdd16b38) | — | [2026-11-14] crates/operant-core/src/skills.rs |
 | skill-directory-roots-006 | done | Move the seeder's `collect_skill_dirs` onto the shared bounded walk (iter-2272, 2b6a02e1) | — | [2026-11-14] crates/operant-cli/src/cmd_skills.rs |
 | skill-directory-roots-007 | done | Validate every per-surface claim in the plan against the code with a mutation-proven test | — | [2026-11-14] crates/operant-cli/src/tui/prompt_input/typeahead.rs |
+| skill-directory-roots-008 | done | iter-2395 skill-infra re-architecture (feed F0350): description clip 120 chars + window-scaled budget + shared rule for the floor + one walker skip rule | claimed-by `agent-omarchy@wskill` since 2026-11-15T12:16 | [2026-11-15] crates/operant-core/src/agent/events.rs |
+| skill-directory-roots-009 | done | iter-2421..2432 one ranking for skills + two roots that dropped extra_roots | claimed-by `agent-omarchy@wskill` since 2026-11-15T15:07 | [2026-11-15] crates/operant-core/src/skill_mentions.rs |

@@ -808,6 +808,17 @@ bash scripts/clippy-warning-gate.sh --update           # refresh allowlist if yo
   fixing warnings, never to hide new ones.
 - Test targets are exempted (`#![cfg_attr(test, allow(...))]` in lib/main files,
   `#![allow(...)]` headers in `tests/` dirs).
+  **Since iter-2444 this is actually true for integration targets too.** Until
+  then only the in-test-module half worked: `cfg_attr(test, ...)` in `lib.rs` /
+  `main.rs` reaches `#[cfg(test)] mod tests`, NOT a `crates/*/tests/*.rs`
+  integration target, which is a **separate crate**. Those files assert with
+  `.expect(..)` once per line and carried no suppression, so the gate denied 19
+  sites in `tests/evidence_seams.rs` alone and could not report a verdict at all
+  (a denied target aborts the run before diagnostics are counted). The gate now
+  treats the lib/bin pass as the sole authority on "did it compile" and exempts
+  the two denied lints on `crates/*/tests/` in its jq filter; any OTHER lint
+  class there still fails. Pinned by `scripts/tests/clippy_gate_test.sh` (6
+  cases, mutation-proven both ways).
 - Note: manifest-level `[workspace.lints]` inheritance is unusable in this
   environment (this cargo build rejects `lints` manifest keys as unused), so
   enforcement lives in the gate script's `-D` flags.

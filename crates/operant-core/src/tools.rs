@@ -102,6 +102,7 @@ pub use checkpoint_tool::{
 };
 pub use config_tool::{ConfigManageArgs, ConfigManageTool};
 pub use cron_tool::CronTool;
+pub use ctx_tools::register_ctx_tools;
 pub use delegation_output_schema::{
     MAX_SCHEMA_RETRIES, append_output_contract, build_retry_message, coerce_output_schema,
     extract_json_candidate, validate_output,
@@ -109,7 +110,6 @@ pub use delegation_output_schema::{
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use home_assistant_tool::HomeAssistantTool;
 pub use kanban_tool::KanbanTool;
-pub use ctx_tools::register_ctx_tools;
 pub use lcm_tools::register_lcm_tools;
 pub use mcp_tool::McpManagementTool;
 pub use osv_check::OsvCheckTool;
@@ -399,7 +399,9 @@ impl ToolContext {
     /// to the same session. A reader that consults only one channel is how the
     /// two drifted apart in the first place.
     pub fn resolved_session_id(&self) -> Option<&str> {
-        self.session_id.as_deref().or_else(|| self.get("session_id"))
+        self.session_id
+            .as_deref()
+            .or_else(|| self.get("session_id"))
     }
 }
 
@@ -810,13 +812,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()
@@ -843,13 +844,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()
@@ -865,8 +865,32 @@ impl ToolRegistry {
         settings: &crate::config::ToolSearchSettings,
         context_window: usize,
     ) -> Vec<ToolSchema> {
+        self.get_schemas_for_request_with_catalog(settings, context_window)
+            .await
+            .1
+    }
+
+    /// The same assembly, plus the full catalog it was built from.
+    ///
+    /// (iter-2366) `tools_for_turn` needs both: `assemble_tools` hides the
+    /// deferred and hidden tools, and `materialise` re-admits the deferred ones
+    /// a turn makes relevant — so it needs the WHOLE catalog. It used to call
+    /// this function and then `get_schemas()` again, building ~115 `ToolSchema`
+    /// values twice per LLM request, taking the registry read lock twice, and
+    /// running the deferred-stamp pass twice. One build now serves both.
+    ///
+    /// The clone is the cheaper of the two: it skips the second lock
+    /// acquisition and the second construction pass. Memoising the catalog
+    /// behind a generation counter is the further step, and it needs the
+    /// counter bumped from every `register`/`unregister`/`set_disabled_*` path.
+    pub async fn get_schemas_for_request_with_catalog(
+        &self,
+        settings: &crate::config::ToolSearchSettings,
+        context_window: usize,
+    ) -> (Vec<ToolSchema>, Vec<ToolSchema>) {
         let all = self.get_schemas().await;
-        tool_search::assemble_tools(all, settings, context_window).visible
+        let visible = tool_search::assemble_tools(all.clone(), settings, context_window).visible;
+        (all, visible)
     }
 
     pub async fn get_available_schemas_filtered(&self, filter: &[String]) -> Vec<ToolSchema> {
@@ -895,13 +919,12 @@ impl ToolRegistry {
                 // The operator's deferral set wins over the type's own
                 // declaration: a Direct tool the operator deferred is stamped
                 // Deferred, so the bridge reaches it instead of the array.
-                let exposure = if deferred_names.contains(t.name())
-                    && t.exposure() == ToolExposure::Direct
-                {
-                    ToolExposure::Deferred
-                } else {
-                    t.exposure()
-                };
+                let exposure =
+                    if deferred_names.contains(t.name()) && t.exposure() == ToolExposure::Direct {
+                        ToolExposure::Deferred
+                    } else {
+                        t.exposure()
+                    };
                 t.schema().with_intent().with_exposure(exposure)
             })
             .collect()

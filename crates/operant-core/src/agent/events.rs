@@ -283,6 +283,26 @@ impl OperantAgent {
         }
     }
 
+    /// (iter-2366) Record what has been streamed so far this turn, so an
+    /// interrupted turn can commit the answer the operator actually saw.
+    ///
+    /// Called from the stream path on every content chunk. Deliberately a
+    /// `try_write` on a std lock, never an await: this sits in the chunk loop,
+    /// and a blocked stream is worse than a missed partial.
+    pub(crate) fn record_partial_text(&self, text: &str) {
+        if let Ok(mut partial) = self.partial_text.try_write() {
+            partial.push_str(text);
+        }
+    }
+
+    /// This turn's streamed text so far, empty when nothing has arrived.
+    pub(crate) fn partial_text_snapshot(&self) -> String {
+        self.partial_text
+            .read()
+            .map(|partial| partial.clone())
+            .unwrap_or_default()
+    }
+
     /// (2026-10-14 batch, plan 04) Commit the interrupted tail: the partial
     /// assistant text plus synthetic "Cancelled…" tool results for calls
     /// that never finished. Runs under ONE conversation write so the store
@@ -295,6 +315,25 @@ impl OperantAgent {
     pub(crate) async fn commit_interrupted_tail(&self, partial: Option<&str>) {
         let session_id = self.session_id().unwrap_or_default();
         let timestamp = chrono::Utc::now().to_rfc3339();
+
+        // (iter-2366) A caller that passes nothing is asking for "whatever this
+        // turn produced", and the agent is the only party that has it: the six
+        // call sites in the run loop all pass `None`, so every
+        // drain-interrupted turn persisted the question and the completed tool
+        // rows and dropped the answer. The TUI's watchdog still passes its own
+        // buffer explicitly, and that wins.
+        let agent_partial;
+        let partial: Option<&str> = match partial {
+            Some(text) => Some(text),
+            None => {
+                agent_partial = self.partial_text_snapshot();
+                if agent_partial.is_empty() {
+                    None
+                } else {
+                    Some(agent_partial.as_str())
+                }
+            }
+        };
 
         // Phase 1 (under the write lock): decide the appends, apply them.
         let mut to_persist: Vec<Message> = Vec::new();
@@ -782,13 +821,21 @@ impl OperantAgent {
         self.conv_epoch.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// (plan 03) Live-set the reasoning effort. `None` disables sending the
+    /// field. Called by the TUI (/effort picker, model picker, Shift+Tab)
+    /// and by the rejection fallback.
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    /// (plan 03) Live-set the reasoning effort. `None` disables sending the
-    /// field. Called by the TUI (/effort picker, model picker, Shift+Tab)
-    /// and by the rejection fallback.
+    pub fn set_reasoning_effort(&self, effort: Option<String>) {
+        tracing::info!(?effort, "Agent reasoning effort set at runtime");
+        *self
+            .reasoning_effort
+            .write()
+            .expect("reasoning_effort RwLock poisoned — programmer error") = effort;
+    }
+
     /// The configured posture for this agent (the gateway's per-chat
     /// `/ponytail` needs it to resolve the level in force).
     pub fn ponytail_settings(&self) -> &crate::config::PonytailSettings {
@@ -809,14 +856,6 @@ impl OperantAgent {
     /// The current posture override for this agent (`None` = config applies).
     pub fn posture_override(&self) -> Option<crate::ponytail::PostureOverride> {
         self.posture_override.read().ok().and_then(|cell| *cell)
-    }
-
-    pub fn set_reasoning_effort(&self, effort: Option<String>) {
-        tracing::info!(?effort, "Agent reasoning effort set at runtime");
-        *self
-            .reasoning_effort
-            .write()
-            .expect("reasoning_effort RwLock poisoned — programmer error") = effort;
     }
 
     #[expect(

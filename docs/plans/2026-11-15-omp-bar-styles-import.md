@@ -223,6 +223,26 @@ sets and picks per theme. Operant has **no symbol-set concept**.
 - **Recommendation:** (a). If an operator reports tofu, that is when (b) earns its keep.
 - **Guard:** none — this is a decision, not code.
 
+**RULED (iter-2370, U11): option (a), and the port is closed.** `powerline` and
+`powerline-thin` ship the Nerd Font codepoints (U+E0B0 / U+E0B1), documented as such in
+`operant.example.toml`. No second symbol set is built.
+
+Two things settled it after the recommendation above was written:
+
+1. **`ascii` is already the fallback, and it is better than a second set.** OMP's second
+   set is an *ASCII* set (`>`, `<`); operant's `ascii` key is `|`, which needs no patched
+   font and no theme to select it. An operator on an unpatched font has a one-line fix
+   (`bar_style = "ascii"`) that does not require detecting the font at all.
+2. **Auto-detecting font coverage is not possible from inside the TUI.** Nothing in a
+   terminal reports which codepoints its font carries; a heuristic would guess from
+   `TERM`, which is a property of the terminal emulator and says nothing about the font
+   the operator chose. A wrong guess draws tofu silently — the exact failure this ruling
+   exists to avoid.
+
+A second set is therefore not a smaller version of the same problem; it is a *detection*
+problem with no reliable signal. Re-open this only if the operator reports tofu and wants
+the fallback chosen automatically rather than by hand.
+
 ### U13 — the segment model, only if U10/U11 show it is needed
 
 The ordered degrade (`segments.rs`, 292 lines) exists so a bar can drop its tail on a

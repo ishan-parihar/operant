@@ -22,6 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const STALE_AFTER_SECS: u64 = 6 * 60 * 60;
 
 /// Tracks currently-active sessions via per-session lock files.
+///
+/// (iter-2366) `Clone` so an async caller can move one into `spawn_blocking`:
+/// every method here is synchronous `std::fs`, and the gateway's inbound path
+/// used to call them directly on the runtime thread.
+#[derive(Clone)]
 pub struct ActiveSessionTracker {
     dir: PathBuf,
     max: Option<usize>,
@@ -46,14 +51,15 @@ impl ActiveSessionTracker {
     /// on an `AlreadyExists` race: that lock belongs to us.
     pub fn acquire(&self, session_id: &str) -> Result<bool, Error> {
         fs::create_dir_all(&self.dir)?;
-        self.prune_stale()?;
-        let current = self.current()?;
+        // ONE pass: the live locks and the stale ones come back together, so a
+        // prompt no longer walks the directory twice (iter-2366).
+        let current = self.scan()?;
         let file = sanitize(session_id);
 
         if current.iter().any(|s| s == &file) {
             // Already holding a slot — refresh the mtime so it is not pruned.
             // RT-395: the refresh was discarded, so a failed write left a BUSY
-            // session's lock on its old mtime and prune_stale then evicted it —
+            // session's lock on its old mtime and the stale sweep then evicted it —
             // breaking the module doc's own promise ("their locks are refreshed
             // on every message, so a busy session can never be evicted by a new
             // one") and letting a concurrent session exceed the cap.
@@ -79,7 +85,7 @@ impl ActiveSessionTracker {
         {
             Ok(mut f) => {
                 // RT-395: the create succeeded but the timestamp is the mtime
-                // prune_stale keys on — a failed write here creates a
+                // the stale sweep keys on — a failed write here creates a
                 // born-stale slot (0 mtime) that the next check prunes.
                 if let Err(e) = f.write_all(now_millis().to_string().as_bytes()) {
                     tracing::warn!(
@@ -105,37 +111,41 @@ impl ActiveSessionTracker {
 
     /// Number of currently-active sessions (after pruning stale locks).
     pub fn count(&self) -> Result<usize, Error> {
-        self.prune_stale()?;
-        Ok(self.current()?.len())
+        Ok(self.scan()?.len())
     }
 
-    fn current(&self) -> Result<Vec<String>, Error> {
-        let mut names = Vec::new();
+    /// One `read_dir` pass over the lock directory: every live lock, plus the
+    /// stale ones, whose files are removed as they are found.
+    ///
+    /// (iter-2366) `acquire` used to call `prune_stale()` and then `current()`,
+    /// which walked the SAME directory twice and `stat`ed every entry in both
+    /// passes — and `count()` did the same pair. `acquire` runs on every inbound
+    /// message, so a busy daemon paid four `read_dir` passes and two full stat
+    /// sweeps per prompt to answer a question one pass answers.
+    fn scan(&self) -> Result<Vec<String>, Error> {
+        let mut live = Vec::new();
         if let Ok(entries) = fs::read_dir(&self.dir) {
             for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_file()).unwrap_or(false)
-                    && let Some(name) = entry.file_name().to_str()
-                {
-                    names.push(name.to_string());
+                if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    continue;
                 }
-            }
-        }
-        Ok(names)
-    }
-
-    fn prune_stale(&self) -> Result<(), Error> {
-        if let Ok(entries) = fs::read_dir(&self.dir) {
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata()
-                    && let Ok(modified) = meta.modified()
-                    && let Ok(elapsed) = modified.elapsed()
-                    && elapsed.as_secs() > STALE_AFTER_SECS
-                {
+                let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                let stale = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|meta| meta.modified().ok())
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|elapsed| elapsed.as_secs() > STALE_AFTER_SECS);
+                if stale {
                     let _ = fs::remove_file(entry.path());
+                } else {
+                    live.push(name);
                 }
             }
         }
-        Ok(())
+        Ok(live)
     }
 }
 
@@ -610,6 +620,47 @@ mod tests {
                 "lookup by the ORIGINAL id must still work"
             );
         });
+    }
+
+    /// iter-2366: the fused scan still PRUNES, and the two questions it
+    /// answers agree.
+    ///
+    /// `acquire` used to call `prune_stale()` and then `current()`, walking the
+    /// same directory twice. Fusing them into one pass is only correct if the
+    /// stale sweep still happens on the way through, so this pins what can be
+    /// pinned without a way to age a file: a live lock and a fresh lock both
+    /// survive and both count, and a release stops counting. The prune branch
+    /// itself is the same `STALE_AFTER_SECS` comparison the old method used.
+    #[test]
+    fn the_fused_scan_counts_every_live_lock_and_drops_a_released_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let locks = dir.path().join("active");
+        let tracker = ActiveSessionTracker::new(locks.clone(), None);
+
+        assert!(
+            tracker.acquire("live-session").expect("acquire"),
+            "the first acquire must succeed"
+        );
+        assert_eq!(
+            tracker.count().expect("count"),
+            1,
+            "the live lock must count"
+        );
+
+        // A second lock file that is not stale must survive the scan.
+        std::fs::write(locks.join("fresh-lock"), "0").expect("a fresh lock file");
+        assert_eq!(
+            tracker.count().expect("count"),
+            2,
+            "a lock that is not stale must survive the fused scan"
+        );
+
+        tracker.release("live-session");
+        assert_eq!(
+            tracker.count().expect("count"),
+            1,
+            "a released lock must stop counting"
+        );
     }
 
     #[test]

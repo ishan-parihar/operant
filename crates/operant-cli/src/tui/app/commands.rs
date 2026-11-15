@@ -537,7 +537,8 @@ impl App {
             // MODEL as prompt text — which reads as "the panel does not exist"
             // rather than "that command is spelled differently".
             "config" | "settings" | "setting" => {
-                self.settings_screen.open(self.config.agent.context_window, &self.config);
+                self.settings_screen
+                    .open(self.config.agent.context_window, &self.config);
                 true
             }
             // (plan 2026-11-15 T2) `/bar` — show or set the status bar style.
@@ -3313,6 +3314,8 @@ mod tests {
                 input_preview: preview.map(str::to_string),
                 seat_escalation: None,
                 unattended: false,
+                // (iter-2366) The session this ask belongs to.
+                session_id: None,
                 response_tx: tx,
             },
             rx,

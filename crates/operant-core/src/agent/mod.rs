@@ -591,6 +591,20 @@ pub struct OperantAgent {
     /// (/effort picker, model picker, Shift+Tab) and the gateway. `None`
     /// when the config is empty or the current model rejected the field.
     reasoning_effort: Arc<std::sync::RwLock<Option<String>>>,
+    /// (iter-2366) The assistant text streamed SO FAR this turn.
+    ///
+    /// `commit_interrupted_tail` writes the partial answer back so a resumed
+    /// session shows what the operator actually watched. Every one of its six
+    /// call sites in the run loop passed `None`, so on a drain-interrupted turn
+    /// the user row and the completed tool rows were persisted and the answer
+    /// was not: `operant continue <id>` rehydrated the question and the tools
+    /// and silently dropped the reply. The only caller that ever supplied text
+    /// was the TUI's own watchdog, which still holds its streamed buffer — the
+    /// gateway and the socket path do not, so the agent keeps its own copy.
+    ///
+    /// Cleared at the start of every turn, so a turn can never commit the
+    /// previous turn's text.
+    partial_text: std::sync::RwLock<String>,
     /// The runtime POSTURE override for this agent (iter-2211): per-chat,
     /// because a process-global static made one chat's `/ponytail` flip
     /// every other chat in the daemon. `None` = the config applies.
@@ -1000,6 +1014,20 @@ fn neutralize_wrapper_tag(text: &str, tag: &str) -> String {
 /// A pending permission request sent from the agent to the TUI
 #[derive(Debug)]
 pub struct ToolPermissionRequest {
+    /// (iter-2366) The session this ask belongs to, when the agent knows it.
+    ///
+    /// The receiver has to route an ask to whoever can answer it. Today it routes
+    /// by a process-global `current_channel`, which is written ONLY by the
+    /// channel dispatch loop: a turn started over the session socket either
+    /// delivers its ask to whichever chat platform turned last — so that chat's
+    /// reply approves a tool running for a DIFFERENT session — or, when no chat
+    /// has ever turned, falls into the no-channel arm. With the session on the
+    /// request the receiver can tell a socket ask from a channel ask and give it
+    /// its own route instead of a stranger's.
+    ///
+    /// `None` is every caller that has no session to name: the one-shot paths,
+    /// and the tests that construct a request directly.
+    pub session_id: Option<String>,
     pub tool_name: String,
     pub tool_id: String,
     pub description: String,
@@ -1024,8 +1052,77 @@ pub struct ToolPermissionRequest {
 /// can see it and tap a button (the gateway showed the prompt and then
 /// immediately reported "Tool timed out after 30s", so the dialog never
 /// resolved). They self-timeout via the user-question receiver (120s) instead.
+/// Whether a name is a namespaced MCP tool (`mcp_<server>_<tool>`).
+///
+/// (iter-2366) The MCP client documents a strict timeout ORDER: its own
+/// first-read budget (60s) must expire BEFORE the tool registry's override for
+/// MCP tools (90s), so the client returns a clean "did not respond" error with
+/// the stream intact. The agent then wrapped every non-interactive,
+/// non-long-running tool in `timeout(self.config.tool_timeout)` — 30s by
+/// default — so the agent always won that race and cancelled the MCP read
+/// mid-flight. Every cancelled call had already written its request line, so its
+/// response arrived later as an orphan, and 64 orphans made a perfectly healthy
+/// call fail with "produced 64 responses without one for request N".
+///
+/// The prefix is the one `qualified_tool_name` writes, so this recognises
+/// exactly the tools the MCP client owns and nothing else.
+fn is_mcp_tool(name: &str) -> bool {
+    name.starts_with("mcp_")
+}
+
 fn is_interactive_tool(name: &str) -> bool {
     matches!(name, "clarify" | "approval_request")
+}
+
+#[cfg(test)]
+mod tool_timeout_class_tests {
+    use super::{is_interactive_tool, is_long_running_tool, is_mcp_tool};
+
+    /// iter-2366: an MCP tool must be recognised as exempt from the agent's
+    /// generic 30s wrapper.
+    ///
+    /// The MCP client's own 60s first-read budget and the registry's 90s
+    /// override only fire in the documented order if nothing outside them is
+    /// shorter. With the generic 30s the agent cancelled the read mid-flight,
+    /// and every cancelled call left an orphan response counting toward the
+    /// 64-response drain cap.
+    #[test]
+    fn an_mcp_tool_is_exempt_from_the_generic_tool_timeout() {
+        for name in [
+            "mcp_github-create_issue",
+            "mcp_sourcehound_web_search",
+            "mcp_a_b",
+        ] {
+            assert!(
+                is_mcp_tool(name),
+                "{name} must be recognised as an MCP tool"
+            );
+            assert!(
+                !is_interactive_tool(name) && !is_long_running_tool(name),
+                "{name} must be exempt by the MCP arm, not by an existing one"
+            );
+        }
+    }
+
+    /// A BUILTIN tool must NOT be caught by the MCP arm: exempting it would
+    /// remove the generic timeout from tools that have no budget of their own.
+    #[test]
+    fn a_builtin_tool_is_not_treated_as_an_mcp_tool() {
+        for name in [
+            "terminal",
+            "file_read",
+            "delegate_task",
+            "clarify",
+            "aft_bash",
+            "mcps",
+            "mcp",
+        ] {
+            assert!(!is_mcp_tool(name), "{name} must not match the MCP arm");
+        }
+        // ...and the two existing classifiers still own their own names.
+        assert!(is_interactive_tool("clarify"));
+        assert!(is_long_running_tool("delegate_task"));
+    }
 }
 
 /// Long-running tools that legitimately run far beyond the generic tool
@@ -1893,6 +1990,11 @@ mod tests {
         );
     }
 
+    /// Wave 2: the bound employee's charter rides the frozen prefix inside an
+    /// explicit marker, and a `None` charter leaves the prefix byte-identical.
+    /// This test shipped WITHOUT `#[test]` (iter-2444) — it compiled, was never
+    /// collected, and silently protected nothing.
+    #[test]
     fn wave2_charter_rides_the_frozen_prefix_and_none_keeps_it_byte_identical() {
         // Wave 2 (ORGANISM-ARCHITECTURE §2): the bound employee's charter is
         // appended to the frozen prefix inside an explicit marker so the
@@ -2386,8 +2488,11 @@ mod tests {
     fn a_delegation_result_gets_the_swarm_budget_and_states_its_unit() {
         assert_eq!(tool_result_cap("delegate_task"), MAX_DELEGATE_RESULT_LEN);
         assert_eq!(tool_result_cap("file_read"), MAX_TOOL_RESULT_LEN);
+        // The swarm budget must be the wider one. A plain `assert!` on the two
+        // constants would be a constant expression; compare what the cap
+        // actually RETURNS, which is what a caller depends on.
         assert!(
-            MAX_DELEGATE_RESULT_LEN > MAX_TOOL_RESULT_LEN,
+            tool_result_cap("delegate_task") > tool_result_cap("file_read"),
             "the swarm budget must be the wider one"
         );
 

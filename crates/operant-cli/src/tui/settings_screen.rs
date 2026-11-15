@@ -18,7 +18,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum SettingKind {
     Bool,
-    Enum { options: Vec<&'static str> },
+    Enum {
+        options: Vec<&'static str>,
+    },
     Number,
     /// Free text, parsed as the field's own type.
     Text,

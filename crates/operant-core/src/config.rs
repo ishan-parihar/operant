@@ -1968,7 +1968,14 @@ pub struct GatewaySettings {
     pub telegram_dm_topics_enabled: bool,
     /// Cap on concurrent gateway sessions (hermes `max_concurrent_sessions`
     /// parity). When reached, new sessions get a refusal reply while existing
-    /// holders keep their slots. `None` = unlimited.
+    /// holders keep their slots.
+    ///
+    /// (iter-2366) `None` is NOT reachable from a TOML file: TOML has no null,
+    /// and `#[serde(default)]` on this struct materialises the `Default` impl,
+    /// which is `Some(32)`. The "unset means unlimited" reading this field used
+    /// to advertise was therefore wrong in the only place an operator writes
+    /// it — an absent key is 32, not unlimited. `None` remains reachable from
+    /// programmatic config (tests, embedders), where it does mean no cap.
     pub max_concurrent_sessions: Option<usize>,
     /// How long a gateway session is kept after its last activity, in days.
     ///
@@ -5653,8 +5660,8 @@ wonderful_unknown_key = 42
         // Parking contract: the misplaced section is dropped, so it cannot
         // bind. Asserting `is_err` here was the pre-parking contract.
         let not_bound = wrong_scope.expect("a misplaced key is parked, not fatal");
-        assert_eq!(
-            not_bound.agent.ponytail.enabled, false,
+        assert!(
+            !not_bound.agent.ponytail.enabled,
             "top-level [ponytail] must not bind the agent-scoped setting"
         );
     }

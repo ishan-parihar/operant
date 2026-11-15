@@ -51,11 +51,12 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 tmp_json="$(mktemp)"
+tmp_json_tests="$(mktemp)"
 tmp_seen="$(mktemp)"
 tmp_allow="$(mktemp)"
 tmp_new="$(mktemp)"
 tmp_stale="$(mktemp)"
-trap 'rm -f "${tmp_json}" "${tmp_seen}" "${tmp_allow}" "${tmp_new}" "${tmp_stale}"' EXIT
+trap 'rm -f "${tmp_json}" "${tmp_json_tests}" "${tmp_seen}" "${tmp_allow}" "${tmp_new}" "${tmp_stale}"' EXIT
 
 echo "[clippy-gate] collecting warnings..."
 # Runs WITH --all-features: the workspace feature inventory is fully fixed
@@ -92,9 +93,36 @@ echo "[clippy-gate] cargo: $CARGO_BIN"
 # this, `set -e` kills the script at the cargo line, the trap deletes
 # ${tmp_json}, and the gate exits 101 with zero diagnostics (BUGS.md R39-6).
 set +e
-"${CARGO_BIN}" clippy --workspace --all-targets --all-features --message-format=json \
-  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}"
+# --all-targets is what makes the gate see `tests/*.rs` integration targets.
+# AGENTS.md promises "Test targets are exempted", but until iter-2444 only the
+# IN-TEST-MODULE half was true: `#![cfg_attr(test, allow(...))]` in lib.rs /
+# main.rs reaches a `#[cfg(test)] mod tests`, NOT an integration target under
+# `tests/`, which is a SEPARATE crate. Those files assert with `.expect(..)` once
+# per line and carried no suppression, so the gate denied 19 sites in
+# `tests/evidence_seams.rs` alone and could not go green while any of the 9
+# failing no-header targets existed.
+#
+# So: the DENIES run over lib/bin only (the production surface the gate exists to
+# protect), and the all-targets pass runs BESIDE them with the same denies to keep
+# compiling every target -- its diagnostics for the two denied lints are dropped
+# in the jq filter below, which is where the documented exemption belongs. The
+# all-targets pass is NOT allowed to fail the script: `set +e` + `|| true`, and
+# its `build-finished` record is stripped before the success check so a denied
+# test target cannot abort the run before its diagnostics are counted.
+"${CARGO_BIN}" clippy --workspace --lib --bins --all-features --message-format=json \
+  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" \
+  > "${tmp_json}"
 cargo_status=$?
+set -e
+
+set +e
+"${CARGO_BIN}" clippy --workspace --all-targets --all-features --message-format=json \
+  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" \
+  > "${tmp_json_tests}" 2>/dev/null
+# Discard the all-targets build-finished record: its status reflects test targets
+# the policy exempts. The lib/bin run above is the authority on "did it compile".
+jq -c 'select(.reason != "build-finished")' "${tmp_json_tests}" >> "${tmp_json}" 2>/dev/null
+rm -f "${tmp_json_tests}"
 set -e
 
 # A finished, successful build is the ONLY state in which "zero diagnostics"
@@ -106,7 +134,17 @@ set -e
 # 72-character worktree printed "seen=0 ... pass" while espeak-rs-sys's cmake
 # was failing with "make Error 2". A gate that passes without measuring is
 # worse than no gate.
-if ! jq -e 'select(.reason == "build-finished" and .success == true)' "${tmp_json}" >/dev/null 2>&1; then
+#
+# EXACTLY ONE record, not "at least one". The all-targets pass runs beside the
+# lib/bin pass (iter-2444) and its own build-finished record is stripped before
+# this point; `jq -e` would accept the FIRST success record it found, so a
+# future edit that stopped stripping would leave the lib/bin failure masked by
+# the other pass's success and this gate would go quiet again. Requiring the
+# count pins the strip in place — and it is what makes the mutation "keep the
+# all-targets record" fail instead of passing silently.
+build_records="$(jq -r 'select(.reason == "build-finished") | .success' "${tmp_json}" 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "${build_records}" != "1" ]] \
+   || ! jq -e 'select(.reason == "build-finished" and .success == true)' "${tmp_json}" >/dev/null 2>&1; then
     echo "[clippy-gate] ERROR: the clippy build did not finish successfully (cargo status ${cargo_status}), so zero diagnostics proves nothing was measured." >&2
     echo "[clippy-gate] If the failure is espeak-rs-sys's cmake 'data' target, the absolute build path is too long: build from a SHORT CARGO_TARGET_DIR (e.g. /dev/shm/ot) — see AGENTS.md parallel-agent rule 6." >&2
     exit 1
@@ -125,6 +163,20 @@ jq -r '
     ) as $span
   | ($span.file_name // "unknown_file") as $file
   | ($m.code.code // ("rustc:" + ($m.message | split(":")[0]))) as $lint
+  # AGENTS.md promises "Test targets are exempted", but until iter-2444 only the
+  # IN-TEST-MODULE half was true: `#![cfg_attr(test, allow(...))]` in lib.rs /
+  # main.rs reaches `#[cfg(test)] mod tests`, NOT an integration target under
+  # `tests/`, which is a SEPARATE crate. Those files assert with `.expect(..)`
+  # once per line and carried no suppression, so the gate denied 19 sites in
+  # `tests/evidence_seams.rs` alone -- and could not go green while any of the 9
+  # failing no-header targets existed. Exempt the denied lints on that surface
+  # ONLY: a test target still fails the gate on a compile error, an unwrap in a
+  # non-test helper, or a lint of any other class.
+  | select(
+      ($file | startswith("crates/") and ($file | contains("/tests/")))
+      and ($lint == "clippy::unwrap_used" or $lint == "clippy::expect_used")
+      | not
+    )
   | "\($target)|\($lint)|\($file)"
 ' "${tmp_json}" | LC_ALL=C sort -u > "${tmp_seen}"
 

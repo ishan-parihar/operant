@@ -122,8 +122,7 @@ impl RecentModels {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = serde_json::to_string_pretty(&self.entries)
-            .unwrap_or_else(|_| "[]".to_string());
+        let text = serde_json::to_string_pretty(&self.entries).unwrap_or_else(|_| "[]".to_string());
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, text)?;
         std::fs::rename(&tmp, &path)

@@ -249,8 +249,24 @@ enum Commands {
         /// renders the events the server sends back. It builds no tool
         /// registry, no database handles, no MCP child servers and no AFT
         /// bridge — which is the whole point of the server.
-        #[arg(long, value_name = "PATH")]
+        ///
+        /// The PATH is OPTIONAL (iter-2366). The daemon defaults to
+        /// `<operant home>/operant-session.sock` and `session_client`'s own doc
+        /// says "an operator should not have to type it twice" — but the client
+        /// had no default, so the operator typed it on every single attach, and
+        /// the flag could not be used as a plain "attach me" switch. With no
+        /// value it resolves to the same default the daemon binds.
+        #[arg(long, value_name = "PATH", default_missing_value = "", num_args = 0..=1)]
         attach: Option<std::path::PathBuf>,
+        /// With `--attach`, adopt THIS session instead of whichever the server
+        /// lists first (iter-2366).
+        ///
+        /// The server's hello lists only the sessions currently loaded in slots
+        /// — at most one per slot — so a second client had no way to reach
+        /// session #5. Naming it sends `LoadHistory`, which both subscribes this
+        /// client to that session and answers with its transcript.
+        #[arg(long, value_name = "SESSION", requires = "attach")]
+        attach_as: Option<String>,
     },
     Test {
         #[arg()]
@@ -1778,6 +1794,8 @@ async fn build_agent_core(
         event_tx,
         memory_manager,
         memory_provider,
+        // This entry point serves ONE agent, so it has nothing to share.
+        None,
     )
     .await
 }
@@ -1805,13 +1823,28 @@ async fn build_agent_core_with_memory(
     event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
     memory_manager: MemoryManager,
     memory_provider: Option<Arc<dyn MemoryProvider>>,
+    // (iter-2366) `shared_client`: a caller-supplied model client, for a host
+    // that builds several agents in one process. `OpenAIClient` owns its own
+    // `RateLimiter` (`client.rs:179`) and two reqwest clients with their own
+    // connection pools. One per agent meant N agents each enforced the
+    // CONFIGURED provider rate limit independently — the operator's "20 requests
+    // a minute" became 640 at 32 slots. The client holds no conversation state,
+    // so one instance serves every agent.
+    shared_client: Option<&OpenAIClient>,
 ) -> Result<AgentCore> {
-    let raw_client = OpenAIClient::new(client_config(config));
+    let owned_client;
+    let raw_client = match shared_client {
+        Some(client) => client,
+        None => {
+            owned_client = OpenAIClient::new(client_config(config));
+            &owned_client
+        }
+    };
     let database = Arc::new(Database::init(config.database_path.clone())?);
     let registry = build_registry(
         config,
         mcp_manager,
-        &raw_client,
+        raw_client,
         model_name,
         database.clone(),
         event_tx,
@@ -2320,6 +2353,48 @@ pub(crate) async fn create_runtime_agent_with(
     spawn_long_lived_maintenance: bool,
     memory: Option<(MemoryManager, Option<Arc<dyn MemoryProvider>>)>,
 ) -> Result<OperantAgent> {
+    // Single-agent entry point: nothing to share, so each agent keeps its own
+    // model client and its own rate limiter (iter-2366).
+    create_runtime_agent_with_client(
+        config,
+        behavior,
+        system_prompt,
+        event_tx,
+        mcp_manager,
+        skills_dir,
+        metrics,
+        spawn_long_lived_maintenance,
+        memory,
+        None,
+    )
+    .await
+}
+
+/// The same, with a CALLER-SUPPLIED model client shared by every agent the host
+/// builds (iter-2366).
+///
+/// A host that builds several agents in one process — the gateway's slot pool,
+/// N agents over one provider — must pass the SAME `OpenAIClient` to each.
+/// Building one per agent gave each its own `RateLimiter`, so N agents enforced
+/// the configured provider rate limit independently and the effective limit was
+/// N x what the operator wrote.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit dependency injection; a config struct would only rename the arguments"
+)]
+pub(crate) async fn create_runtime_agent_with_client(
+    config: &AppConfig,
+    behavior: &BehaviorSettings,
+    system_prompt: Option<&str>,
+    event_tx: mpsc::Sender<AgentEvent>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+    metrics: Option<std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>>,
+    spawn_long_lived_maintenance: bool,
+    memory: Option<(MemoryManager, Option<Arc<dyn MemoryProvider>>)>,
+    // iter-2366: one `OpenAIClient` for every agent this host builds.
+    shared_client: Option<&OpenAIClient>,
+) -> Result<OperantAgent> {
     let core = match memory {
         Some((memory_manager, memory_provider)) => {
             build_agent_core_with_memory(
@@ -2332,6 +2407,7 @@ pub(crate) async fn create_runtime_agent_with(
                 Some(event_tx.clone()),
                 memory_manager,
                 memory_provider,
+                shared_client,
             )
             .await?
         }
@@ -3699,6 +3775,7 @@ async fn run(
             prompt,
             system,
             attach,
+            attach_as,
         }) => {
             // Long-lived session: a child that closes its pipe must be a
             // reportable error, not the death of the process (see
@@ -3711,26 +3788,45 @@ async fn run(
             // The socket is kept for the TUI: a rich terminal attaches and
             // RENDERS the server's stream (RT-542's render half); a plain one
             // takes the headless attach path.
-            let attach_socket = attach.clone();
-            if attach.is_some() && !(loaded.config.tui.rich_output && tui_available()) {
-                return cmd_chat_attach(
-                    &attach_socket.expect("checked above"),
-                    prompt.as_deref().or(system.as_deref()),
-                )
-                .await;
+            // (iter-2366) `--attach` with no value means "the daemon's socket",
+            // so a bare flag and an explicit path now behave the same. Resolved
+            // ONCE, here, so the TUI branch and the headless branch cannot
+            // disagree about which socket they are talking to.
+            let attach_socket = attach.clone().map(|path| {
+                if path.as_os_str().is_empty() {
+                    operant_core::session_client::default_socket_path()
+                } else {
+                    path
+                }
+            });
+            if let Some(socket) = attach_socket.clone()
+                && !(loaded.config.tui.rich_output && tui_available())
+            {
+                return cmd_chat_attach(&socket, prompt.as_deref().or(system.as_deref())).await;
             }
+            // (iter-2366) `attaching()` stores whatever it is handed, so an
+            // unconditional call made a chat WITHOUT `--attach` a client of the
+            // empty path: the TUI then built no agent, no registry and no
+            // database, and every prompt answered "not attached to a session
+            // server". Attach mode is opt-in — only a real `--attach` path may
+            // set it.
             if loaded.config.tui.rich_output && tui_available() {
-                TuiApp::enter(
+                let tui = TuiApp::enter(
                     loaded.config.clone(),
                     prompt.clone().or_else(|| system.clone()),
                     LaunchMode::Landing,
                     cli.no_mouse,
                     cli.dangerously_skip_permissions,
                 )
-                .await?
-                .attaching(attach_socket.unwrap_or_default())
-                .run()
                 .await?;
+                let tui = match attach_socket {
+                    Some(socket) => match attach_as {
+                        Some(session) => tui.attaching(socket).attaching_as(session),
+                        None => tui.attaching(socket),
+                    },
+                    None => tui,
+                };
+                tui.run().await?;
             } else {
                 warn_tui_fallback(loaded.config.tui.rich_output);
                 // The second argument is the SYSTEM PROMPT on this path, not a
@@ -4472,6 +4568,10 @@ mod tests {
                 None,
                 memory_manager.clone(),
                 Some(memory_provider.clone()),
+                // This test builds two SEPARATE cores deliberately, to prove the
+                // memory pair is what they share — so each gets its own client
+                // (iter-2366).
+                None,
             )
             .await
             .unwrap()

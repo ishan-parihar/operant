@@ -3845,6 +3845,8 @@ mod tests {
                         input_preview: None,
                         seat_escalation: None,
                         unattended: false,
+                        // (iter-2366) The session this ask belongs to.
+                        session_id: None,
                         response_tx: tx,
                     },
                 );
@@ -3883,6 +3885,8 @@ mod tests {
                 input_preview: None,
                 seat_escalation: None,
                 unattended: false,
+                // (iter-2366) The session this ask belongs to.
+                session_id: None,
                 response_tx: tx,
             },
         );

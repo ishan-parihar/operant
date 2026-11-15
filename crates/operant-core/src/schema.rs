@@ -759,6 +759,13 @@ mod tests {
         // `get_schemas_for_request` inherits it transitively through
         // `get_schemas` plus the tool_search assembly, so assert that wiring
         // explicitly rather than looking for a direct call.
+        //
+        // (iter-2366) The body delegates: `get_schemas_for_request` now forwards
+        // to `get_schemas_for_request_with_catalog`, and it is THAT function
+        // which calls `get_schemas()`. The old scan looked only in the first
+        // body, so the refactor (which removed the duplicate catalog build)
+        // read as "the augmentation is gone" when it is still there, one hop
+        // down. Follow the delegation instead of assuming a direct call.
         let freq_start = src
             .find("pub async fn get_schemas_for_request")
             .expect("get_schemas_for_request not found");
@@ -767,8 +774,24 @@ mod tests {
                 .find("pub async fn")
                 .map(|i| freq_start + 1 + i)
                 .unwrap_or(src.len())];
+        let inherits = if freq_body.contains("get_schemas().await") {
+            true
+        } else {
+            // Delegated: follow the call into the function that does the work.
+            // Search the WHOLE source for the delegate's definition and inspect
+            // that body — `freq_body` stops at the next `pub async fn`, which is
+            // the delegate's own doc comment, so the call site is not in it.
+            let def = src
+                .find("pub async fn get_schemas_for_request_with_catalog")
+                .expect("get_schemas_for_request_with_catalog not found");
+            let dbody = &src[def..src[def + 1..]
+                .find("pub async fn")
+                .map(|i| def + 1 + i)
+                .unwrap_or(src.len())];
+            dbody.contains("get_schemas().await")
+        };
         assert!(
-            freq_body.contains("get_schemas().await"),
+            inherits,
             "get_schemas_for_request must build on get_schemas, which augments"
         );
     }

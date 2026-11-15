@@ -330,7 +330,10 @@ fn toggle_bool_entry_flips_value() {
     // (iter-1900) "notifications" was here until its dead row went; reduce
     // motion is live, so the row this exercises is a real one.
     screen.reduce_motion = false;
-    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
 
     let initial = screen.reduce_motion;
     let all = all_entries(&screen);
@@ -450,8 +453,8 @@ fn a_config_write_reaches_the_running_process_not_only_the_file() {
     // The panel's write path, then the reload that must follow it.
     operant_core::config::persist_config_key_at(&path, "agent.model", "claude-opus")
         .expect("the write lands");
-    let after = operant_core::config::load_app_config(Some(path.as_path()))
-        .expect("the file reloads");
+    let after =
+        operant_core::config::load_app_config(Some(path.as_path())).expect("the file reloads");
     assert_eq!(
         after.config.agent.model, "claude-opus",
         "the file the panel wrote must carry the new value"
@@ -573,7 +576,10 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
     // five rows and the old estimate (ten) disagreed with the real window.
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let mut screen = SettingsScreen::new();
-    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
     let total = all_entries(&screen).len();
 
     for step in 0..total {
@@ -691,7 +697,10 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
             .collect()
     }
 
-    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
     screen.apply_error =
         Some("Not a number: Context window \"abc\" — kept the previous value".to_string());
     let errored = painted(&screen);
@@ -730,7 +739,10 @@ fn an_unreadable_number_says_so_instead_of_saving_silently() {
 #[test]
 fn the_settings_screen_offers_no_row_whose_value_changes_nothing() {
     let mut screen = SettingsScreen::new();
-    screen.open(AppConfig::default().agent.context_window, &AppConfig::default());
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
     let rows = all_entries(&screen);
     assert!(
         !rows.iter().any(|r| r.key == "compact_threshold"),

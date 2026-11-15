@@ -509,7 +509,7 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
     if config.gateway.max_concurrent_sessions.is_none() {
         items.push(CheckResult::warn(
             cat,
-            "gateway.max_concurrent_sessions is unset — the gateway accepts unlimited concurrent sessions; set a cap (the default is 32)".to_string(),
+            "gateway.max_concurrent_sessions is unset — the shipped default of 32 concurrent sessions applies (that is also the agent slot count, capped at 256)".to_string(),
         ));
     }
     if config.client.rate_limit.max_retries == 0 {

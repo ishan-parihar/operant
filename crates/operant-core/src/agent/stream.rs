@@ -314,6 +314,9 @@ impl OperantAgent {
                                 let scrubbed = strip_memory_context_tags(&visible_text);
                                 if !scrubbed.is_empty() {
                                     accumulated_text.push_str(&scrubbed);
+                                    // (iter-2366) keep the agent's own copy, so an
+                                    // interrupted turn can commit what was seen
+                                    self.record_partial_text(&scrubbed);
                                     self.emit(AgentEvent::Content { text: scrubbed }).await;
                                 }
                             }
@@ -431,6 +434,8 @@ impl OperantAgent {
             let visible = tool_call_router.feed(&remaining_content);
             if !visible.is_empty() {
                 accumulated_text.push_str(&visible);
+                // (iter-2366) see the chunk path above
+                self.record_partial_text(&visible);
                 // Emit the flushed partial so the TUI sees it even if we're
                 // about to return Err — otherwise content streamed right
                 // before the error would be silently lost.
@@ -444,6 +449,8 @@ impl OperantAgent {
         if !tail.is_empty() {
             let scrubbed_tail = strip_memory_context_tags(&tail);
             accumulated_text.push_str(&scrubbed_tail);
+            // (iter-2366) see the chunk path above
+            self.record_partial_text(&scrubbed_tail);
             self.emit(AgentEvent::Content {
                 text: scrubbed_tail,
             })
@@ -1629,6 +1636,10 @@ impl OperantAgent {
                             // keys on this; attended runs never carry it.
                             unattended: self.unattended,
                             input_preview,
+                            // (iter-2366) The session this ask belongs to, so the
+                            // receiver can route it to whoever can answer instead
+                            // of to whichever channel turned last.
+                            session_id: self.session_id(),
                             response_tx: resp_tx,
                         })
                         .await;
@@ -1728,6 +1739,10 @@ impl OperantAgent {
 
         if pending.len() == 1 {
             // Single tool — no concurrency overhead
+            #[expect(
+                clippy::expect_used,
+                reason = "unreachable: the `pending.len() == 1` guard above leaves exactly one element"
+            )]
             let (idx, tool_call, args) = pending
                 .into_iter()
                 .next()
@@ -1754,7 +1769,17 @@ impl OperantAgent {
             // receiver resolves dialogs on their own (120s timeout reply),
             // and the child timeout governs delegation — the wrapper is only
             // a backstop against a wedged receiver/child.
-            let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+            // (iter-2366) MCP tools are exempt too. Their client owns a 60s
+            // first-read budget and the registry gives them a 90s override, and
+            // that order only holds if the OUTER wrapper is not 30s. With 30s
+            // the agent cancelled the read mid-flight, and every cancelled call
+            // left an orphan response that counted toward the 64-response drain
+            // cap — so one slow MCP call could fail a healthy one. The wrapper
+            // is a backstop here, exactly as it is for the two above.
+            let limit = if is_interactive_tool(&name)
+                || is_long_running_tool(&name)
+                || is_mcp_tool(&name)
+            {
                 LONG_RUNNING_TOOL_TIMEOUT
             } else {
                 self.config.tool_timeout

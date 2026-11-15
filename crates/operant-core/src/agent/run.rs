@@ -274,11 +274,18 @@ impl OperantAgent {
         &self,
         messages: &[Message],
     ) -> Vec<crate::schema::ToolSchema> {
-        let visible = self
+        // (iter-2366) ONE catalog build, not two: the assembly already read the
+        // whole registry, and `materialise` needs that same whole catalog back
+        // to re-admit the deferred tools this turn makes relevant. Calling
+        // `get_schemas()` again here built ~115 schemas a second time, per LLM
+        // request, per session.
+        let (catalog, visible) = self
             .registry
-            .get_schemas_for_request(&self.config.tool_search, self.effective_context_window())
+            .get_schemas_for_request_with_catalog(
+                &self.config.tool_search,
+                self.effective_context_window(),
+            )
             .await;
-        let catalog = self.registry.get_schemas().await;
         let schemas = crate::tools::tool_search::deferred::materialise(
             &last_user_turn(messages),
             visible,
@@ -1146,6 +1153,14 @@ impl OperantAgent {
     #[instrument(skip(self, user_query), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
+
+        // (iter-2366) Start this turn's partial-answer cell empty. A turn that
+        // is interrupted commits whatever text it streamed; without the reset a
+        // turn that streams nothing would commit the PREVIOUS turn's text and
+        // the transcript would grow a phantom answer.
+        if let Ok(mut partial) = self.partial_text.write() {
+            partial.clear();
+        }
 
         // Emit AgentStart observer event
         if let Some(ref obs) = self.observer {

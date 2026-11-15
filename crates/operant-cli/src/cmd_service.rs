@@ -319,6 +319,16 @@ fn check_service_status() -> (String, Option<u32>) {
                         .and_then(|l| l.split_whitespace().nth(2))
                         .and_then(|s| s.parse().ok());
                     ("active".to_string(), pid)
+                } else if stdout.contains("could not be found") || o.status.success() {
+                    // (iter-2366) A unit that does not exist and a unit that is
+                    // merely stopped are different problems with different fixes,
+                    // and this used to report both as "inactive". The one that
+                    // matters is the ABSENT unit left behind by a moved binary:
+                    // `install` refuses to rewrite an existing unit without
+                    // `--force`, so a rename leaves an ExecStart pointing at a
+                    // path that no longer exists and the operator has nothing to
+                    // tell the two apart.
+                    ("not installed".to_string(), None)
                 } else {
                     ("inactive".to_string(), None)
                 }

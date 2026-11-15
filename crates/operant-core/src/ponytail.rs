@@ -82,7 +82,6 @@ pub enum PostureOverride {
     Off,
 }
 
-
 /// The posture in force: the runtime override when one is set, else the
 /// config (on only when `enabled` AND `inject = "always_on"`). `None` = off.
 ///
@@ -126,7 +125,6 @@ pub fn bare_command_effect(
         None => BareCommand::SwitchOn(settings.default_level),
     }
 }
-
 
 /// The upstream level suffix lines (plan: lite/ultra are two-sentence
 /// deltas carried as a suffix; `full` is upstream's own default and carries
@@ -235,15 +233,20 @@ mod tests {
             BareCommand::Report(crate::config::PonytailLevel::Ultra)
         );
         // `effective_level` is the same rule the command reads.
-        assert_eq!(effective_level(&on, None), Some(crate::config::PonytailLevel::Ultra));
+        assert_eq!(
+            effective_level(&on, None),
+            Some(crate::config::PonytailLevel::Ultra)
+        );
         assert_eq!(effective_level(&off, None), None);
         assert_eq!(effective_level(&off, Some(PostureOverride::Off)), None);
         assert_eq!(
-            effective_level(&on, Some(PostureOverride::Level(crate::config::PonytailLevel::Lite))),
+            effective_level(
+                &on,
+                Some(PostureOverride::Level(crate::config::PonytailLevel::Lite))
+            ),
             Some(crate::config::PonytailLevel::Lite)
         );
     }
-
 
     /// The spec must be content-shaped: tag-tarball install, skills
     /// extraction, keep=2, community guard source.

@@ -27,7 +27,7 @@
 
 use crate::tui::model_scope::ModelScope;
 use operant_core::config::AppConfig;
-use operant_core::model_roles::{ModelSlot, ALL_SLOTS};
+use operant_core::model_roles::{ALL_SLOTS, ModelSlot};
 
 /// Whether a slot holds a model, and if so which.
 ///
@@ -68,7 +68,10 @@ impl RoleRow {
     /// (panels plan S3) Read by the render half, which is the next unit. Until
     /// it lands these two are test-only, and the allow says so rather than
     /// inviting a caller to invent a surface that paints them twice.
-    #[cfg_attr(not(test), allow(dead_code, reason = "the render half is the next unit"))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the render half is the next unit")
+    )]
     pub fn marker(&self) -> &'static str {
         match &self.state {
             SlotState::Assigned(_) => "●",
@@ -78,7 +81,10 @@ impl RoleRow {
     }
 
     /// The right-hand note: the model, `auto`, or `—`.
-    #[cfg_attr(not(test), allow(dead_code, reason = "the render half is the next unit"))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the render half is the next unit")
+    )]
     pub fn note(&self) -> String {
         match &self.state {
             SlotState::Assigned(model) if self.models.len() > 1 => {
@@ -339,7 +345,9 @@ mod tests {
         let mut panel = ModelsPanel::default();
         panel.open(ModelScope::Roles);
         let cfg = cfg_with("gpt-4");
-        let key = panel.clear_slot(&cfg).expect("the conversation slot is assigned");
+        let key = panel
+            .clear_slot(&cfg)
+            .expect("the conversation slot is assigned");
         assert_eq!(key, ModelSlot::Conversation.persist_key());
     }
 

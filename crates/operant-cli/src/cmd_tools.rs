@@ -195,7 +195,10 @@ fn handle_defer(config: &AppConfig, names: Vec<String>) -> Result<()> {
             continue;
         }
         deferred.insert(name.clone());
-        println!("Tool '{}' deferred — its schema no longer rides every request.", name);
+        println!(
+            "Tool '{}' deferred — its schema no longer rides every request.",
+            name
+        );
     }
 
     operant_core::tools::tool_state::save_deferred_tools(config, &deferred)
@@ -225,7 +228,10 @@ fn handle_eager(config: &AppConfig, names: Vec<String>) -> Result<()> {
     for name in &names {
         if deferred.remove(name) {
             changed = true;
-            println!("Tool '{}' is eager again — its schema rides every request.", name);
+            println!(
+                "Tool '{}' is eager again — its schema rides every request.",
+                name
+            );
         } else {
             println!("Tool '{}' was not deferred.", name);
         }

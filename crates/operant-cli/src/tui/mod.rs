@@ -54,10 +54,10 @@ pub mod keyboard_enhancement;
 pub mod mcp_view;
 pub mod messages;
 pub mod model_effort;
-pub mod model_scope;
 pub mod model_recent;
-pub mod models_panel;
+pub mod model_scope;
 pub mod model_selector;
+pub mod models_panel;
 pub mod notifications;
 pub mod operant_anim;
 #[cfg_attr(

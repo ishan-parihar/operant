@@ -579,11 +579,40 @@ pub struct SubAgentTool {
     /// Where the parent persists "allow always" choices.
     parent_approval_allowlist_path: Option<std::path::PathBuf>,
     database: Arc<Database>,
+    /// (iter-2366) The parent's MCP manager, when it has one.
+    ///
+    /// A delegated child is built from `AgentConfig::default()` and a FRESH
+    /// `ToolRegistry`, so `register_child_tools` gave it the builtin set and
+    /// nothing else: a child that needed `web_search` from an MCP server, a
+    /// database tool, or any configured MCP surface simply could not reach it.
+    /// The manager is clone-over-Arc and owns the live stdio children, so
+    /// handing it over shares the CHILDREN — a child does not spawn a second
+    /// MCP fleet. And because it registers exactly what the parent has, the
+    /// "a subagent must not gain tools the parent lacks" rule holds by
+    /// construction rather than by a second allowlist.
+    mcp_manager: Option<crate::mcp::McpManager>,
     /// Optional event channel to forward child progress events to parent
     event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
 }
 
 impl SubAgentTool {
+    /// Give the child the parent's MCP surface (iter-2366).
+    ///
+    /// `McpManager` is clone-over-Arc: the clone reaches the same live server
+    /// set, so N delegated children share one MCP fleet rather than each
+    /// spawning its own.
+    pub fn with_mcp_manager(mut self, mcp_manager: crate::mcp::McpManager) -> Self {
+        self.mcp_manager = Some(mcp_manager);
+        self
+    }
+
+    /// The same, from an optional manager: the registry build site has an
+    /// `Option<McpManager>`, and an agent built without one keeps builtins only.
+    pub fn with_mcp_manager_opt(mut self, mcp_manager: Option<crate::mcp::McpManager>) -> Self {
+        self.mcp_manager = mcp_manager;
+        self
+    }
+
     /// Construct with the parent's disabled tool/toolset policy so that
     /// spawned children inherit the exact same tool restrictions as the
     /// parent registry (hermes parity).
@@ -622,6 +651,9 @@ impl SubAgentTool {
             // headless deny path still refuses anything not on this list.
             parent_approval_allowlist: std::collections::HashSet::new(),
             parent_approval_allowlist_path: None,
+            // Empty until `with_mcp_manager` is called (iter-2366). A child
+            // built without it keeps the pre-fix behaviour: builtins only.
+            mcp_manager: None,
             database,
             event_tx,
         }
@@ -698,7 +730,7 @@ impl SubAgentTool {
         clippy::too_many_arguments,
         reason = "identical to `call`; one delegates to the other"
     )]
-    pub async fn call_with_session(
+    async fn call_with_session(
         &self,
         goal: impl Into<String>,
         context: Option<impl Into<String>>,
@@ -1273,6 +1305,9 @@ impl SubAgentTool {
 
     fn clone_for_task(&self) -> Self {
         Self {
+            // Clone-over-Arc: the clone reaches the SAME live MCP children, so a
+            // per-task clone does not spawn a second fleet (iter-2366).
+            mcp_manager: self.mcp_manager.clone(),
             client_config: self.client_config.clone(),
             http_client: self.http_client.clone(),
             model: self.model.clone(),
@@ -1371,6 +1406,16 @@ impl SubAgentTool {
         // toolset is absent here is deliberately withheld from children.
         // Most tools default to toolset "builtin", which is always present
         // unless explicitly disabled by the parent.
+        // (iter-2366) The parent's MCP surface, over the parent's live
+        // children. `sync_tools_to_registry` registers exactly the tools the
+        // manager holds, so a child can never gain an MCP tool the parent
+        // lacks — the inheritance rule is satisfied by construction, which is
+        // why there is no second allowlist here. Without this a delegated child
+        // had builtins and no MCP at all.
+        if let Some(manager) = self.mcp_manager.as_ref() {
+            manager.sync_tools_to_registry(registry).await;
+        }
+
         let builtin = "builtin";
         self.register_if_allowed(registry, &toolset_set, "terminal", builtin, TerminalTool)
             .await;
@@ -2590,6 +2635,29 @@ mod tests {
             None,
         );
 
+        // (iter-2366) A child given the parent's MCP manager still gets its
+        // builtins, and an EMPTY manager adds nothing. The regression this
+        // guards is the obvious one: syncing MCP tools into the child registry
+        // must not displace the builtin set the child already had.
+        let mcp_child = SubAgentTool::with_parent_tool_policy(
+            &client,
+            "gpt-4.1",
+            0,
+            vec![],
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+            Arc::new(Database::init(std::env::temp_dir().join("test_child_mcp.db")).unwrap()),
+            None,
+        )
+        .with_mcp_manager(crate::mcp::McpManager::new());
+        let mcp_ts = mcp_child.compute_child_toolsets(SubAgentRole::Leaf, None);
+        let mcp_registry = ToolRegistry::new(Duration::from_secs(5));
+        mcp_child.register_child_tools(&mcp_registry, &mcp_ts).await;
+        assert!(
+            mcp_registry.contains("terminal").await,
+            "a child with an (empty) MCP manager must keep its builtins"
+        );
+
         // Leaf child: core tools yes, delegate_task NO (hermes: leaf children
         // must never recursively delegate).
         let leaf_ts = tool.compute_child_toolsets(SubAgentRole::Leaf, None);
@@ -3533,6 +3601,10 @@ mod tests {
     /// MUTATION PROVEN: restoring the breadth peek above the replay check makes
     /// this test fail with `Spawn refused: 1/1 worker slots are already live`.
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex is held deliberately for the whole test to serialise the process-singleton registry against the async suite"
+    )]
     async fn a_replayed_dispatch_is_admitted_even_with_no_worker_headroom() {
         let _guard = guard_test_lock();
         // The registry is a process singleton shared with the async suite's own

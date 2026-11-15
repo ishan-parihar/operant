@@ -806,8 +806,10 @@ fn prune() {
             // The rule lives in `enforce_terminal_cap`; this only adapts it to a
             // map. The copy that used to sit here is the one iter-2406 fixed in
             // `merge_records` and NOT here, which is how a duplicated rule drifts.
-            let mut rows: Vec<AsyncDelegationRecord> =
-                terminal.iter().filter_map(|id| map.get(id).cloned()).collect();
+            let mut rows: Vec<AsyncDelegationRecord> = terminal
+                .iter()
+                .filter_map(|id| map.get(id).cloned())
+                .collect();
             enforce_terminal_cap(&mut rows);
             let survivors: std::collections::HashSet<String> =
                 rows.into_iter().map(|r| r.delegation_id).collect();
@@ -1763,7 +1765,11 @@ mod ledger_merge_tests {
             parent_session_id: None,
             request_key: None,
         };
-        std::fs::write(&path, serde_json::to_string_pretty(&[prior.clone()]).unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(std::slice::from_ref(&prior)).unwrap(),
+        )
+        .unwrap();
 
         let id = create_record("a fresh delegation", "m");
         mark_completed(&id, "done");
