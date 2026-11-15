@@ -29,6 +29,33 @@ use super::*;
 #[cfg(test)]
 const MAX_TRAJECTORIES_KEPT: usize = 200;
 
+/// What a completed review should SURFACE, given what it did.
+///
+/// A pure function because the arm it decides has no test seam: the completion
+/// path lives inside an async daemon, and a guard written against live state
+/// there cannot be driven from a test.
+///
+/// The rule has two halves, and the second is the one that was missing. A review
+/// that wrote something reports what it wrote. A review that wrote NOTHING still
+/// reports what it SAID, because the memory lane cannot write at all:
+/// `MEMORY_REVIEW_PROMPT` instructs it to return a `Memory candidate: <fact>` line
+/// for a foreground turn to act on, so its final text IS its output. Only an
+/// empty report on both sides surfaces nothing.
+pub(crate) fn review_notification(actions: &[String], last_round_text: &str) -> Option<String> {
+    if !actions.is_empty() {
+        return Some(format!(
+            "💾 Self-improvement review: {}",
+            actions.join(" · ")
+        ));
+    }
+    let report = last_round_text.trim();
+    if report.is_empty() {
+        None
+    } else {
+        Some(format!("💾 Self-improvement review: {}", report))
+    }
+}
+
 /// Token ceiling on the transcript snapshot one background review may carry.
 ///
 /// The review's snapshot was bounded by a message COUNT (40), which is a poor
@@ -636,6 +663,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     // review that looked and found nothing from one that hit the
                     // cap. `review_iter` is out of scope by then.
                     let mut iterations_run = 0usize;
+                    // The last non-empty assistant text the review produced. The
+                    // loop discards it when it breaks, and the memory lane's whole
+                    // output lives there.
+                    let mut last_round_text = String::new();
 
                     for review_iter in 0..MAX_REVIEW_ITERATIONS {
                         iterations_run = review_iter + 1;
@@ -678,6 +709,11 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         let tool_calls_deltas =
                             assistant_msg.tool_calls.clone().unwrap_or_default();
                         let content = assistant_msg.content.clone().unwrap_or_default();
+                        // Kept for the completion path: a review that wrote
+                        // nothing may still have SAID something worth surfacing.
+                        if !content.trim().is_empty() {
+                            last_round_text = content.clone();
+                        }
 
                         // If the model says "Nothing to save" or has no tool calls, we're done
                         if content.contains("Nothing to save") || tool_calls_deltas.is_empty() {
@@ -861,46 +897,53 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         }
                     }
 
-                    // ── Summarize actions taken ──────────────────────────────
-                    // Surface a compact summary to the user via tracing AND callback.
-                    // Matches hermes-agent's _safe_print + background_review_callback pattern.
-                    if !actions_taken.is_empty() {
-                        let summary = actions_taken.join(" · ");
-                        let notification = format!("💾 Self-improvement review: {}", summary);
-                        info!(
-                            session_id = %session_id,
-                            actions = %summary,
-                            action_count = actions_taken.len(),
-                            "Background review completed with updates"
-                        );
-                        // Deliver via callback (TUI/Gateway wired via with_background_review_callback)
-                        // AND via AgentEvent so TUI/CLI surfaces it without needing the callback wired.
-                        if let Some(ref cb) = callback {
-                            cb(notification.clone());
+                    // ── Surface what the review did, or what it SAID ─────────────
+                    //
+                    // Two outcomes, one rule (`review_notification`): a review
+                    // that wrote reports its writes; a review that wrote NOTHING
+                    // still reports its final text, because the memory lane
+                    // CANNOT write and its only output is a
+                    // `Memory candidate:` line for a foreground turn to act on.
+                    //
+                    // That candidate used to be dropped here. `actions_taken`
+                    // counts WRITES; a read-and-propose lane that works correctly
+                    // performs none; so its reply always took the empty branch and
+                    // was discarded. The prompt named a contract no code honoured.
+                    //
+                    // The empty case is `info!` with the iteration count, not
+                    // `debug!`: "looked and found nothing" (few iterations, clean
+                    // exit) and "thrashed and gave up" (hit the cap) are different
+                    // outcomes, and only the count separates them.
+                    match review_notification(&actions_taken, &last_round_text) {
+                        Some(notification) => {
+                            info!(
+                                session_id = %session_id,
+                                actions = %actions_taken.join(" · "),
+                                action_count = actions_taken.len(),
+                                "Background review completed with updates"
+                            );
+                            // Deliver via callback (TUI/Gateway wired via
+                            // with_background_review_callback) AND via AgentEvent,
+                            // so TUI/CLI surfaces it without the callback wired.
+                            if let Some(ref cb) = callback {
+                                cb(notification.clone());
+                            }
+                            if let Some(ref tx) = event_tx {
+                                let _ = tx
+                                    .send(AgentEvent::BackgroundReview {
+                                        summary: notification,
+                                        session_id: session_id.clone(),
+                                    })
+                                    .await;
+                            }
                         }
-                        if let Some(ref tx) = event_tx {
-                            let _ = tx
-                                .send(AgentEvent::BackgroundReview {
-                                    summary: notification,
-                                    session_id: session_id.clone(),
-                                })
-                                .await;
+                        None => {
+                            info!(
+                                session_id = %session_id,
+                                iterations = iterations_run,
+                                "Background review completed with no changes and no report"
+                            );
                         }
-                    } else {
-                        // INFO, not debug, and with the iteration count. A review
-                        // that ran its full budget and changed nothing is a
-                        // DIFFERENT outcome from one that was never spawned, and
-                        // at debug level the two were indistinguishable in every
-                        // log the operator actually reads. The iteration count is
-                        // what separates "looked and found nothing" (few
-                        // iterations, clean exit) from "thrashed and gave up" (hit
-                        // the cap), which is the distinction that tells an
-                        // operator whether the review is worth its spend.
-                        info!(
-                            session_id = %session_id,
-                            iterations = iterations_run,
-                            "Background review completed with no changes"
-                        );
                     }
 
                     debug!(session_id = %session_id, "Background review daemon finished");
@@ -1148,5 +1191,44 @@ mod tests {
         assert_eq!(remaining, total, "a cap of zero must keep every trajectory");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A review that WROTE reports what it wrote.
+    #[test]
+    fn a_review_that_wrote_reports_its_writes() {
+        let actions = vec!["memory: saved a preference".to_string()];
+        let note = review_notification(&actions, "ignored final text");
+        assert_eq!(
+            note.as_deref(),
+            Some("💾 Self-improvement review: memory: saved a preference")
+        );
+    }
+
+    /// A review that wrote NOTHING still reports what it SAID.
+    ///
+    /// This is the memory lane: `MEMORY_REVIEW_PROMPT` tells the model it cannot
+    /// write and must return a `Memory candidate:` line. `actions_taken` counts
+    /// writes, so a lane that works exactly as designed has an EMPTY actions list
+    /// -- and its report used to be discarded with it. The candidate is the lane's
+    /// only output, so it must survive.
+    #[test]
+    fn a_memory_candidate_survives_a_lane_that_cannot_write() {
+        let note = review_notification(
+            &[],
+            "Memory candidate: the operator prefers terse diffs with rationale.",
+        );
+        assert_eq!(
+            note.as_deref(),
+            Some(
+                "💾 Self-improvement review: Memory candidate: the operator prefers \
+                 terse diffs with rationale."
+            )
+        );
+    }
+
+    /// Nothing written AND nothing said surfaces nothing -- the only silent case.
+    #[test]
+    fn an_empty_review_surfaces_nothing() {
+        assert_eq!(review_notification(&[], ""), None);
+        assert_eq!(review_notification(&[], "   \n  "), None);
     }
 }
