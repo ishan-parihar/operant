@@ -255,12 +255,32 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
         return;
     }
 
-    // `begin_modal_frame` routes through `modal_layout`, which already clamps to
-    // `area.height - space::M` and floors at `MIN_MODAL_H`. This used to restate
-    // a caller-side `.min(area.height.saturating_sub(6))` on the way in; the
-    // two clamps bound the same result, so dropping the outer one is a no-op.
-    let rows = screen.visible_themes().len() as u16 + 4;
-    let layout = begin_modal_frame(frame, area, 70, rows + 6, 2, 1);
+// (plan 2026-11-15 T1) THE THEME PICKER SHOWED ONLY 6 OF 8 THEMES.
+    //
+    // MEASURED by rendering the real screen and reading the buffer back: at
+    // every terminal height from 20 to 50 the modal was exactly 16 rows tall
+    // and listed Default, Dark, Light, Solarized, Nord, Dracula — Monokai and
+    // Deuteranopia were unreachable AT ANY SIZE, with no scroll and no overflow
+    // marker. The operator's report: "I am only seeing 6 options from the
+    // theme-picker."
+    //
+    // The cause was this line. Each theme row is TWO lines (the row, then a
+    // blank spacer), so a full catalogue needs 2N lines of BODY — but the body
+    // is the dialog minus header, footer and the inner gutter, so a 16-row
+    // dialog left a body of ~11 and the tail was silently clipped. Because the
+    // height was derived from the count alone it never grew, and `modal_layout`'s
+    // clamp only ever SHRINKS: the ceiling was the bug.
+    //
+    // Now sized to the content the operator is actually shown — `visible_themes()`
+    // (iter-2429), so a search that narrows the list shrinks the modal instead
+    // of leaving a mostly-empty dialog. The query line and its spacer are the
+    // peer's two extra rows. A terminal too short for the whole result still
+    // works: `modal_layout` clamps it and the window below scrolls the
+    // selection into view rather than hiding it.
+    let shown = screen.visible_themes().len() as u16;
+    let rows = 2 /* query + spacer */ + shown * 2;
+    let desired = rows + 2 /* header */ + 1 /* footer */ + 2 /* inner gutter */;
+    let layout = begin_modal_frame(frame, area, 70, desired, 2, 1);
     render_modal_title_frame(frame, layout.header_area, "Choose a theme", "esc");
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         frame.render_widget(
@@ -288,7 +308,34 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     )));
     lines.push(Line::from(""));
 
-    for (i, theme) in visible.iter().enumerate() {
+// (plan 2026-11-15 T1) A short terminal cannot fit the whole result even now,
+    // so the list scrolls to keep the SELECTION visible. Without this the
+    // modal's clamp silently hides whatever falls past the last row — the
+    // original defect in a different guise: an operator who arrows down to a
+    // late palette would watch the highlight vanish with nothing replacing it.
+    //
+    // The window is over `visible` — the peer's search-filtered list
+    // (iter-2429), so scrolling follows the filtered set, not the whole
+    // catalogue. Two lines per row (row + spacer), so capacity is measured in
+    // themes rather than lines.
+    // The query line and its spacer occupy the first TWO body rows (pushed
+        // above this loop), so the theme window is what remains — counting the
+        // whole body would let the window run one theme past the bottom and
+        // push the selection off-screen, which is the very thing this guards.
+        let capacity = layout
+            .body_area
+            .height
+            .saturating_sub(2)
+            .checked_div(2)
+            .unwrap_or(1)
+            .max(1) as usize;
+    let first = if screen.selected_idx >= capacity {
+        screen.selected_idx + 1 - capacity
+    } else {
+        0
+    };
+
+    for (i, theme) in visible.iter().enumerate().skip(first).take(capacity) {
         let theme: &ThemeOption = theme;
         let is_selected = i == screen.selected_idx;
         let bg = if is_selected {
@@ -448,6 +495,7 @@ mod tests {
         screen.select_next();
         assert_eq!(screen.selected_name(), Some("default"));
     }
+
     /// Search must narrow the rows, and the cursor must stay inside what is left.
     ///
     /// Before U2 the picker held eight rows and a cursor-only list was fine; with
@@ -523,5 +571,102 @@ mod tests {
         );
         assert_eq!(restore.as_deref(), Some("nord"), "Esc restores the opener");
         assert!(!screen.visible, "and closes the picker");
+    }
+
+    #[test]
+    fn every_theme_is_reachable_in_the_picker() {
+        // THE INVARIANT: whatever row the cursor is on, that row is ON SCREEN.
+        //
+        // This used to render one frame at a fixed height and assert that the
+        // eight built-in labels appeared in it — a reasonable guard while the
+        // catalogue WAS eight rows. It is vacuous now: the picker holds 100+
+        // file palettes (iter-2427) behind a search filter (iter-2429), so a
+        // single frame shows a window of a few and the other names are
+        // legitimately absent. Mutation-proved: reintroducing the old
+        // content-blind height passed it.
+        //
+        // What the operator is entitled to is that every palette can be
+        // REACHED. Walking the whole list and asserting the selection is always
+        // rendered is that property stated directly, and it holds for any
+        // catalogue size and any terminal height.
+        let mut screen = ThemeScreen::new();
+        screen.open("default");
+        let total = screen.visible_themes().len();
+        assert!(total > 8, "the catalogue is expected to outgrow one screen: {total}");
+
+        // A terminal too short for the whole list, so the window must scroll.
+        let backend = TestBackend::new(90, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        for idx in 0..total {
+            screen.selected_idx = idx;
+            // Compare against `ThemeOption::label` — the field the row actually
+            // prints — rather than re-deriving it. The derivation (`theme_label`)
+            // answers "Custom" for every name outside the eight built-ins, so it
+            // would assert a word the row shows a different value for.
+            let label = screen.visible_themes()[idx].label.to_lowercase();
+            terminal
+                .draw(|frame| render_theme_screen(frame, &screen, frame.area()))
+                .unwrap();
+            let rendered = terminal.backend().buffer();
+            let text: String = (0..20u16)
+                .flat_map(|y| {
+                    (0..90u16).map(move |x| (x, y)).map(|(x, y)| {
+                        rendered
+                            .cell((x, y))
+                            .map(|c| c.symbol().to_string())
+                            .unwrap_or_default()
+                    })
+                })
+                .collect();
+            assert!(
+                text.to_lowercase().contains(&label),
+                "row {idx} ({label}) is selected but not on screen"
+            );
+        }
+    }
+
+    /// A terminal too short for the whole list still reaches every theme by
+    /// scrolling: the selection stays visible instead of vanishing past the last
+    /// row (the same defect in a different guise).
+    #[test]
+    fn a_short_terminal_scrolls_the_selection_into_view() {
+        let mut screen = ThemeScreen::new();
+        screen.open("default");
+        // The last palette in the FILTERED list — what the render loop actually
+        // indexes. (iter-2429 made this list a query filter over the bundled
+        // file palettes, so `themes.len()` and the visible count differ once a
+        // query is set; with no query they agree, and using the visible count is
+        // what keeps this honest either way.)
+        let last_idx = screen.visible_themes().len() - 1;
+        screen.selected_idx = last_idx;
+        // Assert on the NAME, not `theme_label`: a file palette's label falls
+        // back to "Custom" for every name outside the eight built-ins, so a
+        // label assertion would pass or fail on a word that is never rendered.
+        // The name is what the row actually prints for these.
+        let last_name = screen.visible_themes()[last_idx].name.clone();
+
+        let backend = TestBackend::new(90, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_theme_screen(frame, &screen, frame.area()))
+            .unwrap();
+        let rendered = terminal.backend().buffer();
+        let text: String = (0..20u16)
+            .flat_map(|y| {
+                (0..90u16).map(move |x| (x, y)).map(|(x, y)| {
+                    rendered
+                        .cell((x, y))
+                        .map(|c| c.symbol().to_string())
+                        .unwrap_or_default()
+                })
+            })
+            .collect();
+        assert!(
+            text.contains(&last_name),
+            "the selected theme ({last_name}) must scroll into view on a short \
+             terminal, not be clipped away"
+        );
+
     }
 }

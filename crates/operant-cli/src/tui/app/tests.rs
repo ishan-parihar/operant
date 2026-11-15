@@ -18455,3 +18455,68 @@ fn reload_skills_keeps_a_skill_that_lives_only_in_extra_roots() {
 
     let _ = std::fs::remove_dir_all(&extra);
 }
+
+// ── /bar — the status bar style (plan 2026-11-15 T2) ────────────────────────
+mod bar_command_tests {
+    use super::*;
+
+    /// THE OPERATOR'S REPORT: "I do not have /bar command to configure the bar."
+    /// The style existed but was reachable only as a row inside `/config`, so
+    /// there was no command by that name at all — `handle_tui_command` fell
+    /// through to the model, which is why the operator could not find it.
+    #[test]
+    fn bar_is_a_command_and_bare_bar_reports_the_style() {
+        let mut app = make_app();
+        assert!(
+            app.handle_tui_command("bar", ""),
+            "/bar must be a recognised command, not text sent to the model"
+        );
+        let notice = app.status_message.clone().unwrap_or_default();
+        assert!(
+            notice.contains("Status bar style:"),
+            "bare /bar reports the style in force: {notice:?}"
+        );
+        // It names the alternatives, so the command answers "what can I pick".
+        assert!(
+            notice.contains("dot") && notice.contains("powerline"),
+            "bare /bar lists the available styles: {notice:?}"
+        );
+    }
+
+    /// `/bar <style>` applies immediately — the live cell is what the status
+    /// line draws from, so no restart is involved.
+    #[test]
+    fn bar_with_an_argument_applies_the_style() {
+        // `make_app` takes `ACTIVE_LOCK` itself; taking it here as well would
+        // self-deadlock (std's Mutex is not reentrant).
+        let mut app = make_app();
+        assert!(app.handle_tui_command("bar", "ascii"));
+        assert_eq!(
+            crate::tui::status_line::style::style(),
+            crate::tui::status_line::style::SeparatorStyle::Ascii,
+            "/bar ascii must reach the live style cell"
+        );
+        assert_eq!(app.config.tui.bar_style, "ascii", "and the config");
+        // Restore the default so a parallel test does not inherit `ascii`.
+        crate::tui::status_line::style::set_style(None);
+    }
+
+    /// An unknown style is REFUSED with the vocabulary, never silently ignored:
+    /// a bar command that quietly kept the old style would read as broken.
+    #[test]
+    fn bar_refuses_an_unknown_style_and_names_the_options() {
+        let mut app = make_app();
+        let before = crate::tui::status_line::style::style();
+        assert!(app.handle_tui_command("bar", "chartreuse"));
+        assert_eq!(
+            crate::tui::status_line::style::style(),
+            before,
+            "an unknown style must change nothing"
+        );
+        let notice = app.status_message.clone().unwrap_or_default();
+        assert!(
+            notice.contains("Unknown bar style") && notice.contains("dot"),
+            "the refusal names the vocabulary: {notice:?}"
+        );
+    }
+}
