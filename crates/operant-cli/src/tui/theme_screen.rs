@@ -33,6 +33,13 @@ pub struct ThemeScreen {
     pub visible: bool,
     pub themes: Vec<ThemeOption>,
     pub selected_idx: usize,
+    /// Filter over `themes` by name or label. With 108 rows (8 built-ins + the
+    /// bundled palettes, U2) a cursor-only list is unusable, so the picker takes
+    /// a query the way the settings screen does.
+    pub search_query: String,
+    /// The theme that was active when the picker opened, so Esc can put it back
+    /// after a preview moved the live palette.
+    restore: Option<String>,
 }
 
 impl ThemeScreen {
@@ -41,11 +48,15 @@ impl ThemeScreen {
             visible: false,
             themes: builtin_themes(),
             selected_idx: 0,
+            search_query: String::new(),
+            restore: None,
         }
     }
 
     pub fn open(&mut self, current_theme: &str) {
         self.visible = true;
+        self.search_query.clear();
+        self.restore = Some(current_theme.to_string());
         // Select the current theme, if found
         if let Some(idx) = self.themes.iter().position(|t| t.name == current_theme) {
             self.selected_idx = idx;
@@ -56,19 +67,56 @@ impl ThemeScreen {
 
     pub fn close(&mut self) {
         self.visible = false;
+        self.search_query.clear();
+        self.restore = None;
+    }
+
+    /// The theme to return to when the operator cancels after previewing.
+    pub fn restore_target(&self) -> Option<&str> {
+        self.restore.as_deref()
+    }
+
+    /// The rows the current query leaves visible, in list order.
+    pub fn visible_themes(&self) -> Vec<&ThemeOption> {
+        let query = self.search_query.to_lowercase();
+        self.themes
+            .iter()
+            .filter(|theme| {
+                query.is_empty()
+                    || theme.name.to_lowercase().contains(&query)
+                    || theme.label.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    /// The row the cursor is on, within the filtered list.
+    pub fn selected(&self) -> Option<&ThemeOption> {
+        self.visible_themes().get(self.selected_idx).copied()
+    }
+
+    pub fn push_search_char(&mut self, c: char) {
+        self.search_query.push(c);
+        self.selected_idx = 0;
+    }
+
+    pub fn pop_search_char(&mut self) {
+        self.search_query.pop();
+        self.selected_idx = 0;
     }
 
     pub fn select_prev(&mut self) {
-        cycle_prev(&mut self.selected_idx, self.themes.len());
+        let len = self.visible_themes().len();
+        cycle_prev(&mut self.selected_idx, len);
     }
 
     pub fn select_next(&mut self) {
-        cycle_next(&mut self.selected_idx, self.themes.len());
+        let len = self.visible_themes().len();
+        cycle_next(&mut self.selected_idx, len);
     }
 
     /// Return the name of the currently selected theme.
     pub fn selected_name(&self) -> Option<&str> {
-        self.themes.get(self.selected_idx).map(|t| t.name.as_str())
+        self.selected().map(|t| t.name.as_str())
     }
 }
 
@@ -211,7 +259,7 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     // `area.height - space::M` and floors at `MIN_MODAL_H`. This used to restate
     // a caller-side `.min(area.height.saturating_sub(6))` on the way in; the
     // two clamps bound the same result, so dropping the outer one is a no-op.
-    let rows = screen.themes.len() as u16 + 2;
+    let rows = screen.visible_themes().len() as u16 + 4;
     let layout = begin_modal_frame(frame, area, 70, rows + 6, 2, 1);
     render_modal_title_frame(frame, layout.header_area, "Choose a theme", "esc");
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
@@ -224,9 +272,24 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
         );
     }
 
+    let visible = screen.visible_themes();
     let mut lines: Vec<Line> = Vec::new();
+    // The query line doubles as the search field's own feedback: with 100+
+    // bundled palettes an unfiltered list is unreadable, and an operator who
+    // types and sees nothing change needs to know the filter is live.
+    let query = if screen.search_query.is_empty() {
+        "  / to search".to_string()
+    } else {
+        format!("  /{}  ({} match)", screen.search_query, visible.len())
+    };
+    lines.push(Line::from(Span::styled(
+        query,
+        Style::default().fg(theme_colors::muted()),
+    )));
+    lines.push(Line::from(""));
 
-    for (i, theme) in screen.themes.iter().enumerate() {
+    for (i, theme) in visible.iter().enumerate() {
+        let theme: &ThemeOption = theme;
         let is_selected = i == screen.selected_idx;
         let bg = if is_selected {
             theme_colors::accent()
@@ -278,7 +341,7 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            " ↑↓ navigate  ·  enter apply  ·  esc cancel",
+            " ↑↓ navigate  ·  type to search  ·  enter apply  ·  esc cancel",
             Style::default()
                 .fg(theme_colors::muted())
                 .add_modifier(Modifier::ITALIC),
@@ -305,8 +368,14 @@ pub fn handle_theme_key(
 
     match key.code {
         KeyCode::Esc => {
+            // Cancel is a RESTORE, not just a close: moving the cursor previews
+            // each theme live, so Esc must put back what was active at open or
+            // cancelling would silently keep the last row the cursor touched.
+            // Read BEFORE `close()` — close() clears the field, and reading it
+            // after is why the first version of this returned None.
+            let restore = screen.restore_target().map(String::from);
             screen.close();
-            None
+            restore
         }
         KeyCode::Enter => {
             let name = screen.selected_name().map(String::from);
@@ -315,10 +384,18 @@ pub fn handle_theme_key(
         }
         KeyCode::Up => {
             screen.select_prev();
-            None
+            screen.selected_name().map(String::from)
         }
         KeyCode::Down => {
             screen.select_next();
+            screen.selected_name().map(String::from)
+        }
+        KeyCode::Backspace => {
+            screen.pop_search_char();
+            None
+        }
+        KeyCode::Char(c) => {
+            screen.push_search_char(c);
             None
         }
         _ => None,
@@ -363,9 +440,88 @@ mod tests {
         // what made this guard fail the moment the palettes shipped.
         let last = screen.themes.len() - 1;
         screen.select_prev();
-        assert_eq!(screen.selected_name(), Some(screen.themes[last].name.as_str()));
+        assert_eq!(
+            screen.selected_name(),
+            Some(screen.themes[last].name.as_str())
+        );
 
         screen.select_next();
         assert_eq!(screen.selected_name(), Some("default"));
+    }
+    /// Search must narrow the rows, and the cursor must stay inside what is left.
+    ///
+    /// Before U2 the picker held eight rows and a cursor-only list was fine; with
+    /// the bundled palettes it holds 100+, so a query is the only way to reach a
+    /// named palette. The invariant that matters is the index staying valid across
+    /// a filter change — `visible_themes()` is re-derived every move, so a stale
+    /// index would render the wrong row's swatch and apply the wrong theme.
+    #[test]
+    fn typing_searches_the_picker_and_the_cursor_stays_inside_the_matches() {
+        let mut screen = ThemeScreen::new();
+        screen.open("default");
+        let all = screen.themes.len();
+        assert!(all > 100, "the bundled palettes are listed: {all}");
+
+        // Every row is visible with no query, and the cursor is on the current one.
+        assert_eq!(screen.visible_themes().len(), all);
+        assert_eq!(screen.selected_name(), Some("default"));
+
+        // A query that matches nothing leaves no rows and no selection — rather
+        // than landing on an index that no longer names the row it looked like.
+        for c in "zzzz".chars() {
+            screen.push_search_char(c);
+        }
+        assert_eq!(screen.visible_themes().len(), 0);
+        assert_eq!(screen.selected_name(), None);
+
+        // Backspace widens again, and the cursor is valid once more.
+        screen.pop_search_char();
+        screen.pop_search_char();
+        screen.pop_search_char();
+        screen.pop_search_char();
+        assert_eq!(screen.visible_themes().len(), all);
+
+        // A real query narrows to that palette and the cursor lands on it.
+        for c in "gruv".chars() {
+            screen.push_search_char(c);
+        }
+        let visible = screen.visible_themes();
+        assert!(
+            visible.iter().all(|theme| theme.name.contains("gruv")),
+            "only gruvbox-family palettes remain: {:?}",
+            visible.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert_eq!(screen.selected_name(), Some(visible[0].name.as_str()));
+    }
+
+    /// Cancelling restores the theme that was active at open.
+    ///
+    /// Moving the cursor previews a theme live, so Esc that only closed the picker
+    /// would leave the last row the cursor touched in force — a cancel that changes
+    /// what the operator sees is not a cancel. This is the guard for the case the
+    /// settings-screen bar-style row handles by applying on the cycle: a preview is
+    /// a preview until Enter.
+    #[test]
+    fn escaping_after_a_preview_restores_the_theme_it_started_on() {
+        let mut screen = ThemeScreen::new();
+        screen.open("nord");
+
+        // Move down, which in the app applies the preview.
+        let previewed = {
+            screen.select_next();
+            screen.selected_name().map(String::from)
+        };
+        assert_ne!(previewed.as_deref(), Some("nord"), "the cursor moved");
+
+        // Esc reports the theme to go back to, not the one being previewed.
+        let restore = super::handle_theme_key(
+            &mut screen,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+        assert_eq!(restore.as_deref(), Some("nord"), "Esc restores the opener");
+        assert!(!screen.visible, "and closes the picker");
     }
 }
