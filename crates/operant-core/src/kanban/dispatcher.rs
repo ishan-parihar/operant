@@ -45,31 +45,55 @@ impl Dispatcher {
         Ok(tasks)
     }
 
+    /// Claim `task_id` for `worker`, or fail if it is already claimed.
+    ///
+    /// (iter-2453, F1) The three statements below are ONE critical section. They
+    /// used to be three autocommit statements, so two dispatchers could both
+    /// read `todo`, both insert a `running` run and both update the task — the
+    /// second update silently overwrote `current_run_id` and both workers ran the
+    /// same task. `BEGIN IMMEDIATE` takes the write lock before the first read
+    /// of the task's state, so a second claimer blocks and then finds the row no
+    /// longer claimable. The partial unique index from the v2 migration is the
+    /// database-level backstop that holds even if a future caller forgets the
+    /// transaction.
+    ///
+    /// The event insert stays best-effort and OUTSIDE the failure path of the
+    /// claim: a missing audit row must not turn a successful claim into an error.
     #[expect(
         clippy::expect_used,
         reason = "a host clock before 1970 is unrecoverable misconfiguration; timestamps cannot be recorded"
     )]
     pub fn claim_task(&self, task_id: &str, worker: &str) -> Result<i64, Error> {
-        let conn = self.lock_conn()?;
+        let mut conn = self.lock_conn()?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock before UNIX_EPOCH — invariant violation")
             .as_secs() as i64;
-        conn.execute(
-            "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at)
-             VALUES (?1, ?2, 'running', ?3, ?4)",
-            params![task_id, "dispatcher", worker, now],
+
+        // Every early return below drops `tx` without committing, which rolls
+        // back — a half-applied claim leaves no trace.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| Error::Agent(format!("Failed to begin claim transaction: {}", e)))?;
+
+        tx.execute(
+            "INSERT INTO task_runs (task_id, profile, status, started_at)
+             VALUES (?1, ?2, 'running', ?3)",
+            params![task_id, "dispatcher", now],
         )
         .map_err(|e| Error::Agent(format!("Failed to create run: {}", e)))?;
-        let run_id = conn.last_insert_rowid();
-        conn.execute(
+        let run_id = tx.last_insert_rowid();
+        tx.execute(
             "UPDATE tasks SET status = 'running', current_run_id = ?1, started_at = COALESCE(started_at, ?2) WHERE id = ?3",
             params![run_id, now, task_id],
         ).map_err(|e| Error::Agent(format!("Failed to claim task: {}", e)))?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) VALUES (?1, ?2, 'dispatched', ?3, ?4)",
             params![task_id, run_id, serde_json::json!({"worker": worker}).to_string(), now],
         ).unwrap_or_else(|e| { warn!("Failed to insert dispatched event: {}", e); 0 });
+
+        tx.commit()
+            .map_err(|e| Error::Agent(format!("Failed to commit claim: {}", e)))?;
         Ok(run_id)
     }
 
