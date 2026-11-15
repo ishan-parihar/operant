@@ -1080,6 +1080,62 @@ fn ensure_store(store: &Path) -> std::result::Result<(), String> {
 }
 
 /// Checkpoint tool - provides checkpoint management as a callable tool
+/// The parsed `checkpoint` arguments.
+#[derive(Debug, Default, PartialEq)]
+struct ParsedArgs {
+    action: String,
+    working_dir: String,
+    commit_hash: String,
+    /// `None` means "restore the whole directory" — the dangerous default, so
+    /// the camelCase spelling has to resolve here rather than at the dispatch
+    /// seam alone.
+    file_path: Option<String>,
+}
+
+/// Parse the `checkpoint` arguments.
+///
+/// Every multi-word field is read in BOTH spellings. The schema advertises
+/// `workingDir` / `commitHash` / `filePath` (`rename_all = "camelCase"`) and
+/// `tools::normalize_arg_keys` reconciles them at the dispatch seam, so this
+/// works today — but `file_path` is OPTIONAL: without that rescue a
+/// schema-following `restore` call would silently roll back the ENTIRE
+/// directory instead of the one file the caller named. Reading both here makes
+/// the narrower, safer behaviour this tool's own property.
+fn parse_args(args: &Value) -> ParsedArgs {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("list")
+        .to_string();
+    let working_dir = args
+        .get("working_dir")
+        .or_else(|| args.get("workingDir"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(".")
+        .to_string();
+
+    let mut out = ParsedArgs {
+        action,
+        working_dir,
+        commit_hash: String::new(),
+        file_path: None,
+    };
+    if out.action == "restore" {
+        out.commit_hash = args
+            .get("commit_hash")
+            .or_else(|| args.get("commitHash"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        out.file_path = args
+            .get("file_path")
+            .or_else(|| args.get("filePath"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+    out
+}
+
 pub struct CheckpointTool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1136,15 +1192,11 @@ impl OperantTool for CheckpointTool {
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("list");
-
-        let working_dir = args
-            .get("working_dir")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let parsed = parse_args(&args);
+        let action = parsed.action.as_str();
+        let working_dir = parsed.working_dir.as_str();
+        let commit_hash = parsed.commit_hash.as_str();
+        let file_path = parsed.file_path.as_deref();
 
         // (RT-539) The session scopes the checkpoint store. Every gateway
         // chat shares the working directory, so a store keyed by the
@@ -1207,12 +1259,8 @@ impl OperantTool for CheckpointTool {
                 )
             }
             "restore" => {
-                let commit_hash = args
-                    .get("commit_hash")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                let file_path = args.get("file_path").and_then(|v| v.as_str());
+                // `commit_hash` and `file_path` are read by `parse_args`, which
+                // accepts both spellings — see that function for why.
 
                 match manager.restore_for(
                     session_id.as_deref(),
@@ -1315,6 +1363,50 @@ mod tests {
         let tool = CheckpointTool::new();
         assert_eq!(tool.name(), "checkpoint");
         assert!(!tool.description().is_empty());
+    }
+
+    /// `test_checkpoint_schema_has_action_and_working_dir` pins the advertised
+    /// `workingDir`, but nothing joined the schema's spelling up with the read:
+    /// the parser read snake_case only, so the two agreed only because
+    /// `tools::normalize_arg_keys` adds a twin at the dispatch seam.
+    ///
+    /// `file_path` is the case that matters. It is OPTIONAL, so a
+    /// schema-following `restore` without the rescue does not fail loudly — it
+    /// silently rolls back the ENTIRE directory instead of the one file the
+    /// caller named. Restoring the whole tree when one file was requested is
+    /// the kind of data loss a default hides.
+    #[test]
+    fn the_parser_reads_every_multi_word_field_in_both_spellings() {
+        // restore is the arm that reads the multi-word optional fields.
+        for key in ["file_path", "filePath"] {
+            let args = serde_json::json!({ "action": "restore", "commitHash": "abc123", key: "src/lib.rs" });
+            let parsed = parse_args(&args);
+            assert_eq!(
+                parsed.file_path.as_deref(),
+                Some("src/lib.rs"),
+                "the parser must read the file to restore from {key}"
+            );
+            assert_eq!(
+                parsed.commit_hash, "abc123",
+                "the parser must read the commit hash from commitHash"
+            );
+        }
+        // And the snake_case spelling must keep working: the rescue must not be
+        // the only way in.
+        let args = serde_json::json!({ "action": "restore", "commit_hash": "abc123", "file_path": "a.rs" });
+        let parsed = parse_args(&args);
+        assert_eq!(parsed.file_path.as_deref(), Some("a.rs"));
+        assert_eq!(parsed.commit_hash, "abc123");
+
+        // workingDir is read on every arm.
+        assert_eq!(
+            parse_args(&serde_json::json!({ "action": "list", "workingDir": "/tmp/x" })).working_dir,
+            "/tmp/x"
+        );
+        assert_eq!(
+            parse_args(&serde_json::json!({ "action": "list", "working_dir": "/tmp/y" })).working_dir,
+            "/tmp/y"
+        );
     }
 
     #[test]

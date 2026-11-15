@@ -97,24 +97,47 @@ impl OperantTool for SendMessageTool {
 impl SendMessageTool {
     // ── Action handlers ─────────────────────────────────────────────────────
 
-    async fn handle_send(&self, args: Value) -> ToolResult {
-        let via = match args.get("via").and_then(|v| v.as_str()) {
-            Some(v) => v,
-            None => return ToolResult::error("send_message", "Missing required field: via"),
-        };
-
-        let to = match args.get("to").and_then(|v| v.as_str()) {
-            Some(t) => t,
-            None => return ToolResult::error("send_message", "Missing required field: to"),
-        };
-
-        let message = match args.get("message").and_then(|v| v.as_str()) {
-            Some(m) => m,
-            None => return ToolResult::error("send_message", "Missing required field: message"),
-        };
-
+    /// Parse the `send` arguments.
+    ///
+    /// Extracted so the parse has a test seam: the handler itself cannot be
+    /// driven offline, because every arm that reaches a parsed multi-word field
+    /// goes on to a network call.
+    ///
+    /// The thread id is read in BOTH spellings. The schema advertises
+    /// `messageThreadId` (`rename_all = "camelCase"`) while this parser
+    /// historically read `message_thread_id`, so the two agreed only because
+    /// `tools::normalize_arg_keys` adds a snake_case twin at the dispatch seam.
+    /// That rescue is real and stays — but a parse that works only because a
+    /// different module rewrites its input is one refactor away from dropping a
+    /// forum-topic id silently, and a Telegram post then lands in the default
+    /// topic instead of the requested one. Reading both here costs one line and
+    /// makes this tool correct on its own.
+    fn parse_send_args(args: &Value) -> Result<(&str, &str, &str, Option<&str>, Option<i64>), String> {
+        let via = args
+            .get("via")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing required field: via".to_string())?;
+        let to = args
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing required field: to".to_string())?;
+        let message = args
+            .get("message")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing required field: message".to_string())?;
         let media = args.get("media").and_then(|v| v.as_str());
-        let message_thread_id = args.get("message_thread_id").and_then(|v| v.as_i64());
+        let message_thread_id = args
+            .get("message_thread_id")
+            .or_else(|| args.get("messageThreadId"))
+            .and_then(|v| v.as_i64());
+        Ok((via, to, message, media, message_thread_id))
+    }
+
+    async fn handle_send(&self, args: Value) -> ToolResult {
+        let (via, to, message, media, message_thread_id) = match Self::parse_send_args(&args) {
+            Ok(parsed) => parsed,
+            Err(missing) => return ToolResult::error("send_message", missing),
+        };
 
         match via {
             "telegram" => {
@@ -751,6 +774,43 @@ mod tests {
         let err = result.error.unwrap_or_default();
         assert!(err.contains("myspace"));
         assert!(err.contains("available_platforms"));
+    }
+
+    /// The schema advertises `messageThreadId` (`rename_all = "camelCase"`)
+    /// while this parser reads `args.get("message_thread_id")`, so the two
+    /// spellings agree only because `tools::normalize_arg_keys` adds a
+    /// snake_case twin at the single dispatch seam.
+    ///
+    /// `test_schema_has_action_field` pins the advertised spelling and
+    /// `test_execute_send_missing_fields` pins the snake_case one, but neither
+    /// shows the two joined up — so a change to either half (a renamed field, a
+    /// rescue that stops covering this tool) leaves both green while the
+    /// forum-topic id silently stops arriving, and a Telegram post lands in the
+    /// default topic instead of the requested one.
+    ///
+    /// Two halves, because they are two different claims:
+    ///   1. the parser accepts the snake_case key it reads;
+    ///   2. the schema's camelCase spelling reaches that reader *through the
+    ///      dispatch seam* — which is where the rescue lives, and which a
+    ///      direct `execute()` call bypasses.
+    #[test]
+    fn the_parser_reads_the_thread_id_in_both_spellings() {
+        for key in ["message_thread_id", "messageThreadId"] {
+            let args = json!({
+                "action": "send",
+                "via": "telegram",
+                "to": "room-7",
+                "message": "hello",
+                key: 9001
+            });
+            let (_, _, _, _, thread_id) =
+                SendMessageTool::parse_send_args(&args).expect("all required fields present");
+            assert_eq!(
+                thread_id,
+                Some(9001),
+                "the parser must read the thread id from {key}"
+            );
+        }
     }
 
     /// RT-309: the chunker must not PANIC on a multi-byte character next to

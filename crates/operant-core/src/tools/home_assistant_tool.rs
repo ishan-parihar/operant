@@ -343,7 +343,14 @@ impl HomeAssistantTool {
     ///
     /// Returns full state including all attributes, last_changed, and last_updated.
     async fn handle_get_state(&self, args: &Value) -> ToolResult {
-        let entity_id = match args.get("entity_id").and_then(|v| v.as_str()) {
+        // Both spellings: the schema advertises `entityId`
+        // (`rename_all = "camelCase"`) and `tools::normalize_arg_keys`
+        // reconciles them at the dispatch seam.
+        let entity_id = match args
+            .get("entity_id")
+            .or_else(|| args.get("entityId"))
+            .and_then(|v| v.as_str())
+        {
             Some(e) => e,
             None => {
                 return ToolResult::error("ha_get_state", "Missing required parameter: entity_id");
@@ -635,8 +642,17 @@ impl HomeAssistantTool {
             );
         }
 
-        // Validate entity_id if provided
-        let entity_id = args.get("entity_id").and_then(|v| v.as_str());
+        // Validate entity_id if provided.
+        //
+        // Both spellings: the schema advertises `entityId`
+        // (`rename_all = "camelCase"`) and `tools::normalize_arg_keys`
+        // reconciles them at the dispatch seam. OPTIONAL here, so without the
+        // rescue a schema-following call would silently drop the entity target
+        // and address the whole domain instead of the one entity.
+        let entity_id = args
+            .get("entity_id")
+            .or_else(|| args.get("entityId"))
+            .and_then(|v| v.as_str());
         if let Some(eid) = entity_id
             && !ENTITY_ID_RE.is_match(eid)
         {
@@ -945,6 +961,35 @@ mod tests {
             .await;
         assert!(!result.success);
         assert!(result.error.unwrap_or_default().contains("entity_id"));
+    }
+
+    /// The schema advertises `entityId` (`rename_all = "camelCase"`) while the
+    /// handlers read `entity_id`, so the two agreed only because
+    /// `tools::normalize_arg_keys` adds a twin at the dispatch seam.
+    ///
+    /// These tests call `execute` DIRECTLY, which bypasses that rescue — so
+    /// without the dual read here, a schema-following call fails with "missing
+    /// entity_id". That is the observable, and it needs no network.
+    #[tokio::test]
+    async fn the_state_readers_take_the_entity_id_in_both_spellings() {
+        let tool = HomeAssistantTool::new();
+        // The snake_case spelling stays the error-free path when the entity is
+        // well-formed and unreachable-but-valid; what matters here is that the
+        // camelCase spelling does NOT trip the "missing" guard.
+        for key in ["entity_id", "entityId"] {
+            let result = tool
+                .execute(
+                    json!({ "action": "get_state", key: "light.kitchen" }),
+                    ToolContext::default(),
+                )
+                .await;
+            if let Some(err) = result.error.clone() {
+                assert!(
+                    !err.contains("Missing required parameter"),
+                    "the reader must take the entity id from {key}: {err}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -1530,6 +1530,20 @@ struct SkillViewArgs {
 }
 
 impl SkillViewTool {
+    /// Read the optional supporting-file argument.
+    ///
+    /// Both spellings: the schema advertises `filePath`
+    /// (`rename_all = "camelCase"`) and `tools::normalize_arg_keys` reconciles
+    /// them at the dispatch seam. The field is OPTIONAL, so without that rescue
+    /// a schema-following call returns the skill OVERVIEW instead of the file
+    /// the caller named — a wrong result rather than an error, which is the
+    /// harder failure to notice.
+    fn requested_file(args: &Value) -> Option<&str> {
+        args.get("file_path")
+            .or_else(|| args.get("filePath"))
+            .and_then(|v| v.as_str())
+    }
+
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             root_dir: skills_dir,
@@ -1588,8 +1602,9 @@ impl OperantTool for SkillViewTool {
             );
         }
 
-        // If file_path is specified, load a supporting file
-        if let Some(file_path) = args.get("file_path").and_then(|v| v.as_str()) {
+        // If file_path is specified, load a supporting file. See
+        // `requested_file` for why both spellings are read here.
+        if let Some(file_path) = Self::requested_file(&args) {
             let Some(skill_dir) = find_visible_skill(skills_dir, name, &self.vendor_roots) else {
                 return ToolResult::error("skill_view", format!("Skill '{}' not found", name));
             };
@@ -2478,6 +2493,26 @@ impl SkillManageTool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The schema advertises `filePath` (`rename_all = "camelCase"`) while the
+    /// reader used snake_case only, so the two agreed only because
+    /// `tools::normalize_arg_keys` adds a twin at the dispatch seam. The field is
+    /// OPTIONAL, so without that rescue a schema-following call returns the
+    /// skill OVERVIEW instead of the file the caller named — a wrong result, not
+    /// an error, which is the harder failure to notice.
+    #[test]
+    fn the_view_reads_its_file_argument_in_both_spellings() {
+        for key in ["file_path", "filePath"] {
+            let args = serde_json::json!({ "name": "test-skill", key: "references/extra.md" });
+            assert_eq!(
+                SkillViewTool::requested_file(&args),
+                Some("references/extra.md"),
+                "the reader must take the file to view from {key}"
+            );
+        }
+        // Absent means "view the overview" — the default must stay reachable.
+        assert_eq!(SkillViewTool::requested_file(&serde_json::json!({})), None);
+    }
 
     fn setup_test_env() -> (TempDir, PathBuf) {
         let dir = TempDir::new().unwrap();

@@ -100,27 +100,54 @@ impl OperantTool for ReactionTool {
 }
 
 impl ReactionTool {
-    async fn handle_react(&self, args: Value) -> ToolResult {
-        let via = match args.get("via").and_then(|v| v.as_str()) {
-            Some(v) => v,
-            None => return ToolResult::error("react_to_message", "Missing required field: via"),
-        };
-        let to = match args.get("to").and_then(|v| v.as_str()) {
-            Some(t) => t,
-            None => return ToolResult::error("react_to_message", "Missing required field: to"),
-        };
-        let message_id = match args.get("message_id").and_then(|v| v.as_str()) {
-            Some(m) => m,
-            None => {
-                return ToolResult::error(
+    /// Parse the `react` arguments.
+    ///
+    /// Extracted so the parse has a test seam: the handler itself cannot be
+    /// driven offline, because every arm that reads a parsed multi-word field
+    /// goes on to a network call.
+    ///
+    /// `message_id` is read in BOTH spellings. The schema advertises
+    /// `messageId` (`rename_all = "camelCase"`, asserted by
+    /// `test_schema_has_required_fields`) while this parser read only
+    /// `message_id`, so the two agreed only because
+    /// `tools::normalize_arg_keys` adds a snake_case twin at the dispatch seam.
+    /// Here the field is REQUIRED, so a schema-following call without that
+    /// rescue does not degrade quietly — it fails outright with "missing
+    /// message_id". Reading both spellings costs one line and makes this tool
+    /// correct on its own.
+    fn parse_react_args(
+        args: &Value,
+    ) -> Result<(&str, &str, &str, &str), (&'static str, String)> {
+        let via = args
+            .get("via")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("react_to_message", "Missing required field: via".to_string()))?;
+        let to = args
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("react_to_message", "Missing required field: to".to_string()))?;
+        let message_id = args
+            .get("message_id")
+            .or_else(|| args.get("messageId"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                (
                     "react_to_message",
-                    "Missing required field: message_id (message id, or Slack message timestamp)",
-                );
-            }
-        };
-        let emoji = match args.get("emoji").and_then(|v| v.as_str()) {
-            Some(e) => e,
-            None => return ToolResult::error("react_to_message", "Missing required field: emoji"),
+                    "Missing required field: message_id (message id, or Slack message timestamp)"
+                        .to_string(),
+                )
+            })?;
+        let emoji = args
+            .get("emoji")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("react_to_message", "Missing required field: emoji".to_string()))?;
+        Ok((via, to, message_id, emoji))
+    }
+
+    async fn handle_react(&self, args: Value) -> ToolResult {
+        let (via, to, message_id, emoji) = match Self::parse_react_args(&args) {
+            Ok(parsed) => parsed,
+            Err((tool, message)) => return ToolResult::error(tool, message),
         };
 
         match via {
@@ -451,6 +478,32 @@ mod tests {
         // camelCase rename: messageId (not message_id).
         for field in ["action", "via", "to", "messageId", "emoji"] {
             assert!(props.contains_key(field), "schema must have '{}'", field);
+        }
+    }
+
+    /// `test_schema_has_required_fields` pins the advertised `messageId` and
+    /// `test_execute_missing_action` pins the `action` key, but neither shows
+    /// the message id joined up: the schema says `messageId`, the parser reads
+    /// `message_id`, and only `tools::normalize_arg_keys` reconciles them at the
+    /// dispatch seam. A change to either half leaves both tests green while a
+    /// schema-following call fails with "missing message_id" — and because the
+    /// field is required, that is a hard failure rather than a silent drop.
+    #[test]
+    fn the_parser_reads_the_message_id_in_both_spellings() {
+        for key in ["message_id", "messageId"] {
+            let args = json!({
+                "action": "react",
+                "via": "telegram",
+                "to": "room-7",
+                key: "m-42",
+                "emoji": "👍"
+            });
+            let (_, _, message_id, _) =
+                ReactionTool::parse_react_args(&args).expect("all required fields present");
+            assert_eq!(
+                message_id, "m-42",
+                "the parser must read the message id from {key}"
+            );
         }
     }
 
