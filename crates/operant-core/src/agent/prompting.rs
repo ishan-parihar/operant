@@ -99,6 +99,36 @@ pub(crate) fn review_notification(actions: &[String], last_round_text: &str) -> 
 /// recent conversation.
 pub(crate) const REVIEW_VIEW_TOKEN_BUDGET: usize = 8_000;
 
+/// One review tool result as it enters the review's own transcript.
+///
+/// Bounded by the SAME cap the main agent applies to the same tool from the same
+/// registry ([`crate::agent::tool_result_cap`]), because the alternative was no
+/// bound at all. The review loop pushed `result.content` verbatim into
+/// `review_messages` on every one of up to five iterations: a `memory_search`
+/// returns as many as 50 rows and a `skill_view` a whole `SKILL.md`, so a
+/// review that reads three of them is already past a small auxiliary model's
+/// window. The provider then rejects the request, the loop logs a warning and
+/// BREAKS, and the review yields nothing — which is indistinguishable in the log
+/// from a model that simply found nothing worth saving.
+///
+/// Pure so the bound has a test seam. The loop that calls it lives inside an
+/// async daemon, and a rule written inline there cannot be driven from a test;
+/// that missing seam is precisely why the lane shipped unbounded.
+pub(crate) fn review_tool_result(
+    name: &str,
+    success: bool,
+    content: &str,
+    error: Option<&str>,
+) -> String {
+    if !success {
+        return format!(
+            "{{\"success\": false, \"error\": \"{}\"}}",
+            error.unwrap_or("Unknown error")
+        );
+    }
+    crate::agent::truncate_tool_result_capped(content, crate::agent::tool_result_cap(name))
+}
+
 /// Drop the oldest trajectory files so at most `keep` remain.
 ///
 /// `keep` of 0 means keep them all — the default.
@@ -771,27 +801,29 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         // now, and only then, if the agent ignores it, a refusal.
                         //
                         // One stage is enough here, because the loop already has a
-                        // hard stop: this is the soft half. It fires on the LAST
-                        // iteration (not the penultimate), so a review that would
-                        // have finished anyway is never interrupted, and a review
-                        // that was going to be cut off gets one turn to report.
+                        // hard stop: this is the soft half. It fires on the
+                        // PENULTIMATE iteration so a review that would have
+                        // finished anyway is never interrupted, and a review that
+                        // was going to be cut off gets one turn to report.
                         //
                         // The message is appended as a USER turn so the model sees
                         // it as an instruction from the host rather than as its own
                         // reasoning.
-                        // THE PENULTIMATE ITERATION, not the last one. This said
-                        // `review_iter + 1 == MAX_REVIEW_ITERATIONS`, which pushed
-                        // the message onto a request that was never sent: the loop
-                        // ran that iteration's tools and exited, so the model never
-                        // saw the instruction and the fix delivered ZERO turns
-                        // rather than the one it was written to give.
+                        //
+                        // NOT the last iteration. This comment used to say it fired
+                        // there and the code agreed: it tested
+                        // `review_iter + 1 == MAX_REVIEW_ITERATIONS`, which pushed the
+                        // message onto the LAST request — the one that is built, run
+                        // through its tools, and then never sent. The instruction
+                        // reached zero turns, which is the exact thing it was written
+                        // to fix.
                         //
                         // At the penultimate index the message rides the LAST
                         // iteration's request, which is the one the model answers
                         // after being told to stop. `MAX_REVIEW_ITERATIONS` must be
-                        // at least 2 for there to be a penultimate index; the
-                        // saturating_sub below keeps a 1-iteration cap from
-                        // underflowing into a message that can never be sent.
+                        // at least 2 for there to be a penultimate index; enforcing
+                        // that bound is `finalize_iteration`'s job, and it is the one
+                        // place the rule is written down.
                         if finalize_iteration(review_iter, MAX_REVIEW_ITERATIONS) {
                             info!(
                                 session_id = %session_id,
@@ -874,16 +906,18 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
                             match tool_result {
                                 Ok(result) => {
-                                    let result_str = if result.success {
-                                        result.content.clone()
-                                    } else {
-                                        format!(
-                                            "{{\"success\": false, \"error\": \"{}\"}}",
-                                            result
-                                                .error
-                                                .unwrap_or_else(|| "Unknown error".to_string())
-                                        )
-                                    };
+                                    // Bounded by the main agent's own cap — see
+                                    // `review_tool_result` for why this lane had no
+                                    // bound at all and what that cost. The cap is a
+                                    // READ-BACK budget, not a truncation of what the
+                                    // tool did: the write already happened, and the
+                                    // model is told the tail is in the session store.
+                                    let result_str = review_tool_result(
+                                        tool_name,
+                                        result.success,
+                                        &result.content,
+                                        result.error.as_deref(),
+                                    );
 
                                     // Track actions taken for summary
                                     if result.success {
@@ -1382,5 +1416,67 @@ mod tests {
             "one iteration cannot warn itself"
         );
         assert!(!finalize_iteration(0, 0), "no iterations, no carrier");
+    }
+
+    /// THE BOUND THIS LANE DID NOT HAVE.
+    ///
+    /// A review that calls `memory_search` (up to 50 rows) and `skill_view` (a
+    /// whole SKILL.md) once per iteration pushes five rounds of that into ONE
+    /// request. Unbounded, the request outgrows a small auxiliary model's window,
+    /// the provider rejects it, the loop warns and breaks, and the review returns
+    /// nothing. The result is capped so the request stays inside the window the
+    /// review model was chosen for.
+    #[test]
+    fn a_review_tool_result_is_capped_like_the_main_agents() {
+        let huge = "x".repeat(200_000);
+        let capped = review_tool_result("memory_search", true, &huge, None);
+
+        assert!(
+            capped.len() < huge.len(),
+            "an oversized review tool result is cut: {} -> {}",
+            huge.len(),
+            capped.len()
+        );
+        assert!(
+            capped.len() <= crate::agent::tool_result_cap("memory_search") + 128,
+            "cut to the main agent's own cap for the same tool, plus its stated \
+             truncation footer: {} bytes",
+            capped.len()
+        );
+        assert!(
+            capped.contains("truncated") || capped.contains("withheld"),
+            "the cut is STATED, so the model knows the tail exists: {}",
+            &capped[capped.len().saturating_sub(160)..]
+        );
+    }
+
+    /// A result that already fits is passed through untouched — the cap is a
+    /// ceiling, not a rewrite.
+    #[test]
+    fn a_review_tool_result_that_fits_is_untouched() {
+        let small = "{\"results\": [{\"id\": \"abc\", \"text\": \"terse\"}]}";
+        assert_eq!(
+            review_tool_result("memory_search", true, small, None),
+            small
+        );
+    }
+
+    /// The failure arm keeps its wire shape: the model reads `success: false`
+    /// and stops, rather than seeing a truncation of an error string.
+    #[test]
+    fn a_failed_review_tool_result_keeps_its_error_shape() {
+        let err = review_tool_result("skill_view", false, "ignored", Some("no such skill"));
+        assert!(err.contains("\"success\": false"), "{err}");
+        assert!(err.contains("no such skill"), "{err}");
+        assert!(
+            !err.contains("ignored"),
+            "a failure's content is not carried: {err}"
+        );
+
+        let unknown = review_tool_result("skill_view", false, "ignored", None);
+        assert!(
+            unknown.contains("Unknown error"),
+            "a missing error still names itself: {unknown}"
+        );
     }
 }

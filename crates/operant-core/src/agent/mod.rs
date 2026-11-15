@@ -1411,7 +1411,15 @@ const MAX_TOOL_RESULT_LEN: usize = 4096;
 const MAX_DELEGATE_RESULT_LEN: usize = 32 * 1024;
 
 /// The read-back budget for one tool's result.
-fn tool_result_cap(name: &str) -> usize {
+///
+/// `pub(crate)` because the background review daemon runs the SAME registry and
+/// had no budget at all: it pushed `result.content` into its own transcript
+/// unbounded, across up to five iterations. A `memory_search` returning 50 rows
+/// or a `skill_view` returning a whole `SKILL.md` is ordinary for that lane, so
+/// the review's request grew until the provider rejected it — and the loop reads
+/// that rejection as "review failed", logs a warning, and produces nothing. One
+/// rule for both callers beats a second cap that can drift from this one.
+pub(crate) fn tool_result_cap(name: &str) -> usize {
     match name {
         "delegate_task" => MAX_DELEGATE_RESULT_LEN,
         _ => MAX_TOOL_RESULT_LEN,
@@ -1423,7 +1431,10 @@ fn tool_result_cap(name: &str) -> usize {
 /// Every caller states its budget through [`tool_result_cap`], so the one tool
 /// whose result is many answers (`delegate_task`) is not cut to one answer's
 /// size.
-fn truncate_tool_result_capped(content: &str, cap: usize) -> String {
+///
+/// `pub(crate)` for the same reason as [`tool_result_cap`]: the review daemon
+/// truncates with this rather than growing a second, differently-minded cap.
+pub(crate) fn truncate_tool_result_capped(content: &str, cap: usize) -> String {
     if content.len() <= cap {
         return content.to_string();
     }
