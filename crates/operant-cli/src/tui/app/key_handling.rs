@@ -3429,6 +3429,14 @@ impl App {
                 self.set_default_model();
                 true
             }
+            // (model plan M7) `Ctrl+]` walks the scope axis: recently used ·
+            // roles · all models · one per provider. The plan's sidebar is the
+            // visual half; this is the same axis as a key, so the scope is
+            // reachable before the two-pane layout exists rather than after it.
+            KeyCode::Char(']') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_model_scope();
+                true
+            }
             KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_favorite_model();
                 true

@@ -2,7 +2,6 @@
 
 mod agent_events;
 mod agent_identity;
-mod subagent_nav;
 mod channel_drains;
 mod commands;
 mod dialog_routing;
@@ -14,12 +13,14 @@ mod import_config;
 mod init;
 mod key_handling;
 mod messaging;
+mod model_scope_nav;
 mod mouse;
 mod prompt;
 mod providers;
 mod redraw_reason;
 mod scroll_anchor;
 pub(crate) mod scroll_emit;
+mod subagent_nav;
 mod tui_state_impl;
 mod turn_state;
 
@@ -876,6 +877,10 @@ pub struct App {
     /// The acting seat's charter (the org system prompt), kept in step with
     /// `acting_seat` so the pair is atomic for prompt-cache purposes.
     pub acting_charter: Option<String>,
+    /// The models page's scope axis: which slice of the catalogue the picker
+    /// body shows. `All` is today's flat list; the sidebar's other scopes are
+    /// reachable with `Ctrl+]` in the picker (model plan M7).
+    pub model_scope: crate::tui::model_scope::ModelScope,
     /// The subagent navigator (`/subagents`, `←` on a session with live
     /// children): this session's own descendants, as their own surface.
     pub subagent_navigator: crate::tui::subagent_navigator::SubagentNavigatorState,

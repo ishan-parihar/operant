@@ -313,6 +313,14 @@ impl TuiState for App {
         self.active_provider.clone().unwrap_or_default()
     }
 
+    fn acting_model_scope(&self) -> Option<String> {
+        use crate::tui::model_scope::ModelScope;
+        match self.model_scope {
+            ModelScope::All => None,
+            ref other => Some(other.label()),
+        }
+    }
+
     fn acting_seat(&self) -> Option<String> {
         self.acting_seat.clone()
     }
