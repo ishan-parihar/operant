@@ -77,6 +77,17 @@ pub fn heading_color() -> Color {
 pub fn code_color() -> Color {
     super::palette::role_color(super::palette::Role::MdCode)
 }
+/// Markdown list-marker ink (plan 2026-11-15 U3).
+///
+/// `Role::MdListBullet` existed from U3 with no reader: the bullet drew
+/// `md_dim_color()`'s literal grey, which is no role's default, so
+/// `[tui.colors] md_list_bullet` was accepted, stored and repainted nothing.
+/// This is its first reader. NOTE: the default (200,150,90) differs from the
+/// grey the bullet drew before, so this is a deliberate one-time appearance
+/// change — the same trade the diff roles made at U6.
+pub fn list_bullet_color() -> Color {
+    super::palette::role_color(super::palette::Role::MdListBullet)
+}
 /// Markdown link text (plan 2026-11-14 U4).
 pub fn link_color() -> Color {
     super::palette::role_color(super::palette::Role::MdLink)

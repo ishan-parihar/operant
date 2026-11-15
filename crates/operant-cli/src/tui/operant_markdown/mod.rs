@@ -507,6 +507,12 @@ fn code_fg() -> Color {
     // unchanged and `/theme` + `[tui.colors]` can now repaint inline code.
     crate::tui::vendor::style::theme::code_color()
 }
+/// List-marker ink (plan 2026-11-15 U3): the first reader `Role::MdListBullet`
+/// ever had. See `vendor::style::theme::list_bullet_color` for the appearance
+/// note.
+fn list_bullet_color() -> Color {
+    crate::tui::vendor::style::theme::list_bullet_color()
+}
 fn math_fg() -> Color {
     rgb(MATH_FOREGROUND.0, MATH_FOREGROUND.1, MATH_FOREGROUND.2)
 }

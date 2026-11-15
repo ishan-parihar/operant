@@ -353,7 +353,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     ),
                 );
                 ensure_blockquote_prefix(&mut current_spans, blockquote_depth);
-                current_spans.push(Span::styled("• ", Style::default().fg(md_dim_color())));
+                current_spans.push(Span::styled("• ", Style::default().fg(list_bullet_color())));
             }
             Event::End(TagEnd::DefinitionListTitle) => {
                 flush_current_line_with_alignment(
@@ -866,7 +866,10 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                 } else {
                     "• ".to_string()
                 };
-                current_spans.push(Span::styled(marker, Style::default().fg(md_dim_color())));
+                current_spans.push(Span::styled(
+                    marker,
+                    Style::default().fg(list_bullet_color()),
+                ));
             }
             Event::End(TagEnd::Item) => {
                 flush_current_line_with_alignment(

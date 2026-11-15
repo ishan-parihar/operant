@@ -902,7 +902,6 @@ pub(crate) mod tests {
         Role::MdCodeBlock,
         Role::MdQuote,
         Role::MdHr,
-        Role::MdListBullet,
         Role::ToolDiffAdded,
         Role::ToolDiffRemoved,
         Role::ToolDiffContext,
@@ -1194,5 +1193,271 @@ pub(crate) mod tests {
 
         set_role_overrides(&std::collections::BTreeMap::new());
         set_active_theme("default");
+    }
+
+    /// **Every role in `ALL_ROLES` must have a live reader.**
+    ///
+    /// The family `Role::MdListBullet` opened (plan 2026-11-15 U3): that role was
+    /// declared, seeded, listed in `ALL_ROLES`, accepted by
+    /// [`palette::Palette::from_pairs`] — and read by nothing, because the
+    /// markdown list markers drew `md_dim_color()`'s own literal grey rather than
+    /// the role. So `[tui.colors] md_list_bullet = "#ff0000"` was validated,
+    /// stored, re-applied after a `/theme` switch, and changed nothing on screen.
+    /// That is worse than a hardcode: a hardcode fails politely, while a
+    /// writer-only key is a knob the operator can turn, watch save, and watch do
+    /// nothing.
+    ///
+    /// A first pass at this measurement searched only the fully-qualified
+    /// `vendor::style::theme::<fn>()` form and reported five LIVE roles as dead:
+    /// `ui_theme.rs` and `operant_ui/mod.rs` re-export those accessors under
+    /// short names, so `ai_color(` and `tool_color(` are real call sites the
+    /// qualified form never matches. The compiler caught it (ten unresolved
+    /// imports when the "dead" roles were deleted), which is why this is a test
+    /// and not a comment.
+    #[test]
+    fn every_role_has_a_live_reader() {
+        fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().is_some_and(|x| x == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rs_files(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .as_path(),
+            &mut files,
+        );
+
+        let theme_src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/vendor/style/theme.rs"),
+        )
+        .expect("theme.rs is a source file in this crate");
+
+        let all_roles = palette::ALL_ROLES;
+        // accessor name -> the one role it reads
+        let mut by_role: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        // `Role::key()` is snake_case (`md_list_bullet`) while the enum variant
+        // is PascalCase (`MdListBullet`), so matching `Role::{key})` matched
+        // NOTHING and every role read as dead. Derive the variant name from the
+        // key — correct for every key in this table, none of which has an
+        // acronym or a digit.
+        let variant_of = |key: &str| -> String {
+            key.split('_')
+                .map(|part| {
+                    let mut chars = part.chars();
+                    match chars.next() {
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                })
+                .collect()
+        };
+        for role in all_roles {
+            let name = role.key();
+            let variant = variant_of(name);
+            let needle = format!("Role::{variant})");
+            for block in theme_src.split("pub fn ") {
+                let Some(sig) = block.split("-> Color").next() else {
+                    continue;
+                };
+                let Some(fname) = sig.split('(').next() else {
+                    continue;
+                };
+                let fname = fname.trim();
+                if fname.is_empty() || !fname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    continue;
+                }
+                if block.contains(&needle) {
+                    by_role.insert(role.key(), Box::leak(fname.to_string().into_boxed_str()));
+                }
+            }
+        }
+
+        // The theme plumbing is not a reader. `operant_markdown/mod.rs` holds a
+        // thin `fn list_bullet_color() -> Color { theme::list_bullet_color() }`
+        // wrapper and `operant_ui/ui_theme.rs` / `mod.rs` hold the `pub use`
+        // shims: all three mention every accessor name without any widget
+        // being wired to it. Counting them is how a mutation that reverts BOTH
+        // real call sites still passed. Everything else in `src` counts.
+        const PLUMBING: &[&str] = &[
+            "vendor/style/",
+            "/tui/theme_colors.rs",
+            "/tui/color_depth.rs",
+            "/operant_markdown/mod.rs",
+            "/operant_ui/ui_theme.rs",
+            "/operant_ui/mod.rs",
+        ];
+        // A role is usually reached through a LOCAL WRAPPER, not through the
+        // accessor's own name: `operant_markdown/mod.rs` defines
+        // `fn code_fg() -> Color { theme::code_color() }` and widgets call
+        // `code_fg()`. So an accessor-name scan reports `md_code` as dead even
+        // though the markdown renderer is wired to it. Learn the wrapper names
+        // by reading each `fn` body for a call to the accessor, then count a
+        // call to EITHER name.
+        let mut aliases: std::collections::HashMap<&str, Vec<String>> =
+            std::collections::HashMap::new();
+        for (role_key, fname) in &by_role {
+            aliases.insert(role_key, vec![(*fname).to_string()]);
+        }
+        for path in &files {
+            let lossy = path.to_string_lossy().to_string();
+            // Only the vendor shim is skipped HERE: the wrapper a widget calls
+            // is usually DEFINED in a plumbing file (`operant_markdown/mod.rs`
+            // defines `code_fg`), so excluding plumbing from alias discovery
+            // loses the name the widgets actually use. Plumbing is still
+            // excluded when COUNTING readers, below.
+            if lossy.contains("vendor/style/") {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            for (role_key, fname) in &by_role {
+                let mut rest = src.as_str();
+                while let Some(at) = rest.find("fn ") {
+                    let after = &rest[at + 3..];
+                    let end = after.find('{').unwrap_or(after.len());
+                    let name = after[..end]
+                        .split(['(', '<', ' '])
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    let body_end = after[end..]
+                        .find('}')
+                        .map(|i| end + i)
+                        .unwrap_or(after.len());
+                    let body = &after[end..body_end.min(after.len())];
+                    if !name.is_empty() && name != *fname && body.contains(&format!("{fname}(")) {
+                        let list = aliases.entry(role_key).or_default();
+                        if !list.iter().any(|n| n == name) {
+                            list.push(name.to_string());
+                        }
+                    }
+                    rest = &after[end.min(after.len() - 1)..];
+                }
+            }
+        }
+
+        let mut readers: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for path in &files {
+            let lossy = path.to_string_lossy().to_string();
+            if PLUMBING.iter().any(|needle| lossy.contains(needle)) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            for (role_key, _fname) in &by_role {
+                let Some(names) = aliases.get(role_key) else {
+                    continue;
+                };
+                // Count CALL sites, not definitions. A bare `matches()`
+                // counts the accessor's own `pub fn`, the `pub(super) use`
+                // shim, and any local wrapper — so reverting both real call
+                // sites still left `md_list_bullet` reading as live and the
+                // guard passed on a mutation it was supposed to catch. A line
+                // that opens with a `fn` header is a definition, not a reader.
+                let hits = src
+                    .lines()
+                    .filter(|line| {
+                        names.iter().any(|n| line.contains(&format!("{n}(")))
+                            && !line.trim_start().starts_with("fn ")
+                            && !line.trim_start().starts_with("pub fn ")
+                            && !line.trim_start().starts_with("pub(crate) fn ")
+                            && !line.trim_start().starts_with("pub(super) fn ")
+                            && !line.trim_start().starts_with("pub(super) use")
+                            && !line.trim_start().starts_with("pub use")
+                    })
+                    .count();
+                if hits > 0 {
+                    *readers.entry(role_key).or_insert(0) += hits;
+                }
+            }
+            // A literal equal to a role's frozen default is also a reader: the
+            // buffer pass attributes that cell by exact match, so an override
+            // repaints it. `MdListBullet`'s default was among no literal before
+            // U3, which is exactly why it was dead.
+            if !lossy.contains("vendor/style/")
+                && !lossy.ends_with("theme_colors.rs")
+                && !lossy.ends_with("color_depth.rs")
+            {
+                for role in all_roles {
+                    let (r, g, b) = role.default_rgb();
+                    if src.contains(&format!("rgb({r}, {g}, {b})")) {
+                        *readers.entry(role.key()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // The nine `syntax_*` roles are reached through ONE generic call site,
+        // not one accessor each: `markdown_render_support.rs` calls
+        // `theme::syntax_color(role_for_scope_stack(..))`, and `syntax_color`'s
+        // own `debug_assert!` restricts its argument to exactly these nine. A
+        // per-accessor scan therefore reports all nine as dead — the same false
+        // positive a first pass at this measurement produced, which is why the
+        // special case is written down rather than re-discovered.
+        let syntax_reader = files.iter().any(|path| {
+            !path.to_string_lossy().contains("vendor/style/")
+                && std::fs::read_to_string(path).is_ok_and(|src| src.contains("syntax_color("))
+        });
+        if syntax_reader {
+            for role in all_roles {
+                if matches!(
+                    role,
+                    palette::Role::SyntaxComment
+                        | palette::Role::SyntaxKeyword
+                        | palette::Role::SyntaxFunction
+                        | palette::Role::SyntaxVariable
+                        | palette::Role::SyntaxString
+                        | palette::Role::SyntaxNumber
+                        | palette::Role::SyntaxType
+                        | palette::Role::SyntaxOperator
+                        | palette::Role::SyntaxPunctuation
+                ) {
+                    *readers.entry(role.key()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let dead: Vec<&str> = all_roles
+            .iter()
+            .filter(|role| readers.get(role.key()).copied().unwrap_or(0) == 0)
+            .map(|role| role.key())
+            .collect();
+        // ONE deliberate exception, recorded rather than wired.
+        //
+        // `MdCodeBlock`'s frozen default (200,200,195) is byte-identical to the
+        // literal `operant_markdown::text_color()` returns for markdown BODY
+        // prose. Pointing `text_color` at the role would render identically
+        // today, but it would be a lie about what the role means — the same
+        // category of error the predecessor plan named when it refused to point
+        // `html_fg` at `ToolDiffContext` ("HTML passthrough is not diff
+        // context"). So the role stays unread until some surface actually means
+        // "code block", and the exception is written down here so the next
+        // reader knows it was decided, not missed.
+        const KNOWN_UNREAD: &[&str] = &["md_code_block"];
+        let dead: Vec<&str> = all_roles
+            .iter()
+            .map(|role| role.key())
+            .filter(|key| readers.get(key).copied().unwrap_or(0) == 0)
+            .filter(|key| !KNOWN_UNREAD.contains(key))
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "roles with NO live reader — `[tui.colors]` would accept them and repaint \
+             nothing. Either wire a reader, add it to KNOWN_UNREAD with a reason, \
+             or delete the role: {dead:?}"
+        );
     }
 }
