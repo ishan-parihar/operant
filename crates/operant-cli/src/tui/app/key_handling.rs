@@ -3471,6 +3471,7 @@ impl App {
         code: KeyCode,
         modifiers: KeyModifiers,
     ) -> bool {
+        use crate::tui::operant_app::tui_fns::PickerKind;
         let Some(picker) = self.inline_interactive.as_mut() else {
             return false;
         };
@@ -3480,6 +3481,22 @@ impl App {
                     picker.filter.clear();
                     Self::apply_inline_interactive_filter(picker);
                 } else {
+                    // (plan 2026-11-16 B1) CANCEL IS A RESTORE, not just a
+                    // close. Moving the cursor through the bar picker PREVIEWS
+                    // each style on the live status line, so an Esc that only
+                    // dismissed the menu would leave the last row the cursor
+                    // touched in force — the same rule the theme picker learned
+                    // in iter-2429: a cancel that changes what the operator
+                    // sees is not a cancel.
+                    //
+                    // The committed value is re-read from the config rather than
+                    // a remembered field, because a preview deliberately never
+                    // writes it: `apply_bar_style` is the only writer of
+                    // `config.tui.bar_style`, and it runs on Enter, not on a
+                    // cursor move.
+                    if picker.kind == PickerKind::Bar {
+                        self.restore_committed_bar_style();
+                    }
                     self.inline_interactive = None;
                 }
                 true
@@ -3491,6 +3508,7 @@ impl App {
                     let entry = &mut picker.entries[idx];
                     entry.selected_option = entry.selected_option.saturating_sub(1);
                 }
+                self.preview_bar_selection();
                 true
             }
             KeyCode::Down => {
@@ -3504,6 +3522,7 @@ impl App {
                         entry.selected_option += 1;
                     }
                 }
+                self.preview_bar_selection();
                 true
             }
             KeyCode::Left => {
@@ -3666,6 +3685,33 @@ impl App {
                 // rather than closing the picker on a no-op.
                 None => self.set_status_notice(
                     "That row carries no effort level — nothing to apply.".to_string(),
+                ),
+            }
+            return;
+        }
+        // (plan 2026-11-16 B1) A bar-style row sets a bar style and nothing
+        // else. Like Effort, this arm must come BEFORE the `entry.action` match:
+        // the row's action is `BarStyle`, which has no model and no slot, and
+        // letting it fall through would close the picker on a no-op.
+        if kind == PickerKind::Bar {
+            match &entry.action {
+                PickerAction::BarStyle(key) => {
+                    match crate::tui::status_line::style::parse_strict(key) {
+                        Some(style) => {
+                            // The shared writer, so the picker and
+                            // `/bar <style>` persist identically.
+                            let notice = self.apply_bar_style(style);
+                            self.set_status_notice(notice);
+                        }
+                        // A row whose key does not resolve would be a row that
+                        // does nothing; say so rather than silently closing.
+                        None => self.set_status_notice(format!(
+                            "That row carries no bar style — nothing to apply ({key:?})."
+                        )),
+                    }
+                }
+                _ => self.set_status_notice(
+                    "That row carries no bar style — nothing to apply.".to_string(),
                 ),
             }
             return;

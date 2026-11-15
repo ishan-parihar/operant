@@ -557,69 +557,33 @@ impl App {
             // screen and reaching into it from here would make the settings
             // screen's writer private-debt rather than a seam.
             "bar" => {
-                use crate::tui::status_line::style::{self as bar_style_cell, SeparatorStyle};
-                // The style rendered as a sample, so the reply is the evidence
-                // the change took — see `bar_style_cell::preview`.
-                let bar_preview = |style: SeparatorStyle| bar_style_cell::preview(style);
+                // (plan 2026-11-16 B1) A BARE `/bar` OPENS THE PICKER.
+                //
+                // The operator's report: "/bar is very irritating to navigate and
+                // implement." The style used to be a typed ARGUMENT, so choosing
+                // one meant recalling one of eight spellings and reading a text
+                // notice to find out what happened — the only command in this TUI
+                // that made a LIST-shaped choice by typing. Every comparable
+                // surface (`/model`, `/effort`, `/agent`, `/theme`) opens a picker
+                // whose rows show the options and whose cursor applies on Enter.
+                //
+                // `/bar <style>` still applies directly, because a scripted or
+                // habitual invocation should not have to traverse a menu — the
+                // same split `/effort` has.
                 let requested = args.trim();
                 if requested.is_empty() {
-                    let style = crate::tui::status_line::style::style();
-                    let known = SeparatorStyle::ALL
-                        .iter()
-                        .map(|s| s.key())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.set_status_notice(format!(
-                        "Status bar style: {} [{}] — /bar <{known}>",
-                        style.key(),
-                        bar_preview(style),
-                    ));
+                    self.open_bar_picker();
                     return true;
                 }
-                let (style, known) = SeparatorStyle::parse(requested);
-                if !known {
-                    let known = SeparatorStyle::ALL
-                        .iter()
-                        .map(|s| s.key())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.set_status_notice(format!(
-                        "Unknown bar style \"{requested}\" — expected one of: {known}"
-                    ));
-                    return true;
-                }
-                crate::tui::status_line::style::set_style(Some(style));
-                self.config.tui.bar_style = style.key().to_string();
-                match self.config.config_path.as_ref().map_or_else(
-                    || {
-                        Err(operant_core::error::Error::Config(
-                            "the loaded config has no recorded source path".to_string(),
-                        ))
-                    },
-                    |path| {
-                        operant_core::config::persist_config_key_at(
-                            path,
-                            "tui.bar_style",
-                            style.key(),
-                        )
-                    },
-                ) {
-                    Ok(_) => {
-                        self.set_status_notice(format!(
-                            "Status bar style: {} [{}]",
-                            style.key(),
-                            bar_preview(style),
-                        ));
+                match crate::tui::status_line::style::parse_strict(requested) {
+                    Some(style) => {
+                        let notice = self.apply_bar_style(style);
+                        self.set_status_notice(notice);
                     }
-                    // Applied for this session, not persisted — said out loud,
-                    // because a setting that silently reverts on restart reads as
-                    // a broken command rather than an unwritable config.
-                    Err(e) => {
+                    None => {
+                        let known = crate::tui::status_line::style::vocabulary();
                         self.set_status_notice(format!(
-                            "Status bar style: {} [{}] — applied for this session, but \
-                             not persisted: {e}",
-                            style.key(),
-                            bar_preview(style),
+                            "Unknown bar style \"{requested}\" — expected one of: {known}"
                         ));
                     }
                 }
@@ -3774,5 +3738,164 @@ mod tests {
             app.pending_mcp_reconnect,
             "'r' on the servers pane still reconnects the MCP runtime"
         );
+    }
+}
+
+impl App {
+    /// Apply one status-bar style and say what happened. THE one writer.
+    ///
+    /// (plan 2026-11-16 B1) The bar style had TWO callers after this plan — the
+    /// `/bar <style>` argument and the picker's Enter — and they must not
+    /// disagree about what "applied" means. Before this, the write lived inline
+    /// in the command arm, so the picker would have needed a second copy of the
+    /// same three steps (live cell, config field, TOML) and the two could have
+    /// drifted on the persist path.
+    ///
+    /// Returns the notice to show rather than setting it, so a caller that wants
+    /// to prefix or defer the message can.
+    pub(crate) fn apply_bar_style(
+        &mut self,
+        style: crate::tui::status_line::style::SeparatorStyle,
+    ) -> String {
+        use crate::tui::status_line::style::{self as cell};
+        // The live cell first: the status line reads it per frame, so the change
+        // is on screen without a restart whatever the persist does below.
+        cell::set_style(Some(style));
+        self.config.tui.bar_style = style.key().to_string();
+        match self.config.config_path.as_ref().map_or_else(
+            || {
+                Err(operant_core::error::Error::Config(
+                    "the loaded config has no recorded source path".to_string(),
+                ))
+            },
+            |path| operant_core::config::persist_config_key_at(path, "tui.bar_style", style.key()),
+        ) {
+            Ok(_) => format!(
+                "Status bar style: {} [{}]",
+                style.key(),
+                cell::preview(style)
+            ),
+            // Applied for this session, not persisted — said out loud, because a
+            // setting that silently reverts on restart reads as a broken command
+            // rather than an unwritable config.
+            Err(e) => format!(
+                "Status bar style: {} [{}] — applied for this session, but not \
+                 persisted: {e}",
+                style.key(),
+                cell::preview(style)
+            ),
+        }
+    }
+
+    /// Build the status-bar style picker.
+    ///
+    /// (plan 2026-11-16 B1) The operator's report: "/bar is very irritating to
+    /// navigate and implement." It was the only list-shaped choice in this TUI
+    /// made by typing an argument. The rows follow `open_effort_picker_inline`
+    /// exactly — one row per option, the current one flagged and preselected,
+    /// Enter routes through the shared writer.
+    ///
+    /// Each row's NAME renders the separator it draws (`preview`), so the list
+    /// IS the sample: an operator arrows down and reads the shapes instead of
+    /// recalling eight spellings. That is the whole point of the change — the
+    /// old reply could only NAME a style, never show it.
+    pub(crate) fn open_bar_picker(&mut self) {
+        use crate::tui::operant_app::tui_fns::{
+            InlineInteractiveState, PickerAction, PickerEntry, PickerKind, PickerOption,
+        };
+        use crate::tui::status_line::style::{self as cell, SeparatorStyle};
+
+        let current = cell::style();
+        let entries: Vec<PickerEntry> = SeparatorStyle::ALL
+            .iter()
+            .map(|style| PickerEntry {
+                name: format!("{:<15}{}", style.key(), cell::preview(*style)),
+                options: vec![PickerOption {
+                    provider: "status-line".to_string(),
+                    api_method: "bar-style".to_string(),
+                    available: true,
+                    detail: String::new(),
+                    estimated_reference_cost_micros: None,
+                }],
+                // The key, not the label: the label carries padding and a
+                // rendered sample, and parsing it back would be lossy.
+                action: PickerAction::BarStyle(style.key().to_string()),
+                selected_option: 0,
+                is_current: *style == current,
+                is_default: *style == SeparatorStyle::default(),
+                is_favorite: false,
+                recommended: false,
+                recommendation_rank: 0,
+                usage_score: 0,
+                old: false,
+                created_date: None,
+                effort: None,
+            })
+            .collect();
+
+        let selected = entries
+            .iter()
+            .position(|e| e.is_current)
+            .unwrap_or_default();
+        let mut picker = InlineInteractiveState {
+            kind: PickerKind::Bar,
+            entries,
+            filtered: (0..0).collect(),
+            selected,
+            column: 0,
+            filter: String::new(),
+            // Eight local constants: nothing is loading.
+            loading: false,
+            preview: false,
+        };
+        Self::apply_inline_interactive_filter(&mut picker);
+        self.inline_interactive = Some(picker);
+    }
+    /// Point the LIVE style cell at whatever row the bar picker's cursor is on.
+    ///
+    /// (plan 2026-11-16 B1) This is what makes the picker worth having: the
+    /// operator arrows through eight rows and the real status line redraws in
+    /// each one, so the choice is made by looking rather than by recalling
+    /// eight spellings and re-running the command to see what changed.
+    ///
+    /// The LIVE CELL ONLY. `config.tui.bar_style` is deliberately untouched —
+    /// `apply_bar_style` is its only writer and runs on Enter, so a cursor move
+    /// can preview all day without changing what the next launch reads. That is
+    /// also what makes [`Self::restore_committed_bar_style`] a complete undo:
+    /// the committed value is still there to go back to.
+    pub(crate) fn preview_bar_selection(&mut self) {
+        use crate::tui::operant_app::tui_fns::{PickerAction, PickerKind};
+        use crate::tui::status_line::style::{self as cell};
+        let Some(picker) = self.inline_interactive.as_ref() else {
+            return;
+        };
+        if picker.kind != PickerKind::Bar {
+            return;
+        }
+        let Some(&idx) = picker.filtered.get(picker.selected) else {
+            return;
+        };
+        let Some(entry) = picker.entries.get(idx) else {
+            return;
+        };
+        let PickerAction::BarStyle(key) = &entry.action else {
+            return;
+        };
+        if let Some(style) = cell::parse_strict(key) {
+            cell::set_style(Some(style));
+        }
+    }
+
+    /// Undo a preview: put the committed style back on the live cell.
+    ///
+    /// (plan 2026-11-16 B1) Called when the operator cancels the bar picker.
+    /// The committed value is read back from the config, which is the only cell
+    /// a preview never writes, so this needs no extra state to remember where
+    /// the cursor started.
+    pub(crate) fn restore_committed_bar_style(&mut self) {
+        use crate::tui::status_line::style::{self as cell, SeparatorStyle};
+        let committed =
+            cell::parse_strict(&self.config.tui.bar_style).unwrap_or(SeparatorStyle::default());
+        cell::set_style(Some(committed));
     }
 }

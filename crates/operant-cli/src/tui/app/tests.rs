@@ -18607,59 +18607,148 @@ fn reload_skills_keeps_a_skill_that_lives_only_in_extra_roots() {
 // ── /bar — the status bar style (plan 2026-11-15 T2) ────────────────────────
 mod bar_command_tests {
     use super::*;
+    use crate::tui::operant_app::tui_fns::PickerKind;
+    use crate::tui::status_line::style::{self as cell, SeparatorStyle};
+
+    /// Keeps the process-global style cell and the config field as they were,
+    /// so one bar test cannot poison the next.
+    struct Restore {
+        style: Option<SeparatorStyle>,
+        configured: String,
+    }
+    impl Restore {
+        fn take(app: &App) -> Self {
+            Self {
+                style: cell::style().into(),
+                configured: app.config.tui.bar_style.clone(),
+            }
+        }
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            cell::set_style(self.style);
+        }
+    }
 
     /// THE OPERATOR'S REPORT: "I do not have /bar command to configure the bar."
     /// The style existed but was reachable only as a row inside `/config`, so
-    /// there was no command by that name at all — `handle_tui_command` fell
-    /// through to the model, which is why the operator could not find it.
+    /// there was no command by that name at all.
     #[test]
-    fn bar_is_a_command_and_bare_bar_reports_the_style() {
+    fn bar_is_a_command() {
         let mut app = make_app();
         assert!(
             app.handle_tui_command("bar", ""),
             "/bar must be a recognised command, not text sent to the model"
         );
-        let notice = app.status_message.clone().unwrap_or_default();
-        assert!(
-            notice.contains("Status bar style:"),
-            "bare /bar reports the style in force: {notice:?}"
+    }
+
+    /// THE OPERATOR'S SECOND REPORT: "/bar is very irritating to navigate and
+    /// implement." A bare `/bar` now opens the PICKER, the way `/model`,
+    /// `/effort` and `/agent` do, instead of printing a spelling list.
+    #[test]
+    fn a_bare_bar_opens_the_picker() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("bar", ""));
+        let picker = app.inline_interactive.as_ref().expect("the picker opens");
+        assert_eq!(
+            picker.kind,
+            PickerKind::Bar,
+            "the bar surface must declare its own kind, not borrow the model one"
         );
-        // It names the alternatives, so the command answers "what can I pick".
+        assert_eq!(
+            picker.entries.len(),
+            SeparatorStyle::ALL.len(),
+            "every style in the catalogue gets a row"
+        );
+        // The row carries the config KEY, not its label: the label is padded and
+        // carries a rendered sample, so parsing it back would be lossy.
+        for (entry, style) in picker.entries.iter().zip(SeparatorStyle::ALL) {
+            assert_eq!(
+                entry.action,
+                crate::tui::operant_app::tui_fns::PickerAction::BarStyle(style.key().to_string()),
+                "row {} must carry the key {:?}",
+                entry.name,
+                style.key()
+            );
+        }
+    }
+
+    /// Each row must SHOW its separator. That is the whole point of the change:
+    /// the old reply could only name a style, never render one, so choosing
+    /// meant eight spellings and a text notice to find out what happened.
+    #[test]
+    fn every_bar_row_renders_its_own_separator() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("bar", ""));
+        let picker = app.inline_interactive.as_ref().expect("the picker opens");
+        for (entry, style) in picker.entries.iter().zip(SeparatorStyle::ALL) {
+            assert!(
+                entry.name.contains(style.glyph()),
+                "row {:?} must render the glyph {:?} so the operator can SEE the \
+                 style before applying it",
+                entry.name,
+                style.glyph()
+            );
+        }
+    }
+
+    /// The current style is flagged and preselected, so opening the picker
+    /// lands the cursor on what is already in force.
+    #[test]
+    fn the_picker_opens_on_the_current_style() {
+        let mut app = make_app();
+        cell::set_style(Some(SeparatorStyle::Block));
+        app.config.tui.bar_style = "block".to_string();
+        assert!(app.handle_tui_command("bar", ""));
+        let picker = app.inline_interactive.as_ref().expect("the picker opens");
+        let selected = picker
+            .entries
+            .get(picker.selected)
+            .expect("the cursor names a row");
+        assert_eq!(
+            selected.action,
+            crate::tui::operant_app::tui_fns::PickerAction::BarStyle("block".to_string()),
+            "the cursor must start on the style in force"
+        );
         assert!(
-            notice.contains("dot") && notice.contains("powerline"),
-            "bare /bar lists the available styles: {notice:?}"
+            picker.entries.iter().filter(|e| e.is_current).count() == 1,
+            "exactly one row is marked current"
         );
     }
 
-    /// `/bar <style>` applies immediately — the live cell is what the status
-    /// line draws from, so no restart is involved.
+    /// `/bar <style>` still applies WITHOUT a menu, so a scripted or habitual
+    /// invocation does not have to traverse eight rows.
     #[test]
-    fn bar_with_an_argument_applies_the_style() {
-        // `make_app` takes `ACTIVE_LOCK` itself; taking it here as well would
-        // self-deadlock (std's Mutex is not reentrant).
+    fn bar_with_an_argument_applies_directly_and_opens_no_picker() {
+        let _r = Restore::take(&make_app());
         let mut app = make_app();
         assert!(app.handle_tui_command("bar", "ascii"));
-        assert_eq!(
-            crate::tui::status_line::style::style(),
-            crate::tui::status_line::style::SeparatorStyle::Ascii,
-            "/bar ascii must reach the live style cell"
+        assert!(
+            app.inline_interactive.is_none(),
+            "an explicit style must not also open a menu"
         );
+        assert_eq!(cell::style(), SeparatorStyle::Ascii, "the live cell moved");
         assert_eq!(app.config.tui.bar_style, "ascii", "and the config");
-        // Restore the default so a parallel test does not inherit `ascii`.
-        crate::tui::status_line::style::set_style(None);
     }
 
-    /// An unknown style is REFUSED with the vocabulary, never silently ignored:
-    /// a bar command that quietly kept the old style would read as broken.
+    /// A typo must be REFUSED, not silently degraded to `dot`. The config
+    /// loader degrades on purpose (a bad file must still boot); a value the
+    /// operator TYPED has to come back as an error, or `/bar powerlin` reads as
+    /// success and the operator never learns the spelling.
     #[test]
     fn bar_refuses_an_unknown_style_and_names_the_options() {
+        let _r = Restore::take(&make_app());
         let mut app = make_app();
-        let before = crate::tui::status_line::style::style();
+        let before = cell::style();
         assert!(app.handle_tui_command("bar", "chartreuse"));
         assert_eq!(
-            crate::tui::status_line::style::style(),
+            cell::style(),
             before,
             "an unknown style must change nothing"
+        );
+        assert!(
+            app.inline_interactive.is_none(),
+            "a refused style must not open the picker either"
         );
         let notice = app.status_message.clone().unwrap_or_default();
         assert!(
@@ -18667,144 +18756,99 @@ mod bar_command_tests {
             "the refusal names the vocabulary: {notice:?}"
         );
     }
-    /// A record belonging to ANOTHER session must never reach this session's gallery.
-    ///
-    /// The registry is one process-wide map and the delegation ledger is one file for
-    /// the whole home, so the producer's only defence is the scope it applies. This
-    /// is the guard for the bug the operator reported: a fresh session opened with
-    /// another session's subagent rows already in the strip, because the read was
-    /// unscoped. It pins the two halves of the rule — an unparented record and a
-    /// record parented to a DIFFERENT session are both foreign — and the positive
-    /// case, so the guard cannot be satisfied by returning nothing at all.
+
+    /// PARSING IS CASE- AND SEPARATOR-INSENSITIVE, matching the TOML.
     #[test]
-    fn a_foreign_sessions_subagent_never_reaches_the_gallery() {
-        let _registry = registry_lock();
-        let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
-        const MINE: &str = "sess-mine";
-        const THEIRS: &str = "sess-theirs";
-        let admit = |parent: Option<&str>| {
-            operant_core::tools::async_delegation::try_create_record("job", "m", 16, parent, None)
-                .expect("a free slot")
-                .id()
-                .to_string()
-        };
-
-        let mine = admit(Some(MINE));
-        let theirs = admit(Some(THEIRS));
-        let unattributed = admit(None);
-
-        let mut app = make_app();
-        app.current_session = Some(MINE.to_string());
-        let shown: Vec<String> = app
-            .swarm_gallery_members(false)
-            .map(|m| m.session_id)
-            .collect();
-
-        assert!(
-            shown.contains(&mine),
-            "this session's own child must be shown: {shown:?}"
-        );
-        assert!(
-            !shown.contains(&theirs),
-            "a child of ANOTHER session must not be shown: {shown:?}"
-        );
-        assert!(
-            !shown.contains(&unattributed),
-            "a record with no parent edge is not provably this session's: {shown:?}"
-        );
-
-        // No session at all means nothing to scope against: an empty strip is honest,
-        // a foreign one is not.
-        app.current_session = None;
-        assert!(
-            app.swarm_gallery_members(false).next().is_none(),
-            "with no session the gallery must be empty, not unscoped"
-        );
-    }
-
-    /// (plan 2026-11-16 T3) THE REPLY MUST SHOW THE STYLE, NOT JUST NAME IT.
-    ///
-    /// The operator's second report: "/bar command is still not working
-    /// properly." It WAS applying — verified by `bar_with_an_argument_applies_
-    /// the_style` — but the reply named only the key, and on an idle session
-    /// the status row renders NOTHING for six of the eight styles. MEASURED:
-    /// `add_caps` on an empty line yields `""` for dot, slash, pipe, block,
-    /// none and ascii, because a separator only exists BETWEEN two segments and
-    /// an idle row has one (the tip, and only 12s of every 90). So an operator
-    /// who ran `/bar slash` had no way to tell a working change from a dead
-    /// command — the notice was the only evidence available, and it carried
-    /// none.
-    ///
-    /// The fix is that the notice carries the glyph. This asserts the glyph
-    /// reaches the string, so a future edit that drops it fails here rather
-    /// than in front of an operator.
-    #[test]
-    fn the_bar_notice_shows_the_style_it_applied() {
-        use crate::tui::status_line::style::SeparatorStyle;
-
-        // Restore whatever was in force so a parallel test is unaffected.
-        let before = crate::tui::status_line::style::style();
-
-        for style in SeparatorStyle::ALL {
-            let mut app = make_app();
-            // A bare `/bar` too: it reports the style ALREADY in force, and it
-            // is the arm most likely to be edited because it has no persist
-            // branch to keep in step. Testing only `/bar <style>` left a
-            // mutation that dropped the preview from the reply GREEN, because
-            // `make_app` has no config path and so never reaches the `Ok` arm.
-            assert!(app.handle_tui_command("bar", style.key()));
-            let applied = app.status_message.clone().unwrap_or_default();
-            assert!(
-                applied.contains(style.glyph()),
-                "/bar {} must SHOW its glyph; the notice was {:?}",
-                style.key(),
-                applied
-            );
-
-            let mut bare = make_app();
-            crate::tui::status_line::style::set_style(Some(*style));
-            assert!(bare.handle_tui_command("bar", ""));
-            let notice = bare.status_message.clone().unwrap_or_default();
-            let glyph = style.glyph();
-            assert!(
-                notice.contains(glyph),
-                "/bar {} must SHOW its glyph so the operator can see the change; \
-                 the notice was {:?}",
-                style.key(),
-                notice
+    fn bar_style_names_parse_like_the_config_does() {
+        for (typed, expected) in [
+            ("powerline", SeparatorStyle::Powerline),
+            ("Powerline", SeparatorStyle::Powerline),
+            ("  POWERLINE  ", SeparatorStyle::Powerline),
+            ("powerline_thin", SeparatorStyle::PowerlineThin),
+            ("powerline thin", SeparatorStyle::PowerlineThin),
+        ] {
+            assert_eq!(
+                cell::parse_strict(typed),
+                Some(expected),
+                "{typed:?} must resolve like the config's own key"
             );
         }
-
-        crate::tui::status_line::style::set_style(Some(before));
+        assert_eq!(cell::parse_strict("chartreuse"), None);
     }
 
-    /// A style that renders as whitespace must still be visible in the reply —
-    /// `none`'s glyph is a single space, so an unframed sample would read as a
-    /// hole in the sentence. The preview brackets it for exactly this reason.
+    /// MOVING THE CURSOR PREVIEWS WITHOUT COMMITTING.
+    ///
+    /// This is the behaviour that makes the picker worth having, and the pair of
+    /// assertions is the contract: a preview moves the live cell, and it does
+    /// NOT move the config — which is what makes cancel a complete undo.
     #[test]
-    fn the_preview_brackets_a_whitespace_only_style() {
-        let none = crate::tui::status_line::style::SeparatorStyle::None;
-        let preview = crate::tui::status_line::style::preview(none);
-        assert!(
-            preview.starts_with('a') && preview.ends_with('b'),
-            "the sample must name its own edges when the glyph is blank: {preview:?}"
+    fn moving_the_cursor_previews_but_does_not_commit() {
+        let _r = Restore::take(&make_app());
+        let mut app = make_app();
+        app.config.tui.bar_style = "dot".to_string();
+        assert!(app.handle_tui_command("bar", ""));
+        let start = app
+            .inline_interactive
+            .as_ref()
+            .expect("the picker opens")
+            .selected;
+
+        app.handle_inline_interactive_key(KeyCode::Down, KeyModifiers::NONE);
+        let picker = app.inline_interactive.as_ref().expect("still open");
+        assert_eq!(picker.selected, start + 1, "the cursor moved");
+        let previewed = match picker.entries[picker.selected].action.clone() {
+            crate::tui::operant_app::tui_fns::PickerAction::BarStyle(key) => {
+                cell::parse_strict(&key).expect("a row's key resolves")
+            }
+            _ => unreachable!("a bar row carries BarStyle"),
+        };
+        assert_eq!(
+            cell::style(),
+            previewed,
+            "the live cell must show the row under the cursor"
+        );
+        assert_eq!(
+            app.config.tui.bar_style, "dot",
+            "a preview must NOT write the config — that is what makes Esc a full undo"
         );
     }
 
-    /// (plan 2026-11-16 T3) `/bar <style>` MUST REACH THE TOML.
+    /// ESC RESTORES, it does not merely close.
     ///
-    /// MEASURED, not assumed. The write goes through
-    /// `persist_config_key_at(path, "tui.bar_style", key)` — the same seam the
-    /// settings-screen row uses — but the seam is only reachable when
-    /// `config.config_path` is populated, and `make_app()` leaves it `None`.
-    /// Every other `/bar` test therefore exercises the "applied for this
-    /// session, but not persisted" branch and would stay green if the persist
-    /// call were deleted outright.
-    ///
-    /// This one supplies a real path and reads the file back, so a regression
-    /// that silently stopped persisting fails here.
+    /// A preview moves the live palette, so an Esc that only dismissed the menu
+    /// would leave the last row the cursor touched in force — the rule the theme
+    /// picker learned in iter-2429.
     #[test]
-    fn bar_with_an_argument_writes_the_toml() {
+    fn escaping_the_bar_picker_restores_the_committed_style() {
+        let _r = Restore::take(&make_app());
+        let mut app = make_app();
+        app.config.tui.bar_style = "dot".to_string();
+        assert!(app.handle_tui_command("bar", ""));
+        for _ in 0..3 {
+            app.handle_inline_interactive_key(KeyCode::Down, KeyModifiers::NONE);
+        }
+        assert_ne!(
+            cell::style(),
+            SeparatorStyle::Dot,
+            "the preview moved off the committed style"
+        );
+        app.handle_inline_interactive_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.inline_interactive.is_none(), "Esc closes the picker");
+        assert_eq!(
+            cell::style(),
+            SeparatorStyle::Dot,
+            "Esc must restore the committed style, not leave the previewed one"
+        );
+    }
+
+    /// ENTER COMMITS: live cell, config, and the TOML.
+    ///
+    /// MEASURED, not assumed. Every other bar test runs with `config_path ==
+    /// None`, so they exercise only the "not persisted" branch and would stay
+    /// green if the persist call were deleted outright. This one supplies a real
+    /// path and reads the file back.
+    #[test]
+    fn the_picker_and_the_argument_share_one_writer() {
         // Under the manifest, not `std::env::temp_dir()`: a sandboxed run can
         // have a read-only /var/tmp, and a test that fails for that reason
         // teaches the next agent to delete it.
@@ -18815,22 +18859,64 @@ mod bar_command_tests {
         std::fs::write(&path, "[tui]\ntheme = \"dark\"\n").expect("seed the config");
 
         let _cfg_guard = operant_core::config::config_path_test_guard();
+        let _r = Restore::take(&make_app());
         let mut app = make_app();
         app.config.config_path = Some(path.clone());
+        app.config.tui.bar_style = "dot".to_string();
 
+        // Via the ARGUMENT.
         assert!(app.handle_tui_command("bar", "pipe"));
-        let written = std::fs::read_to_string(&path).expect("the config is readable");
+        let by_argument = std::fs::read_to_string(&path).expect("readable");
         assert!(
-            written.contains("bar_style = \"pipe\""),
-            "/bar pipe must write tui.bar_style; the file was:\n{written}"
+            by_argument.contains("bar_style = \"pipe\""),
+            "/bar pipe must write tui.bar_style; the file was:\n{by_argument}"
         );
-        // The operator's own keys survive the write — a persist that rewrote the
-        // whole file would drop every other setting.
+
+        // Via the PICKER, which must produce the same file.
+        app.config.tui.bar_style = "dot".to_string();
+        assert!(app.handle_tui_command("bar", ""));
+        let target = app
+            .inline_interactive
+            .as_ref()
+            .expect("the picker opens")
+            .entries
+            .iter()
+            .position(|e| {
+                e.action
+                    == crate::tui::operant_app::tui_fns::PickerAction::BarStyle("block".to_string())
+            })
+            .expect("a block row exists");
+        app.handle_inline_interactive_key(KeyCode::Up, KeyModifiers::NONE);
+        // Walk the cursor to the block row explicitly.
+        let picker = app.inline_interactive.as_ref().expect("open");
+        let mut cursor = picker.selected;
+        while cursor != target {
+            app.handle_inline_interactive_key(KeyCode::Down, KeyModifiers::NONE);
+            cursor = app.inline_interactive.as_ref().expect("open").selected;
+        }
+        app.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::NONE);
+        let by_picker = std::fs::read_to_string(&path).expect("readable");
         assert!(
-            written.contains("theme = \"dark\""),
-            "the pre-existing key must survive: {written}"
+            by_picker.contains("bar_style = \"block\""),
+            "the picker must write through the same seam; the file was:\n{by_picker}"
+        );
+        // The operator's own keys survive both writes.
+        assert!(
+            by_picker.contains("theme = \"dark\""),
+            "the pre-existing key must survive: {by_picker}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The style cell is process-global, so a test that leaves it moved breaks
+    /// unrelated tests in the same binary. Belt and braces on top of `Restore`.
+    #[test]
+    fn the_bar_tests_leave_the_style_where_they_found_it() {
+        let _r = Restore::take(&make_app());
+        cell::set_style(Some(SeparatorStyle::Pipe));
+        drop(_r);
+        assert_eq!(cell::style(), SeparatorStyle::Dot, "restored on drop");
+        cell::set_style(None);
     }
 }

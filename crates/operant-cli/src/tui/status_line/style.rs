@@ -202,6 +202,34 @@ pub fn preview(style: SeparatorStyle) -> String {
     format!("a{}b", style.glyph())
 }
 
+/// Parse an operator-typed style name, or `None` if it names none.
+///
+/// (plan 2026-11-16 B1) The strict twin of [`SeparatorStyle::parse`], which
+/// answers "the default, and you were wrong" so a config loader can degrade
+/// silently. A command that TYPED a value must not degrade: an operator who
+/// runs `/bar powerlin` and gets `dot` back has been told their input was fine
+/// when it was not, and has no way to learn the spelling.
+///
+/// The name is normalised the same way the loader normalises it (trimmed,
+/// lower-cased, `_` and space folded to `-`), so `/bar Powerline` and
+/// `/bar powerline` agree with what the TOML accepts.
+pub fn parse_strict(key: &str) -> Option<SeparatorStyle> {
+    let normalized = key.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    SeparatorStyle::ALL
+        .iter()
+        .copied()
+        .find(|style| style.key() == normalized)
+}
+
+/// The accepted style names for a message, in catalogue order.
+pub fn vocabulary() -> String {
+    SeparatorStyle::ALL
+        .iter()
+        .map(|s| s.key())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
