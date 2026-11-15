@@ -1504,8 +1504,16 @@ impl App {
                 true
             }
             "subagents" => {
-                // session-hub plan T7: the subagent navigator. Session-scoped,
-                // so it refuses to mount on a session with no children.
+                // The BESPOKE subagent navigator: this session's own descendants,
+                // flat by default with a tree on `t`. Session-scoped, so it
+                // refuses to mount on a session with no children.
+                //
+                // NOT what `<-` opens. The operator asked for `←` to open "the
+                // subagent filtered session-picker", which is the hub scoped to
+                // this session's children (`open_subagent_scoped_hub`) — the
+                // picker's own rows, preview and rename guards, plus a scope.
+                // This surface stays reachable by name because it is the one that
+                // draws the TREE, and a tree is not a list.
                 self.open_subagent_navigator();
                 true
             }

@@ -10,6 +10,7 @@
 //! (`tui_state.rs:2804-2809`).
 
 use super::*;
+use crate::tui::session_hub::SubagentScope;
 use crate::tui::subagent_navigator::{NavigatorEntry, descendants};
 
 impl App {
@@ -165,6 +166,55 @@ impl App {
             self.set_status_notice("this session has no subagents".to_string());
         }
         mounted
+    }
+
+    /// Mount the SESSION PICKER restricted to this session's own subagents —
+    /// the `<-` gesture on an ongoing session.
+    ///
+    /// The operator's ask: "if a session is ongoing, and not a new session,
+    /// then the `<-` left arrow must open the subagent filtered session-picker,
+    /// rather than the global session picker."
+    ///
+    /// # Why the hub and not a bespoke surface
+    ///
+    /// The rows, the preview pane, the rename/archive guards and the
+    /// `FocusSubagent` selection are all already the hub's, so a second surface
+    /// would re-implement them to answer the same question. Scoping the picker
+    /// also matches codex, whose `/subagents` is the generic `SelectionView`
+    /// with a subagent row source (`source_kinds = SubAgentThreadSpawn`,
+    /// `ancestor_thread_id = root`) rather than a bespoke widget.
+    ///
+    /// # Why it can refuse
+    ///
+    /// Returns `false` — and leaves the hub closed — when there is no current
+    /// session or this session spawned nobody (omp's `requireContent`). An
+    /// empty filtered picker reads as a broken key, and the caller's `false` is
+    /// what lets `←` fall through to the global hub instead of being swallowed.
+    pub fn open_subagent_scoped_hub(&mut self) -> bool {
+        // The root is cloned FIRST: `session_descendant_ids` borrows `self`, and
+        // the scope has to outlive that borrow.
+        let Some(root) = self.current_session.clone() else {
+            self.set_status_notice(
+                "no session to inspect — the picker is session-scoped".to_string(),
+            );
+            return false;
+        };
+        let Some(ids) = self.session_descendant_ids() else {
+            return false;
+        };
+        if ids.is_empty() {
+            // Not an error: a session with no children is the common case, and
+            // the ← gesture is simply the global picker for it.
+            self.set_status_notice("this session has no subagents".to_string());
+            return false;
+        }
+        // One scope, two fields, from one source: the id set is what the hub
+        // filters on AND what the open guard counted, so the picker can never
+        // open empty or refuse a full one.
+        self.session_hub
+            .open_subagent_scoped(Some(std::time::Instant::now()), SubagentScope { root, ids });
+        self.session_list_pending = true;
+        true
     }
 
     /// Enter on a navigator row focuses that child, through the hub's own

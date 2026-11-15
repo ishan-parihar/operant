@@ -390,9 +390,14 @@ pub fn set_active_theme(theme_name: &str) {
     // The file's pairs ride the same merge as `[tui.colors]`, so a theme file
     // cannot be half-applied and cannot clobber an explicit operator override
     // that names the same role.
-    if let Some(map) = &file_map {
-        set_role_overrides(map);
-    }
+    //
+    // They go to THEIR OWN store, not to `ROLE_OVERRIDES`: that one belongs to
+    // the operator's `[tui.colors]` and must outlive a theme switch, while a
+    // theme's pairs must outlive nothing. Sharing the store meant the first
+    // bundled palette an operator tried repainted every theme they picked
+    // afterwards — `/theme dark-retro` then `/theme default` left the role
+    // table on `#ffc633`, and nothing on screen said why.
+    set_theme_role_overrides(file_map.as_ref());
     apply_role_overrides();
 }
 
@@ -422,6 +427,37 @@ pub fn set_role_overrides(pairs: &std::collections::BTreeMap<String, String>) {
     apply_role_overrides();
 }
 
+/// The ACTIVE THEME's own colour pairs, kept apart from [`ROLE_OVERRIDES`].
+///
+/// # Why this is a second store
+///
+/// Both used to be one list, and the difference between them is exactly one
+/// question: should this survive a `/theme` switch? The operator's
+/// `[tui.colors]` pairs must — that is the whole reason `ROLE_OVERRIDES`
+/// exists. A theme's pairs must NOT, because they ARE the theme: keeping them
+/// meant the first bundled palette an operator tried was layered over every
+/// theme they chose afterwards, so `default` stopped being default.
+///
+/// Measured on the operator's store: after `/theme dark-retro` then
+/// `/theme default`, `Role::Accent` still read `#ffc633` (dark-retro) instead
+/// of `#ffbf00` (default).
+static THEME_ROLE_OVERRIDES: std::sync::RwLock<Vec<(String, String)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Remember the active theme's own pairs (empty for a built-in palette) and
+/// re-apply the merge now.
+///
+/// Passing an empty map is the CLEARING call — every built-in theme and every
+/// unknown name takes it, which is what makes a switch away from a file theme
+/// actually switch.
+fn set_theme_role_overrides(pairs: Option<&std::collections::BTreeMap<String, String>>) {
+    if let Ok(mut guard) = THEME_ROLE_OVERRIDES.write() {
+        *guard = pairs
+            .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+    }
+}
+
 /// Re-apply [`ROLE_OVERRIDES`] on top of the currently seeded role palette.
 ///
 /// Called from [`set_active_theme`] — the one write path for the palette — so
@@ -430,10 +466,17 @@ pub fn set_role_overrides(pairs: &std::collections::BTreeMap<String, String>) {
 /// override are left exactly as the theme seeded them, so one typo cannot
 /// wash out the rest of the palette.
 fn apply_role_overrides() {
-    let pairs: Vec<(String, String)> = match ROLE_OVERRIDES.read() {
+    // Theme pairs first, operator pairs second, so an explicit `[tui.colors`
+    // entry wins over the theme that happens to be active — the documented
+    // precedence, kept while the two sources were split.
+    let mut pairs: Vec<(String, String)> = match THEME_ROLE_OVERRIDES.read() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     };
+    pairs.extend(match ROLE_OVERRIDES.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    });
     if pairs.is_empty() {
         return;
     }
@@ -765,6 +808,81 @@ pub fn disabled() -> Color {
 /// appearance decision rather than a leftover.
 pub const SEARCH_MATCH_BG: Color = Color::Rgb(60, 50, 0);
 
+/// A foreground guaranteed to read on a `selection_bg()` fill.
+///
+/// # Why this is derived and not a role
+///
+/// A selection bar paints `selection_bg()` as a FILL, and the foreground has to
+/// contrast with it. No fixed role can: the 100 bundled palettes were generated
+/// from oh-my-pi's `defaults.json` with no constraint that a foreground be
+/// readable on top of the selection colour, and the two obvious candidates both
+/// fail when measured across all of them —
+///
+/// | foreground | worst ratio | under 3:1 | under 4.5:1 |
+/// |------------|-------------|-----------|-------------|
+/// | `accent()` — what the hub's filter pill used | 1.34 (`light-retro`) | 26/98 | 56/98 |
+/// | `text_dark()` = black — what `on_selection()` returns | 1.05 (`dark-midnight`) | 51/98 | 51/98 |
+///
+/// The second row is the trap. `text_dark` reads well on the eight built-in
+/// palettes, so `on_selection()` looked correct; it is black on all 100 bundled
+/// ones because no role seeds `text_dark`, and black on `dark-cyberpunk`'s
+/// `#1B1B2A` selection fill is invisible.
+///
+/// So the foreground is COMPUTED from the fill instead of named: whichever of
+/// black and white contrasts better, walked toward that endpoint until it does.
+/// `max(contrast(black, c), contrast(white, c))` bottoms out at luminance 0.179
+/// where it equals 4.58:1, so this clears WCAG AA for normal text on every
+/// possible colour, not merely on these palettes.
+///
+/// The walk is the vendored `readable_light_foreground`: hue-preserving, 7:1
+/// target, quantised through the capability-aware `rgb()` so a 256-colour
+/// terminal stays palette-bounded. When 7:1 is unreachable — it is, for any
+/// mid-luminance fill — it lands on the better endpoint, which is the best
+/// available answer rather than a failure.
+///
+/// # Cost
+///
+/// The walk is a 12-round bisection and this is called per painted row, so the
+/// result is memoised on the INPUT pair: the palette is quantised once at apply
+/// time and the colour depth is fixed for the process, so the pair identifies
+/// the answer exactly and the cache is bounded by the palette count.
+pub fn on_selection_bg() -> Color {
+    // Two reads, not a tuple: `with_active` returns one `Color`, and taking the
+    // lock twice is free compared with the bisection behind the second call.
+    let ink = with_active(|p| p.text_dark);
+    let fill = with_active(|p| p.selection_bg);
+    readable_on_cached(ink, fill)
+}
+
+/// A foreground guaranteed to read on `background`, derived the way
+/// [`on_selection_bg`] derives its own.
+///
+/// The general form, for a renderer whose selection fill is not
+/// `selection_bg()` — the `accent()` fills in the plugins hub, the agent list
+/// and the export dialog want this rather than a fixed black, because black on
+/// an accent fill measures 2.91:1 at worst (`alabaster`) and under 4.5:1 on 11
+/// of the 98 bundled palettes.
+pub fn readable_on(background: Color) -> Color {
+    let ink = with_active(|p| p.text_dark);
+    readable_on_cached(ink, background)
+}
+
+/// The memo for [`readable_on_cached`]. Keyed on the (ink, fill) pair, which the
+/// quantised palette and the fixed colour depth make a complete description of
+/// the answer.
+fn readable_on_cached(ink: Color, fill: Color) -> Color {
+    static CACHE: std::sync::RwLock<Option<std::collections::HashMap<(Color, Color), Color>>> =
+        std::sync::RwLock::new(None);
+    let mut guard = CACHE.write().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(hit) = cache.get(&(ink, fill)) {
+        return *hit;
+    }
+    let resolved = theme_mode::readable_light_foreground(ink, fill);
+    cache.insert((ink, fill), resolved);
+    resolved
+}
+
 /// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`], and on
 /// top of `accent()` when a list row is selected — `accent()` returns
 /// `p.emphasis`, which carries the same value as `selection_bg` on every theme
@@ -778,8 +896,19 @@ pub const SEARCH_MATCH_BG: Color = Color::Rgb(60, 50, 0);
 /// `accent()` is a named ANSI slot (Cyan / Blue), so the ratio is
 /// terminal-dependent and not computable from source; `text_dark` is
 /// `Color::Black` on both, so every foreground option coincides there.
+///
+/// # Scope, stated honestly
+///
+/// Every caller pairs this with an `accent()` fill, not with `selection_bg()` —
+/// that is what "on top of `accent()`" above has meant since iter-468, and the
+/// name predates the distinction. So it resolves against `accent()`, and it is
+/// [`readable_on`] that this returns. A renderer whose selection fill IS
+/// `selection_bg()` wants [`on_selection_bg`]; using this one there is how the
+/// session hub's filter pill came to paint `accent()` on `selection_bg()` at
+/// 1.34:1.
 pub fn on_selection() -> Color {
-    with_active(|p| p.text_dark)
+    let accent = with_active(|p| p.emphasis);
+    readable_on(accent)
 }
 
 /// Apply the palette for a `Theme` enum value from `adapter_types::config`.
@@ -950,6 +1079,241 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// WCAG 2.1 relative luminance and contrast ratio, for the guards below.
+    ///
+    /// Local rather than imported: `vendor::style::theme_mode` keeps its own copy
+    /// private to the light-adaptation pass, and a guard that reached into a
+    /// private helper would be one refactor away from silently testing nothing.
+    ///
+    /// EVERY form is mapped, because the derivation returns a NAMED endpoint —
+    /// `readable_light_foreground` bisects toward `Color::Black` or
+    /// `Color::White`, not toward `Rgb(0,0,0)`. A helper that understood only
+    /// `Rgb` would read both as mid-grey, which is exactly how the first
+    /// version of this guard reported 3.44:1 for a pairing that is really 18:1.
+    fn to_rgb(color: Color) -> (u8, u8, u8) {
+        match color {
+            Color::Rgb(r, g, b) => (r, g, b),
+            Color::Indexed(n) => crate::tui::vendor::style::color::indexed_to_rgb(n),
+            Color::Reset => (128, 128, 128),
+            named => {
+                let index = match named {
+                    Color::Black => 0,
+                    Color::Red => 1,
+                    Color::Green => 2,
+                    Color::Yellow => 3,
+                    Color::Blue => 4,
+                    Color::Magenta => 5,
+                    Color::Cyan => 6,
+                    Color::Gray => 7,
+                    Color::DarkGray => 8,
+                    Color::LightRed => 9,
+                    Color::LightGreen => 10,
+                    Color::LightYellow => 11,
+                    Color::LightBlue => 12,
+                    Color::LightMagenta => 13,
+                    Color::LightCyan => 14,
+                    Color::White => 15,
+                    // `Color::Reset` was handled above; anything else is not a
+                    // colour this palette can hold, so it reads as mid-grey.
+                    _ => 7,
+                };
+                crate::tui::vendor::style::color::indexed_to_rgb(index)
+            }
+        }
+    }
+
+    fn relative_luminance(color: Color) -> f32 {
+        let (r, g, b) = to_rgb(color);
+        let linear = |channel: u8| {
+            let value = f32::from(channel) / 255.;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (a, b) = (relative_luminance(a), relative_luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// THE guard for the operator's report: "the highlight of the selected
+    /// filter is not ideally visible on all themes for text-visibility".
+    ///
+    /// It was not one theme — it was 26 of the 100 bundled palettes rendering
+    /// the active filter tab below the 3:1 floor, and `light-retro` at 1.34:1
+    /// (amber `#ffbb00` on `#e8e4d8`). The cause was structural: a FIXED role
+    /// was chosen as the foreground on a fill it had no relationship to. `accent()`
+    /// on `selection_bg()` measures 1.34:1 at worst, `user_bg()` on the same fill
+    /// 1.00:1, and `text_dark()` — always black, since no role seeds it — 1.05:1.
+    ///
+    /// So the foreground is derived from the fill, and this asserts the
+    /// DERIVATION across every bundled palette rather than asserting one pairing
+    /// that would rot the moment a palette is regenerated. 4.5:1 is WCAG AA for
+    /// normal text; the theoretical floor of the black/white choice this makes is
+    /// 4.58:1, so a failure here means the derivation broke, not that a palette
+    /// is unusual.
+    #[test]
+    fn selection_and_accent_fills_always_carry_a_readable_foreground() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Restore, so a panic here cannot leave the process on the last palette
+        // this loop applied.
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                // `set_role_overrides` FIRST: `set_active_theme` on a BUNDLED
+                // name records that palette's pairs as ROLE OVERRIDES, so
+                // restoring only the theme name would leave the last bundled
+                // palette's colours installed on top of `default` — and the
+                // next theme test to read the role palette would see them.
+                set_role_overrides(&std::collections::BTreeMap::new());
+                set_active_theme("default");
+            }
+        }
+        let _restore = Restore;
+
+        for (name, _) in crate::tui::theme_bundled::BUNDLED {
+            set_active_theme(name);
+            let fill = selection_bg();
+            let on_fill = on_selection_bg();
+            let ratio = contrast(on_fill, fill);
+            assert!(
+                ratio >= 4.5,
+                "{name}: on_selection_bg() = {on_fill:?} on selection_bg() = {fill:?} \
+                 measures {ratio:.2}:1, under the 4.5:1 floor"
+            );
+
+            // The `accent()` fills — the plugins hub, the agent list, the export
+            // dialog, the theme screen — resolve through `on_selection()`, which
+            // measured 2.91:1 at worst (`alabaster`) and under 4.5:1 on 11
+            // palettes when it returned a fixed black.
+            let accent_fill = accent();
+            let on_accent = on_selection();
+            let accent_ratio = contrast(on_accent, accent_fill);
+            assert!(
+                accent_ratio >= 4.5,
+                "{name}: on_selection() = {on_accent:?} on accent() = {accent_fill:?} \
+                 measures {accent_ratio:.2}:1, under the 4.5:1 floor"
+            );
+        }
+    }
+
+    /// `/theme <bundled>` followed by `/theme default` must give `default` back.
+    ///
+    /// # The leak this pins
+    ///
+    /// `set_active_theme` records a THEME FILE's pairs as ROLE OVERRIDES, and
+    /// `apply_role_overrides` re-applies them on every subsequent switch. So the
+    /// moment an operator tries one of the 100 bundled palettes, its colours are
+    /// installed over EVERY theme they pick afterwards — including the built-ins
+    /// they switch back to. `default` stops being default, and nothing on screen
+    /// says why.
+    ///
+    /// The operator's own `[tui.colors]` pairs must still survive a theme
+    /// switch (that is what `ROLE_OVERRIDES` is for), so the fix cannot be to
+    /// drop overrides on a switch — it has to keep the two SOURCES apart.
+    #[test]
+    fn a_bundled_palette_does_not_outlive_the_switch_away_from_it() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                set_role_overrides(&std::collections::BTreeMap::new());
+                set_active_theme("default");
+            }
+        }
+        let _restore = Restore;
+
+        // The ROLE palette, not `theme_colors::*`: the accessors read the
+        // `ColorPalette` fields, which `set_active_theme` does reset. The stale
+        // overrides land on the vendored role table — the one markdown, syntax
+        // and every migrated surface read — so that is what this has to measure.
+        let role_accent = || palette::palette().rgb(palette::Role::Accent);
+
+        set_role_overrides(&std::collections::BTreeMap::new());
+        set_active_theme("default");
+        let clean_default = role_accent();
+
+        set_active_theme("dark-retro");
+        assert_ne!(
+            role_accent(),
+            clean_default,
+            "the bundled palette must actually repaint the role table, or this \
+             guard proves nothing"
+        );
+        set_active_theme("default");
+        assert_eq!(
+            role_accent(),
+            clean_default,
+            "switching back to a built-in theme must restore THAT theme, not the \
+             bundled palette's accent layered over it"
+        );
+    }
+
+    /// The other half of the split: the operator's own `[tui.colors]` pairs must
+    /// still survive a theme switch, and must still WIN over the theme's pairs.
+    ///
+    /// This is what `ROLE_OVERRIDES` exists for, and the reason the fix above
+    /// could not simply drop overrides on every switch.
+    #[test]
+    fn operator_colour_overrides_survive_a_theme_switch_and_win() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                set_role_overrides(&std::collections::BTreeMap::new());
+                set_active_theme("default");
+            }
+        }
+        let _restore = Restore;
+
+        let mut pairs = std::collections::BTreeMap::new();
+        pairs.insert("accent".to_string(), "#010203".to_string());
+        set_role_overrides(&pairs);
+        set_active_theme("default");
+        assert_eq!(
+            palette::palette().rgb(palette::Role::Accent),
+            (1, 2, 3),
+            "an explicit [tui.colors] entry is applied"
+        );
+
+        // A bundled theme names the same role. The operator's entry must win.
+        set_active_theme("dark-retro");
+        assert_eq!(
+            palette::palette().rgb(palette::Role::Accent),
+            (1, 2, 3),
+            "the operator's [tui.colors] accent beats the theme's"
+        );
+
+        // And it is still there after switching back to a built-in.
+        set_active_theme("default");
+        assert_eq!(
+            palette::palette().rgb(palette::Role::Accent),
+            (1, 2, 3),
+            "an explicit override outlives every theme switch"
+        );
+    }
+
+    /// The derivation is idempotent and the memo cannot answer from a stale key:
+    /// the same pair must resolve the same way however often it is asked, and
+    /// two different fills must not share an answer.
+    #[test]
+    fn the_readable_foreground_memo_is_keyed_on_the_pair() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dark = readable_on(Color::Rgb(0x1B, 0x1B, 0x2A));
+        let light = readable_on(Color::Rgb(0xF0, 0xEF, 0xF0));
+        assert_eq!(dark, readable_on(Color::Rgb(0x1B, 0x1B, 0x2A)));
+        assert_ne!(
+            dark, light,
+            "two fills must not share one derived foreground"
+        );
+        assert!(contrast(dark, Color::Rgb(0x1B, 0x1B, 0x2A)) >= 4.5);
+        assert!(contrast(light, Color::Rgb(0xF0, 0xEF, 0xF0)) >= 4.5);
     }
 
     /// A typo in the seed table's field names would silently un-seed a role

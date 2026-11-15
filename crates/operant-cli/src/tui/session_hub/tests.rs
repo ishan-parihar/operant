@@ -604,7 +604,10 @@ fn tool_call_json_is_summarized_not_printed() {
         ..Default::default()
     };
     let pv = preview_message_from_row(row).expect("tool calls alone still render a row");
-    assert_eq!(pv.tool_calls, vec!["bash", "read_file"]);
+    // `bash: $ ls`, not `bash`: the label carries what the call DID, so the
+    // right pane reads as a transcript instead of a list of tool names. A call
+    // with no arguments still names itself.
+    assert_eq!(pv.tool_calls, vec!["bash: $ ls", "read_file"]);
     assert!(pv.content.is_empty());
 }
 
@@ -2294,8 +2297,8 @@ fn the_header_names_the_engaged_employee() {
     hub.replace_rows(vec![row("s1", None, Some("premiere"))]);
     let (list, _) = hub_rows_with(&mut hub);
     assert!(
-        list.join("\n").contains("s cycle"),
-        "with no employee engaged the header keeps its hint: {list:?}"
+        list.join("\n").contains("s/S cycle"),
+        "with no employee engaged the header keeps its hint, both directions: {list:?}"
     );
     hub.cycle_employee();
     let (list, _) = hub_rows_with(&mut hub);
@@ -3901,8 +3904,8 @@ fn every_stages_claim_holds_on_one_drawn_hub() {
         "Stage A: the header must carry the live row count\n{joined}"
     );
     assert!(
-        joined.contains("s cycle"),
-        "Stage A: the filter affordance must be visible\n{joined}"
+        joined.contains("s/S cycle"),
+        "Stage A: the filter affordance must be visible, in BOTH directions\n{joined}"
     );
     assert!(
         joined.contains("all 4"),
@@ -4158,4 +4161,466 @@ fn the_sql_filter_and_the_row_predicate_agree_on_every_axis() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// The filter ladder walks BOTH ways (`s` / `S`)
+// ---------------------------------------------------------------------------
+
+/// The operator's ask: "if `s` changes the filters, then shift+s must revert
+/// that order of change".
+///
+/// `prev()` is held to `next()` here rather than by inspection. A second
+/// hand-written ladder drifts the moment a rung is inserted, and the failure
+/// mode is silent: the reverse cycle skips a filter and nobody notices until an
+/// operator presses `S` and lands somewhere they did not expect.
+#[test]
+fn prev_is_the_exact_inverse_of_next_for_every_mode() {
+    let mut mode = HubFilterMode::All;
+    let mut seen = vec![mode];
+    for _ in 0..7 {
+        mode = mode.next();
+        seen.push(mode);
+    }
+    assert_eq!(
+        seen.last(),
+        Some(&HubFilterMode::All),
+        "the ladder must be a single cycle back to All"
+    );
+    for mode in &seen {
+        assert_eq!(
+            mode.prev().next(),
+            *mode,
+            "{mode:?}: prev() then next() must return to the same rung"
+        );
+        assert_eq!(
+            mode.next().prev(),
+            *mode,
+            "{mode:?}: next() then prev() must return to the same rung"
+        );
+    }
+    // The two ends are each other's neighbours, which is the part a ladder
+    // written by hand gets wrong: All is the FIRST forward rung and the LAST
+    // backward one.
+    assert_eq!(HubFilterMode::All.prev(), HubFilterMode::CurrentBranch);
+    assert_eq!(HubFilterMode::CurrentBranch.next(), HubFilterMode::All);
+    assert_eq!(HubFilterMode::All.next(), HubFilterMode::NeedsYou);
+    assert_eq!(HubFilterMode::NeedsYou.prev(), HubFilterMode::All);
+}
+
+/// The two directions must leave the hub in the same state for the same rung —
+/// not merely land on the same enum. `cycle_filter` resets the cursor and
+/// re-derives the visible set; a reverse that skipped either would show the
+/// right tab over the wrong rows.
+#[test]
+fn stepping_back_reaches_the_same_state_as_stepping_forward_to_it() {
+    let mut forward = SessionHubState::new();
+    let mut backward = SessionHubState::new();
+    forward.replace_rows(vec![
+        row("s1", Some("one"), None),
+        row("s2", Some("two"), None),
+    ]);
+    backward.replace_rows(forward.rows.clone());
+
+    // Walk forward three rungs, recording the route.
+    let mut walked = vec![forward.filter_mode];
+    for _ in 0..3 {
+        forward.cycle_filter();
+        walked.push(forward.filter_mode);
+    }
+    assert_eq!(
+        walked,
+        vec![
+            HubFilterMode::All,
+            HubFilterMode::NeedsYou,
+            HubFilterMode::Working,
+            HubFilterMode::Ready
+        ]
+    );
+
+    // Stand the second hub on the rung the walk ended at, then step back three
+    // times: it must retrace the route exactly rather than take a different one.
+    backward.filter_mode = HubFilterMode::Ready;
+    let mut retraced = vec![backward.filter_mode];
+    for _ in 0..3 {
+        backward.cycle_filter_reverse();
+        retraced.push(backward.filter_mode);
+    }
+    retraced.reverse();
+    assert_eq!(
+        retraced, walked,
+        "walking back must retrace the forward walk, not take a different route"
+    );
+    assert_eq!(
+        backward.filter_mode, walked[0],
+        "three steps back from the end must land on the rung the walk started at"
+    );
+    assert_eq!(
+        backward.selected, forward.selected,
+        "both directions reset the cursor identically"
+    );
+    // And the reverse of the reverse is the forward step: `S` must not be a
+    // one-way door. One `s` from the bottom of the walk is the walk's second
+    // rung, which is what "undoing one `S`" has to mean.
+    backward.cycle_filter();
+    assert_eq!(
+        backward.filter_mode, walked[1],
+        "stepping forward again must undo exactly one step back"
+    );
+}
+
+/// `S` is the same ladder in the other direction, and it re-queries the page
+/// for the same reason `s` does: a page fetched under one mode describes a
+/// population the new mode does not show.
+#[test]
+fn reverse_filter_stepping_preserves_the_row_selection_contract() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("s1", Some("one"), None),
+        row("s2", Some("two"), None),
+    ]);
+    hub.selected = 1;
+    hub.cycle_filter();
+    assert_eq!(hub.selected, 0, "a filter change reselects from the top");
+    hub.cycle_filter_reverse();
+    assert_eq!(hub.selected, 0, "and so does the reverse step");
+}
+
+// ---------------------------------------------------------------------------
+// The subagent scope (← on an ongoing session)
+// ---------------------------------------------------------------------------
+
+fn scope_of(root: &str, ids: &[&str]) -> SubagentScope {
+    SubagentScope {
+        root: root.to_string(),
+        ids: ids.iter().map(|id| (*id).to_string()).collect(),
+    }
+}
+
+/// A subagent row whose `parent_id` names the session that spawned it, which is
+/// what `records_snapshot` writes and what the walk scopes on.
+fn child_row(id: &str, parent: &str) -> SessionEntryV2 {
+    let mut r = subagent_row(id, "the goal", "completed");
+    r.parent_id = Some(parent.to_string());
+    r
+}
+
+/// The scope shows this session's children and NOTHING else — not another
+/// session's children, and not this session's own forks.
+///
+/// Both halves are the defect this guards. The hub's delegation rows come from a
+/// process-wide registry, so a scope keyed on the row KIND alone would list
+/// every session's children as this session's; and a fork carries the same
+/// `parent_id` as a child, so a scope keyed on the PARENT alone would fill a
+/// "subagents" list with the operator's own branches.
+#[test]
+fn the_subagent_scope_shows_only_this_sessions_children() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("root", Some("this session"), None),
+        child_row("kid-1", "root"),
+        child_row("kid-2", "root"),
+        child_row("other-kid", "other-root"),
+        {
+            // A FORK: a real session row whose parent is the root. It is the
+            // operator's own branch, not a subagent.
+            let mut fork = row("fork-1", Some("a branch"), None);
+            fork.parent_id = Some("root".to_string());
+            fork
+        },
+        row("other-root", Some("another session"), None),
+    ]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1", "kid-2"]));
+
+    let visible: Vec<&str> = hub
+        .visible_idx
+        .iter()
+        .map(|&i| hub.rows[i].id.as_str())
+        .collect();
+    assert_eq!(
+        visible,
+        vec!["kid-1", "kid-2"],
+        "the scoped picker must list exactly this session's subagent rows"
+    );
+}
+
+/// The scope's TAB COUNTS come from the same predicate as the visible set.
+///
+/// A count that ignored the scope would not be optimistic, it would be
+/// answering a different question: it would promise 500 rows over a list of 2.
+#[test]
+fn the_subagent_scope_counts_what_it_shows() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("root", Some("this session"), None),
+        child_row("kid-1", "root"),
+        child_row("other-kid", "other-root"),
+    ]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+
+    let counts = hub.compute_filter_counts();
+    let all = counts
+        .iter()
+        .find(|(mode, _)| *mode == HubFilterMode::All)
+        .map(|(_, n)| *n)
+        .expect("the All tab is in the ladder");
+    assert_eq!(
+        all, 1,
+        "the All tab must count the scoped rows, not the whole store"
+    );
+}
+
+/// Opening a scope drops the STORE's counts: they were fetched for the whole
+/// population, so keeping them would paint seven tabs that promise rows the
+/// scope will never show — the defect `cycle_employee` closes, from the same
+/// cause.
+#[test]
+fn opening_a_scope_drops_the_store_wide_counts() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![child_row("kid-1", "root")]);
+    hub.store_counts = Some(operant_core::database::SessionFilterCounts {
+        all: 500,
+        needs_you: 22,
+        ready: 300,
+        inactive: 100,
+        current_dir: 5,
+        current_branch: 12,
+    });
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    assert!(
+        hub.store_counts.is_none(),
+        "a scoped hub must not carry store-wide counts"
+    );
+}
+
+/// Esc widens the list back to every session, and only then closes the hub —
+/// one press must not cost the operator both the filter and the surface.
+#[test]
+fn escaping_a_scope_widens_it_before_closing_the_hub() {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![
+        row("root", Some("this session"), None),
+        child_row("kid-1", "root"),
+    ]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    assert_eq!(hub.visible_idx.len(), 1);
+
+    assert!(
+        hub.clear_subagent_scope(),
+        "the first Esc reports that it cleared the scope"
+    );
+    assert!(hub.visible, "and it does NOT close the hub");
+    assert!(hub.subagent_scope().is_none());
+    assert_eq!(
+        hub.visible_idx.len(),
+        2,
+        "the list is back to every session"
+    );
+
+    assert!(
+        !hub.clear_subagent_scope(),
+        "a second Esc has no scope to clear"
+    );
+}
+
+/// The scope is cleared by a plain reopen and by a close, so a hub opened by
+/// `/session` can never inherit the previous session's children — the same
+/// reset rule `open()` documents for the filter, the search and the employee.
+#[test]
+fn the_scope_does_not_survive_a_reopen_or_a_close() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![child_row("kid-1", "root")]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    assert!(hub.subagent_scope().is_some());
+
+    hub.open(None);
+    assert!(
+        hub.subagent_scope().is_none(),
+        "a fresh open must not still be scoped to the old session"
+    );
+
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    hub.close();
+    assert!(hub.subagent_scope().is_none(), "close drops the scope");
+}
+
+// ---------------------------------------------------------------------------
+// The tool-call preview: human text, not the wire format
+// ---------------------------------------------------------------------------
+
+/// One stored `role='tool'` row, built the way the database holds it.
+fn tool_result(tool_name: &str, content: &str) -> operant_core::database::MessageData {
+    operant_core::database::MessageData {
+        id: 9,
+        session_id: "s".to_string(),
+        role: "tool".to_string(),
+        content: Some(content.to_string()),
+        tool_call_id: None,
+        tool_calls: None,
+        tool_name: Some(tool_name.to_string()),
+        timestamp: "now".to_string(),
+        ..Default::default()
+    }
+}
+
+/// THE guard for "the tool-call previews on the right panel are in json, and
+/// are broken".
+///
+/// A `role='tool'` row's body IS the tool's payload — 46,160 of the operator's
+/// 80,190 messages are tool rows, and the preview printed the raw object. The
+/// four payloads below are copied from the operator's own store, one per tool
+/// family, because a summarizer written against invented shapes is a summarizer
+/// written against nothing.
+#[test]
+fn a_tool_result_renders_as_text_and_never_as_json() {
+    let cases: Vec<(&str, &str, &[&str])> = vec![
+        (
+            // code_execution: the answer is stdout, and `exit 0` is the
+            // expected outcome for every successful call — noise.
+            "code_execution",
+            r#"{"exit_code":0,"language":"python","runtime_ms":74,"stderr":"","stderr_truncated":false,"stdout":"=== operant/operant-testing/kb ===\n    3786  11-05 06:05  operant-testing/kb/blind-spots.md"}"#,
+            &["operant-testing/kb/blind-spots.md", "74ms"],
+        ),
+        (
+            // datetime: nothing but fields, and `formatted` is the one a
+            // person reads.
+            "datetime",
+            r#"{"formatted":"2026-11-05T20:01:09Z","nanoseconds":909380727,"timestamp":1793908869,"timezone":"UTC","timezone_offset_seconds":0,"unix_timestamp":1793908869}"#,
+            &["2026-11-05T20:01:09Z"],
+        ),
+        (
+            // http_request: the body, not the headers that carried it.
+            "http_request",
+            r#"{"body":"{\"error\":{\"type\":\"authentication_error\",\"code\":\"invalid_api_key\"}}","body_size":218,"headers":{"access-control-allow-headers":"Content-Type"}}"#,
+            &["authentication_error"],
+        ),
+        (
+            // A NON-zero exit is the one exit code worth printing.
+            "aft_bash",
+            r#"{"command":"cargo check","exit_code":101,"output":"error[E0308]: mismatched types"}"#,
+            &["exit 101", "mismatched types"],
+        ),
+    ];
+
+    for (tool, payload, expected) in cases {
+        let pv = preview_message_from_row(tool_result(tool, payload))
+            .unwrap_or_else(|| panic!("{tool}: a result row must render"));
+        for needle in expected {
+            assert!(
+                pv.content.contains(needle),
+                "{tool}: the summarized row must contain {needle:?}\n  got: {:?}",
+                pv.content
+            );
+        }
+        assert!(
+            !pv.content.contains("\"stdout\"")
+                && !pv.content.contains("\"formatted\"")
+                && !pv.content.contains("\"nanoseconds\"")
+                && !pv.content.contains("unix_timestamp"),
+            "{tool}: the row must not leak the payload's field names\n  got: {:?}",
+            pv.content
+        );
+    }
+}
+
+/// A payload that is already prose passes through untouched — the summarizer
+/// must not rewrite a terminal tool's error message.
+#[test]
+fn a_plain_text_tool_result_is_not_rewritten() {
+    let pv = preview_message_from_row(tool_result(
+        "terminal",
+        "Failed to spawn process: No such file or directory (os error 2)",
+    ))
+    .expect("a text result renders");
+    assert_eq!(
+        pv.content, "Failed to spawn process: No such file or directory (os error 2)",
+        "a non-JSON payload is already the human text"
+    );
+}
+
+/// A tool name with no payload still says which tool ran, rather than vanishing
+/// from the transcript.
+#[test]
+fn a_tool_result_with_no_payload_names_the_tool() {
+    let pv = preview_message_from_row(tool_result("aft_read", "  ")).expect("a named row renders");
+    assert_eq!(pv.content, "aft_read");
+}
+
+/// The fallback for an unfamiliar tool: the first INFORMATIVE scalar, not the
+/// first scalar. A `process` result's first field is its id, and a row of
+/// `proc_aae581460ef2` tells the operator nothing.
+#[test]
+fn an_unfamiliar_payload_falls_back_to_the_first_informative_field() {
+    let pv = preview_message_from_row(tool_result(
+        "process",
+        r#"{"id":"proc_aae581460ef2","command":"cargo check -p operant-core","pid":2659466,"status":"Running"}"#,
+    ))
+    .expect("a row renders");
+    assert!(
+        pv.content.contains("cargo check -p operant-core"),
+        "the command is the information; the id and pid are transport\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        !pv.content.contains("proc_aae581460ef2") && !pv.content.contains("2659466"),
+        "identifiers and pids must not be the row's content\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// THE "broken" half of the report: the stored tool calls use the OpenAI nesting
+/// the providers send, and the old parser read `call["name"]` — so every call
+/// was dropped and an assistant row carrying three calls rendered as
+/// `N. agent: (no text)`, which reads as a lost message.
+///
+/// Both shapes are accepted, and the arguments may be a JSON string (the wire
+/// form) or an already-parsed object (the in-process form).
+#[test]
+fn tool_call_labels_accept_every_shape_the_store_holds() {
+    let cases: Vec<(&str, &str)> = vec![
+        (
+            r#"[{"id":"call_1","function":{"name":"aft_bash","arguments":"{\"command\": \"ls -la\"}"}}]"#,
+            "aft_bash",
+        ),
+        (
+            r#"[{"name":"bash","arguments":{"command":"ls -la"}}]"#,
+            "bash",
+        ),
+        (r#"[{"name":"read_file"}]"#, "read_file"),
+        (
+            r#"[{"tool":{"name":"web_fetch","input":{"url":"https://example.com"}}}]"#,
+            "web_fetch",
+        ),
+        (
+            // An empty arguments string is no arguments, not a parse error.
+            r#"[{"function":{"name":"todo","arguments":""}}]"#,
+            "todo",
+        ),
+    ];
+    for (raw, name) in cases {
+        let pv = preview_message_from_row(operant_core::database::MessageData {
+            id: 1,
+            session_id: "s".to_string(),
+            role: "assistant".to_string(),
+            content: Some(String::new()),
+            tool_call_id: None,
+            tool_calls: Some(raw.to_string()),
+            tool_name: None,
+            timestamp: "now".to_string(),
+            ..Default::default()
+        })
+        .unwrap_or_else(|| panic!("{raw}: a tool-call-only row must render"));
+        assert_eq!(
+            pv.tool_calls.len(),
+            1,
+            "{raw}: the call must not be dropped\n  got: {:?}",
+            pv.tool_calls
+        );
+        assert!(
+            pv.tool_calls[0].starts_with(name),
+            "{raw}: the label must name the tool\n  got: {:?}",
+            pv.tool_calls
+        );
+    }
 }

@@ -456,7 +456,11 @@ pub(crate) fn highlight_spans(
 /// needs its first non-empty line (the operator is scanning shape, not reading
 /// the body — that is what Enter-switch is for). Blank bodies collapse to a
 /// single placeholder so a tool-only message still produces a row.
-fn first_line(content: &str) -> String {
+///
+/// `pub(super)` because the ROW BUILDER needs it too: `summarize_tool_result`
+/// runs a non-JSON payload through this, so a preview row holds exactly the
+/// text the pane prints — which is what keeps the scroll bound honest.
+pub(super) fn first_line(content: &str) -> String {
     let line = content
         .lines()
         .map(str::trim)
@@ -609,6 +613,18 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     ];
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
 
+    // The subagent chip: the picker is SCOPED, and a scope that is not named is
+    // the ambiguity the scope exists to remove. The WAY OUT is on the footer
+    // line rather than here — this header is 46 columns and the group clause has
+    // to yield to whatever it holds.
+    if let Some(scope) = state.subagent_scope() {
+        let short: String = scope.root.chars().take(8).collect();
+        spans.push(Span::styled(
+            format!("  ← subagents of {short}"),
+            Style::default().fg(theme_colors::accent()),
+        ));
+    }
+
     // The employee chip: the axis that is filtering the list, named. It comes
     // before the hint because it is the one thing on this line that changes
     // what the operator is looking at.
@@ -664,10 +680,15 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // The key hint goes LAST, and only if there is still room: without it the
     // tab bar and the group headings read as decoration, but a clipped header
     // is worse than a missing hint.
+    //
+    // `s/S`, not `s`: the operator asked for Shift+S to walk the filter ladder
+    // backwards, and a control whose affordance is invisible is decoration the
+    // operator cannot find.
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    if state.employee_filter().is_none() && used + 9 <= budget {
+    if state.employee_filter().is_none() && state.subagent_scope().is_none() && used + 10 <= budget
+    {
         spans.push(Span::styled(
-            "  s cycle",
+            "  s/S cycle",
             Style::default().fg(theme_colors::muted()),
         ));
     }
@@ -818,9 +839,11 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
                 .map_or_else(|| "0".to_string(), |(_, n)| n.to_string());
             return Line::from(vec![Span::styled(
                 format!(" {} {}", state.filter_mode.label(), active),
+                // Same derivation as the full tab bar's active pill: one
+                // selection widget, one contrast rule.
                 Style::default()
                     .bg(theme_colors::selection_bg())
-                    .fg(theme_colors::accent())
+                    .fg(theme_colors::on_selection_bg())
                     .add_modifier(Modifier::BOLD),
             )]);
         };
@@ -847,9 +870,14 @@ fn render_tab_bar(state: &SessionHubState, width: u16) -> Line<'static> {
             Counts::Active | Counts::None => label.clone(),
         };
         let style = if *mode == state.filter_mode {
+            // `on_selection_bg()`, not `accent()`: the fill is `selection_bg()`
+            // and the foreground has to be derived from THAT. Pairing the
+            // accent with the selection fill measures 1.34:1 on `light-retro`
+            // and is under 3:1 on 26 of the 98 bundled palettes — the selected
+            // tab's own label was the least readable text in the pane.
             Style::default()
                 .bg(theme_colors::selection_bg())
-                .fg(theme_colors::accent())
+                .fg(theme_colors::on_selection_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::muted())
@@ -1698,10 +1726,21 @@ fn render_preview(
                 // from one field: `shows_tool_calls` was false for two of the
                 // three states, so `UserOnly` and `UserAndTurnEnd` were
                 // indistinguishable on screen.
-                format!(
-                    "t cycles the preview ({}) · Enter switches",
-                    state.preview_filter.label()
-                ),
+                // `· Esc widens` appears only while the subagent scope is
+                // engaged: a filter the operator cannot find the way out of is
+                // a trap, and the affordance belongs on the line that already
+                // names the controls.
+                if state.subagent_scope().is_some() {
+                    format!(
+                        "t cycles the preview ({}) · Esc widens · Enter switches",
+                        state.preview_filter.label()
+                    )
+                } else {
+                    format!(
+                        "t cycles the preview ({}) · Enter switches",
+                        state.preview_filter.label()
+                    )
+                },
                 Style::default().fg(theme_colors::accent()),
             )));
             // The scroll bound must count WRAPPED rows, not source lines: the

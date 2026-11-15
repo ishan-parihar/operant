@@ -204,9 +204,13 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
     let dim = theme::dim_color();
     let dialog_bg = theme_colors::panel_bg();
     let highlight_bg = theme_colors::selection_bg(); // selected-row bar
-    // A selection bar is a filled surface, so its foreground is the dark surface
-    // role rather than a light text role.
-    let highlight_fg = theme::user_bg();
+    // A selection bar is a filled surface, so its foreground is DERIVED from
+    // that surface. `theme::user_bg()` was the old answer, and it is the same
+    // colour as `selection_bg()` in 8 of the 100 bundled palettes —
+    // `dark-cyberpunk` paints `#1B1B2A` on `#1B1B2A`, so the selected row had
+    // no text at all. Measured over all 98 palettes that carry both roles:
+    // `user_bg` on `selection_bg` is under 3:1 on 96 of them.
+    let highlight_fg = theme_colors::on_selection_bg();
     let category_fg = theme_colors::accent(); // category headers
 
     // ── Dialog size: fit content, bounded by the primitive ──

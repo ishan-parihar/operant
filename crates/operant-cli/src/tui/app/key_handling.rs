@@ -814,7 +814,19 @@ impl App {
                 return false;
             }
             match key.code {
-                KeyCode::Esc => self.session_hub.close(),
+                KeyCode::Esc => {
+                    // Esc leaves the INNERMOST state first (the rule the inline
+                    // picker already follows): with the subagent scope engaged,
+                    // one press widens the list back to every session and only
+                    // the next press closes the hub. Losing the filter and the
+                    // surface to a single press is how an operator ends up
+                    // re-navigating to where they were.
+                    if self.session_hub.clear_subagent_scope() {
+                        self.session_list_pending = true;
+                    } else {
+                        self.session_hub.close();
+                    }
+                }
                 // Tab: swap which pane the step keys act on (jcode's
                 // `PaneFocus` toggle). This is the key the operator reported
                 // dead — the hub had no focus model to toggle.
@@ -890,6 +902,16 @@ impl App {
                     // population, and the page was loaded under the previous
                     // mode (audit 2026-11-14, finding 4). The load reads the
                     // current mode, so the next frame brings the filtered page.
+                    self.session_list_pending = true;
+                }
+                // `S` walks the same ladder BACKWARDS — the operator's ask:
+                // "if `s` changes the filters, then shift+s must revert that
+                // order of change". One press back to the view they were on,
+                // instead of six presses round the cycle to undo one.
+                KeyCode::Char('S') => {
+                    self.session_hub.cycle_filter_reverse();
+                    // Same re-query as `s`: the page must read the population
+                    // the new mode names, not the one it was fetched under.
                     self.session_list_pending = true;
                 }
                 // The EMPLOYEE axis (2026-11-13): a separate filter, by
@@ -2218,22 +2240,26 @@ impl App {
                     self.last_left_tap_at = None;
                     return false;
                 }
-                // (plan 2026-11-15 B4) ← on an ACTIVE session opens the subagent
-                // navigator — the operator's ask: "in active session, <- left
-                // arrow key must open the subagent panel just like oh-my-pi".
+                // ← on an ACTIVE session opens the SESSION PICKER SCOPED TO
+                // THIS SESSION'S SUBAGENTS — the operator's ask: "if a session
+                // is ongoing, and not a new session, then the `<-` left arrow
+                // must open the subagent filtered session-picker, rather than
+                // the global session picker."
                 //
-                // The split follows omp's: `←` is the SESSION-SCOPED roster, and
-                // the hub keeps the fresh-session `←` above, which has no
-                // descendants to show. The two gestures therefore never compete —
-                // an empty session opens the hub because there is nothing else to
-                // open, and an active one opens its children.
+                // It is the picker, not a second surface: the rows, the preview
+                // pane, the rename/archive guards and the `FocusSubagent`
+                // selection are the hub's, so the operator keeps every key they
+                // had in the global list. Scoping the picker is also what codex
+                // does for `/subagents` — the generic selection view with a
+                // subagent row source (`source_kinds = SubAgentThreadSpawn`,
+                // `ancestor_thread_id = root`) rather than a bespoke widget.
                 //
-                // `open_subagent_navigator` REFUSES on an empty roster (omp's
-                // `requireContent`) and says why, so `←` on a session with no
-                // children is inert rather than flashing an empty overlay. That
-                // refusal is also why this sits BEFORE the double-tap: a refused
-                // navigator leaves `←` free to fall through to the hub.
-                if gesture_candidate && self.open_subagent_navigator() {
+                // `open_subagent_scoped_hub` REFUSES on a childless session
+                // (omp's `requireContent`) and says why, so `←` there is the
+                // global picker rather than an empty filtered list. That refusal
+                // is also why this sits BEFORE the double-tap: it leaves `←` free
+                // to fall through.
+                if gesture_candidate && self.open_subagent_scoped_hub() {
                     self.last_left_tap_at = None;
                     return false;
                 }

@@ -25,6 +25,9 @@ use operant_core::session::listing::{RowKind, RowStatus, SessionEntryV2};
 mod render;
 mod row_style;
 pub use render::render_session_hub;
+// The row builder and the pane share the one-line truncation: a preview row must
+// hold the text the pane prints, or the scroll bound counts the wrong rows.
+use render::first_line;
 
 /// N idle session rows for hosts and tests that need a populated hub list
 /// without a database (iter-1503).
@@ -59,6 +62,16 @@ pub fn probe_rows(n: usize) -> Vec<SessionEntryV2> {
 
 #[cfg(test)]
 mod tests;
+
+/// The subagent scope: which session's children the hub is showing.
+#[derive(Debug, Clone)]
+pub struct SubagentScope {
+    /// The root session id. The header's chip names it, because "3 subagents"
+    /// without saying whose is the ambiguity the scope exists to remove.
+    pub root: String,
+    /// The delegation ids the walk from `root` reached.
+    pub ids: std::collections::HashSet<String>,
+}
 
 /// Filter mode cycled with `s` (jcode's cycle, reduced to what operant has —
 /// no external-CLI modes, no server modes).
@@ -110,6 +123,26 @@ impl HubFilterMode {
             Self::Inactive => Self::CurrentDir,
             Self::CurrentDir => Self::CurrentBranch,
             Self::CurrentBranch => Self::All,
+        }
+    }
+
+    /// The mode BEFORE this one: `S` (Shift+S), the operator's "revert that
+    /// order of change".
+    ///
+    /// A second explicit ladder, the same shape as `next`, `label` and
+    /// `short_label` — and held to it by
+    /// `prev_is_the_exact_inverse_of_next_for_every_mode`, which is the actual
+    /// guarantee. Deriving it by walking `next()` would avoid the second ladder
+    /// but leave the key handler one non-terminating `next()` away from a hang.
+    pub fn prev(self) -> Self {
+        match self {
+            Self::All => Self::CurrentBranch,
+            Self::NeedsYou => Self::All,
+            Self::Working => Self::NeedsYou,
+            Self::Ready => Self::Working,
+            Self::Inactive => Self::Ready,
+            Self::CurrentDir => Self::Inactive,
+            Self::CurrentBranch => Self::CurrentDir,
         }
     }
 
@@ -656,6 +689,26 @@ pub struct SessionHubState {
     /// operator typed and the assistant's end-of-turn output — which is
     /// exactly the pair the operator named.
     pub preview_filter: PreviewFilter,
+    /// The SUBAGENT SCOPE: when set, the list shows only the subagent rows
+    /// this session spawned. Engaged by `<-` on an ongoing session.
+    ///
+    /// The operator's ask: "if a session is ongoing, and not a new session,
+    /// then the `<-` left arrow must open the subagent filtered session-picker,
+    /// rather than the global session picker."
+    ///
+    /// It is the hub's OWN scope rather than a seventh filter tab for the same
+    /// reason `employee_filter` is: the ladder answers "what STATE is this work
+    /// in", and "whose children are these" is a different question. Folding it
+    /// in would make one tab mean two things.
+    ///
+    /// It carries the ID SET, not a root id and a re-walk. The hub's subagent
+    /// rows are a PROCESS-WIDE registry (`records_snapshot`), so an unscoped
+    /// "show subagents" would list another session's children as this session's
+    /// — the exact defect `session_descendant_ids` exists to prevent. Carrying
+    /// the walked ids also makes the OPEN refusal and the FILTER the same
+    /// predicate by construction: a set that is non-empty is a list that is
+    /// non-empty, so `<-` can never open an empty picker or refuse a full one.
+    subagent_scope: Option<SubagentScope>,
     /// The EMPLOYEE ROSTER: every employee the store knows about, by id and
     /// by label.
     ///
@@ -739,6 +792,7 @@ impl SessionHubState {
             rename_target_id: None,
             live_session_id: None,
             employee_filter: None,
+            subagent_scope: None,
             preview_filter: PreviewFilter::DEFAULT,
             employee_roster: Vec::new(),
             preview_first_prompt: None,
@@ -773,6 +827,10 @@ impl SessionHubState {
         self.filter_mode = HubFilterMode::All;
         self.search_query.clear();
         self.employee_filter = None;
+        // The subagent scope resets with the rest for the same reason: a hub
+        // opened by `/session` must not still be showing the previous session's
+        // children. `[open_subagent_scoped]` is what sets it deliberately.
+        self.subagent_scope = None;
         self.preview_scroll = 0;
         self.focus = PaneFocus::Sessions;
         self.focused_subagent = None;
@@ -782,6 +840,47 @@ impl SessionHubState {
         self.rename_target_id = None;
         self.armed_close_tap = armed_close_tap;
         self.rebuild_visible();
+    }
+
+    /// Open the hub restricted to `root`'s own subagent rows — `<-` on an
+    /// ongoing session.
+    ///
+    /// This is the session-picker, SUBAGENT-FILTERED, not a second surface: the
+    /// rows, the preview, the rename/archive guards and the `FocusSubagent`
+    /// selection are all the hub's, so an operator who lands here has exactly
+    /// the keys they had in the global list.
+    ///
+    /// `store_counts` is dropped rather than kept: the store counted the WHOLE
+    /// population, so leaving it in place would paint seven tab counts that
+    /// promise rows the scope will never show — the same defect `cycle_employee`
+    /// closes, from the same cause.
+    pub fn open_subagent_scoped(&mut self, armed_close_tap: Option<Instant>, scope: SubagentScope) {
+        self.open(armed_close_tap);
+        self.subagent_scope = Some(scope);
+        self.store_counts = None;
+        self.rebuild_visible();
+    }
+
+    /// The engaged subagent scope, for the header's chip.
+    pub fn subagent_scope(&self) -> Option<&SubagentScope> {
+        self.subagent_scope.as_ref()
+    }
+
+    /// Disengage the subagent scope (`Esc`), returning whether it was engaged.
+    ///
+    /// The caller uses the return to decide between "clear the scope" and
+    /// "close the hub" — jcode's and this file's own inline-picker rule that Esc
+    /// leaves the innermost state first, so one press never costs the operator
+    /// both the filter and the surface.
+    pub fn clear_subagent_scope(&mut self) -> bool {
+        if self.subagent_scope.take().is_none() {
+            return false;
+        }
+        self.store_counts = None;
+        self.selected = 0;
+        self.note_preview_miss();
+        self.rebuild_visible();
+        true
     }
 
     /// Open with the cursor already on `session_id`, when the row set holds it.
@@ -829,6 +928,7 @@ impl SessionHubState {
         self.rename_active = false;
         self.rename_draft.clear();
         self.rename_target_id = None;
+        self.subagent_scope = None;
     }
 
     /// Push the current delegation-registry state into the rows ALREADY in
@@ -1310,10 +1410,25 @@ impl SessionHubState {
                         }
                         None => true,
                     })
+                    // …and so does the subagent scope, for the same reason and
+                    // with a sharper edge: under a scope the whole population
+                    // is hidden, so an unscoped count would not be optimistic,
+                    // it would be answering a different question.
+                    .filter(|r| self.in_subagent_scope(r))
                     .count();
                 (mode, n)
             })
             .collect()
+    }
+
+    /// Whether `r` survives the engaged subagent scope. One predicate for the
+    /// visible set AND the tab counts, so the two can never disagree about
+    /// what the scope means.
+    fn in_subagent_scope(&self, r: &SessionEntryV2) -> bool {
+        match self.subagent_scope.as_ref() {
+            Some(scope) => scope.ids.contains(&r.id),
+            None => true,
+        }
     }
 
     pub fn selected_row(&self) -> Option<&SessionEntryV2> {
@@ -1322,6 +1437,19 @@ impl SessionHubState {
 
     pub fn cycle_filter(&mut self) {
         self.filter_mode = self.filter_mode.next();
+        self.selected = 0;
+        self.note_preview_miss();
+        self.rebuild_visible();
+    }
+
+    /// Step the filter BACK one rung — `S`, the reverse of `s`.
+    ///
+    /// Identical to [`Self::cycle_filter`] but for the direction: the operator
+    /// pressed `s` once too often and wants the previous view back, without
+    /// walking the whole ladder round. Same reset and same re-derivation, so
+    /// the two directions leave the hub in the same state for the same rung.
+    pub fn cycle_filter_reverse(&mut self) {
+        self.filter_mode = self.filter_mode.prev();
         self.selected = 0;
         self.note_preview_miss();
         self.rebuild_visible();
@@ -1386,6 +1514,20 @@ impl SessionHubState {
                     }
                     None => true,
                 }
+            })
+            .filter(|(_, r)| {
+                // The subagent scope (←), through the same predicate the tab
+                // counts use, so the count on a tab is the number of rows that
+                // tab will actually show.
+                //
+                // Membership is a walk the App already does for the navigator
+                // (`session_descendant_ids`) rather than a re-derivation here:
+                // a delegation is not a session, and a grandchild is only
+                // reachable through that hop, so re-walking would either stop at
+                // depth 1 or duplicate the walk's cycle guard. It also means the
+                // picker that opened is never empty and a full one is never
+                // refused — both sides read one set.
+                self.in_subagent_scope(r)
             })
             .filter(|(_, r)| {
                 // AND-token search over a lowercase haystack: title, id,
@@ -1829,6 +1971,263 @@ const SESSION_PAGE_STEP_COUNT: usize = 3;
 /// in the store; the pane names how many prompts it dropped.
 pub const PREVIEW_MESSAGE_LIMIT: usize = 400;
 
+/// The keys a tool RESULT's human-readable text lives under, in the order they
+/// are tried.
+///
+/// Measured against the operator's own store — 46,160 `role='tool'` rows across
+/// 25 tools — every payload puts its readable body under one of these:
+/// `stdout`/`stderr` (code_execution), `output` (aft_bash, aft_read),
+/// `formatted` (datetime), `body` (http_request, web_fetch), `content`
+/// (aft_read), `todos` (todo). A ranked walk reads all of them, so a new tool
+/// needs no table entry here and an old one cannot fall out of date.
+const RESULT_KEYS: &[&str] = &[
+    "formatted",
+    "stdout",
+    "output",
+    "body",
+    "content",
+    "text",
+    "message",
+    "error",
+    "result",
+    "todos",
+];
+
+/// One tool result's payload, as the human line the preview prints.
+///
+/// The preview used to print `first_line(content)` verbatim, and for a
+/// `role='tool'` row that IS the payload — so the right pane read
+/// `{"command":"md5sum …","compressed_tokens":36,"exit_code":0,…}` where a
+/// person wants "the output, and whether it worked". A JSON object is not a
+/// transcript; it is the wire format the tool happened to answer in.
+///
+/// The shape is: the cheap outcome metadata first (`exit 1`, `Running`,
+/// `74ms`), then the ONE field that carries the text. Nothing else in the
+/// object is printed — the remaining keys are transport detail (`pid`,
+/// `stderr_truncated`, `body_size`) that answers a question the pane is not
+/// being read for.
+///
+/// A payload that is not JSON is already human text and passes through
+/// untouched.
+fn summarize_tool_result(tool_name: Option<&str>, content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        // A result row with a name and no payload still says which tool ran.
+        return tool_name.unwrap_or_default().to_string();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return first_line(trimmed);
+    };
+    let Some(object) = value.as_object() else {
+        // A bare JSON string or number: the scalar is the text, without quotes.
+        return first_line(&scalar_text(&value, 200));
+    };
+
+    // The outcome metadata, kept SEPARATE from the body: `status` alone is not
+    // a row. A `process` result whose only recognised field is `status` must
+    // still reach the fallback below and show its command, not print "Running".
+    let mut meta: Vec<String> = Vec::with_capacity(3);
+    // `exit 0` is the expected outcome for every successful call, so printing
+    // it on all of them is the noise this function exists to remove. A NON-zero
+    // exit is the one the operator is looking for.
+    if let Some(code) = object.get("exit_code").and_then(serde_json::Value::as_i64)
+        && code != 0
+    {
+        meta.push(format!("exit {code}"));
+    }
+    if let Some(status) = object.get("status").and_then(serde_json::Value::as_str) {
+        meta.push(status.to_string());
+    }
+    if let Some(ms) = object.get("runtime_ms").and_then(serde_json::Value::as_f64) {
+        meta.push(format!("{ms:.0}ms"));
+    }
+
+    // The body: the one field under RESULT_KEYS that carries the text.
+    let mut body = String::new();
+    for key in RESULT_KEYS {
+        let Some(value) = object.get(*key) else {
+            continue;
+        };
+        let text = scalar_text(value, 200);
+        if text.trim().is_empty() {
+            continue;
+        }
+        body = text;
+        break;
+    }
+    // Nothing recognised: name the first scalar field that is not transport
+    // detail, rather than dumping the object. A new tool then degrades to
+    // `key=value` instead of to JSON.
+    if body.is_empty()
+        && let Some((key, value)) = object
+            .iter()
+            .find(|(key, value)| is_scalar(value) && !is_identifier_key(key))
+    {
+        body = format!("{key}={}", scalar_text(value, 120));
+    }
+
+    meta.push(body);
+    meta.join(" · ")
+}
+
+/// Whether a payload key names an identifier or a measurement rather than the
+/// thing a person reads.
+///
+/// Only the FALLBACK consults this: when nothing under [`RESULT_KEYS`] matched,
+/// the choice is between the one informative scalar and the first scalar in the
+/// object. Measured on the operator's store, the first scalar of a `process`
+/// result is its `id` (`proc_aae581460ef2`) and of a `cron` result its
+/// `job` — so an unfiltered fallback prints a row of digits where the useful
+/// answer was the command.
+fn is_identifier_key(key: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "id",
+        "pid",
+        "cwd",
+        "nanoseconds",
+        "timezone",
+        "timestamp",
+        "body_size",
+        "compressed_tokens",
+        "stderr_truncated",
+        "notify_on_complete",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "_id",
+        "_at",
+        "_ms",
+        "_us",
+        "_ns",
+        "_tokens",
+        "_size",
+        "_truncated",
+        "_seconds",
+        "_offset",
+    ];
+    EXACT.contains(&key)
+        || key.ends_with("_id")
+        || SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
+}
+
+/// Whether a JSON value is a leaf a single line can carry: not null, not a
+/// container. `serde_json` has no `is_scalar`, and writing the test out is what
+/// keeps `null` from rendering as the word "null" in a preview row.
+fn is_scalar(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_)
+    )
+}
+
+/// A JSON value as the short plain text a person reads.
+///
+/// A string passes through, a number stringifies, an array of strings joins,
+/// and any other array or object reports its SIZE rather than its contents —
+/// `61 lines`, `11 todos`. The count is the information; the elements are what
+/// the operator pressed Enter to go and read.
+fn scalar_text(value: &serde_json::Value, limit: usize) -> String {
+    let text = match value {
+        serde_json::Value::String(s) => collapse_whitespace(s),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Array(items) if items.is_empty() => String::new(),
+        serde_json::Value::Array(items) => {
+            // An array of scalars reads as a list; anything else as a count.
+            if items.iter().all(is_scalar) {
+                let joined = items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if joined.is_empty() {
+                    format!("{} items", items.len())
+                } else {
+                    joined
+                }
+            } else {
+                format!("{} items", items.len())
+            }
+        }
+        // `todo`'s payload is `{"todos": [...]}`, whose first entry's `content`
+        // is the useful line; one level down is as deep as a preview row goes.
+        serde_json::Value::Object(map) => match map.get("content").or_else(|| map.get("name")) {
+            Some(inner) => scalar_text(inner, limit),
+            None => format!("{} fields", map.len()),
+        },
+    };
+    let collapsed = collapse_whitespace(&text);
+    if collapsed.chars().count() <= limit {
+        collapsed
+    } else {
+        collapsed.chars().take(limit).collect::<String>() + "…"
+    }
+}
+
+/// Collapse every run of whitespace to one space, so a payload's newlines and
+/// indentation cannot break the preview's one-row-per-message contract.
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The human label for one stored tool call: `name: summary`.
+///
+/// # The shape this has to accept
+///
+/// The old parser read `call["name"]`, and the database does not hold that
+/// shape — it holds the OpenAI nesting the providers send
+/// (`{"id":…,"function":{"name":"aft_bash","arguments":"{…}"}}`). So every
+/// `filter_map` returned `None` and the labels were dropped SILENTLY: an
+/// assistant row carrying three tool calls and no text rendered as
+/// `N. agent: (no text)`, which reads as a lost message rather than as three
+/// calls.
+///
+/// Both shapes are accepted here, plus the `tool`-nested form some adapters
+/// emit, and `arguments` may arrive as a JSON string (the wire form) or as an
+/// already-parsed object (the in-process form). One parser, because the
+/// alternative is a label that appears for some sessions and not others.
+fn tool_call_label(call: &serde_json::Value) -> Option<String> {
+    let (name, args) = if let Some(name) = call.get("name").and_then(|v| v.as_str()) {
+        (
+            name,
+            call.get("arguments")
+                .or_else(|| call.get("input"))
+                .or_else(|| call.get("args")),
+        )
+    } else if let Some(function) = call.get("function") {
+        (
+            function.get("name")?.as_str()?,
+            function.get("arguments").or_else(|| function.get("input")),
+        )
+    } else {
+        let tool = call.get("tool")?;
+        (
+            tool.get("name")?.as_str()?,
+            tool.get("input").or_else(|| tool.get("arguments")),
+        )
+    };
+    let input = match args {
+        // The wire form is a STRING holding JSON; an empty one is no arguments.
+        Some(serde_json::Value::String(raw)) => {
+            serde_json::from_str::<serde_json::Value>(raw).unwrap_or(serde_json::Value::Null)
+        }
+        Some(other) => other.clone(),
+        None => serde_json::Value::Null,
+    };
+    let summary = crate::tui::operant_ui::tools_ui::get_tool_summary(
+        &crate::tui::operant_model::vendor_types::ToolCall {
+            name: name.to_string(),
+            input,
+            ..Default::default()
+        },
+    );
+    Some(if summary.trim().is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}: {}", collapse_whitespace(&summary))
+    })
+}
+
 /// Flatten one stored message row into a preview row.
 ///
 /// The preview renders ONE line per message, so a message whose whole body is
@@ -1842,21 +2241,22 @@ pub fn preview_message_from_row(
 ) -> Option<PreviewMessage> {
     let role = row.role;
     let content = row.content.unwrap_or_default();
+    let tool_name = row.tool_name.clone();
     let tool_calls = row
         .tool_calls
         .as_deref()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
         .and_then(|value| value.as_array().cloned())
-        .map(|calls| {
-            calls
-                .iter()
-                .filter_map(|call| {
-                    let name = call.get("name").and_then(|n| n.as_str())?;
-                    Some(name.to_string())
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(|calls| calls.iter().filter_map(tool_call_label).collect::<Vec<_>>())
         .unwrap_or_default();
+    // A tool RESULT row's body is the tool's own payload, not prose. Summarize
+    // it here rather than at render time so the preview's row count, its scroll
+    // bound and its filter all see the same text the operator sees.
+    let content = if role == "tool" {
+        summarize_tool_result(tool_name.as_deref(), &content)
+    } else {
+        content
+    };
     if content.trim().is_empty() && tool_calls.is_empty() {
         return None;
     }

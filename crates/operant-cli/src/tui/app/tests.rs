@@ -3098,6 +3098,65 @@ fn the_session_picker_renames_the_selected_row_inline() {
     let _ = std::fs::remove_file(&db_path);
 }
 
+/// THE OPERATOR'S ASK: "if `s` changes the filters, then shift+s must revert
+/// that order of change".
+///
+/// The state-level guarantee is `session_hub`'s (`prev_is_the_exact_inverse_of_
+/// next_for_every_mode`); what this pins is that the KEY reaches it, and that it
+/// re-queries the page the way `s` does — a page fetched under one mode describes
+/// a population the new mode does not show.
+#[test]
+fn shift_s_steps_the_filter_ladder_back() {
+    let mut app = make_app();
+    app.session_hub.open(None);
+    app.session_hub.replace_rows(hub_rows(3));
+    assert_eq!(
+        app.session_hub.filter_mode,
+        crate::tui::session_hub::HubFilterMode::All
+    );
+
+    // Three presses of `s` walk forward; the assertion names the rungs so a
+    // ladder edit cannot quietly change what "back" means.
+    for expected in [
+        crate::tui::session_hub::HubFilterMode::NeedsYou,
+        crate::tui::session_hub::HubFilterMode::Working,
+        crate::tui::session_hub::HubFilterMode::Ready,
+    ] {
+        app.handle_key_event(press_key(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(
+            app.session_hub.filter_mode, expected,
+            "`s` must advance the ladder"
+        );
+    }
+
+    // One `S` undoes one `s`.
+    app.handle_key_event(press_key(KeyCode::Char('S'), KeyModifiers::NONE));
+    assert_eq!(
+        app.session_hub.filter_mode,
+        crate::tui::session_hub::HubFilterMode::Working,
+        "`S` must step back exactly one rung"
+    );
+    assert!(
+        app.session_list_pending,
+        "the reverse step re-queries, for the same reason `s` does"
+    );
+
+    // And `S` at the bottom wraps to the top, the way `s` does at the top.
+    app.session_hub.filter_mode = crate::tui::session_hub::HubFilterMode::All;
+    app.handle_key_event(press_key(KeyCode::Char('S'), KeyModifiers::NONE));
+    assert_eq!(
+        app.session_hub.filter_mode,
+        crate::tui::session_hub::HubFilterMode::CurrentBranch,
+        "`S` on the first rung wraps to the last, not to nowhere"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert_eq!(
+        app.session_hub.filter_mode,
+        crate::tui::session_hub::HubFilterMode::All,
+        "and `s` on the last rung wraps back to the first"
+    );
+}
+
 #[test]
 fn n_cancels_a_pending_archive_instead_of_starting_a_rename() {
     // The hub uses `n` for two things: "no" on an archive confirm, and the
@@ -3662,15 +3721,15 @@ mod left_tap_gesture_tests {
         assert!(app.session_list_pending, "rows load on open");
     }
 
-    /// (plan 2026-11-15 B4) THE OPERATOR'S ASK: "in active session, <- left
-    /// arrow key must open the subagent panel just like oh-my-pi".
+    /// THE OPERATOR'S ASK: "if a session is ongoing, and not a new session,
+    /// then the `<-` left arrow must open the SUBAGENT FILTERED SESSION-PICKER,
+    /// rather than the global session picker."
     ///
-    /// An active session (history, no navigator) had no keyboard route to its
-    /// own children at all — `subagent_navigator` was reachable only through
-    /// `/subagents`. The `←` that opens the hub on a FRESH session is left alone
-    /// by this arm: a fresh session has no descendants to show.
+    /// So this asserts the picker, not a second surface: the hub is visible, it
+    /// is SCOPED, and the scope names the session whose children these are. The
+    /// fresh-session `←` above is untouched — a fresh session has no descendants.
     #[test]
-    fn one_left_on_an_active_session_opens_the_subagent_navigator() {
+    fn one_left_on_an_active_session_opens_the_subagent_filtered_picker() {
         use operant_core::tools::async_delegation::{DelegationAdmission, try_create_record};
 
         // The registry is process-global; hold its lock for the whole test so a
@@ -3692,26 +3751,76 @@ mod left_tap_gesture_tests {
 
         app.handle_key_event(left());
         assert!(
-            app.subagent_navigator.visible,
-            "one ← on an active session with a live roster opens the navigator"
+            app.session_hub.visible,
+            "one ← on an active session opens the SESSION PICKER"
+        );
+        let scope = app
+            .session_hub
+            .subagent_scope()
+            .expect("the picker is scoped to subagents, not global");
+        assert_eq!(
+            scope.root, "sess-b4",
+            "the scope must name the session whose children are listed"
         );
         assert!(
-            !app.session_hub.visible,
-            "the navigator takes the gesture; the hub does not also open"
+            scope.ids.contains("dlg-1") || !scope.ids.is_empty(),
+            "the scope carries the walked delegation ids"
+        );
+        assert!(
+            app.session_list_pending,
+            "the scoped list loads its own rows"
         );
 
-        // And a session with NO children still falls through: the navigator
-        // refuses (omp's `requireContent`) rather than flashing an empty overlay.
-        operant_core::tools::async_delegation::__test_reset_registry();
-        let mut lonely = make_app();
-        lonely
-            .messages
-            .push(Message::user("the first ask".to_string()));
-        lonely.current_session = Some("sess-b4".to_string());
-        lonely.handle_key_event(left());
+        // The bespoke navigator is NOT what the gesture opens any more; it is
+        // still reachable by name (`/subagents`), which is what keeps the tree
+        // view from being deleted along with its key.
         assert!(
-            !lonely.subagent_navigator.visible,
-            "an empty roster must not mount"
+            !app.subagent_navigator.visible,
+            "the gesture opens the picker, not the second surface"
+        );
+
+        // Esc widens the picker back to every session BEFORE it closes the hub:
+        // one press must not cost the operator both the scope and the surface.
+        // (The picker is armed, so ← is the close-tap handoff and closes it —
+        // Esc is the widening key, and it is the one a filtered list needs.)
+        app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            app.session_hub.visible,
+            "the first Esc clears the scope; only the second closes"
+        );
+        assert!(
+            app.session_hub.subagent_scope().is_none(),
+            "and the list is back to every session"
+        );
+        operant_core::tools::async_delegation::__test_reset_registry();
+    }
+
+    /// A session with NO children falls through to the global picker rather than
+    /// opening an empty filtered list — omp's `requireContent`.
+    #[test]
+    fn one_left_on_a_childless_session_falls_through_to_the_global_picker() {
+        use operant_core::tools::async_delegation::test_lock;
+
+        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        operant_core::tools::async_delegation::__test_reset_registry();
+
+        let mut app = make_app();
+        app.messages
+            .push(Message::user("the first ask".to_string()));
+        app.current_session = Some("sess-lonely".to_string());
+        app.handle_key_event(left());
+        assert!(
+            app.session_hub.subagent_scope().is_none(),
+            "a childless session must not open a filtered picker"
+        );
+        // The refusal leaves `←` free, so the second tap is the double-tap that
+        // opens the global list.
+        assert!(!app.session_hub.visible, "the first tap only armed");
+        tap_gap();
+        app.handle_key_event(left());
+        assert!(
+            app.session_hub.visible,
+            "the global picker still opens for a childless session"
         );
         operant_core::tools::async_delegation::__test_reset_registry();
     }

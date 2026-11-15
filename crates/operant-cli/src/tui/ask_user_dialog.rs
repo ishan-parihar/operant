@@ -282,9 +282,12 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             } else {
                 theme_colors::panel_bg()
             };
-            // A selection bar is a filled surface, so its foreground is the
-            // dark surface role rather than a light text role.
-            let sel_fg = theme::user_bg();
+            // A selection bar is a filled surface, so its foreground is DERIVED
+            // from that surface. `theme::user_bg()` was the old answer and it
+            // equals `selection_bg()` in 8 of the 100 bundled palettes —
+            // `dark-cyberpunk` paints `#1B1B2A` on `#1B1B2A`, leaving the
+            // selected option with no readable text.
+            let sel_fg = theme_colors::on_selection_bg();
             write_line!(
                 row,
                 Line::from(vec![
@@ -330,7 +333,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             prefix,
             Style::default()
                 .fg(if is_sel {
-                    theme::user_bg()
+                    theme_colors::on_selection_bg()
                 } else {
                     theme::dim_color()
                 })
