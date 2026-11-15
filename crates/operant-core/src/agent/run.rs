@@ -1345,6 +1345,9 @@ impl OperantAgent {
         //
         // Scope the MutexGuard so it's dropped before the .await below.
         let should_review_memory = {
+            // `[background_review] enabled = false` stops this lane too — the
+            // same one switch as the skill lane above.
+            let review_settings = crate::config::runtime_config().background_review.clone();
             let memory_tool_active = !self
                 .registry
                 .get_available_schemas_filtered(&[
@@ -1365,8 +1368,16 @@ impl OperantAgent {
                     .evolution_state
                     .lock()
                     .expect("evolution_state mutex poisoned — programmer error");
+                let permitted =
+                    review_settings.permits(evo.skill_nudge_interval, evo.memory_review_interval);
                 let trigger = turn_finalizer::advance_memory_trigger(&mut evo);
-                if trigger.should_review_memory {
+                if trigger.should_review_memory && !permitted {
+                    debug!(
+                        "background review is disabled by [background_review] enabled — \
+                         the memory review is not spawned"
+                    );
+                }
+                if trigger.should_review_memory && permitted {
                     info!(
                         turns = trigger.turns_since_memory,
                         interval = self.config.memory_review_interval,
@@ -3812,15 +3823,29 @@ impl OperantAgent {
             // A std::sync::MutexGuard held across an await point makes the
             // future !Send, which breaks tokio::spawn.
             let should_review_skills = {
+                // `[background_review] enabled = false` is the ONE switch that
+                // stops both lanes. Read here rather than baked into the
+                // intervals so an operator has one key to turn the daemon off,
+                // not two to find in a section that does not name it.
+                let review_settings = crate::config::runtime_config().background_review.clone();
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self
                     .evolution_state
                     .lock()
                     .expect("evolution_state mutex poisoned — programmer error");
 
+                let permitted =
+                    review_settings.permits(evo.skill_nudge_interval, evo.memory_review_interval);
                 let trigger = turn_finalizer::advance_skill_trigger(&mut evo, skill_manage_called);
 
-                if trigger.should_review_skills {
+                if trigger.should_review_skills && !permitted {
+                    debug!(
+                        "background review is disabled by [background_review] enabled — \
+                         the skill nudge is not spawned"
+                    );
+                }
+
+                if trigger.should_review_skills && permitted {
                     info!(
                         iters = trigger.iters_since_skill,
                         interval = self.config.skill_nudge_interval,
@@ -3843,7 +3868,7 @@ impl OperantAgent {
                     }
                 }
 
-                trigger.should_review_skills
+                trigger.should_review_skills && permitted
             }; // MutexGuard dropped here — safe to .await
             // S3 review discipline: the SPAWN is deferred to the turn's exit
             // path and happens at most once per turn — the measured pathology

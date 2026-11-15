@@ -227,11 +227,10 @@ context_compression = false
 # folded span, and the rungs below already fit the request. Turn it on for
 # sessions long enough that the lossy rungs are degrading a conversation you
 # still want.
-# PARKED -- the historian rung was removed (iter-2404) and these two keys now
-# read nothing. They are accepted so an existing operant.toml still parses, and
-# have no effect. Do not set them expecting a fold.
+# RETIRED (iter-2448) -- the historian rung, its module and its table are gone;
+# these two keys now read nothing. They are accepted so an existing operant.toml
+# still parses, and have no effect. Do not set them expecting a fold.
 # context_historian = false
-# context_historian_max_span = 0
 # context_historian_max_span = 0
 # Share of the window above which @file:/@folder: injection is refused, and the
 # share above which it is warned about (0 = the built-in 0.50 / 0.25).
@@ -399,6 +398,30 @@ enabled = false
 # then one next action; adding text here extends that, it does not replace
 # it. Empty (default) reproduces the historical prompt byte for byte.
 # instructions = ""
+
+# Background self-improvement review - the DREAMER. After a completed turn it
+# forks a small side agent over the recent transcript to update the skill library
+# and/or propose memories.
+#
+# Its MODEL is `[auxiliary_models.memory]` below. That key is the review
+# daemon's route and NOT the [memory] engine's - an unfortunate name kept for
+# wire compatibility.
+[background_review]
+# Master switch for BOTH lanes. Omit it to follow the intervals below (a
+# non-zero interval is on, a zero interval is off), which is the historical
+# behaviour. Set it to false to stop every review without hunting through
+# [agent] for the two keys that used to be the only way to do it.
+# enabled = true
+# Freeform extra instructions appended to whichever review prompt is selected -
+# the skill lane, the memory lane, or the combined one. The built-in prompt
+# states the lane's contract; text here is added after it, so it extends the
+# brief rather than replacing it. Empty (default) reproduces the historical
+# prompt byte for byte.
+# instructions = ""
+#
+# The CADENCE still lives in [agent], its historical home:
+#   memory_nudge_interval   - turns between memory reviews     (0 = off, default 10)
+#   creation_nudge_interval - iterations between skill nudges (0 = off, default 10)
 
 [autonomous]
 interval_secs = 300

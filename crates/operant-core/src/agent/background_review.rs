@@ -424,7 +424,29 @@ pub(crate) fn resolve_review_route(
 /// Build the review prompt based on which triggers fired.
 ///
 /// Returns the appropriate prompt string for the background review agent.
+///
+/// The operator's `[background_review] instructions` are APPENDED, never
+/// prepended: the built-in prompt states the lane's contract (what to look for,
+/// and that an unattended memory review cannot write), and a suffix is read as
+/// an addition to that contract rather than a replacement for it. Empty leaves
+/// the prompt byte-identical to before.
 pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
+    build_review_prompt_with_instructions(
+        review_memory,
+        review_skills,
+        &crate::config::runtime_config()
+            .background_review
+            .instructions,
+    )
+}
+
+/// [`build_review_prompt`] with the operator's instructions passed explicitly,
+/// so the append is testable without a live `runtime_config()`.
+pub(crate) fn build_review_prompt_with_instructions(
+    review_memory: bool,
+    review_skills: bool,
+    instructions: &str,
+) -> String {
     let mut base = if review_memory && review_skills {
         COMBINED_REVIEW_PROMPT.to_string()
     } else if review_memory {
@@ -464,12 +486,72 @@ pub fn build_review_prompt(review_memory: bool, review_skills: bool) -> String {
         base.push_str("\n\n");
         base.push_str(HARNESS_LESSON_DISCIPLINE);
     }
+    // The operator's instructions come LAST — after the lane contract and any
+    // opt-in lane — so they read as an addition to the whole brief rather than
+    // a correction to the first line of it.
+    if !instructions.trim().is_empty() {
+        base.push_str("\n\nAdditional instructions from the operator:\n");
+        base.push_str(instructions.trim());
+    }
     base
 }
 
 // ---------------------------------------------------------------------------
 // Configuration for the background review daemon
 // ---------------------------------------------------------------------------
+
+/// Operator-facing settings for the review daemon (`[background_review]`).
+///
+/// The daemon's ON/OFF and RESPONSE SHAPE before this struct: two intervals in
+/// `[agent]`, and no way to change what a review looks for without a rebuild.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackgroundReviewSettings {
+    /// Master switch for BOTH review lanes.
+    ///
+    /// `None` (the default) means "follow the intervals", which is exactly the
+    /// old behaviour: `agent.memory_nudge_interval` and
+    /// `agent.creation_nudge_interval` decide, and a 0 in either disables that
+    /// lane. `Some(false)` disables the daemon whatever the intervals say, so an
+    /// operator has ONE key to turn it off rather than two to find.
+    ///
+    /// `Some(true)` with a zeroed interval stays off for that lane: there is no
+    /// cadence to run on. Same reasoning as `recap.enabled`.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Freeform instructions APPENDED to whichever review prompt is selected.
+    ///
+    /// Empty (the default) is byte-identical to before, which is the point — a
+    /// session that sets nothing must produce exactly the prompt it always did.
+    /// Matches `advisor.instructions` and `recap.instructions`, so all three
+    /// side-call engines answer the same axis the same way.
+    #[serde(default)]
+    pub instructions: String,
+}
+
+impl Default for BackgroundReviewSettings {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            instructions: String::new(),
+        }
+    }
+}
+
+impl BackgroundReviewSettings {
+    /// Whether the daemon may run at all, given the two lane intervals.
+    ///
+    /// Split out as a pure function because the gates that consult it sit inside
+    /// the turn loop, and a rule inlined there has no test seam — the same shape
+    /// that hid the finalize-iteration defect (iter-2404).
+    #[must_use]
+    pub fn permits(&self, skill_interval: usize, memory_interval: usize) -> bool {
+        if self.enabled == Some(false) {
+            return false;
+        }
+        skill_interval > 0 || memory_interval > 0
+    }
+}
 
 /// Configuration for the background review daemon.
 ///

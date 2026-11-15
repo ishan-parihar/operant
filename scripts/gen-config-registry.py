@@ -80,6 +80,11 @@ TOP_LEVEL_SECTIONS = [
     "moa",
     "advisor",
     "recap",
+    # `[background_review]` (the dreamer) went live in iter-2451. A new
+    # top-level section MUST be listed here: an absent section is not merely
+    # undocumented, it is parked WHOLESALE by `split_unknown` for any operator
+    # who also carries one stale key - the iter-2357 failure mode.
+    "background_review",
     "holon",
     "integrations",
     "compression",

@@ -75,6 +75,21 @@ pub struct AppConfig {
     /// line instead of the primary.
     #[serde(default)]
     pub recap: crate::recap::RecapConfig,
+    /// Background self-improvement review daemon (`[background_review]`
+    /// section) — the DREAMER.
+    ///
+    /// Two of the three axes every other engine has were missing here. Its
+    /// ON/OFF was two separate intervals in `[agent]`
+    /// (`memory_nudge_interval`, `creation_nudge_interval`, both 0 = off), so
+    /// turning it off meant knowing to zero two keys in the wrong section, and
+    /// there was no single switch at all. Its RESPONSE SHAPE did not exist:
+    /// `COMBINED_REVIEW_PROMPT`, `MEMORY_REVIEW_PROMPT` and
+    /// `SKILL_REVIEW_PROMPT` are consts, so changing what a review looks for
+    /// meant a rebuild — while the advisor and the recap beside it both grew an
+    /// `instructions` key. Only the MODEL axis was configurable, and under a
+    /// name (`[auxiliary_models.memory]`) that reads as the MEMORY engine's.
+    #[serde(default)]
+    pub background_review: crate::agent::background_review::BackgroundReviewSettings,
     pub checkpoints: CheckpointsSettings,
     /// Plan 016 / Phase 0 config surface for `operant-harness`. Dark-merged:
     /// `enabled` defaults to `false` and no provider is mounted unless the
@@ -183,6 +198,7 @@ impl Default for AppConfig {
             moa: MoaSettings::default(),
             advisor: crate::advisor::AdvisorConfig::default(),
             recap: crate::recap::RecapConfig::default(),
+            background_review: crate::agent::background_review::BackgroundReviewSettings::default(),
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),

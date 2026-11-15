@@ -68,6 +68,32 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONFIG_RS = ROOT / "crates" / "operant-core" / "src" / "config.rs"
+
+# Modules that declare a section's settings struct outside `config.rs`. A
+# section whose struct lives here (`advisor: AdvisorConfig`) is invisible to a
+# config.rs-only field scan, which is how every `advisor.*` and `recap.*` key
+# came to read as newly added.
+_SECTION_SOURCES = (
+    "crates/operant-core/src/advisor.rs",
+    "crates/operant-core/src/recap.rs",
+    "crates/operant-core/src/agent/background_review.rs",
+    # Sections whose struct lives in another crate or another module. Without
+    # these, every `proxy.*`, `providers.*`, `observability.*` and
+    # `compression.*` key reads as newly added and fails the gate.
+    "crates/operant-config/src/schema/proxy.rs",
+    "crates/operant-config/src/providers.rs",
+    "crates/operant-config/src/schema/platform_cfg.rs",
+    "crates/operant-core/src/agent/evidence/mod.rs",
+)
+
+
+def _base_file(rel: str) -> str:
+    """One file's contents on `origin/main` (empty when unreadable)."""
+    r = subprocess.run(
+        ["git", "show", f"origin/main:{rel}"],
+        capture_output=True, text=True, check=False,
+    )
+    return r.stdout if r.returncode == 0 else ""
 REGISTRY = ROOT / "crates" / "operant-core" / "src" / "config_registry.rs"
 HEAL = ROOT / "crates" / "operant-core" / "src" / "config_heal.rs"
 TEMPLATE = ROOT / "operant.example.toml"
@@ -539,12 +565,34 @@ def added_keys() -> set[str]:
         return here
 
     # section -> struct name (AppConfig's field type), then the base's fields.
+    #
+    # ANY CamelCase field type, not only `*Settings`. The earlier pattern
+    # matched `[A-Z][A-Za-z0-9]*[Ss]ettings`, which silently excluded every
+    # section whose struct is named for what it configures rather than for being
+    # a settings bag: `advisor: AdvisorConfig`, `recap: RecapConfig`. Their
+    # fields were therefore never in `base_fields`, so EVERY `advisor.*` and
+    # `recap.*` key read as "added by this change" and failed the gate. That was
+    # invisible while the registry declared 83 of its 385 keys, because those
+    # keys were never evaluated at all.
     section_struct = dict(
-        re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*([A-Z][A-Za-z0-9]*[Ss]ettings)\b", base.stdout)
+        re.findall(
+            r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*"
+            r"([A-Z][A-Za-z0-9_]*)\s*,",
+            base.stdout,
+        )
     )
     base_fields: set[str] = set()
     for struct in set(section_struct.values()):
         base_fields |= _struct_fields(base.stdout, struct)
+    # A section struct can live in its own module — `AdvisorConfig` is declared
+    # in advisor.rs, not config.rs — so config.rs alone does not carry its
+    # fields. Read them from whichever base file declares the struct.
+    for path in _SECTION_SOURCES:
+        text = _base_file(path)
+        if not text:
+            continue
+        for struct in set(section_struct.values()):
+            base_fields |= _struct_fields(text, struct)
     # The AppConfig fields are their own names. Scoped to the AppConfig body:
     # a whole-file scan collects every field in every struct (262 of them),
     # which defeats the point of matching the owning struct.

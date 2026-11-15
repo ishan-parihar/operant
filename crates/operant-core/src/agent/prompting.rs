@@ -1479,4 +1479,68 @@ mod tests {
             "a missing error still names itself: {unknown}"
         );
     }
+
+    /// The master switch is ONE key, not the two intervals an operator had to
+    /// find in `[agent]`. `Some(false)` wins over any cadence.
+    #[test]
+    fn the_master_switch_disables_both_lanes_whatever_the_intervals_say() {
+        let off = crate::agent::background_review::BackgroundReviewSettings {
+            enabled: Some(false),
+            instructions: String::new(),
+        };
+        assert!(!off.permits(10, 10), "off beats a live cadence");
+        assert!(!off.permits(0, 0), "off beats an already-silent one");
+    }
+
+    /// Omitting the key is the historical behaviour: the intervals decide, and
+    /// a zero in BOTH is the only thing that means off.
+    #[test]
+    fn an_unset_switch_follows_the_intervals_exactly_as_before() {
+        let unset = crate::agent::background_review::BackgroundReviewSettings::default();
+        assert!(unset.permits(10, 10));
+        assert!(unset.permits(10, 0), "one live lane is enough");
+        assert!(unset.permits(0, 10));
+        assert!(!unset.permits(0, 0), "no cadence, no review");
+    }
+
+    /// The operator's instructions extend the lane contract rather than
+    /// replacing it, and an empty setting reproduces the old prompt byte for
+    /// byte.
+    #[test]
+    fn review_instructions_are_appended_after_the_lane_contract() {
+        use crate::agent::background_review::build_review_prompt_with_instructions;
+
+        for (memory, skills) in [(true, false), (false, true), (true, true)] {
+            let bare = build_review_prompt_with_instructions(memory, skills, "");
+            assert!(
+                !bare.contains("Additional instructions from the operator"),
+                "empty instructions add nothing"
+            );
+
+            let tailed =
+                build_review_prompt_with_instructions(memory, skills, "  Prefer root causes.  ");
+            assert!(
+                tailed.starts_with(&bare),
+                "the built-in contract comes first, unchanged"
+            );
+            assert!(
+                tailed.contains("Prefer root causes."),
+                "the operator's text is carried"
+            );
+            assert!(
+                !tailed.contains("  Prefer"),
+                "the text is trimmed before it is appended"
+            );
+        }
+    }
+
+    /// A whitespace-only setting is the same as no setting.
+    #[test]
+    fn blank_review_instructions_are_ignored() {
+        use crate::agent::background_review::build_review_prompt_with_instructions;
+        assert_eq!(
+            build_review_prompt_with_instructions(true, true, "   \n\t "),
+            build_review_prompt_with_instructions(true, true, "")
+        );
+    }
 }
