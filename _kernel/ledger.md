@@ -1649,3 +1649,41 @@ iter-2381/2382 (382 keys, identical defaults and notes). `--check` now
 whitespace-normalises both sides, so CONTENT still fails the gate (mutation-
 proven on a one-word note change) while the formatter is tolerated. The
 generated file is untouched.
+
+## iter-2384 — red-team of the remediation
+
+A four-seam read-only red-team of iter-2365..2370 (memory/skills, advisor/recap,
+compression/window, lean) at fdc0fa0c, every candidate re-verified against the
+bytes, produced one regression I shipped and a set of live gaps. All closed:
+
+- REGRESSION: `memory_injection_budget_tokens = 0` — the value the example
+  SHIPS — deleted all recall (0 → one-token ceiling → empty body). Fixed at
+  `recall_fit_budget` (0 = the 4,000 default, the convention every other knob
+  uses) and pinned by a guard that asserts both halves.
+- Micro-compaction: the epoch bump fired on zero-mutation turns (false
+  compacted-class rewind errors) — moved inside `folds > 0`; a fold could grow
+  the store (tiny exchanges) — `micro_compact` now refuses non-shrinking
+  folds; my own comment misattributed cache handling to `bump_conv_epoch` —
+  rewritten honestly.
+- Advisor/recap: the continuation latch suppresses real user turns on hosts
+  that cannot submit (gateway, headless) — reported, not papered (semantics);
+  notes could carry the host control tokens and hijack the split — quarantined;
+  the headless print arm dumped the raw machine payload — split + card only;
+  all three hosts split recaps at the advisor tag — now prefix-gated; recap
+  text is enforced single-line with the tag neutralized; an empty fitted recap
+  view (fabrication risk) is skipped with a warn.
+- Skills off switch: the tools stayed registered and `/reload-skills`
+  resurrected the surface — both closed; the flag is threaded through
+  `register_builtin_tools` and honored at both reload sites.
+- Config clamps: reference shares clamp to [0,1] with soft ≤ hard;
+  `context_semantic_max_groups` clamps to 1,024 and the embed call is batched
+  at 32 (the trait's own contract).
+- Lean: `should_compress` both-zero → false; redundant `idle == 0` wrapper
+  deleted; single-use test helper inlined; dead import removed.
+
+Method note: three of my own edits this round were wrong on first landing (a
+dropped brace, a `return Ok(())` in an Option branch, a TUI `return;` in a
+bool branch) and each was caught by the compiler inside the batch, not at the
+gate. The `micro_compact` non-progress guard initially broke an existing test
+whose fixtures were 2-4 characters — real exchanges are not, and the fixture
+was corrected rather than the guard weakened.
