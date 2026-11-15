@@ -474,8 +474,6 @@ pub fn render_session_hub(
     area: ratatui::layout::Rect,
     ctx: &mut crate::tui::render::FrameCtx,
 ) {
-    // The rename prompt and the search prompt share this one row — the two
-    // are never live at once, and the pane has no second row to give.
     let has_rename = state.rename_active;
     let has_search = state.search_active || !state.search_query.is_empty();
     let has_prompt = has_rename || has_search;
@@ -492,9 +490,8 @@ pub fn render_session_hub(
     if has_prompt {
         let prompt_area = chunks[idx];
         idx += 1;
-        // One row, two shapes. The rename editor and the search box are never
-        // live at once, and the pane has no second row to give — so the only
-        // difference is the icon, the text and the trailing hint.
+        // One row, two shapes: they are never live at once and the pane has no
+        // second row to give, so only the icon, the text and the hint differ.
         let (icon, text, hint) = if has_rename {
             // Show the TAIL of the draft: the caret sits at the end, which is
             // the one part the operator is looking at.
