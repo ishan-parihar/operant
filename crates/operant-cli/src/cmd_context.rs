@@ -864,22 +864,25 @@ pub(crate) async fn measure_protected_floor(
     // the runtime builds (which includes `[skills] extra_roots`).
     let mut manager = crate::skill_roots::skill_manager(config);
     let _ = manager.load_all();
-    // The SAME ceiling the runtime applies to the advertised block
-    // (ADVERTISED_SKILLS_TOKEN_BUDGET): the runtime advertises the skills
-    // that fit and drops the rest, so the floor the check measures has to
-    // count the skills that are actually advertised. Measuring every
-    // installed skill would over-state the protected content and report a
-    // floor the runtime never carries.
-    let skills_budget = if config.agent.advertised_skills_token_budget > 0 {
-        config.agent.advertised_skills_token_budget
-    } else {
-        operant_core::context_management::ADVERTISED_SKILLS_TOKEN_BUDGET
-    };
+    // The SAME budget and the SAME clip the runtime applies to the advertised
+    // block. This used to re-derive the budget from the flat constant and to
+    // measure whole descriptions, so it disagreed with the prefix twice: it
+    // counted a 32k-era ceiling the runtime no longer uses, and it charged for
+    // descriptions the runtime now clips. One shared function for the budget,
+    // one for the row, so the floor this check reports is the floor the runtime
+    // actually carries.
+    let skills_budget = operant_core::context_management::advertised_skills_budget(
+        config.agent.advertised_skills_token_budget,
+        window,
+    );
     let mut skills_tokens = 0usize;
     let mut skills_advertised = 0usize;
     let mut skills_dropped = 0usize;
     for (name, description) in manager.list_available() {
-        let cost = estimate_tokens(&format!("  <skill name=\"{name}\">{description}</skill>\n"));
+        let cost = estimate_tokens(&format!(
+            "  <skill name=\"{name}\">{}</skill>\n",
+            operant_core::context_management::clip_skill_description(&description)
+        ));
         if skills_tokens + cost > skills_budget {
             skills_dropped += 1;
             continue;
