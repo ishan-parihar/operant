@@ -1575,7 +1575,6 @@ Six findings from the magic-context / oh-my-pi contrast audit, committed as
   git submodule this worktree does not have. 12 core + 31 CLI tests cover the
   new paths. clippy clean with --all-targets.
 
-<<<<<<< Updated upstream
 ## iter-2364 follow-up — context-lifecycle audit, red-team and remediation
 
 The audit (5 read-only studies, every finding hand-verified against `59bab8e0`)
@@ -1688,7 +1687,6 @@ bool branch) and each was caught by the compiler inside the batch, not at the
 gate. The `micro_compact` non-progress guard initially broke an existing test
 whose fixtures were 2-4 characters — real exchanges are not, and the fixture
 was corrected rather than the guard weakened.
-=======
 ## iter-2345 — the parking walk dropped 23 live keys, and memory recall had no ceiling
 
 Audit: `ponytail-audit` of the context lifecycle at `6c59b3b0`, contrasted
@@ -1901,4 +1899,100 @@ compartments to stable message ids", which is the reasoning the audit rules reje
 Either delete both (a migration, so it needs the operator's call) or state the
 design that will use them. Not decided unilaterally because the table exists on the
 operator's live database.
->>>>>>> Stashed changes
+
+## iter-2449..2453 — context-lifecycle audit vs magic-context, and the six engines
+
+Re-audit at `733ea7de` (iter-2420) against `external-repos/plugins/magic-context`,
+then the ranked remediation. Peers advanced iter-2420 -> 2444 during the pass;
+three of my eight audited files moved and all three edits were doc-only
+(`context_management.rs` touched only the `advertised_skills` comment), so every
+finding was re-derived from current bytes before it was reported.
+
+### What the six engines answered
+
+| engine | on/off | response shape | model | lifecycle-managed |
+|---|---|---|---|---|
+| ADVISOR   | `[advisor] enabled` | 4 keys | `[advisor] model` | NO (finding 1) |
+| RECAP     | `[recap] enabled`   | `instructions` | `[recap] model` | n/a — host-only |
+| SKILL     | `[skills] autoload` | none | n/a (no call) | yes |
+| MEMORY    | `[memory] enabled`  | none | n/a (provider) | yes |
+| HISTORIAN | parked, read nothing | none | none | dead |
+| DREAMER   | two intervals in `[agent]` | none (consts) | `[auxiliary_models.memory]` | NO (findings 2,4) |
+
+RECAP is the only one fully configurable AND correctly outside the lifecycle: it
+renders to the host as a `※ recap:` line and never enters model context.
+
+### Shipped
+
+- **iter-2449** — decay front-truncated by CHARACTER COUNT, blind to markup. The
+  advisor's model-visible batch is 376 chars of boundary guidance then the
+  `<advisory>` notes; cut to the 400-char target the oldest messages get, the
+  result was the guidance plus `<advisory severity="con` — an unterminated tag and
+  ZERO notes. The model was told to weigh aggregated advice that had been removed
+  from the request. Now a cut that breaks previously-balanced markup replaces the
+  block whole and says so. The guard tests the CUT, not the text, so
+  `Vec<Message>` and `2 < 3` are untouched.
+- **iter-2450** — the review daemon pushed `result.content` into its own
+  transcript unbounded, across up to five iterations, while the main agent caps
+  the same tool at 4 KB. A few `memory_search` calls (50 rows each) or one
+  `skill_view` outgrew a small auxiliary model's window; the provider rejects,
+  the loop warns and breaks, and the review yields nothing — indistinguishable in
+  the log from a model that found nothing. Reuses the main agent's cap.
+- **iter-2451** — `[background_review]` with `enabled` (one master switch, was two
+  intervals in the wrong section) and `instructions` (was a `const`). Also
+  repaired a STALE generated registry: `CONFIG_KEYS` declared 83 of 385 keys, so
+  `config describe`/`notes` rendered a fifth of the surface, `split_unknown` would
+  park any config using the other 302, and the config-key gate evaluated only 83.
+- **iter-2452** — decay's `p` was `1.0` with a `.max(0.10)` that could never
+  fire, so `H ∝ 1/p` was `H ∝ 1`: the curve ignored how tight the window was.
+  Now budget pressure, floored at 0.1.
+- **iter-2453** — deleted `historian.rs` (720 lines, 0 non-test callers), its
+  three store helpers, `CompartmentRecord` and its tests. The v5 migration STAYS.
+
+### Method notes
+
+- **The yardstick overturned my own reason.** I had kept the historian "for a
+  design that keys compartments to stable message ids". magic-context's persisted
+  anchor is ALSO positional — an ordinal recomputed per read over
+  `(time_created, id)` minus finished summaries. It survives on four fail-closed
+  guards plus per-block content fingerprints re-verified inside the publish
+  transaction. Those guard a producer, a transaction and a render path; we have
+  none of the three, so the guards would guard nothing.
+- **Removing a migration is a downgrade, not a cleanup.** I dropped the v5 entry
+  and 41 tests failed with "the operant BINARY is older than the sessions
+  database" — `migrations.len()` IS the schema version. That message reads as the
+  data being wrong and invites an operator to delete it. Restored.
+- **`cargo fmt --all` silently blinded the config-key gate.** The generator writes
+  one tuple per line; rustfmt reflows a long one across four. The audit regex was
+  line-anchored, so it matched 83 of 387 keys, printed `-189 of them reach all four
+  surfaces`, and read GREEN. Any tree that had been fmt'd — every committed tree —
+  had a fifth of its config surface unchecked.
+- **`added_keys()` only understood `*Settings` structs declared in `config.rs`.**
+  Sections whose struct is named for what it configures (`advisor: AdvisorConfig`)
+  had their fields missing from the baseline, so every `advisor.*`/`recap.*` key
+  read as NEWLY ADDED and failed the gate for an inherited defect. 36 -> 0 false
+  positives after matching any CamelCase type and resolving cross-module/cross-crate.
+- **A TMPDIR inside a git worktree breaks "not a git repo" tests.** Three suite
+  failures were my own scratch dir; moved to `/tmp`, all three pass.
+
+### Verification
+
+- `operant-core --lib`: **3476 passed / 5 failed** — the five known
+  `tools::kernel` submodule tests, unchanged across all five commits.
+- clippy `--all-targets`: 0 errors in any file this pass touched. The tree still
+  carries 9 pre-existing errors elsewhere (verified by stashing my work and
+  re-running on clean origin/main) — the release line does not currently pass its
+  own documented clippy gate.
+- registry: 387 keys, `--check` green; config-key audit green, and its own
+  mutation self-test still fails a key that misses a surface.
+- Mutation evidence: removing the decay guard reproduces the broken tag;
+  reinstating the over-aggressive rule fails on `fn parse<T: Clone>`; restoring
+  `p = 1.0` fails all four pressure tests; restoring the last-iteration finalize
+  rule fails three; uncapping the review tool result fails the bound test.
+
+### Also repaired, found on the way
+
+`_kernel/ledger.md` carried unresolved `<<<<<<< Updated upstream / ======= /
+>>>>>>> Stashed changes` markers, COMMITTED on origin/main by iter-2444's bulk
+tree commit. Both sides were additive sections covering different iterations, so
+the resolution is to keep both and drop the three marker lines.
