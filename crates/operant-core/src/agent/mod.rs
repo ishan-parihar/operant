@@ -218,6 +218,12 @@ pub struct AgentConfig {
     /// construction; the rung still needs an attached embedder
     /// (`with_semantic_embedder`) or it degrades to recency.
     pub context_semantic_compaction: bool,
+    /// Run the historian rung: fold closed spans into durable compartments.
+    /// (`agent.context_historian`)
+    pub context_historian: bool,
+    /// One fold call's ceiling in messages; 0 = the built-in
+    /// (`agent.context_historian_max_span`).
+    pub context_historian_max_span: usize,
     /// Most groups the semantic rung will embed; 0 = the built-in cap.
     pub context_semantic_max_groups: usize,
     /// `@file:` injection hard/soft shares; 0 = the built-in 50%/25%.
@@ -295,6 +301,8 @@ impl From<&BehaviorSettings> for AgentConfig {
             // surface ever fed it.
             guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
             context_semantic_compaction: settings.context_semantic_compaction,
+            context_historian: settings.context_historian,
+            context_historian_max_span: settings.context_historian_max_span,
             context_semantic_max_groups: settings.context_semantic_max_groups,
             context_reference_hard_share: settings.context_reference_hard_share,
             context_reference_soft_share: settings.context_reference_soft_share,
@@ -4611,6 +4619,8 @@ mod tests {
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
             context_semantic_max_groups: 0,
+            context_historian: false,
+            context_historian_max_span: 0,
             context_reference_hard_share: 0.0,
             context_reference_soft_share: 0.0,
             model: "demo".to_string(),
@@ -4674,6 +4684,8 @@ mod tests {
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
             context_semantic_max_groups: 0,
+            context_historian: false,
+            context_historian_max_span: 0,
             context_reference_hard_share: 0.0,
             context_reference_soft_share: 0.0,
             model: "demo".to_string(),
@@ -4803,6 +4815,8 @@ mod tests {
             reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             context_semantic_compaction: false,
             context_semantic_max_groups: 0,
+            context_historian: false,
+            context_historian_max_span: 0,
             context_reference_hard_share: 0.0,
             context_reference_soft_share: 0.0,
             model: "demo".to_string(),

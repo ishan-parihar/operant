@@ -34,6 +34,83 @@
 use crate::client::Message;
 use crate::context_management::tool_group_starts;
 
+/// The system prompt for a fold.
+///
+/// Deliberately narrow: the model's whole job is to compress ONE closed span
+/// into a short factual paragraph that preserves what a later reader needs —
+/// decisions, constraints, open threads. It is not asked to evaluate, to advise,
+/// or to continue anything, because a compartment is reference material, not
+/// instruction.
+pub fn historian_system_prompt() -> &'static str {
+    "You compress one closed stretch of a coding session into a short factual \
+     reference paragraph. Preserve: what was decided, what constraint was \
+     established, what is still open. Drop: pleasantries, retries that reached \
+     nothing, and anything already stated more precisely elsewhere. Write prose, \
+     no headings, no bullets, at most 150 words. Do not advise, do not continue \
+     the work, do not address the reader."
+}
+
+/// The user-role instruction that carries the span.
+pub const HISTORIAN_INSTRUCTION: &str =
+    "Compress the stretch above into one factual reference paragraph.";
+
+/// Token ceiling on the rendered span one fold call may carry.
+///
+/// Smaller than the advisor's and recap's: a compartment is a fixed-length
+/// output, so it does not need to read as much as an advisory review does, and
+/// the span is bounded by `MAX_SPAN_MESSAGES` in messages before this is applied.
+pub const HISTORIAN_VIEW_TOKEN_BUDGET: usize = 6_000;
+
+/// The render tier a new compartment is stored at.
+///
+/// P2 — the middle of the four fidelity levels. Storing the middle is what makes
+/// re-rendering possible in BOTH directions: a tight window can drop to P3/P4
+/// without a model call, and a roomy one can keep P2 rather than having stored a
+/// lossy P4 with no way back.
+pub const DEFAULT_COMPARTMENT_TIER: i64 = 2;
+
+/// The decay weight a new compartment starts at.
+///
+/// Compartments are reference material the operator may still want, so they
+/// start above the middle of the 1..100 importance scale rather than at it.
+pub const DEFAULT_COMPARTMENT_IMPORTANCE: i64 = 60;
+
+/// Pull the compartment body out of a model reply.
+///
+/// The prompt asks for prose, but a model that answers with a heading, a fence or
+/// a preamble is common enough that the parser must be tolerant rather than
+/// strict: a fold that reached the model and came back in the wrong shape is
+/// still a fold, and discarding it wastes the call.
+///
+/// Returns `None` when there is no usable text at all, which is the one case the
+/// caller must treat as a failure.
+pub fn parse_compartment(reply: &str) -> Option<String> {
+    let trimmed = reply.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Strip a wrapping code fence if the model added one.
+    let body = match trimmed.find("```") {
+        Some(start) => {
+            let after = &trimmed[start + 3..];
+            // Skip the language tag on the opening fence.
+            let content_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
+            let content = &after[content_start..];
+            match content.rfind("```") {
+                Some(end) => content[..end].trim(),
+                None => content.trim(),
+            }
+        }
+        None => trimmed,
+    };
+    let collapsed: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
 /// A span of message positions proposed for folding, or a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpanPlan {
@@ -539,5 +616,45 @@ mod tests {
             fold_hash("s2", 0, 3, &msgs),
             "a different session is a new fold"
         );
+    }
+    /// The parser tolerates the shapes a model actually returns.
+    ///
+    /// The prompt asks for plain prose, but a fenced answer or a preamble is
+    /// common enough that a strict parser would discard a fold that DID reach the
+    /// model — paying for the call and keeping nothing.
+    #[test]
+    fn the_parser_accepts_prose_a_fence_and_a_preamble() {
+        let plain =
+            parse_compartment("Decided on the chunked writer. The lock is held across the write.");
+        assert_eq!(
+            plain.as_deref(),
+            Some("Decided on the chunked writer. The lock is held across the write.")
+        );
+
+        let fenced = parse_compartment("```text\nThe lock is held across the write.\n```");
+        assert_eq!(
+            fenced.as_deref(),
+            Some("The lock is held across the write.")
+        );
+
+        // A fenced block with no closing fence still yields the content.
+        let unclosed = parse_compartment("```\nThe lock is held.\n");
+        assert_eq!(unclosed.as_deref(), Some("The lock is held."));
+
+        // Whitespace is collapsed, because a compartment renders inline.
+        let multiline = parse_compartment("first line\n\n  second   line");
+        assert_eq!(multiline.as_deref(), Some("first line second line"));
+    }
+
+    /// An empty or whitespace-only reply is a FAILURE, not an empty compartment.
+    ///
+    /// Storing an empty body would leave a row that occupies a span and says
+    /// nothing, and the anchor would advance past messages that were never
+    /// summarized — the one outcome worse than not folding.
+    #[test]
+    fn an_empty_reply_is_no_compartment() {
+        assert_eq!(parse_compartment(""), None);
+        assert_eq!(parse_compartment("   \n\n  "), None);
+        assert_eq!(parse_compartment("```\n\n```"), None);
     }
 }

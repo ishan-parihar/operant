@@ -4641,6 +4641,36 @@ impl OperantAgent {
                 info!("Preflight rung 4 (summarize): LLM summarize-before-evict");
                 messages = self.preflight_llm_summarize(messages).await;
             }
+
+            // ── Rung 4b: historian — durable compartments ──
+            //
+            // The last RECOVERABLE rung before the lossy eviction below. Decay
+            // and summarize both shrink the request by rewriting what is sent;
+            // the historian writes the summary OUT OF BAND (the `compartments`
+            // table) and leaves the message list pointing at it, so the saving
+            // is paid for once instead of on every later turn, and an old
+            // compartment can be re-rendered at a lower tier when the window is
+            // tight.
+            //
+            // It runs AFTER summarize on purpose: the LLM summarizer is the
+            // cheaper transform when it works, and a span the summarizer already
+            // reduced is not worth a second model call.
+            //
+            // Every degrade path passes the messages through untouched: no
+            // database, no model, an unsafe span, a refold of an already-folded
+            // span. A compaction rung must never be the reason a turn fails.
+            if self.config.context_historian && estimated_tokens > preflight_threshold {
+                let max_span = if self.config.context_historian_max_span == 0 {
+                    crate::historian::MAX_SPAN_MESSAGES
+                } else {
+                    self.config.context_historian_max_span
+                };
+                messages = self.preflight_historian_fold(messages, max_span).await;
+                // NO re-estimate, unlike the other rungs: the historian stores
+                // its summary OUT OF BAND and leaves the message list as it was,
+                // so this rung does not shrink the request. The saving is paid
+                // once at write time, not per turn — which is the point of it.
+            }
         }
 
         // Context engine hook (hermes-lcm parity): when a lossless engine is

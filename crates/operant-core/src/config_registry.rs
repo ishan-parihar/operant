@@ -107,6 +107,16 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Absolute hard-compaction limit in tokens. Whichever of this and `context_hard_cap_percent` is smaller binds first. `0` (the default) disables the absolute axis.",
     ),
     (
+        "agent.context_historian",
+        "false",
+        "Run the HISTORIAN: fold closed spans of old messages into durable compartments stored out of band, so a summary is paid for once instead of riding every later request. Off by default. It costs one model call per folded span, and the ladder below it (decay, summarize, eviction) already fits the request — the historian is a floor UNDER that ladder for sessions long enough that the lossy rungs are degrading a conversation the operator still wants. Every degrade path is the rung's own pass-through: no model, a failed call, an unsafe span — all leave the messages untouched.",
+    ),
+    (
+        "agent.context_historian_max_span",
+        "0",
+        "The largest span one historian pass may fold, in messages. A span that large is one model call's worth of input. 0 keeps the built-in [`crate::historian::MAX_SPAN_MESSAGES`]. The backlog is folded in successive passes, so this bounds ONE call rather than the backlog.",
+    ),
+    (
         "agent.context_lcm_assertion_extraction",
         "false",
         "P3 LLM-driven assertion extraction (hermes `assertion_extraction.py` `ModelAssertionExtractor` parity, opt-in): when true, the `lcm_assert` tool's `action = \"extract\"` mines durable (subject, predicate, object) facts out of the most recent DAG nodes and persists them to the assertion store. Off by default — costs one LLM call per extract invocation.",
@@ -1617,6 +1627,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "agent.context_engine",
     "agent.context_hard_cap_percent",
     "agent.context_hard_cap_tokens",
+    "agent.context_historian",
+    "agent.context_historian_max_span",
     "agent.context_lcm_assertion_extraction",
     "agent.context_lcm_auto_recall",
     "agent.context_lcm_auto_recall_limit",

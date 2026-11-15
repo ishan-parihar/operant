@@ -221,6 +221,16 @@ context_compression = false
 # drifted-conversation failure it exists to fix, so an agentic session with many
 # tool exchanges needs a higher number here.
 # context_semantic_max_groups = 0
+# HISTORIAN: fold closed spans of old messages into durable compartments stored
+# out of band (the `compartments` table), so a summary is paid for once instead
+# of riding every later request. Off by default: it costs one model call per
+# folded span, and the rungs below already fit the request. Turn it on for
+# sessions long enough that the lossy rungs are degrading a conversation you
+# still want.
+# context_historian = false
+# The largest span one fold call may cover, in messages (0 = the built-in 200).
+# Bounds ONE call, not the backlog: the backlog is folded in successive passes.
+# context_historian_max_span = 0
 # Share of the window above which @file:/@folder: injection is refused, and the
 # share above which it is warned about (0 = the built-in 0.50 / 0.25).
 # context_reference_hard_share = 0.0

@@ -965,6 +965,25 @@ pub struct BehaviorSettings {
     /// per compaction, and recency already protects the tail.
     #[serde(default)]
     pub context_semantic_compaction: bool,
+    /// Run the HISTORIAN: fold closed spans of old messages into durable
+    /// compartments stored out of band, so a summary is paid for once instead of
+    /// riding every later request.
+    ///
+    /// Off by default. It costs one model call per folded span, and the ladder
+    /// below it (decay, summarize, eviction) already fits the request — the
+    /// historian is a floor UNDER that ladder for sessions long enough that the
+    /// lossy rungs are degrading a conversation the operator still wants.
+    /// Every degrade path is the rung's own pass-through: no model, a failed
+    /// call, an unsafe span — all leave the messages untouched.
+    #[serde(default)]
+    pub context_historian: bool,
+    /// The largest span one historian pass may fold, in messages.
+    ///
+    /// A span that large is one model call's worth of input. 0 keeps the
+    /// built-in [`crate::historian::MAX_SPAN_MESSAGES`]. The backlog is folded
+    /// in successive passes, so this bounds ONE call rather than the backlog.
+    #[serde(default)]
+    pub context_historian_max_span: usize,
     /// Share of the context window above which `@file:`/`@folder:` injection
     /// is REFUSED, and the share above which it is WARNED about (defaults
     /// 0.50 / 0.25). They were compile-time literals with no control, so an
@@ -1239,6 +1258,8 @@ impl Default for BehaviorSettings {
             recap_idle_seconds: 240,
             context_engine: "compact".to_string(),
             context_semantic_compaction: false,
+            context_historian: false,
+            context_historian_max_span: 0,
             context_semantic_max_groups: default_context_semantic_max_groups(),
             context_reference_hard_share: 0.0,
             context_reference_soft_share: 0.0,
