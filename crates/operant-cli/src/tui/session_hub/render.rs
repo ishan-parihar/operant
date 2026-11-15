@@ -611,8 +611,6 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
         ),
         Span::styled(count_clause, Style::default().fg(theme_colors::muted())),
     ];
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-
     // The subagent chip: the picker is SCOPED, and a scope that is not named is
     // the ambiguity the scope exists to remove. The WAY OUT is on the footer
     // line rather than here — this header is 46 columns and the group clause has
@@ -634,6 +632,13 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
             Style::default().fg(theme_colors::accent()),
         ));
     }
+
+    // Measured HERE, after the two chips, because they are part of what the
+    // Group clause has to fit beside. Measuring it above them is what let a
+    // 16-cell prefix plus a 24-cell chip admit a 21-cell clause into a 46-cell
+    // pane, which `List` then clips — the exact failure the budget exists to
+    // prevent, reintroduced by measuring the wrong set.
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
 
     // The `Group:` clause, codex's own header line shape. Stage C fills in the
     // mode and the key that changes it: the header alone now answers both
@@ -684,8 +689,7 @@ fn render_header(state: &SessionHubState, inner_width: u16) -> Line<'static> {
     // `s/S`, not `s`: the operator asked for Shift+S to walk the filter ladder
     // backwards, and a control whose affordance is invisible is decoration the
     // operator cannot find.
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    if state.employee_filter().is_none() && state.subagent_scope().is_none() && used + 10 <= budget
+    if state.employee_filter().is_none() && state.subagent_scope().is_none() && used + 11 <= budget
     {
         spans.push(Span::styled(
             "  s/S cycle",

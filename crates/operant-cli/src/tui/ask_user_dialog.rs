@@ -299,7 +299,20 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
                     ),
                     Span::styled(
                         num_str,
-                        Style::default().fg(theme::dim_color()).bg(style_bg)
+                        // Gated on `is_sel`, like the prefix and the label
+                        // beside it. `dim_color()` is the Dim role, and on a
+                        // selection fill it is the fill: 1.00:1 on
+                        // `dark-dracula` (`#44475A` on `#44475A`), 1.54:1 on
+                        // the SHIPPED default theme, under 3:1 on 42 of the
+                        // 98 bundled palettes. The option NUMBER is how the
+                        // operator aims, so this is the worst span to lose.
+                        Style::default()
+                            .fg(if is_sel {
+                                theme_colors::on_selection_bg()
+                            } else {
+                                theme::dim_color()
+                            })
+                            .bg(style_bg)
                     ),
                     Span::styled(
                         label,
@@ -350,7 +363,17 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             let display_text = format!("{}{}", state.custom_text, cursor);
             spans.push(Span::styled(
                 display_text,
-                Style::default().fg(theme::user_text()).bg(style_bg),
+                // Same rule as the option rows: the fill is a selection fill
+                // when this row is active, so the ink comes from the fill.
+                // `user_text()` is White on 93 of the 100 bundled palettes,
+                // which measures 1.06:1 on `light-honeycomb`'s `#FFF8E1`.
+                Style::default()
+                    .fg(if is_sel {
+                        theme_colors::on_selection_bg()
+                    } else {
+                        theme::user_text()
+                    })
+                    .bg(style_bg),
             ));
         }
         write_line!(row, Line::from(spans));

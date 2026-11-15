@@ -14316,12 +14316,18 @@ fn a_delegation_with_no_assigned_todos_has_no_counter() {
 /// `left: []` (its record was gone) in the module run while passing alone.
 /// That is the RT-207 hazard `RegistryDrain`'s own doc names. Same discipline
 /// `gateway_commands.rs`'s `SUBAGENTS_LOCK` already uses for its registry tests.
-static DELEGATION_REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Guard for [`DELEGATION_REGISTRY_LOCK`]; take one at the top of any test that
-/// seeds or reads the delegation registry.
+/// Guard for the delegation registry; take one at the top of any test that
+/// seeds or reads it.
+///
+/// This is `async_delegation::test_lock()` — the SAME mutex, not a second one.
+/// It used to be a private `DELEGATION_REGISTRY_LOCK`, and two mutexes guarding
+/// one process-global registry exclude nothing: a test holding this one and a
+/// test holding that one could interleave, and `__test_reset_registry()` wipes
+/// the records the other was asserting on. That is the mechanism behind the
+/// suite's unstable failure count (5, then 8, then 9 on three runs of one
+/// commit), and it is invisible in any single-test run.
 fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
-    DELEGATION_REGISTRY_LOCK
+    operant_core::tools::async_delegation::test_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

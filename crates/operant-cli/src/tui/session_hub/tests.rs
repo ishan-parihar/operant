@@ -4624,3 +4624,259 @@ fn tool_call_labels_accept_every_shape_the_store_holds() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Red-team 2448: the payload shapes the first pass missed
+// ---------------------------------------------------------------------------
+
+/// A FAILED exec writes its cause to `stderr` and nothing to `stdout`. 226 real
+/// rows are exactly this shape, and without `stderr` in the ranked keys the row
+/// read `exit 1 · 58ms · exit_code=1` — the code twice and no reason.
+#[test]
+fn a_stderr_only_failure_shows_the_cause_not_the_exit_code_twice() {
+    let pv = preview_message_from_row(tool_result(
+        "code_execution",
+        r#"{"exit_code":1,"language":"python","runtime_ms":58,"stderr":"Traceback (most recent call last):\nAssertionError: anchor not found\n","stdout":"","success":false}"#,
+    ))
+    .expect("a failure with a cause renders");
+    assert!(
+        pv.content.contains("AssertionError: anchor not found"),
+        "the traceback is the only text a failed exec produces\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        !pv.content.contains("exit_code="),
+        "the fallback must not repeat what the meta prefix already said\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// Some adapters store the payload as a JSON STRING whose interior is the real
+/// object, so the quotes and backslashes are part of the stored bytes. 256 real
+/// rows took this shape and printed escaped JSON — the exact defect the change
+/// was made to remove.
+#[test]
+fn a_double_encoded_payload_is_unwrapped_not_printed_escaped() {
+    let pv = preview_message_from_row(tool_result("browser", "\"{\\\"tasks\\\": []}\""))
+        .expect("a double-encoded row renders");
+    assert!(
+        !pv.content.contains("\\\"") && !pv.content.contains("{\\\""),
+        "the row must not carry the escaped braces\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// A body that IS a JSON document (an API error object, a JSON-RPC reply) is
+/// summarized once more rather than printed with its braces. 188 real rows.
+#[test]
+fn a_body_that_is_a_json_document_is_summarized_once_more() {
+    let pv = preview_message_from_row(tool_result(
+        "web_fetch",
+        r#"{"body":"{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32000,\"message\":\"Method not allowed.\"},\"id\":null}"}"#,
+    ))
+    .expect("a JSON body renders");
+    assert!(
+        !pv.content.contains("jsonrpc"),
+        "a JSON-RPC envelope is transport, not the message\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        pv.content.contains("Method not allowed"),
+        "the message inside the envelope is the row\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// A `todos` array is the tool's whole answer; counting its entries throws the
+/// answer away. The doc on `scalar_text` claimed the first entry's `content`
+/// would render, but the value is an ARRAY, so the array arm won.
+#[test]
+fn a_todo_list_shows_the_first_item_not_a_bare_count() {
+    let pv = preview_message_from_row(tool_result(
+        "todo",
+        r#"{"count":1,"sessionId":"default","todos":[{"content":"Test infrastructure","id":"1","status":"in_progress"}]}"#,
+    ))
+    .expect("a todo payload renders");
+    assert!(
+        pv.content.contains("Test infrastructure"),
+        "the list is the answer\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        !pv.content.contains("1 items"),
+        "a count is not a summary\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// An object with no text key used to render `"{n} fields"` — a number and a
+/// noun, which is strictly less than the JSON the previous build printed. It now
+/// returns empty so the caller falls back to the first informative scalar.
+#[test]
+fn an_unrecognised_object_does_not_render_a_field_count() {
+    let pv = preview_message_from_row(tool_result(
+        "browser",
+        r#"{"id":7,"result":{"result":{"description":"Example Domain","type":"string","value":"Example Domain"}},"sessionId":"page-1-session"}"#,
+    ))
+    .expect("a row renders");
+    assert!(
+        !pv.content.contains("fields"),
+        "a key count is not information\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// A row whose summary would come out EMPTY is dropped by the caller, so the
+/// tool call vanishes from the transcript entirely — 51 real rows took that
+/// path (`{"servers":[]}`, `{"tools":[]}`). The tool name is the floor.
+#[test]
+fn an_empty_payload_still_names_the_tool() {
+    for payload in [r#"{"servers":[]}"#, r#"{"tools":[]}"#] {
+        let pv = preview_message_from_row(tool_result("browser", payload))
+            .unwrap_or_else(|| panic!("{payload}: a named row must not be dropped"));
+        assert!(
+            !pv.content.trim().is_empty(),
+            "{payload}: an empty summary loses the call from the transcript"
+        );
+    }
+}
+
+/// The stored payload can carry a TRAILER the writer appended after the JSON —
+/// the operator's store has 3,629 rows shaped `{"symbol":"BTC",…}\n\n[receipt:
+/// zc-receipt-…]`. `serde_json::from_str` on the whole column fails, so the old
+/// code printed the raw line, receipt and all.
+#[test]
+fn a_payload_with_a_receipt_trailer_reads_as_the_document() {
+    let pv = preview_message_from_row(tool_result(
+        "crypto",
+        "{\"content\":\"BTC at 65000\",\"symbol\":\"BTC\"}\n\n[receipt: zc-receipt-1791349509-RiDJsSEGEaNQOD9lNQrGY9eBFU8HxcpMnG0XRwSRMww]",
+    ))
+    .expect("a trailed payload renders");
+    assert!(
+        !pv.content.contains("receipt") && !pv.content.contains('{'),
+        "the trailer is provenance and the braces are transport\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        pv.content.contains("BTC at 65000"),
+        "the document is the row\n  got: {:?}",
+        pv.content
+    );
+}
+
+/// A payload TRUNCATED at storage is not valid JSON at all, and printing its
+/// first 200 characters is the raw JSON the pane is not supposed to show. The
+/// first readable field is salvaged instead.
+#[test]
+fn a_truncated_payload_salvages_its_first_readable_field() {
+    let pv = preview_message_from_row(tool_result(
+        "code_execution",
+        r#"{"exit_code":0,"stdout":"hello from the truncated run","stderr":""}"#,
+    ))
+    .expect("a truncated payload renders");
+    assert!(
+        !pv.content.starts_with('{'),
+        "a half-written object is not a row\n  got: {:?}",
+        pv.content
+    );
+    assert!(
+        pv.content.contains("hello from the truncated run"),
+        "the readable field survives the truncation\n  got: {:?}",
+        pv.content
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Red-team 2448: the scope vs the rest of the hub's state
+// ---------------------------------------------------------------------------
+
+/// The store-wide counts come back through the drain after a scoped open: the
+/// drain calls `set_store_counts` unconditionally, and `count_sessions_by_filter`
+/// has no scope argument. Accepting them repopulates exactly what the open
+/// dropped, so the seven tabs promise 500 rows over a list of two.
+#[test]
+fn store_wide_counts_are_ignored_while_a_scope_is_engaged() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![child_row("kid-1", "root")]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    assert!(hub.store_counts.is_none(), "the open drops them");
+
+    hub.set_store_counts(Some(operant_core::database::SessionFilterCounts {
+        all: 500,
+        needs_you: 22,
+        ready: 300,
+        inactive: 100,
+        current_dir: 5,
+        current_branch: 12,
+    }));
+    assert!(
+        hub.store_counts.is_none(),
+        "a scoped hub must not accept store-wide counts, or the tabs lie"
+    );
+    let all = hub
+        .compute_filter_counts()
+        .into_iter()
+        .find(|(mode, _)| *mode == HubFilterMode::All)
+        .map(|(_, n)| n)
+        .expect("the All tab exists");
+    assert_eq!(all, 1, "the All tab counts the scoped rows, not 500");
+
+    // Widening restores the store counts, because the unscoped page can now
+    // show every row they describe.
+    assert!(hub.clear_subagent_scope());
+    hub.set_store_counts(Some(operant_core::database::SessionFilterCounts {
+        all: 500,
+        needs_you: 22,
+        ready: 300,
+        inactive: 100,
+        current_dir: 5,
+        current_branch: 12,
+    }));
+    assert!(
+        hub.store_counts.is_some(),
+        "an unscoped hub takes them again"
+    );
+}
+
+/// `has_more` is computed from the UNscoped page, so a scoped hub showing two
+/// rows still drew a selectable `Show more` — a no-op that costs a full
+/// 500-row DB page and can never produce a visible row.
+#[test]
+fn a_scoped_hub_does_not_offer_show_more() {
+    let mut hub = SessionHubState::new();
+    hub.replace_rows(vec![
+        row("root", Some("this session"), None),
+        child_row("kid-1", "root"),
+    ]);
+
+    hub.set_has_more(true);
+    assert!(hub.has_more, "an unscoped hub keeps the row");
+
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    hub.set_has_more(true);
+    assert!(
+        !hub.has_more,
+        "a scoped hub must not offer a page that cannot add a row"
+    );
+}
+
+/// Esc drops an armed archive confirm along with the scope. It used to widen
+/// the list to every session with "Archive session abcd1234? (y/n)" still on
+/// screen, so `y` archived a row the operator could no longer see.
+#[test]
+fn widening_the_scope_also_disarms_a_pending_archive() {
+    let mut hub = SessionHubState::new();
+    hub.visible = true;
+    hub.replace_rows(vec![
+        row("root", Some("this session"), None),
+        child_row("kid-1", "root"),
+    ]);
+    hub.open_subagent_scoped(None, scope_of("root", &["kid-1"]));
+    hub.pending_archive = Some("kid-1".to_string());
+
+    assert!(hub.clear_subagent_scope());
+    assert!(
+        hub.pending_archive.is_none(),
+        "the confirm is an inner state and Esc leaves the innermost state first"
+    );
+}

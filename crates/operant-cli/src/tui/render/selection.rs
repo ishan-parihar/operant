@@ -406,7 +406,13 @@ pub(crate) fn render_context_menu(frame: &mut Frame, app: &App) {
 
             let fg_color = if *enabled {
                 if is_selected {
-                    theme_colors::on_selection()
+                    // `on_selection_bg()`, not `on_selection()`: that one
+                    // derives against `accent()`, and the fill below is
+                    // `selection_bg()`. Deriving for the wrong fill measured
+                    // 1.05:1 on `dark-midnight` (black on `#000A12`) and is
+                    // under 3:1 on 60 of the 98 bundled palettes — the whole
+                    // selected row's label, not a glyph.
+                    theme_colors::on_selection_bg()
                 } else {
                     theme_colors::text()
                 }
