@@ -17,10 +17,12 @@ CORRECTED iter-2510, RE-CORRECTED iter-2515: the first pass removed a
 carried three stale blocks, all disproved by grep against this tree:
 
 - **"derive `Configurable` from `operant-macros`"** — neither exists.
-  `crates/operant-macros` is absent and the workspace has no such member;
-  `Configurable`, `HasPropKind`, `ChannelConfig` and `OnboardUi` have ZERO hits
-  outside this README. The parallel config surface that used them was retired
-  at iters 1138-1141 (RT-141).
+  `crates/operant-macros` is absent and the workspace has no such member, and
+  there is no `Configurable` trait to derive (0 `derive(`/`impl`/`trait` sites
+  anywhere; the two bare-word matches a plain grep finds are the ordinary
+  English adjective in unrelated comments). `HasPropKind`, `ChannelConfig` and
+  `OnboardUi` have no hits at all. The parallel config surface that used them
+  was retired at iters 1138-1141 (RT-141).
 - **"`src/traits.rs`"** — the file does not exist.
 - **"`operant-memory`, `operant-providers`, `operant-tools` depend on this
   crate"** — all three directories are absent. Only `operant-core` names it.
