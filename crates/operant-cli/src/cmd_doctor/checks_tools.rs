@@ -589,16 +589,22 @@ pub fn run_platform_checks(
         }
     }
 
-    // TTS is only proven by loading the ONNX Runtime, which the doctor does not
-    // do, so a configured TTS is reported as unverified rather than available (CR-4).
+    // TTS is proven by the Phonon checkpoint being present and complete
+    // (`phonon::is_cached`), which the doctor checks without loading the
+    // engine. The old check pointed at the ONNX Runtime, which iter-2513
+    // removed entirely.
     if config.tts.enabled {
-        check_warn(
-            "tts",
-            "(configured — the ONNX Runtime is checked on first use)",
-        );
+        if operant_core::tools::phonon::is_cached() {
+            check_ok("tts", "(phonon model cached)");
+        } else {
+            check_warn(
+                "tts",
+                "(configured \u{2014} the phonon model downloads on first use)",
+            );
+        }
     } else {
         any_unavailable = true;
-        check_warn("tts", "(not configured — run operant setup)");
+        check_warn("tts", "(not configured \u{2014} run operant setup)");
     }
 
     if any_unavailable {

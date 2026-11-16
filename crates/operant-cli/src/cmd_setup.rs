@@ -1043,48 +1043,24 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
                 tts_options[sel].0
             ));
 
-            // Download the Phonon checkpoint if selected. This is the local,
-            // offline default: a ~65 MB q8_0 GGUF plus its tokenizer and one
-            // voice, fetched from a pinned Hugging Face revision.
+            // Download the Phonon checkpoint if selected. The download is
+            // shared with the runtime (`phonon::ensure_downloaded`) so setup
+            // and the tool cannot disagree about the pinned revision or the
+            // cache path.
             if tts_values[sel] == "phonon" {
-                let cache_dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".cache")
-                    .join("phonon")
-                    .join("gradium")
-                    .join("phonon-31m-en");
-                let model_path = cache_dir.join("model.q8.gguf");
-                let config_path = cache_dir.join("config.json");
-                let tokenizer_path = cache_dir.join("tokenizer.json");
-                let voice_path = cache_dir.join("default-voice.safetensors");
-
-                if !model_path.exists() || !config_path.exists() {
-                    print_info("Phonon requires model files (~65 MB). Downloading now...");
-                    std::fs::create_dir_all(&cache_dir).ok();
-
-                    let client = reqwest::Client::new();
-                    if !model_path.exists() {
-                        print_info("  Downloading model.q8.gguf (65 MB)...");
-                        match download_file_to(&client, "https://huggingface.co/gradium/phonon-31m-en/resolve/main/model.q8.gguf", &model_path).await {
-                            Ok(_) => print_success("  Model downloaded."),
-                            Err(e) => print_warning(&format!("  Download failed: {}. TTS will download on first use.", e)),
-                        }
-                    }
-                    let _ = download_file_to(
-                        &client,
-                        "https://huggingface.co/gradium/phonon-31m-en/resolve/main/config.json",
-                        &config_path,
-                    )
-                    .await;
-                    let _ = download_file_to(
-                        &client,
-                        "https://huggingface.co/gradium/phonon-31m-en/resolve/main/tokenizer.json",
-                        &tokenizer_path,
-                    )
-                    .await;
-                    let _ = download_file_to(&client, "https://huggingface.co/gradium/phonon-31m-en/resolve/main/default-voice.safetensors", &voice_path).await;
-                } else {
+                if operant_core::tools::phonon::is_cached() {
                     print_success("Phonon model files already present.");
+                } else {
+                    print_info("Phonon requires model files (~65 MB). Downloading now...");
+                    match operant_core::tools::phonon::ensure_downloaded().await {
+                        Ok(true) => print_success("  Model downloaded."),
+                        Ok(false) => {
+                            print_warning("  Download incomplete. TTS will retry on first use.")
+                        }
+                        Err(e) => print_warning(&format!(
+                            "  Download failed: {e}. TTS will download on first use."
+                        )),
+                    }
                 }
             }
         }
@@ -1094,21 +1070,6 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
     }
 
     println!();
-    Ok(())
-}
-
-/// Download a file from URL to a local path.
-async fn download_file_to(
-    client: &reqwest::Client,
-    url: &str,
-    dest: &std::path::Path,
-) -> Result<()> {
-    let resp = client.get(url).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}", resp.status());
-    }
-    let bytes = resp.bytes().await?;
-    std::fs::write(dest, &bytes)?;
     Ok(())
 }
 

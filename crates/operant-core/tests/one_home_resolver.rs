@@ -189,10 +189,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "the PROJECT-level `.operant/agents`, not the operant home",
     ),
     (
-        "crates/operant-cli/src/cmd_setup.rs",
-        "`~/.cache/phonon` — the Phonon model cache, not the operant home",
-    ),
-    (
         "crates/operant-providers/src/lib.rs",
         "the provider state-dir fallback; the production path passes the \
          loaded config's parent. This crate cannot depend on operant-core",

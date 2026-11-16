@@ -16,11 +16,17 @@
 //! ## What is on disk
 //!
 //! The model is NOT a crate dependency. On first use this module downloads a
-//! small GGUF checkpoint into `~/.cache/phonon/<name>/` and loads it from
-//! there. Nothing is fetched at build time and no network is touched when the
-//! cache is warm:
+//! small GGUF checkpoint into `~/.operant/cache/phonon/<repo>-<rev>/` and
+//! loads it from there. Nothing is fetched at build time and no network is
+//! touched when the cache is warm:
 //!
 //!   config.json, tokenizer.json, model.q8.gguf, and one voice file.
+//!
+//! The cache lives under the operant home, not `$XDG_CACHE_HOME`: every
+//! operant store resolves through `platform::operant_home()` so there is one
+//! home and no per-subsystem cache fragmentation (see `one_home_resolver.rs`).
+//! An install that still has the old `~/.cache/phonon/...` tree is migrated
+//! on first use rather than re-downloading 65 MB.
 //!
 //! `--quant`-style GGUF quants are the point: q8_0 is ~65 MB (near-lossless)
 //! and q4k is ~55 MB for size-constrained builds. The ONNX export was
@@ -46,6 +52,17 @@ const MODEL_FILES: &[&str] = &[
     "tokenizer.json",
     "model.q8.gguf",
     "default-voice.safetensors",
+];
+
+/// Expected size of `model.q8.gguf` in bytes, used to reject a truncated
+/// download. A GET that dies mid-stream (or a captive-portal error page
+/// captured with a 200) would otherwise be written as a short file that
+/// `exists()` accepts as complete and `ptts` then fails to load.
+const MODEL_FILE_SIZES: &[(&str, u64)] = &[
+    ("config.json", 4_634),
+    ("tokenizer.json", 277_967),
+    ("model.q8.gguf", 64_512_352),
+    ("default-voice.safetensors", 256_136),
 ];
 
 /// The quant `ptts` loads the GGUF weights as. q8_0 keeps quality
@@ -81,12 +98,6 @@ impl PhononSynth {
     pub fn sample_rate(&self) -> u32 {
         self.inner.sample_rate()
     }
-
-    /// The names of the voices this engine can select with
-    /// [`Self::synthesize`]'s `voice` argument.
-    pub fn voices(&self) -> Vec<String> {
-        self.inner.voices()
-    }
 }
 
 /// Write `samples` as a 16-bit mono WAV at `sample_rate` into `out`.
@@ -119,12 +130,22 @@ pub fn write_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
 
 /// The cache directory this engine keeps its checkpoint in.
 ///
-/// `~/.cache/phonon/<repo-name>/`, with `$XDG_CACHE_HOME` honoured on Linux
-/// and the platform cache dir elsewhere. This is a MODEL cache, not an
-/// operant-home store, so it deliberately does NOT resolve through
-/// `platform::operant_home()` — see `one_home_resolver.rs`, which carries a
-/// matching allowance.
+/// `~/.operant/cache/phonon/<repo>-<rev>/`. It lives under the operant home so
+/// every operant store resolves through `platform::operant_home()` and there
+/// is one home, not a per-subsystem `$XDG_CACHE_HOME` tree. The revision is
+/// part of the path so bumping `MODEL_REVISION` invalidates the cache instead
+/// of silently reusing the previous weights.
 pub fn cache_dir() -> Option<PathBuf> {
+    let home = crate::platform::operant_home();
+    Some(home.join("cache").join("phonon").join(format!(
+        "{}-{}",
+        repo_name(),
+        &MODEL_REVISION[..12]
+    )))
+}
+
+/// The pre-iter-2524 cache location, read only to migrate an existing tree.
+fn legacy_cache_dir() -> Option<PathBuf> {
     let base = dirs::cache_dir().or_else(dirs::home_dir)?;
     Some(base.join("phonon").join(repo_name()))
 }
@@ -133,12 +154,35 @@ fn repo_name() -> &'static str {
     MODEL_REPO
 }
 
-/// Whether the checkpoint is already present in the cache.
+/// Expected byte length of one model file, if it is pinned.
+fn expected_size(file: &str) -> Option<u64> {
+    MODEL_FILE_SIZES
+        .iter()
+        .find(|(name, _)| *name == file)
+        .map(|(_, size)| *size)
+}
+
+/// Whether a cached file is present AND the right size. A short file is a
+/// truncated download, not a cache hit: `ptts` would fail on it with
+/// "failed to fill whole buffer", so the only safe answer is to re-fetch.
+fn file_is_complete(dir: &Path, file: &str) -> bool {
+    let path = dir.join(file);
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return false;
+    };
+    match expected_size(file) {
+        Some(want) => meta.len() == want,
+        // Unpinned file: existence is all we can check.
+        None => true,
+    }
+}
+
+/// Whether the checkpoint is already present in the cache, complete.
 pub fn is_cached() -> bool {
     let Some(dir) = cache_dir() else {
         return false;
     };
-    MODEL_FILES.iter().all(|f| dir.join(f).exists())
+    MODEL_FILES.iter().all(|f| file_is_complete(&dir, f))
 }
 
 /// Download any missing checkpoint files into the cache, then load them.
@@ -148,7 +192,7 @@ pub fn is_cached() -> bool {
 /// download is a plain `reqwest` GET of a `resolve/<rev>/<file>` URL; there
 /// is no Hub client to configure.
 pub async fn load_or_download() -> Result<PhononSynth, String> {
-    let dir = cache_dir().ok_or_else(|| "no cache directory for the Phonon model".to_string())?;
+    let dir = cache_dir().ok_or_else(|| "no operant home for the Phonon model".to_string())?;
     download_missing(&dir).await?;
 
     let config = read_config(dir.join("config.json")).map_err(|e| e.to_string())?;
@@ -161,17 +205,37 @@ pub async fn load_or_download() -> Result<PhononSynth, String> {
     Ok(PhononSynth { inner: synth })
 }
 
-/// Fetch every file in [`MODEL_FILES`] that is missing from `dir`.
+/// Fetch every file in [`MODEL_FILES`] that is missing or truncated in `dir`,
+/// then report whether the cache is complete.
+///
+/// Shared with `operant setup`, which must not carry its own downloader: two
+/// downloaders in one repo is how a pinned revision and a moving `main` come
+/// to disagree (audit finding on iter-2513).
+pub async fn ensure_downloaded() -> Result<bool, String> {
+    let dir = cache_dir().ok_or_else(|| "no operant home for the Phonon model".to_string())?;
+    download_missing(&dir).await?;
+    Ok(MODEL_FILES.iter().all(|f| file_is_complete(&dir, f)))
+}
+
+/// Fetch every file in [`MODEL_FILES`] that is missing or truncated in `dir`.
+///
+/// Each file is downloaded to `<file>.part` and renamed into place only after
+/// it matches its expected size, so a failed or truncated download can never
+/// masquerade as a complete one. Any stale `.part` from a previous interrupted
+/// run is removed before the retry.
 async fn download_missing(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {dir:?}: {e}"))?;
+    migrate_legacy_cache(dir)?;
     let client = reqwest::Client::new();
     for file in MODEL_FILES {
-        let dest = dir.join(file);
-        if dest.exists() {
+        if file_is_complete(dir, file) {
             continue;
         }
         let url = format!("https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/{file}");
         let tmp = dir.join(format!("{file}.part"));
+        // A stale partial from an interrupted run must not be mistaken for
+        // a fresh download; remove it before fetching.
+        let _ = std::fs::remove_file(&tmp);
         let resp = client
             .get(&url)
             .send()
@@ -184,8 +248,44 @@ async fn download_missing(dir: &Path) -> Result<(), String> {
             .bytes()
             .await
             .map_err(|e| format!("download {file}: {e}"))?;
+        if let Some(want) = expected_size(file)
+            && bytes.len() as u64 != want
+        {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "download {file}: got {} bytes, expected {want} (truncated?)",
+                bytes.len()
+            ));
+        }
         std::fs::write(&tmp, &bytes).map_err(|e| format!("write {file}: {e}"))?;
-        std::fs::rename(&tmp, &dest).map_err(|e| format!("install {file}: {e}"))?;
+        std::fs::rename(tmp, dir.join(file)).map_err(|e| format!("install {file}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Move a pre-iter-2524 `~/.cache/phonon/<repo>/` tree into the operant home.
+///
+/// The cache used to live outside the operant home. Rather than re-download
+/// 65 MB for every existing install, copy any complete file across once. A
+/// file that is missing or truncated in the old location is left alone and
+/// re-fetched normally.
+fn migrate_legacy_cache(dir: &Path) -> Result<(), String> {
+    let Some(old) = legacy_cache_dir() else {
+        return Ok(());
+    };
+    if old == dir || !old.is_dir() {
+        return Ok(());
+    }
+    for file in MODEL_FILES {
+        if file_is_complete(dir, file) {
+            continue;
+        }
+        if !file_is_complete(&old, file) {
+            continue;
+        }
+        let from = old.join(file);
+        let to = dir.join(file);
+        std::fs::copy(&from, &to).map_err(|e| format!("migrate {file}: {e}"))?;
     }
     Ok(())
 }
@@ -195,16 +295,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_dir_is_under_the_model_cache_not_the_operant_home() {
+    fn cache_dir_is_under_the_operant_home_with_the_revision() {
         let Some(dir) = cache_dir() else {
             return;
         };
         let s = dir.to_string_lossy();
-        assert!(s.contains("phonon"), "cache dir is {s}");
+        assert!(s.contains("phonon"), "cache dir must name phonon: {s}");
         assert!(
-            !s.contains(".operant"),
-            "cache dir must not be the operant home: {s}"
+            s.contains("cache"),
+            "cache dir must be under a cache/ subdir: {s}"
         );
+        assert!(
+            s.contains(&MODEL_REVISION[..12]),
+            "cache dir must carry the revision so a bump invalidates it: {s}"
+        );
+        // The cache resolves through the operant home so there is one home,
+        // not a per-subsystem $XDG_CACHE_HOME tree.
+        assert!(
+            s.contains(".operant") || s.contains(".hermes"),
+            "cache dir must be under the operant home: {s}"
+        );
+    }
+
+    #[test]
+    fn a_truncated_file_is_not_a_cache_hit() {
+        // A short file is a failed download, not a complete one: `ptts` would
+        // fail on it with "failed to fill whole buffer".
+        let tmp = std::env::temp_dir().join(format!("phonon-trunc-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        for file in MODEL_FILES {
+            let want = expected_size(file).unwrap();
+            // Write one byte short: exists() would say yes, file_is_complete must not.
+            std::fs::write(tmp.join(file), vec![0u8; (want - 1) as usize]).unwrap();
+            assert!(!file_is_complete(&tmp, file), "{file} must be rejected");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

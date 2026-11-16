@@ -94,29 +94,28 @@ const BUILTIN_PROVIDERS: &[&str] = &[
 
 /// Map a configured provider name onto one this build can dispatch to.
 ///
-/// `kokoro` is the retired default (iter-2513 replaced it). An operator whose
-/// `operant.toml` still says `provider = "kokoro"` would otherwise get
-/// "Unknown provider" on every speech request — a config that parsed
-/// yesterday failing today. Degrading to the default is the same posture the
-/// memory provider takes for a retired name: warn once, keep working.
+/// A name this build does not have degrades to the default with one warning,
+/// the same posture the memory provider takes for a retired name. That covers
+/// both a retired name (`kokoro`, the default until iter-2513) and a typo:
+/// an operator whose `operant.toml` still says `provider = "kokoro"` would
+/// otherwise get "Unknown provider" on every speech request — a config that
+/// parsed yesterday failing today.
 ///
-/// An unrecognised name degrades the same way rather than erroring. The
-/// tool's own `provider` ARGUMENT is still free to name anything — a plugin
-/// or command provider may be registered under a name not in this list —
+/// The tool's own `provider` ARGUMENT is deliberately NOT resolved: a plugin
+/// or command provider may register under a name outside [`BUILTIN_PROVIDERS`],
 /// so only the value that came from config is resolved here.
 fn resolve_provider_name(name: &str) -> String {
-    match name {
-        "kokoro" => {
-            tracing::warn!(
-                retired = %name,
-                replacement = %default_provider(),
-                "TTS provider is retired; using the default"
-            );
-            default_provider()
-        }
-        "" => default_provider(),
-        other => other.to_string(),
+    if BUILTIN_PROVIDERS.contains(&name) {
+        return name.to_string();
     }
+    if !name.is_empty() {
+        tracing::warn!(
+            provider = %name,
+            replacement = %default_provider(),
+            "TTS provider is unknown; using the default"
+        );
+    }
+    default_provider()
 }
 
 impl Default for TtsTool {
@@ -955,10 +954,10 @@ except Exception as e:
     /// Phonon (gradium/phonon-31m-en) — the local, offline default voice.
     ///
     /// The engine is loaded lazily on first call: `phonon::load_or_download`
-    /// fetches a pinned GGUF checkpoint into `~/.cache/phonon/` when it is
-    /// missing and returns a warm `Synth` otherwise. `ptts` surfaces errors as
-    /// `Result`, so unlike the old `ort` binding there is no panic-on-load
-    /// hazard to catch here.
+    /// fetches a pinned GGUF checkpoint into `~/.operant/cache/phonon/` when
+    /// it is missing and returns a warm `Synth` otherwise. `ptts` surfaces
+    /// errors as `Result`, so unlike the old `ort` binding there is no
+    /// panic-on-load hazard to catch here.
     async fn phonon_local(&self, args: &TtsArgs) -> ToolResult {
         let voice = if args.voice.is_empty() {
             "default"
@@ -1087,13 +1086,17 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_provider_name_degrades_to_the_default_instead_of_erroring() {
+    fn an_unknown_provider_name_degrades_to_the_default_instead_of_erroring() {
         // The regression this pins: iter-2513 retired `kokoro`, and an
         // operator whose operant.toml still names it would have got
         // "Unknown provider" on every request — a config that parsed
         // yesterday failing today.
         assert_eq!(resolve_provider_name("kokoro"), default_provider());
         assert_eq!(resolve_provider_name(""), default_provider());
+        // An unknown name (a typo, or a retired/never-installed plugin)
+        // degrades the same way rather than erroring — the doc/CHANGELOG promise.
+        assert_eq!(resolve_provider_name("openai-tts"), default_provider());
+        assert_eq!(resolve_provider_name("nonexistent"), default_provider());
         // A name this build genuinely has is left alone.
         assert_eq!(resolve_provider_name("edge"), "edge");
         assert_eq!(resolve_provider_name("phonon"), "phonon");
@@ -1152,7 +1155,7 @@ mod tests {
     /// tool's wiring and schema without a model, this one proves the model
     /// actually loads and speaks.
     #[tokio::test]
-    #[ignore = "needs the Phonon checkpoint in ~/.cache/phonon (downloads ~70 MB)"]
+    #[ignore = "needs the Phonon checkpoint in ~/.operant/cache/phonon (downloads ~65 MB)"]
     async fn phonon_speaks_through_the_tool_with_the_cached_model() {
         let tool = TtsTool::new();
         let result = tool
