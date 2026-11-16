@@ -1996,3 +1996,71 @@ renders to the host as a `※ recap:` line and never enters model context.
 >>>>>>> Stashed changes` markers, COMMITTED on origin/main by iter-2444's bulk
 tree commit. Both sides were additive sections covering different iterations, so
 the resolution is to keep both and drop the three marker lines.
+
+## iter-2479..2483 — red-team of iter-2449..2454, and the remediation
+
+The prior pass shipped six commits and reported them done. Red-teaming the SHIPPED
+BYTES rather than the plan found that two of the six did not hold under the input
+shapes that actually occur. Both failures are the same shape: I fixed the instance
+I was looking at and generalised the mechanism only as far as the motivating case.
+
+### What the red-team found
+
+- **The dreamer's bound was half a bound (iter-2450).** It capped ONE tool result
+  at 4 KB; nothing capped the REQUEST. Every round re-sends the whole transcript,
+  so 8000 + 1040N > 32768 at N >= 24 and a 5x5 review is 25.
+  `trim_tool_results_to_share` appeared ZERO times in `prompting.rs` while the main
+  agent runs it on every request. The failure arm was still `warn!; break`, so a
+  provider rejection remained byte-identical in the log to a model that found
+  nothing — the exact mode iter-2450 claimed to close.
+- **The config gate could not see its own change (iter-2451).** `added_keys()`
+  compared LEAF NAMES; 13 leaves are shared (`enabled` by 22 keys, `model` by 15,
+  `provider`/`api_key`/`base_url` by 13 each). Measured on the branch that added
+  `[background_review]`: it returned the EMPTY SET. The NEW arm could never fire
+  for either of that change's keys.
+- **My own repair then broke the gate's arithmetic.** Fixing that exposed a second
+  unit mismatch: `other_len` was in ESCAPED bytes while the cut was in RAW chars,
+  so a 4100-newline body re-escaped to 2x the budget and still overflowed — into
+  the hard head-truncate, which hands the model unparseable JSON. A test written
+  for the first defect caught the second.
+- **Two guards wrong one input over.** `markup_is_balanced` counted depth, so an
+  unmatched close cancelled a later unclosed open (`</a><b>text` scored 0 and the
+  broken `<b>` was emitted). `_const_block` counted brackets over raw text, so an
+  unmatched bracket in a NOTE ran the block past `CONFIG_KEYS` into `SETTING_ROWS`.
+
+### Method notes
+
+- **The comparison baseline for "what did this change add" is the MERGE BASE, not
+  the tip.** `tui.bar_style` was added in iter-2370 and later dropped on `main`;
+  this branch forked before the removal, so the gate reported it as NEWLY ADDED
+  with no heal or doctor row and failed on a defect the branch inherited. The tip
+  is still the authority for what the release line contains — it is just the wrong
+  baseline for a question about a branch's delta.
+- **A gate's first honest run is a backlog report.** Making `added_keys()` exact
+  turned the gate red on the two keys it had been blind to. That is the gate
+  working; the work is then to satisfy it with REAL surfaces (a heal rule for the
+  contradictory switch, three doctor rows) rather than exemptions — except
+  `instructions`, which genuinely has no range to violate and joins
+  `NO_HEAL_SUFFIXES` alongside `advisor.instructions` and `recap.instructions`.
+- **A mutation is the only evidence a guard works.** Each fix here was proved by
+  breaking it: the newline case was OBSERVED falling through to the hard truncate
+  before the encoded-aware cut; planting a `skills.enabled` with no surfaces now
+  yields `DRIFT 1 ... skills.enabled: missing note, heal, template, doctor`
+  where it was silent before.
+- **`DATABASE_MIGRATIONS` is append-only and `migrations.len()` IS the schema
+  version.** Re-confirmed: removing an entry makes the build claim an older schema
+  and REFUSE every database a newer binary migrated, with a message that reads as
+  the data being wrong.
+
+### Verification
+
+- `operant-core --lib`: **3490 passed / 5 failed** — the five known
+  `tools::kernel` submodule tests, unchanged across all five commits.
+- clippy `--all-targets`: 0 errors in every file this pass touched. The tree still
+  carries the 9 pre-existing errors on clean `origin/main`.
+- registry: 387 keys, `--check` green. Config-key audit green, inherited gaps
+  110 -> 108, and its own mutation self-test still fails a key that misses a
+  surface.
+- Deployed and verified live after the prior pass: `config describe` reports 387
+  keys (was 83), `context_historian` reads RETIRED, and the decay marker, the
+  review cap and the `[background_review]` section are all present in the binary.
