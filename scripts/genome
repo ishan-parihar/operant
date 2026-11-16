@@ -170,7 +170,7 @@ CONFIG_KEYS = {
     "ops": {"bulk_allow", "bulk_globs", "code_globs", "code_roots", "jobs", "link_prefixes", "link_surfaces",
             "max_bytes", "owner_exempt", "owner_globs", "py_paths", "secrets", "root_files", "dir_suffixes",
             "dir_requires", "dir_globs", "stale_terms", "stale_exempt", "external_ok",
-            "dir_name_patterns", "dir_name_exempt", "coverage_surfaces", "coverage_units",
+            "dir_name_patterns", "dir_name_exempt", "coverage_surfaces", "coverage_units", "doc_claims",
             "coverage_exempt", "coverage_label"},
     # `app` is the language-agnostic application/system-integrity declaration. A repo
     # writes what its toolchain IS (python, cargo, npm...) and genome runs the check
@@ -1640,7 +1640,34 @@ def lint_core(cfg: Cfg) -> list[str]:
                 if a and b and len(a & b) / len(a | b) >= 0.5:
                     out.append(f"W006 plans `{titles[i][0]}` and `{titles[j][0]}` answer the same question — keep one owner")
     out += lint_outward(cfg)
+    out += lint_doc_claims(cfg)
     return out
+
+
+def lint_doc_claims(cfg: Cfg) -> list[str]:
+    """E019: a doc's DERIVED claim about the code disagrees with the code.
+
+    A prose inventory of the code drifts in both directions — it keeps entries that
+    were deleted and misses entries that were added — and reading the list and
+    judging it "looks right" is how that happens (the reason
+    `scripts/check-doc-claims.sh` exists at all). That script has been right and
+    UNRUN for weeks: it is wired only into the slow `self-test.sh`, so the drift it
+    detects sat in `AGENTS.md` until something ran it by hand. Measured 2026-11-17:
+    `CLI (52 command variants)` against 53 in the `Commands` enum, the list missing
+    `continue`, and `66 TUI modules (328 .rs files)` against 68 and 342.
+
+    This runs the SAME script rather than reimplementing its derivations, so there is
+    one authority for each claim instead of two that can disagree. `ops.doc_claims`
+    names it; a repo without one simply has no such gate.
+    """
+    script = cfg.get("ops", "doc_claims", "")
+    if not script:
+        return []
+    p = cfg.root / script
+    if not p.is_file():
+        return [f"E019 ops.doc_claims names missing `{script}`"]
+    r = sh(cfg.root, "bash", script)
+    return [f"E019 {ln}" for ln in r.splitlines() if ln.startswith("DRIFT")]
 
 
 def lint_outward(cfg: Cfg) -> list[str]:
@@ -4935,6 +4962,10 @@ def _remedies_for(codes) -> str:
         fixes.append("move history out of the over-budget file (`genome archive`)")
     if "E018" in seen:
         fixes.append("`genome migrate` (an unmigrated schema reads every membership glob with the old dialect)")
+    if "E311" in seen:
+        fixes.append("document the unit in a library page, or add it to ops.coverage_exempt WITH the reason")
+    if "E019" in seen:
+        fixes.append("correct the doc's count to what ops.doc_claims derives, or fix the code it describes")
     if "W006" in seen:
         fixes.append("two plans answer one question — keep one owner, retire the other")
     if "W008" in seen:

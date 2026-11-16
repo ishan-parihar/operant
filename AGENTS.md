@@ -658,7 +658,7 @@ operant/
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
 │       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
-│       │   ├── tui/           # 66 TUI modules (328 .rs files) — (app, render, prompt_input, dialogs)
+│       │   ├── tui/           # 68 TUI modules (342 .rs files) — (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode
 │       │   ├── config.rs      # CLI config
@@ -1103,22 +1103,23 @@ outright because `kill(0, …)` addresses the caller's process group.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (52 command variants — real handlers; no stubs remain as of iter-1474)
+### CLI (53 command variants — real handlers; no stubs remain as of iter-1474)
 
-run, autonomous, tools, chat, test, config, sessions
-mcp, cookies, skills, model, completion, cron, pause
-resume, suggestions, kanban, org, gateway, checkpoints, memory
-context, profile, auth, login, logout, version, doctor
-status, dump, logs, backup, import, uninstall, update
-insights, webhook, hooks, debug, plugins, architecture, channel
-sop, migrate, service, curator, setup, acp, dashboard
-trajectory, tui, donate
+run, autonomous, tools, chat, test, config, sessions, continue
+mcp, cookies, skills, model, completion, cron, pause, resume
+suggestions, kanban, org, gateway, checkpoints, memory, context
+profile, auth, login, logout, version, doctor, status, dump
+logs, backup, import, uninstall, update, insights, webhook, hooks
+debug, plugins, architecture, channel, sop, migrate, service, curator
+setup, acp, dashboard, trajectory, tui, donate
 
 The list above is derived from the `Commands` enum in
-`crates/operant-cli/src/main.rs` (52 variants). It used to claim 53 and list
-`hardware` and `peripheral`, both removed in iter-892, while omitting `donate`
-and `org`, both real commands with handlers. Re-derive it rather than trusting
-it — see RG-010 for the check.
+`crates/operant-cli/src/main.rs` (53 variants). It has said 52 and omitted
+`continue` since iter-2372 added it; `scripts/check-doc-claims.sh` is the check
+that catches this class of drift, and it is the authority — re-derive rather
+than trusting the number here. It used to claim 53 and list `hardware` and
+`peripheral`, both removed in iter-892, while omitting `donate` and `org`, both
+real commands with handlers. See RG-010 for the check.
 
 ### Operator-facing surfaces (re-verified 2026-10-21, iters 1124-1131)
 - `operant tools disable` removes the tool from the agent's toolset — the

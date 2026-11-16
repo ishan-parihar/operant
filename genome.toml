@@ -86,3 +86,9 @@ coverage_exempt = [
   # Leaf modules a reader reaches only through the page that owns their family;
   # each is named in its owner's prose even though its own stem is not.
 ]
+
+# E019: a doc's DERIVED claim about the code must match the code. The script is the
+# authority for each derivation (AGENTS.md's command count, its TUI module count,
+# the gateway platform count, ...), and it is run here rather than reimplemented,
+# so a claim and its check cannot drift apart.
+doc_claims = "scripts/check-doc-claims.sh"
