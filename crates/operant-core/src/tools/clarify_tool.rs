@@ -86,9 +86,17 @@ impl OperantTool for ClarifyTool {
         // the ask_user_dialog, the user picks/types an answer, and the
         // reply flows back via the oneshot. The agent loop blocks here
         // until the user responds. (iter-97 — closes Bug #2.)
-        if let Some(reply_rx) =
-            crate::user_question::try_send_user_question(args.question.clone(), choices.clone())
-        {
+        // Pass the asking session so the gateway can deliver this question to
+        // the chat that raised it rather than to whichever chat ran a turn
+        // last (A3-gateway H-3). `resolved_session_id` reads the field first
+        // with a metadata fallback -- reading only one channel is how the two
+        // drifted apart before (see its doc).
+        let session_id = context.resolved_session_id().map(str::to_string);
+        if let Some(reply_rx) = crate::user_question::try_send_user_question(
+            args.question.clone(),
+            choices.clone(),
+            session_id,
+        ) {
             match reply_rx.await {
                 Ok(answer) => {
                     // Return the user's answer as the tool result. The

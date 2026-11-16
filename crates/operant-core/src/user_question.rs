@@ -29,6 +29,19 @@ pub struct UserQuestionRequest {
     pub question: String,
     /// Optional list of choices for the user to pick from.
     pub choices: Option<Vec<String>>,
+    /// (A3-gateway H-3, the third receiver) The session this question belongs
+    /// to, when the asking tool knows it.
+    ///
+    /// The gateway's ask-user receiver routes by ONE process-global
+    /// `current_channel` cell, so a question raised inside session A could be
+    /// delivered to whichever chat most recently ran a turn -- and the answer
+    /// came back to A. The other two receivers were fixed in iter-2528 by
+    /// resolving per event; this one could not be, because the request carried
+    /// no session and `try_send_user_question` had no way to learn one.
+    ///
+    /// `None` is every caller with no session to name: the one-shot paths,
+    /// the TUI's debug mock, and tests that construct a request directly.
+    pub session_id: Option<String>,
     /// Oneshot reply channel — the user's answer flows back here.
     pub reply_tx: oneshot::Sender<String>,
 }
@@ -58,11 +71,13 @@ pub fn set_user_question_sender(
 pub fn try_send_user_question(
     question: String,
     choices: Option<Vec<String>>,
+    session_id: Option<String>,
 ) -> Option<oneshot::Receiver<String>> {
     let (reply_tx, reply_rx) = oneshot::channel();
     let req = UserQuestionRequest {
         question,
         choices,
+        session_id,
         reply_tx,
     };
     // Try to get the sender. If it's not set (CLI mode), return None.
@@ -85,4 +100,53 @@ pub fn try_send_user_question(
 /// (TUI mode) or return immediately (CLI mode).
 pub fn has_user_question_sender() -> bool {
     USER_QUESTION_TX.get().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (A3-gateway H-3) The asking session survives the trip to the receiver.
+    ///
+    /// The gateway's ask-user receiver routes by session, so if the id is lost
+    /// between the tool and the channel the receiver falls back to the
+    /// process-global cell and the question lands in whichever chat ran a turn
+    /// last. This pins the one hop that carries it.
+    ///
+    /// `USER_QUESTION_TX` is a process-global `OnceLock`, so this test can
+    /// only run once per process and must not be made parallel with another
+    /// test that sets a sender. It is the only one that does.
+    #[test]
+    fn the_asking_session_reaches_the_receiver() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<UserQuestionRequest>();
+        // A second set is refused by design (the TUI initializes once).
+        assert!(
+            set_user_question_sender(tx).is_ok(),
+            "the first sender must be accepted"
+        );
+
+        let reply = try_send_user_question(
+            "which database?".to_string(),
+            Some(vec!["primary".to_string(), "replica".to_string()]),
+            Some("gw_abc123".to_string()),
+        );
+        assert!(
+            reply.is_some(),
+            "a registered sender must accept the request"
+        );
+
+        let req = rx.try_recv().expect("the request must arrive");
+        assert_eq!(
+            req.session_id.as_deref(),
+            Some("gw_abc123"),
+            "the asking session must reach the receiver; losing it is what \\
+             routes the question to a chat that never asked"
+        );
+        assert_eq!(req.question, "which database?");
+        assert_eq!(
+            req.choices.as_deref(),
+            Some(&["primary".to_string(), "replica".to_string()][..]),
+            "choices must be unchanged by the added field"
+        );
+    }
 }

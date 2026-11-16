@@ -859,6 +859,42 @@ fn the_progress_receiver_names_the_events_that_explain_a_gap() {
     );
 }
 
+/// (A3-gateway H-3, third receiver) The ask-user receiver resolves the
+/// session that ASKED, not the process-global slot.
+///
+/// This is the receiver that could not be fixed in iter-2528: the event and
+/// permission receivers resolve per event, but `UserQuestionRequest` had no
+/// session field and `try_send_user_question` was a process-global sender
+/// with no way to learn one. The request now carries `session_id` (read by
+/// the asking tool off its own `ToolContext`) and this receiver resolves on
+/// it. A question raised inside session A was delivered to whichever chat ran
+/// a turn last, while A's turn sat blocked on an answer nobody was shown.
+#[test]
+fn the_ask_user_receiver_resolves_the_asking_session() {
+    let source = include_str!("../gateway_runner.rs");
+    assert!(
+        source.contains("session_channels_for_uq"),
+        "the ask-user receiver must consult the per-session pin"
+    );
+    assert!(
+        source.contains("resolve_turn_channel(req.session_id.as_deref(), pinned, slot_channel)"),
+        "the ask-user receiver must resolve through resolve_turn_channel on the \
+         request's session -- reading the global cell directly is the pre-fix \
+         shape that delivered a question to a chat that never asked"
+    );
+    let uq_global = ["current_channel_for_uq.lock().await.as_ref()"].concat();
+    assert!(
+        !source.contains(uq_global.as_str()),
+        "the ask-user receiver must not take its target straight from the \
+         global cell; a question would land in whichever chat ran a turn last"
+    );
+    assert!(
+        source.contains("current_channel_for_uq.lock().await.clone()"),
+        "the cell is still needed as the resolver's fallback for sessionless \
+         asks (the one-shot paths and the TUI debug mock)"
+    );
+}
+
 /// (RT-534) The gateway sets the cron origin on the SLOT's agent, not in a
 /// process global.
 ///

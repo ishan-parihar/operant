@@ -1545,6 +1545,9 @@ impl TuiApp {
                         let _ = uq_tx.send(operant_core::user_question::UserQuestionRequest {
                             question,
                             choices,
+                            // The debug mock drives events with no session
+                            // behind them, so there is none to name.
+                            session_id: None,
                             reply_tx,
                         });
                     }

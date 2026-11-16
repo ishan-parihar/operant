@@ -7317,6 +7317,7 @@ pub async fn start_gateway(
     // View, Slack Block Kit, WhatsApp native poll).
     let gw_for_uq = gw.clone();
     let current_channel_for_uq = current_channel.clone();
+    let session_channels_for_uq = session_channels.clone();
     // Pending clarify() questions, keyed by `platform:channel_id` (the same
     // key the message handler uses to intercept replies).
     let pending_uq: Arc<Mutex<HashMap<String, PendingUserQuestion>>> =
@@ -7332,10 +7333,22 @@ pub async fn start_gateway(
         tracing::info!("User question receiver started");
         while let Some(req) = uq_rx.recv().await {
             tracing::info!(question = %req.question, "User question received from clarify tool");
-            // Surface the question to the user.
-            if let Some((platform, channel_id, thread_id)) =
-                current_channel_for_uq.lock().await.as_ref()
-            {
+            // Surface the question to the user -- resolved for the session that
+            // ASKED, not from the process-global slot (A3-gateway H-3, the
+            // third and last receiver). The request carries `session_id`
+            // because the asking tool read it off its own `ToolContext`; the
+            // two receivers that could resolve per event were fixed in
+            // iter-2528. Until now a question raised inside session A was
+            // delivered to whichever chat ran a turn last, and A's turn sat
+            // blocked on an answer nobody was shown.
+            let pinned = match req.session_id.as_deref() {
+                Some(id) if !id.is_empty() => session_channels_for_uq.lock().await.get(id).cloned(),
+                _ => None,
+            };
+            let slot_channel = current_channel_for_uq.lock().await.clone();
+            let channel_info =
+                resolve_turn_channel(req.session_id.as_deref(), pinned, slot_channel);
+            if let Some((platform, channel_id, thread_id)) = channel_info.as_ref() {
                 let channel_key = format!("{platform}:{channel_id}");
                 // Platforms with interactive components render tappable
                 // choice buttons (hermes `send_clarify` parity); the rest

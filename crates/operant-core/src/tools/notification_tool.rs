@@ -37,7 +37,7 @@ impl OperantTool for NotificationTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let message = match args.get("message").and_then(|v| v.as_str()) {
             Some(m) => m,
             None => {
@@ -91,7 +91,7 @@ impl OperantTool for ApprovalTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let request = match args.get("request").and_then(|v| v.as_str()) {
             Some(r) => r,
             None => {
@@ -115,6 +115,10 @@ impl OperantTool for ApprovalTool {
         if let Some(reply_rx) = crate::user_question::try_send_user_question(
             full_request,
             Some(vec!["approve".to_string(), "deny".to_string()]),
+            // (A3-gateway H-3) The asking session, so an approval prompt
+            // reaches the chat that raised it. `context` is currently
+            // `_context` in this impl -- it has to be named to be read.
+            context.resolved_session_id().map(str::to_string),
         ) {
             match reply_rx.await {
                 Ok(answer) => {
