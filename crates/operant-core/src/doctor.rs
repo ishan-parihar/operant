@@ -448,6 +448,52 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
             ));
         }
     }
+
+    // The dreamer's switch against the cadence it depends on. Both live
+    // config, and the contradiction is invisible from either alone: `enabled`
+    // reads "on" while both intervals are zero, so the daemon can never fire.
+    // The keys are named as standalone literals so `config describe` and this
+    // check cannot drift apart on what the surface is called.
+    let review_enabled = "background_review.enabled";
+    let review_instructions = "background_review.instructions";
+    let review_live =
+        config.agent.memory_nudge_interval > 0 || config.agent.creation_nudge_interval > 0;
+
+    if config.background_review.enabled == Some(true) && !review_live {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{review_enabled} is true but agent.memory_nudge_interval and \
+                 agent.creation_nudge_interval are both 0 — the review daemon can never \
+                 fire. Set one interval above zero, or turn {review_enabled} off."
+            ),
+        ));
+    }
+    // The mirror image: an explicitly disabled daemon with a live cadence is a
+    // config whose intervals are doing nothing.
+    if config.background_review.enabled == Some(false) && review_live {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{review_enabled} is false while an [agent] review interval is above zero \
+                 — only the switch decides, so that interval is read by nothing. Zero it \
+                 to keep the file honest."
+            ),
+        ));
+    }
+    // Instructions that can never be used: the operator wrote a brief for a
+    // daemon that is switched off.
+    if !config.background_review.instructions.trim().is_empty()
+        && config.background_review.enabled == Some(false)
+    {
+        items.push(CheckResult::warn(
+            cat,
+            format!(
+                "{review_instructions} is set but {review_enabled} is false, so the brief is \
+                 never appended to any review prompt."
+            ),
+        ));
+    }
 }
 
 // ── L4: the upgrade-resilience sweep ──────────────────────────────
@@ -1399,6 +1445,69 @@ mod tests {
         assert_eq!(
             text,
             "[config]\n  ✓ one\n  ✓ two\n[environment]\n  ⚠ three\n[workspace]\n  ✗ four\n"
+        );
+    }
+    /// The switch and the cadence it depends on are both live config, and the
+    /// contradiction is invisible from either alone.
+    #[test]
+    fn an_enabled_review_daemon_with_no_cadence_is_reported() {
+        let mut config = fixture_config();
+        config.background_review.enabled = Some(true);
+        config.agent.memory_nudge_interval = 0;
+        config.agent.creation_nudge_interval = 0;
+
+        let items = diagnose(&config);
+        assert!(
+            items
+                .iter()
+                .any(|i| i.message.contains("background_review.enabled")
+                    && i.message.contains("can never fire")),
+            "the contradiction is not reported: {:?}",
+            items.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// The mirror image, and the brief that can never be used.
+    #[test]
+    fn a_disabled_review_daemon_reports_the_dead_intervals_and_brief() {
+        let mut config = fixture_config();
+        config.background_review.enabled = Some(false);
+        config.agent.memory_nudge_interval = 10;
+        config.background_review.instructions = "prefer root causes".to_string();
+
+        let items = diagnose(&config);
+        let messages: Vec<&str> = items.iter().map(|i| i.message.as_str()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("background_review.enabled is false while")),
+            "the dead interval is not reported: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("background_review.instructions is set")),
+            "the unusable brief is not reported: {messages:?}"
+        );
+    }
+
+    /// A coherent config raises neither row: the check must not fire on the
+    /// normal state, or it is noise.
+    #[test]
+    fn a_coherent_review_config_is_not_reported() {
+        let mut config = fixture_config();
+        config.background_review.enabled = None;
+        config.agent.memory_nudge_interval = 10;
+        config.agent.creation_nudge_interval = 0;
+        config.background_review.instructions = String::new();
+
+        let items = diagnose(&config);
+        assert!(
+            !items
+                .iter()
+                .any(|i| i.message.contains("background_review.")),
+            "a coherent config is reported: {:?}",
+            items.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
 }

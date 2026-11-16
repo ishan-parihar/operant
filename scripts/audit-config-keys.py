@@ -109,6 +109,11 @@ NO_HEAL_SUFFIXES = {
     "string": "a string: there is no range to violate",
     "bool": "a bool: both values are meaningful",
     "list": "a list: emptiness is the only state and it means 'none'",
+    # Freeform operator prose. There is no range to violate and no malformed
+    # value to repair: the prompt appends whatever is there, and empty is the
+    # documented default. This covers `advisor.instructions`,
+    # `recap.instructions` and `background_review.instructions` alike.
+    "instructions": "freeform prompt text: every value is usable as written",
 }
 
 # Keys the operator never discovers from the template: provenance, or written
@@ -417,25 +422,16 @@ def registry_keys() -> list[tuple[str, str, str]]:
         )
         sys.exit(2)
     src = REGISTRY.read_text(encoding="utf-8")
-    # The CONFIG_KEYS table is one `("key", "default", "note")` per entry, and
-    # the generator owns that format — so a change to it is a change to both
-    # sides of this contract, which is the point.
-    #
-    # It must be read STRUCTURALLY, not line by line. The generator writes each
-    # tuple on ONE line, but `cargo fmt --all` — which this repo runs before
-    # every commit — reflows a long one across FOUR:
-    #
-    #       (
-    #           "agent.context_historian",
-    #           "…",
-    #           "…",
-    #       ),
-    #
-    # A line-anchored regex matched only the short tuples that survived the
-    # reflow: 83 of 387 on the current tree. The gate then evaluated a fifth of
-    # the keys, printed a negative coverage count (`-189 of them reach all four
-    # surfaces`), and read as green while 304 keys went unchecked. Scope the
-    # match to the CONFIG_KEYS block so other 3-tuples in the file cannot match.
+    return _parse_registry(src)
+
+
+def _parse_registry(src: str) -> list[tuple[str, str, str]]:
+    """`(dotted, default, note)` for every key in a registry source.
+
+    Structural, not line-by-line: `cargo fmt --all` reflows a long tuple across
+    four lines, so a line-anchored regex saw 83 of 387 keys and the gate read
+    GREEN. See `registry_keys`.
+    """
     block = _const_block(src, "CONFIG_KEYS")
     return [
         (m.group(1), m.group(2), m.group(3))
@@ -446,6 +442,24 @@ def registry_keys() -> list[tuple[str, str, str]]:
             re.S,
         )
     ]
+
+
+def base_registry_keys() -> set[str] | None:
+    """The dotted keys `origin/main`'s registry declares, or None if unreadable.
+
+    None means "cannot tell", and every caller treats it as the strict reading.
+    """
+    rel = REGISTRY.relative_to(ROOT).as_posix()
+    try:
+        base = subprocess.run(
+            ["git", "show", f"origin/main:{rel}"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if base.returncode != 0:
+        return None
+    return {dotted for dotted, _, _ in _parse_registry(base.stdout)}
 
 
 def _const_block(src: str, name: str) -> str:
@@ -577,64 +591,36 @@ def added_keys() -> set[str]:
     for a defect it inherited: a peer lands `skills.extra_roots` with no heal
     row, and every later config change fails on it forever.
 
-    The comparison is against the FIELDS of the owning struct on `origin/main`,
-    not against a name list. Both cruder readings fail: a bare `pub <name>:`
-    scan matches every struct at once (`enabled` exists in six of them, so a
-    new `skills.enabled` reads as old), and a registry-only diff reports a
-    field a peer added and never regenerated as this change's (observed:
-    iter-2260 added two `SkillsSettings` fields and never ran the generator).
+    THE COMPARISON IS BY DOTTED PATH, and that is the whole fix. It used to
+    compare LEAF NAMES against the set of field names declared on `origin/main`:
+
+        {dotted for dotted in here if dotted.rsplit(".", 1)[-1] not in base_fields}
+
+    which is blind to exactly the keys most likely to be added. 13 leaf names
+    are shared by more than one key — `enabled` by 22, `model` by 15,
+    `provider`/`api_key`/`base_url` by 13 each — so any new key called
+    `skills.enabled` or `memory.enabled` read as PRE-EXISTING, could miss all
+    four surfaces, and still exited 0. Measured on the branch that added
+    `[background_review]`: `added_keys()` returned the empty set, so the gate
+    could not see either of that change's own two keys. A gate that cannot name
+    the change it guards is not a gate.
+
+    The leaf-name heuristic existed to catch a field a peer added without
+    regenerating the registry (iter-2260). That case needs nothing here: a key
+    absent from the registry is absent from `here`, so it is not a finding —
+    `gen-config-registry.py --check` is what catches a stale registry.
 
     `origin/main` is the authority (AGENTS.md: local history is stale the
     moment a peer pushes). A missing or unreadable ref degrades to "every key
-    counts as added", which is the strict reading and never hides a gap.
+    counts as added", the strict reading, which never hides a gap.
     """
     if not REGISTRY.exists():
         return set()
     here = {dotted for dotted, _, _ in registry_keys()}
-    try:
-        base = subprocess.run(
-            ["git", "show", f"origin/main:{CONFIG_RS.relative_to(ROOT)}"],
-            capture_output=True, text=True, check=False,
-        )
-    except OSError:
+    base = base_registry_keys()
+    if base is None:
         return here
-    if base.returncode != 0:
-        return here
-
-    # section -> struct name (AppConfig's field type), then the base's fields.
-    #
-    # ANY CamelCase field type, not only `*Settings`. The earlier pattern
-    # matched `[A-Z][A-Za-z0-9]*[Ss]ettings`, which silently excluded every
-    # section whose struct is named for what it configures rather than for being
-    # a settings bag: `advisor: AdvisorConfig`, `recap: RecapConfig`. Their
-    # fields were therefore never in `base_fields`, so EVERY `advisor.*` and
-    # `recap.*` key read as "added by this change" and failed the gate. That was
-    # invisible while the registry declared 83 of its 385 keys, because those
-    # keys were never evaluated at all.
-    section_struct = dict(
-        re.findall(
-            r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*"
-            r"([A-Z][A-Za-z0-9_]*)\s*,",
-            base.stdout,
-        )
-    )
-    base_fields: set[str] = set()
-    for struct in set(section_struct.values()):
-        base_fields |= _struct_fields(base.stdout, struct)
-    # A section struct can live in its own module — `AdvisorConfig` is declared
-    # in advisor.rs, not config.rs — so config.rs alone does not carry its
-    # fields. Read them from whichever base file declares the struct.
-    for path in _SECTION_SOURCES:
-        text = _base_file(path)
-        if not text:
-            continue
-        for struct in set(section_struct.values()):
-            base_fields |= _struct_fields(text, struct)
-    # The AppConfig fields are their own names. Scoped to the AppConfig body:
-    # a whole-file scan collects every field in every struct (262 of them),
-    # which defeats the point of matching the owning struct.
-    base_fields |= _struct_fields(base.stdout, "AppConfig")
-    return {dotted for dotted in here if dotted.rsplit(".", 1)[-1] not in base_fields}
+    return here - base
 
 
 def missing_surfaces(dotted: str, note: str, heal: set[str], template: set[str], doctor: set[str]) -> list[str]:

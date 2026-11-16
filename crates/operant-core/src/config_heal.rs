@@ -379,8 +379,40 @@ pub fn heal_config(config: &mut crate::config::AppConfig) -> Vec<Healed> {
     heal_gateway(&mut config.gateway, &mut out);
     heal_tool_search(&mut config.tools.tool_search, &mut out);
     heal_rate_limit(&mut config.client.rate_limit, &mut out);
+    heal_background_review(config, &mut out);
 
     out
+}
+
+/// `[background_review]` — the dreamer's own switch.
+///
+/// The one contradictory state this section can hold is `enabled = true` with
+/// BOTH cadences at zero: the operator has asked for the daemon and given it no
+/// turn on which to run, so it can never fire. Every other combination means
+/// something — an omitted `enabled` follows the intervals, and one live interval
+/// is enough to run on.
+///
+/// Left alone, that config reads as "on" while doing nothing, and the operator
+/// cannot tell from the outside why no review ever ran. The interval keys live
+/// in `[agent]` (their historical home) and are clamped there; this resolves only
+/// the contradiction between them and the switch.
+fn heal_background_review(config: &mut crate::config::AppConfig, out: &mut Vec<Healed>) {
+    if config.background_review.enabled != Some(true) {
+        return;
+    }
+    let cadence =
+        config.agent.memory_nudge_interval > 0 || config.agent.creation_nudge_interval > 0;
+    if !cadence {
+        out.push(Healed::clamped(
+            "background_review.enabled",
+            "true".to_string(),
+            "false".to_string(),
+            "enabled while agent.memory_nudge_interval and \
+             agent.creation_nudge_interval are both 0, so the daemon has no turn to \
+             run on and could never fire",
+        ));
+        config.background_review.enabled = Some(false);
+    }
 }
 
 /// `[client]` — the transport's own knobs.
@@ -760,6 +792,59 @@ mod tests {
         assert!(
             !second.iter().any(|r| r.key.starts_with("agent.retry")),
             "second heal moved a retry row: {second:?}"
+        );
+    }
+
+    /// The one contradictory `[background_review]` state: the switch says on,
+    /// both cadences say never. It reads as enabled and can never fire.
+    #[test]
+    fn an_enabled_daemon_with_no_cadence_is_healed_off() {
+        let mut config = crate::config::AppConfig::default();
+        config.background_review.enabled = Some(true);
+        config.agent.memory_nudge_interval = 0;
+        config.agent.creation_nudge_interval = 0;
+
+        let healed = heal_config(&mut config);
+
+        let row = healed
+            .iter()
+            .find(|h| h.key == "background_review.enabled")
+            .expect("the contradiction is reported");
+        assert_eq!(row.old, "true");
+        assert_eq!(row.new, "false");
+        assert_eq!(config.background_review.enabled, Some(false));
+    }
+
+    /// One live interval is enough, so nothing is healed — the switch agreeing
+    /// with a working cadence is the normal state.
+    #[test]
+    fn an_enabled_daemon_with_a_cadence_is_left_alone() {
+        for (memory, creation) in [(10, 0), (0, 10), (10, 5)] {
+            let mut config = crate::config::AppConfig::default();
+            config.background_review.enabled = Some(true);
+            config.agent.memory_nudge_interval = memory;
+            config.agent.creation_nudge_interval = creation;
+
+            let healed = heal_config(&mut config);
+
+            assert!(
+                healed.iter().all(|h| h.key != "background_review.enabled"),
+                "memory={memory} creation={creation}: a live cadence is enough, got {healed:?}"
+            );
+            assert_eq!(config.background_review.enabled, Some(true));
+        }
+    }
+
+    /// The switch UNSET is the historical behaviour, so it is not healed even
+    /// with no cadence: that state means "off", which is what it should mean.
+    #[test]
+    fn an_unset_switch_with_no_cadence_stays_unset() {
+        let mut config = crate::config::AppConfig::default();
+        assert_eq!(config.background_review.enabled, None);
+        let healed = heal_config(&mut config);
+        assert!(
+            healed.iter().all(|h| h.key != "background_review.enabled"),
+            "unset already means off, and healing it is noise: {healed:?}"
         );
     }
 }
