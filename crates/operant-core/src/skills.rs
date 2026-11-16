@@ -188,6 +188,16 @@ impl RootIssue {
              so the skill answers to two names; rename the directory or fix the \
              frontmatter so both agree"
                 .to_string(),
+            // The reason string already carries the winner's path
+            // (`shadowed_by: <dir>`), so the explanation only has to say what
+            // to do about it. Naming the losing root as well would repeat
+            // `entry`, which `describe()` already prints.
+            reason if reason.starts_with("shadowed_by: ") => {
+                " -- a skill with this name already loaded from a higher-precedence \
+                 root (operator pool > extra roots > vendor); this copy is not \
+                 loadable"
+                    .to_string()
+            }
             "dead_symlink" => " -- the symlink target is gone".to_string(),
             "sensitive_path" => " -- refused: a credential or secret store is not a skill \
              root"
@@ -518,6 +528,14 @@ pub struct SkillManager {
     extra_roots: Vec<PathBuf>,
     /// Cache of loaded skills keyed by name
     skills: HashMap<String, Skill>,
+    /// The winning SKILL.md's directory for each name in `skills`.
+    ///
+    /// `Skill` deliberately carries no path of its own, so when a later root's
+    /// same-named skill is shadowed there was nothing to name in the report --
+    /// the operator could be told "shadowed" but not by WHAT (iter-2468).
+    /// This side map is the smallest thing that fixes that: the winner's
+    /// directory, keyed by the skill name it won.
+    skill_paths: HashMap<String, PathBuf>,
     /// Problems the last `load_all` found: dead symlinks and refused roots.
     issues: Vec<RootIssue>,
     /// Whether the last `load_all` hit the walk cap.
@@ -531,6 +549,7 @@ impl SkillManager {
             skills_dir,
             extra_roots: Vec::new(),
             skills: HashMap::new(),
+            skill_paths: HashMap::new(),
             issues: Vec::new(),
             truncated: false,
         }
@@ -578,6 +597,9 @@ impl SkillManager {
     /// creatable/deletable through this manager (see [`Skill::origin`]).
     pub fn load_all(&mut self) -> Result<Vec<Skill>> {
         self.skills.clear();
+        // Must be cleared WITH `skills`: a stale winner path would make a
+        // shadow report name a file the current load never chose.
+        self.skill_paths.clear();
         self.issues.clear();
         self.truncated = false;
 
@@ -685,9 +707,46 @@ impl SkillManager {
                     // unresolvable, because `shared` was already taken by
                     // `alpha`'s alias.
                     if self.skills.contains_key(&skill.name) {
+                        // REPORT THE SHADOW, DO NOT SWALLOW IT (iter-2468). The
+                        // drop itself is correct -- first root wins -- but a
+                        // silent `continue` meant "is my skill installed?"
+                        // answered `no` with nothing to explain why. This is
+                        // the same defect iter-2466 fixed for dead symlinks,
+                        // one layer over: the skill is dropped by the resolver
+                        // and the operator never hears about it.
+                        //
+                        // Deduplicated on (winner path, loser path) the way
+                        // hermes does it: without the guard, a pool holding two
+                        // same-named skills behind the winner would re-emit the
+                        // loser's line on every load.
+                        // The winner's path is always recorded before a later
+                        // root can shadow it, so the fallback is only a
+                        // defensive default for a name inserted outside
+                        // `load_root`.
+                        let winner_label = self.skill_paths.get(&skill.name).map_or_else(
+                            || "<unknown root>".to_string(),
+                            |p| p.display().to_string(),
+                        );
+                        let shadowed_reason = format!("shadowed_by: {winner_label}");
+                        let already = self.issues.iter().any(|issue| {
+                            issue.reason == shadowed_reason
+                                && issue.entry == path
+                                && issue.root == root.to_path_buf()
+                        });
+                        if !already {
+                            self.issues.push(RootIssue {
+                                root: root.to_path_buf(),
+                                entry: path.clone(),
+                                link_target: None,
+                                reason: shadowed_reason,
+                            });
+                        }
                         continue;
                     }
                     self.skills.insert(skill.name.clone(), skill.clone());
+                    // Remember WHERE the winner lives so a later shadow report
+                    // can name it (iter-2468).
+                    self.skill_paths.insert(skill.name.clone(), path.clone());
                     // The directory alias is best-effort: an existing entry
                     // (the operator's own alias, or another root's) wins.
                     if dir_key != skill.name {
@@ -1317,6 +1376,43 @@ mod tests {
         let loaded = mgr.load_all().unwrap();
         assert_eq!(loaded.len(), 1, "shadowed duplicate must not double-list");
         assert_eq!(mgr.get("clash").unwrap().origin, SkillOrigin::OperatorPool);
+
+        // iter-2468: the winner is still the pool (asserted above), but the
+        // shadow must be REPORTED, not swallowed. Before this the loser
+        // vanished with no trace and `skills list` could only shrug.
+        let shadow = mgr
+            .issues()
+            .iter()
+            .find(|issue| issue.reason.starts_with("shadowed_by: "))
+            .unwrap_or_else(|| panic!("a shadowed skill must be reported, got {:?}", mgr.issues()));
+        // The report's ENTRY is the shadowed copy. Both roots hold a `clash/`
+        // dir, so the entry is identified by its PARENT -- the extra root --
+        // not by the leaf name, which is identical on both sides.
+        assert_eq!(
+            shadow.entry,
+            extra.join("clash"),
+            "the report's entry must be the shadowed copy under the extra root"
+        );
+        assert_ne!(
+            shadow.entry,
+            pool.join("clash"),
+            "the report must not point at the winner"
+        );
+        // The reason names the WINNER's directory.
+        assert!(
+            shadow
+                .reason
+                .contains(&pool.join("clash").display().to_string()),
+            "the report must name the winning dir ({}), got {}",
+            pool.join("clash").display(),
+            shadow.reason
+        );
+        // And the operator-facing line is actionable, not a bare code.
+        let described = shadow.describe();
+        assert!(
+            described.contains("higher-precedence"),
+            "describe() must explain the shadow, got: {described}"
+        );
 
         cleanup(&pool);
         cleanup(&extra);
