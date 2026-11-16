@@ -1130,3 +1130,471 @@ in the check itself.
 - **2026-11-14T00:39** · `agent-omarchy-wt2096` — thin-client-session-server campaign opened: the server/process architecture was audited against jcode and codex (13 full operant binaries, 792 MiB RSS, 13 of 13 owning a separate AFT bridge), the findings became ledger rows RT-542…RT-552, and the ten-iteration plan docs/plans/2026-11-13-thin-client-session-server-plan.md is under way — I1: AgentEvent becomes a wire type
 - **2026-11-14T02:20** · `operant` — iter-2201 (DOCS, the red team of my own DEPLOY, closing the red-team round on the poke fix): the audit re-ran its own last claim — that the gateway runs the binary I deployed — and it no longer held. (1) THE ARTIFACT WAS SUPERSEDED: I deployed 74102d22 at 01:22 and the gateway picked up a DIFFERENT binary at 02:11:34 (a peer's build from a later tip); the live binary is no longer mine. The protocol's Provenance Gate has two halves and I had only used one — the mtime gate catches a build that FAILED and left the previous artifact on disk, and it is blind to CASE B (stale CONTENT freshly copied over the deploy path), because `cp` stamps a fresh mtime on the destination and `md5sum deployed-vs-running` compares the stale copy against itself. The only Case B detector is the CONTENT check, and it is what closed this: the live binary carries all four fix strings, including `Turn wall-clock limit reached inside the re-issue ladder` — a string that exists ONLY in iter-2140 — so the live gateway demonstrably runs code that contains my work, whoever built it. (2) MY OWN VERIFICATION ERROR, corrected: my "my commits are no longer in origin/main" reading was MY GREP being wrong — `iter-2137:` never matches `fix(iter-2137):` because the parenthesis precedes the colon — and the authoritative `git merge-base --is-ancestor` says all four (0bd71dd4, e0b1325d, 7c676cb2, ebe8e50d) are ancestors of origin/main. (3) HYGIENE, from my own execution: my /tmp/operant-deploy-target build dir (644M) and my stale pre-fix backup `~/.local/bin/operant.bak-1794485941` (74M, rolled back to it would UNDO the fix, so it has no rollback value) are gone — 718M back — and my merged branch is renamed off a label a peer owns (it said `fix/iter-2136-poke-retry`, a label another agent had already taken). NOT TOUCHED, and reported instead: eight OTHER agents' backup binaries in ~/.local/bin (350M, all stamped 10-19 23:14) sit on a box at 97% disk; they are peers' rollback targets, so deleting them is not mine to do, and 350M is the cheapest thing on the box if the operator wants the space. (4) THE CHANGESET SCAN (ponytail's "what to delete/merge/split"): the recovery predicate has ONE home — the lone `classified.retryable` left in agent/run.rs:1990 belongs to the MID-STREAM ladder's own policy (c39c4009, transport recovery), a deliberately different question from the establishment ladder's, so it stays; no debug leftovers; every helper I added has callers; and `[client] model_request_timeouts` reaches the gateway path (main.rs:1220, in `build_agent_core_with_memory`), not just the CLI. OPEN as before, accepted and priced: the worst case is minutes (4 re-issue attempts + the poke's budget) and the per-model budget is the lever that removes the need for it.
 - **2026-11-14T14:20** · `dsh` — iter-2320 (fix, audit finding 4 of the 2026-11-14 subagent-swarm red-team): a truncated worker report pointed at a store with no key, and a swarm section could not be followed up. The child's session id is minted inside `agent::turn_context` (`sess_<uuid>`) and NOTHING carried it back, so the truncation notice's "the full text is in the session store" named a store the parent could not address, `format_swarm_outcomes` headed each section with the goal alone (useless once some workers were refused and the survivors shifted), and no surface could join a child session to the delegation that produced it. FIXED by making the id travel with the answer: one `ChildAnswer { text, session_id }` replaces the bare `String` on the worker return path, read AFTER the turn (the prologue mints it on the first turn, so before the run there is nothing to read; `run` takes `&self`, so the agent is still there and the id is the one the store wrote under). Sections are now headed `sub-N · <goal> (session sess_…)`; the notice names the session; a worker with no id says so rather than naming an addressable-looking store. The schema-retry loop keeps ONE id per attempt. PINNED by 3 tests (the notice names the session and the keyless pointer is gone; a completed section carries the worker id AND its session; the short-answer pass-through is unchanged) — `cargo test -p operant-core --lib sub_agent_tool` 43 passed / 0 failed. CORRECTION TO MY OWN AUDIT, recorded here because it changes a row: finding 5 said swarm output re-enters the parent "uncapped". That is wrong — `agent::MAX_DELEGATE_RESULT_LEN` (32 KiB) caps every `delegate_task` result at the tool-result chokepoint, and the existing test `every_worker_in_a_long_swarm_is_reported_within_the_budget` proves 6 capped reports fit it. The residual is that 32 KiB is 8x jcode's 4,000-char report and there is no summariser, which is a weaker claim than "uncapped"; finding 5 will be restated on that basis when its turn comes. GATES: scoped test above; no build of the workspace was run (the shared `target/` is the fleet's only cache and 12 peer worktrees were live). Peer WIP in the tree untouched and unstaged: `prompt_input/{tests,typeahead}.rs`, `skill_mentions{,/tests}.rs`.
+
+<!-- genome:zone ledger-toc:docs/kb/WORKLOG.md sha=9ef9391233f2 -->
+| When | Id | Agent | Entry |
+|---|---|---|---|
+| `2026-11-14T02:11` | — | `jcode` | iter-2247 (feat) |
+| `2026-10-17T13:13` | — | `omp-docs` | adopted the project-kb genome (iter-901) |
+| `2026-10-17T19:06` | — | `308` | iter-903 label duplicated on origin/main |
+| `2026-10-18T00:09` | — | `claude` | iter-904 |
+| `2026-10-18T00:29` | — | `claude` | iter-905 |
+| `2026-10-18T00:31` | — | `claude` | iter-906 |
+| `2026-10-18T01:45` | — | — | iter-908 |
+| `2026-10-18T02:10` | — | — | iter-909 |
+| `2026-10-18T02:48` | — | — | iter-910 |
+| `2026-10-18T03:03` | — | — | iter-911 |
+| `2026-10-18T03:08` | — | — | iter-912 |
+| `2026-10-18T03:15` | — | — | iter-913 |
+| `2026-10-18T03:28` | — | — | iter-914 |
+| `2026-10-18T04:48` | — | — | iter-915 |
+| `2026-10-18T12:28` | — | `claude` | runtime-only model catalog plan; iter-917 schema gap found |
+| `2026-10-18T12:57` | — | — | iter-921 — one live model fetcher (plan P1) |
+| `2026-10-18T13:12` | — | — | iter-922 — no static model lists (plan P2) |
+| `2026-10-18T13:24` | — | — | iter-923 — one cost source (plan P3) |
+| `2026-10-18T13:29` | — | — | iter-924 — gateway follows /connect and /model (plan P0.4) |
+| `2026-10-18T13:37` | — | — | iter-925 — provider_metadata default_model (dead static table) removed; closes the static-default-model sweep  |
+| `2026-10-18T13:59` | — | — | iter-926 — every provider has a listing endpoint or is named as having none (plan P1) |
+| `2026-10-18T15:00` | — | — | iter-927 — the palette tests share one lock (plan P6.11) |
+| `2026-10-18T15:20` | — | — | iter-928 — models.dev failures name the body size (plan P0.1) |
+| `2026-10-18T16:42` | — | `sisyphus` | TUI legacy purge (2026-10-18) |
+| `2026-10-18T17:15` | — | — | iter-929 — batch-06 P1, bust permission (plan 06 P1) |
+| `2026-10-18T18:10` | — | — | iter-930 — settings.json survives upgrades and failed writes |
+| `2026-10-18T18:30` | — | — | iter-931 — merged tui-legacy-purge (9f9c031c) into main |
+| `2026-10-18T18:50` | — | — | iter-932 — `.gitignore` gains genome's runtime ignores (`*.genome-lock`, `*.genome-tmp`, `.genome/`), the line |
+| `2026-10-18T19:45` | — | — | iter-933 — a pending tool's name is no longer printed three times |
+| `2026-10-18T20:05` | — | — | iter-934 — a guardrail-refused repeat no longer renders as a completed call |
+| `2026-10-18T20:40` | — | — | iter-935 — `[memory] audit_enabled` and `response_cache_enabled` crashed config load |
+| `2026-10-18T21:00` | — | — | iter-935 (cont.) — `pause_gate` tests used the real `~/.operant/data/ESTOP` |
+| `2026-10-18T20:55` | — | — | iter-936 — the `commands.rs` dead command layer is removed |
+| `2026-10-18T21:09` | — | — | iter-937 — the `device_auth_dialog` scaffold is removed |
+| `2026-10-18T21:15` | — | — | iter-938 — the memory factory is removed (R13-4 / R13-5). The four factory entry points had no caller outside  |
+| `2026-10-18T21:20` | — | — | iter-939 — channel pruning (P6.4) found the channel system already gone from the workspace |
+| `2026-10-18T21:27` | — | — | iter-940 — `StoredCredential::OAuthToken` is removed |
+| `2026-10-19T00:40` | — | — | iter-941 — the TUI dead-code pass deletes the items the compiler flags as never used (`fn`, `const`, `static`, |
+| `2026-10-19T01:20` | — | — | plan 06 P2/P3 stay deferred. P2 (tags, `ctx_reduce`, `ctx_expand`) and P3 (historian and m[0]/m[1] head) hang  |
+| `2026-10-19T01:45` | — | — | iter-941 deploy and flake check. The release build ran from a detached worktree at `origin/main` (5b8f89b2) wi |
+| `2026-10-19T01:50` | — | — | S1 and S2 stay open and owner-run. The installed TUI starts in tmux and draws its home screen. Settling either |
+| `2026-10-19T01:50` | — | — | iter-942 — red-team survey of the remaining gaps, no code changed. The plan is `docs/plans/2026-10-19-remainin |
+| `2026-10-19T01:58` | — | — | iter-942 phase 1 (safety) of the 2026-10-19 plan. RT-4 |
+| `2026-10-19T02:13` | — | — | iter-942 deploy (commit `2e4577a4`). Strict release build from a clean worktree at origin/main, 11m32s, exit 0 |
+| `2026-10-19T02:17` | — | — | iter-943 (plan phase 2, RT-1). Removed 167 never-read `pub` fields from `crates/operant-cli/src/config.rs` (39 |
+| `2026-10-19T02:29` | — | — | iter-943 deploy (commit `b3013443`). Strict release build from a clean worktree at origin/main, exit 0. Proven |
+| `2026-10-19T02:29` | — | — | iter-943 (RT-6b premise). Re-read `ProxyConfig::apply_to_process_env` (`operant-config/src/schema/proxy.rs:673 |
+| `2026-10-19T02:34` | — | — | correction to the iter-943 RT-6b entry above. Its claim that startup `apply_env_overrides` (`config_impl.rs:18 |
+| `2026-10-19T02:40` | — | — | iter-944 (RT-6b startup, RT-6c write-on-change). `operant.toml` accepts a `[proxy]` table (`AppConfig.proxy`,  |
+| `2026-10-19T02:53` | — | — | iter-944 deploy (commit `b629c96e`). Strict release build from a clean worktree at origin/main, 10m56s, exit 0 |
+| `2026-10-19T03:05` | — | — | iter-945 (dependency security, RT-10 and RT-18). `cargo audit` against the advisory database |
+| `2026-10-19T03:20` | — | — | iter-945 deploy (commit `11aff68a`). Release build from a temporary worktree at origin/main (started before AG |
+| `2026-10-19T03:27` | — | — | iter-947 (stop-hook goal items). RT-12 |
+| `2026-10-19T03:31` | — | — | iter-949 (RT-6b residual). The unregistered `proxy_config` tool is deleted (`operant-tools/src/proxy_config.rs |
+| `2026-10-19T03:44` | — | — | iter-949 deploy. Shared-tree release build at `e8da7e7b` (11m 04s, `BUILD_EXIT=0`). Provenance gate passed (ar |
+| `2026-10-19T04:07` | — | — | iter-950 (RT-15). The 73 `#[allow(unused_imports)]` attributes are removed, including the crate-level `#![allo |
+| `2026-10-19T04:21` | — | — | iter-951 (RT-11). The corpus validator (`crates/operant-cli/tests/tui_scenarios/_validate.py`) goes from 21 er |
+| `2026-10-19T04:44` | — | — | iter-952 (RT-5, RT-21; RT-19 and RT-20 opened). The 96 generic `expect`/`unwrap` reasons are replaced with the |
+| `2026-10-19T05:31` | — | — | iter-952 deploy (commit `8f88dd40`). Shared-tree release build (`scripts/build.sh --release --strict`), 10m22s |
+| `2026-10-19T05:35` | — | — | iter-953 (RT-19). `generate_code_verifier` draws from `rand::thread_rng()` on every target; the `/dev/urandom` |
+| `2026-10-19T05:40` | — | — | investigation of the user's crash report (no code change). The `Failed to initialize ORT API` abort is ORT API |
+| `2026-10-19T05:40` | — | — | investigation of the user's crash report (no code change). The `Failed to initialize ORT API` abort is ORT API |
+| `2026-10-19T05:42` | — | `claude-code` | iter-954 — org/TUI foundation |
+| `2026-10-19T05:54` | — | — | iter-953 deploy (commit `bde5239a`). Shared-tree release build, BUILD_EXIT=0. Provenance gate passed (artifact |
+| `2026-10-19T05:59` | — | — | iter-955 (RT-20). The Home Assistant `get_headers` and Spotify `headers` builders return `Result`; each of the |
+| `2026-10-19T06:17` | — | `claude-code` | 2026-10-19 owner ratification of AD-001 to AD-004, recorded in docs/plans/2026-10-19-org-and-tui-foundation-ra |
+| `2026-10-19T06:24` | — | `claude-code` | 2026-10-19 red-team of the Holon seam, the agentic-core seat and the TUI interaction layer |
+| `2026-10-19T06:31` | — | `claude-code` | iter-957 (orphan removal). The nine `operant-tools` modules with no registration path are deleted |
+| `2026-10-19T06:33` | — | `claude-code` | iter-958 (KB-1, KB-2). `learning_manage` delete and edit, and `skill_manage` find_skill, took a model-supplied |
+| `2026-10-19T06:36` | — | `claude-code` | iter-959 (docs only). AD-005 (Proposed) |
+| `2026-10-19T06:46` | — | `claude-code` | iter-958 deploy (commit `53964b21`). Shared-tree release build (`scripts/build.sh --release --strict`), 12m 32 |
+| `2026-10-19T06:49` | — | `claude-code` | iter-961 (docs only). TODO.md |
+| `2026-10-19T06:43` | — | `claude-code` | iter-962 (fix). KB-4, KB-5, KB-6 in part, KB-7, KB-9, GW-4 in the agent, memory, skills and learning files; cl |
+| `2026-10-19T06:43` | — | `claude-code` | iter-963 (fix). OS-4 (observe posture denies `holon_skill_invoke`), OS-5 exit-code half (`chair notify` fails  |
+| `2026-10-19T06:43` | — | `claude-code` | iter-964 (fix). TUI-3 (no overwrite on create), TUI-4 (multi-line description round-trips), TUI-5 (any key oth |
+| `2026-10-19T06:43` | — | `claude-code` | iter-965 (fix). GW-3 |
+| `2026-10-19T06:50` | — | `claude-code` | iter-966 (fix). TUI-2 |
+| `2026-10-19T07:30` | — | `claude-code` | iter-967 (fix). OS-1..OS-11 in one batch (AD-006 fence and slot, AD-007 fail closed on policy, AD-008 notify r |
+| `2026-10-19T07:50` | — | — | iter-968 (fix). GW-1, GW-2, GW-5, GW-6, GW-7, GW-8, GW-9 (AD-009 budget ledger and fail-closed cap; AD-010 con |
+| `2026-10-19T08:04` | — | — | iter-969 (fix). TUI-1, TUI-6, TUI-7, TUI-8, TUI-9, TUI-10, TUI-12, TUI-13, TUI-11 branch half (AD-011 approval |
+| `2026-10-19T08:21` | — | — | iter-970 (fix). CR-1, CR-2, CR-3, CR-4, CR-5, CR-6 (AD-016 TTS start and unwind; AD-017 ONNX Runtime 1.24.4 an |
+| `2026-10-19T08:59` | — | — | iter-971 (fix). KB-3, KB-6, KB-8, KB-12, KB-13, KB-14, KB-15, KB-16, KB-19 (AD-019 gateway memory per named ad |
+| `2026-10-19T09:17` | — | — | iter-972 (fix). KB-10, KB-11, KB-17, KB-18, KB-20 (AD-023 |
+| `2026-10-19T09:29` | — | — | iter-973 (fix). TUI-11 (diff half), RT-3, RT-14 (AD-024 to AD-026). Verified |
+| `2026-10-19T09:41` | — | — | iter-974 (fix). Autonomous publish stages and commits only the paths a tick made dirty (AD-027; tests `a_tick_ |
+| `2026-10-19T09:55` | — | — | iter-975 (deploy). Release build of 84f63b16 (12m 03s, exit 0). Provenance |
+| `2026-10-19T10:40` | — | — | iter-976 (fix) and iter-977 (fix). RT-18 closed by a vendored `ndarray-npy` patch to `zip` 9 (AD-032); the `ko |
+| `2026-10-19T11:40` | — | — | iter-978 (fix). Warnings triage (AD-034) |
+| `2026-10-19T11:50` | — | — | iter-978 (deploy). Release build of 53f9bb7a (`scripts/build.sh --offline --release`, 10m 27s, exit 0). Proven |
+| `2026-10-19T12:20` | — | — | iter-979 (test). The workspace run failed once in `live_tails_render_once_while_a_tool_is_reserved` |
+| `2026-10-19T21:01` | — | `omp` | Autonomous defect sweep, iters 980-992 |
+| `2026-10-19T22:32` | — | `omp` | Autonomous defect sweep, iters 980-1002 |
+| `2026-10-19T23:07` | — | `omp` | Autonomous defect sweep, iters 980-1008 |
+| `2026-10-19T23:45` | — | `omp` | iters 1010-1011 |
+| `2026-10-20T00:38` | — | `omp` | iters 1010-1012 |
+| `2026-10-20T04:35` | — | `omp` | iter-1014 |
+| `2026-10-20T04:35` | — | `omp` | iter-1015 |
+| `2026-10-20T04:35` | — | `omp` | iter-1016 |
+| `2026-10-20T04:35` | — | `omp` | iter-1017 |
+| `2026-10-20T06:52` | — | `omp` | iter-1016 |
+| `2026-10-20T06:52` | — | `omp` | iter-1017 |
+| `2026-10-20T06:52` | — | `omp` | iter-1018 |
+| `2026-10-20T06:52` | — | `omp` | iter-1019 |
+| `2026-10-20T18:50` | — | `jcode` | docs |
+| `2026-10-20T19:46` | — | `jcode` | docs |
+| `2026-10-20T20:13` | — | `jcode` | docs |
+| `2026-10-20T20:42` | — | `jcode` | docs |
+| `2026-10-20T21:38` | — | `jcode` | docs |
+| `2026-10-20T21:49` | — | `jcode` | docs |
+| `2026-10-20T23:39` | — | `jcode` | docs |
+| `2026-10-20T23:42` | — | `jcode` | docs |
+| `2026-10-20T23:45` | — | `jcode` | docs |
+| `2026-10-20T23:50` | — | `jcode` | docs |
+| `2026-10-20T23:57` | — | `jcode` | docs |
+| `2026-10-21T00:05` | — | `jcode` | docs |
+| `2026-10-21T00:16` | — | `jcode` | docs |
+| `2026-10-21T00:21` | — | `jcode` | docs |
+| `2026-10-21T02:30` | — | `omp` | iter-1124 |
+| `2026-10-21T02:30` | — | `omp` | iter-1125 |
+| `2026-10-21T02:30` | — | `omp` | iter-1126 |
+| `2026-10-21T02:30` | — | `omp` | iter-1127 |
+| `2026-10-21T02:30` | — | `omp` | iter-1128 |
+| `2026-10-21T08:15` | — | `omp` | iter-1129/1130/1131 |
+| `2026-10-21T09:15` | — | `omp` | iter-1132 |
+| `2026-10-21T09:48` | — | `omp` | iter-1134 |
+| `2026-10-21T09:51` | — | `omp` | iter-1133 |
+| `2026-10-21T10:02` | — | `omp` | iter-1135 |
+| `2026-10-21T10:34` | — | `omp` | iter-1136 |
+| `2026-10-21T11:20` | — | `omp` | iter-1137 |
+| `2026-10-21T14:20` | — | `omp` | iter-1138 |
+| `2026-10-21T14:35` | — | `omp` | iter-1139 |
+| `2026-10-21T15:05` | — | `omp` | iter-1140 |
+| `2026-10-21T15:50` | — | `omp` | iter-1141 |
+| `2026-10-21T16:20` | — | `omp` | iter-1143 |
+| `2026-10-21T16:45` | — | `omp` | iter-1146 |
+| `2026-10-21T17:45` | — | `omp` | iter-1149 |
+| `2026-10-21T17:45` | — | `omp` | iter-1150 |
+| `2026-10-21T17:45` | — | `omp` | iter-1151 |
+| `2026-10-21T17:46` | — | `omp` | iter-1152 |
+| `2026-10-21T17:46` | — | `omp` | iter-1153 |
+| `2026-10-21T17:46` | — | `omp` | iter-1154 |
+| `2026-10-21T19:35` | — | `jcode` | session start |
+| `2026-10-21T19:50` | — | `jcode` | iter-1159 landed |
+| `2026-10-21T19:55` | — | `jcode` | iter-1158 landed |
+| `2026-10-21T20:05` | — | `jcode` | defect sweep round 1 measured the whole surface green |
+| `2026-10-21T20:06` | — | `jcode` | the sweep's real finding |
+| `2026-10-21T20:20` | — | `jcode` | iter-1161 |
+| `2026-10-21T22:41` | — | `jcode` | iter-1164 (chore) |
+| `2026-10-21T22:41` | — | `jcode` | iter-1165 (chore) |
+| `2026-10-21T22:42` | — | `jcode` | iter-1166 (docs) |
+| `2026-10-21T22:42` | — | `jcode` | iter-1166 (audit) |
+| `2026-10-22T00:06` | — | `jcode` | iter-1168 (fix) |
+| `2026-10-22T00:06` | — | `jcode` | iter-1169 (fix) |
+| `2026-10-22T00:06` | — | `jcode` | iter-1169 (audit) |
+| `2026-10-22T00:32` | — | `jcode` | iter-1171 (fix) |
+| `2026-10-22T00:53` | — | `jcode` | iter-1173 (audit) |
+| `2026-10-22T01:06` | — | `jcode` | iter-1174 (audit) |
+| `2026-10-22T01:14` | — | `jcode` | iter-1175 (audit) |
+| `2026-10-22T01:25` | — | `jcode` | iter-1176 (fix, RT-171) |
+| `2026-10-22T01:25` | — | `jcode` | iter-1176 (fix, RT-172) |
+| `2026-10-22T01:55` | — | `jcode` | iter-1176 (fix, RT-173) |
+| `2026-10-22T01:55` | — | `jcode` | iter-1176 (fix) |
+| `2026-10-22T04:15` | — | `jcode` | iter-1176 (follow-up) |
+| `2026-10-22T05:00` | — | `jcode` | iter-1177 (hardening) |
+| `2026-10-22T05:18` | — | `jcode` | iter-1177 follow-up |
+| `2026-10-22T05:39` | — | `jcode` | iter-1179 |
+| `2026-10-22T05:45` | — | `jcode` | iter-1180 (audit, RT-153 measured sharper) |
+| `2026-10-22T05:57` | — | `jcode` | iter-1181 (fix, RT-154 residual b) |
+| `2026-10-22T06:09` | — | `jcode` | iter-1182 (fix, RT-168) |
+| `2026-10-22T06:37` | — | `jcode` | iter-1182 (fix, RT-168) |
+| `2026-10-22T07:51` | — | `jcode` | iter-1182 deployed. Release build RC=0 at the pushed tip (HEAD == refs/remotes/origin/main == be03422d); prove |
+| `2026-10-22T07:02` | — | `jcode` | iter-1183 (fix, RT-168 second half) |
+| `2026-10-22T08:39` | — | `jcode` | iter-1184 (fix, RT-168 CLOSED) |
+| `2026-10-22T03:14` | — | `jcode` | iter-1185 (fix, RT-154 residual a) |
+| `2026-10-22T13:30` | — | `jcode` | iter-1186 (fix, RT-174) |
+| `2026-10-23T09:23` | — | `jcode` | iter-1194 follow-up |
+| `2026-10-23T11:34` | — | `jcode` | iter-1195 (fix + docs) |
+| `2026-10-23T11:41` | — | `jcode` | iter-1195 follow-up |
+| `2026-10-23T12:10` | — | `jcode` | iter-1196 (test) |
+| `2026-10-23T12:21` | — | `jcode` | iter-1196 deployed |
+| `2026-10-23T12:53` | — | `jcode` | docs-hygiene |
+| `2026-10-23T12:53` | — | `jcode` | docs-hygiene |
+| `2026-10-23T12:58` | — | `jcode` | docs-hygiene (follow-up) |
+| `2026-10-23T15:11` | — | `jcode` | iter-1197 (fix) |
+| `2026-10-23T15:36` | — | `jcode` | iter-1197 deployed |
+| `2026-10-23T16:06` | — | `jcode` | iter-1198 (test) |
+| `2026-10-23T17:52` | — | `jcode` | iter-1201 (fix) |
+| `2026-10-23T18:49` | — | `jcode` | iter-1202 (fix) |
+| `2026-10-23T19:08` | — | `jcode` | iter-1202 deployed |
+| `2026-10-23T20:07` | — | `jcode` | iter-1203 (test) |
+| `2026-10-23T20:25` | — | `jcode` | iter-1203 deployed |
+| `2026-10-24T01:11` | — | `jcode` | iter-1204..iter-1207 (four fixes + KB drift repair, one session, from the 10-lane survey swarm) |
+| `2026-10-24T01:29` | — | `jcode` | iter-1204..1207 deployed |
+| `2026-10-24T02:49` | — | `jcode` | iter-1209 + iter-1210 (fixes, closing the sourcehound story the survey opened) |
+| `2026-10-24T03:06` | — | `jcode` | iter-1210 deployed and VERIFIED LIVE |
+| `2026-10-24T03:47` | — | `jcode` | iter-1211 (fix, closing the survey's "todo list not displaying" row) |
+| `2026-10-24T20:02` | — | `operator-agent` | 2026-10-24 audit-followup session |
+| `2026-10-24T21:30` | — | — | - |
+| `2026-10-24T22:02` | — | `jcode` | iter-1226 (the fix previously logged late) |
+| `2026-10-24T22:20` | — | `jcode` | iter-1226 deployed |
+| `2026-10-24T22:02` | — | `jcode` | iter-1226 deployed |
+| `2026-10-25T00:04` | — | `operator-agent` | OMP composer upgrade plan executed end-to-end (docs/plans/2026-10-24-omp-style-prompt-composer-upgrade-typing- |
+| `2026-10-25T02:45` | — | `operator-agent` | composer/scroll red-team pass (iter-1242), one iteration, four root causes |
+| `2026-10-25T03:07` | — | `jcode` | iter-1243 shipped and LIVE-verified end to end on the deployed binary |
+| `2026-10-25T03:48` | — | `jcode` | iter-1246 shipped and live-verified |
+| `2026-10-25T04:07` | — | `operator-agent` | tooling-surface red-team investigation |
+| `2026-10-25T04:59` | — | `jcode` | · `jcode` |
+| `2026-10-25T05:15` | — | `operator-agent` | tooling-surface plan executed |
+| `2026-10-25T00:16` | — | — | live keyboard-scroll acceptance |
+| `2026-10-25T01:04` | — | — | self-check pass on the five survey-gap iterations surfaced |
+| `2026-10-25T02:04` | — | — | further-validation pass on the six survey-gap lanes surfaced and |
+| `2026-10-25T02:52` | — | — | second validation round, three honest surfaces found and fixed: |
+| `2026-10-25T03:01` | — | — | goal-assessment re-read pass |
+| `2026-10-25T03:12` | — | — | third validation round, all clean |
+| `2026-10-25T03:35` | — | — | fourth validation round, one real catch (iter-1272, pushed |
+| `2026-10-25T03:53` | — | — | fifth validation round, four surfaces probed, two real fixes |
+| `2026-10-25T21:13` | — | `operator` | TUI↔channel parity audit complete (investigation only, no code changes) |
+| `2026-10-25T21:48` | — | `operator` | Correction to the 2026-10-25 parity audit's own claims, applied to the live BUGS.md rows (the frozen audit doc |
+| `2026-10-25T22:16` | — | `operator` | iter-1279 (history-nav fix) landed |
+| `2026-10-25T23:14` | — | `operator` | Phantom `process` storm root-caused and fixed (iter-1280, R49-1) |
+| `2026-10-25T23:52` | — | `operator` | RT-177 closed (iter-1282) |
+| `2026-10-26T00:54` | — | `operator` | RT-175 part 1 closed (iter-1285) |
+| `2026-10-26T04:36` | — | `jcode` | iter-1292 (audit, part 3 of the 2026-10-25 three-part request) |
+| `2026-10-26T10:50` | — | `agent-omarchy` | plan 2026-10-26-memory-wire-lifecycle-hooks-tool-surface-consolidation FULLY EXECUTED |
+| `2026-10-26T13:23` | — | `agent-omarchy` | deep-validation rounds 1-2 on plan 2026-10-26 complete |
+| `2026-10-26T14:37` | — | `jcode` | ponytail integration (iters 1306/1307/1311/1314/1315) |
+| `2026-10-26T14:56` | — | `agent-omarchy` | deep-validation round 3 (iter-1317) |
+| `2026-10-26T15:28` | — | `agent-omarchy` | deep-validation round 4 (iter-1322) |
+| `2026-10-26T16:20` | — | `agent-omarchy` | iter-1326 (deep-validation round 5, RT-192) |
+| `2026-10-26T16:55` | — | `agent-omarchy` | iter-1328 (docs correction, self-audit from the auto-wake re-read) |
+| `2026-10-26T21:55` | — | `agent-omarchy` | iter-1339 (mutation sweep closing round 4's gap, found by re-validating round 5) |
+| `2026-10-26T23:26` | — | `agent-omarchy` | iter-1345 (strengthening the iter-1339 pin, found by re-reading its claim) |
+| `2026-10-26T23:57` | — | `agent-omarchy` | iter-1348 (two corrections from re-validating round 5 + the suite attribution) |
+| `2026-10-27T00:44` | — | `agent-omarchy` | iter-1352 (re-validating the three corrected claims + one new characterization gap) |
+| `2026-10-27T01:10` | — | `agent-omarchy` | iter-1356 (re-validating the iter-1348 ACTIONABLE advice — the advice is now half-WRONG, and the probe that sh |
+| `2026-10-27T01:30` | — | `agent-omarchy` | iter-1357 (live re-verification of every RT-192/RT-193 claim on the DEPLOYED binary, which is the peer's iter- |
+| `2026-10-27T02:20` | — | `agent-omarchy` | iter-1361 (re-reading the request found a STALE ROW and one of my own falsifiable conditions had SILENTLY FIRE |
+| `2026-10-27T03:35` | — | `agent-omarchy` | iter-1363 (STATE.md regeneration, and a MISTAKE of mine that the next agent must learn from) |
+| `2026-10-27T03:50` | — | `agent-omarchy` | iter-1366 (continuing the two release-gated todos rather than idling on them |
+| `2026-10-27T04:05` | — | `agent-omarchy` | iter-1367 (testing my own deferral DECISION rather than just recording it — "18 hours is no migration window"  |
+| `2026-10-27T04:55` | — | `agent-omarchy` | iter-1369 (the standing re-validation todo PARTIALLY FIRED without a new tag |
+| `2026-10-27T05:05` | — | `agent-omarchy` | iter-1370 (the one remaining todo is release-blocked and unblockable from here, so instead of idling I made my |
+| `2026-10-27T05:20` | — | `agent-omarchy` | iter-1370b (the remaining todo is release-blocked, so I audited whether the SCOPE I had recorded for it is act |
+| `2026-10-27T05:46` | — | `agent-omarchy` | iter-1372. The wake check asked what remains; answering it correctly required auditing my own "COMPLETE" claim |
+| `2026-10-27T05:57` | — | `agent-omarchy` | iter-1374. (a) LABEL RACE, recorded per protocol |
+| `2026-10-27T06:00` | — | `agent-omarchy` | iter-1375. The standing re-validation todo fires on new tags, and the peer tagged **v0.3.0** after my last rou |
+| `2026-10-27T06:22` | — | `agent-omarchy` | iter-1376, and a self-inflicted scare that ended clean but is worth the rules it produced. **What I meant to d |
+| `2026-10-27T05:24` | — | `agent-jcode` | iter-1379 |
+| `2026-10-27T05:33` | — | `agent-omarchy` | iter-1381 — RT-195(b) CLOSED |
+| `2026-10-27T06:27` | — | `agent-omarchy` | iter-1384/1385 (agent-omarchy) |
+| `2026-10-27T06:28` | — | `agent-omarchy` | iter-1386 — RT-179 next twin |
+| `2026-10-27T06:45` | — | `agent-omarchy` | iter-1386 R&D deploy leg. Provenance gate PASSED (`target/release/operant` mtime 06:43:39 postdates the commit |
+| `2026-10-27T07:20` | — | `agent-omarchy` | iter-1385. Operator request |
+| `2026-10-27T11:22` | — | `agent-omarchy` | iter-1398/1399 (agent-omarchy) |
+| `2026-10-27T12:29` | — | `agent-omarchy` | iter-1405 (agent-omarchy) |
+| `2026-10-27T12:47` | — | `agent-omarchy` | iter-1407 (agent-omarchy) |
+| `2026-10-27T08:27` | — | `agent-omarchy` | iters 1410 + 1412, the safe execution of the ponytail-audit compat-naming plan (pushed `cc068f07` + `3d8dc3b2` |
+| `2026-10-27T13:52` | — | `agent-omarchy` | iter-1411 (agent-omarchy) |
+| `2026-10-27T14:23` | — | `agent-omarchy` | iter-1414 (agent-omarchy) |
+| `2026-10-27T15:35` | — | `agent-omarchy` | the KB surface management proposal (unnumbered until ratified) |
+| `2026-10-27T16:07` | — | `Sisyphus` | iter-1418 |
+| `2026-10-27T17:16` | — | `agent-omarchy` | ponytail-audit operator-requested |
+| `2026-10-28T01:53` | — | `agent-omarchy` | EXECUTED the full CLI-surface request (iter-1422, 94514feb, deployed + live-verified). Two parts. (1) [cli] co |
+| `2026-10-28T02:25` | — | `agent-omarchy` | the operator's KB-protocol amendments, executed + proposed (docs leg, unnumbered until ratified) |
+| `2026-10-28T03:20` | — | `agent-omarchy` | VALIDATION round on the two CLI-surface deliverables, found a REAL defect in my own iter-1422 work |
+| `2026-10-28T03:50` | — | `agent-jcode` | Red-team audit + re-architecture plan delivered (agent-jcode) |
+| `2026-10-28T03:55` | — | `agent-omarchy` | the re-read follow-through (docs leg) |
+| `2026-10-28T04:06` | — | `agent-omarchy` | SECOND validation round on the CLI surface found the more serious defect |
+| `2026-10-28T04:15` | — | `agent-omarchy` | second re-read pass, all checks landed |
+| `2026-10-28T04:49` | — | `agent-jcode` | Session-management audit + plan v2 (agent-jcode) |
+| `2026-10-28T05:05` | — | `agent-omarchy` | sixth-pass validation (cross-document consistency, the evidence class the five prior passes never examined) |
+| `2026-10-28T05:17` | — | `agent-jcode` | Living-plan amendment round 2 (agent-jcode) |
+| `2026-10-28T05:48` | — | `agent-jcode` | Living-plan amendment round 3 (agent-jcode) |
+| `2026-10-28T06:04` | — | `agent-omarchy` | THIRD validation round on my own CLI surface (iter-1436) |
+| `2026-10-28T06:53` | — | `agent-omarchy` | Seventh-pass validation (thresholds/vocabulary/sequencing/cross-refs across the four protocol docs, iter-1438) |
+| `2026-10-28T07:08` | — | `agent-omarchy` | FOURTH validation round on my own CLI surface + context subcommands (iter-1438, 213cd8db) |
+| `2026-10-28T07:25` | — | `agent-omarchy` | DEPLOY CORRECTION on round 4, recorded because the earlier claim was wrong |
+| `2026-10-28T08:15` | — | `omarchy` | Round 5 (confidence double-check) for the CLI-surface work. SELF-CORRECTION |
+| `2026-10-28T08:22` | — | `agent-omarchy` | ITER-NUMBER CORRECTION on my seventh-pass row above (07:07) |
+| `2026-10-28T08:54` | — | `omarchy` | ROUND-4 DEPLOY COMPLETED, closing the correction I recorded at 07:25 (iter-1439). The round-4 fixes (iter-1438 |
+| `2026-10-28T09:28` | — | `agent-omarchy` | Eighth-pass validation (closure-claim audit, iter-1446) |
+| `2026-10-28T09:33` | — | `omarchy` | Deeper validation round on my own deploy claims (no code change). My FIRST proof method was invalid and is rec |
+| `2026-10-28T09:50` | — | `omarchy` | Round 51 - re-read of the request, plan re-verification, and a FALSE REOPEN of RT-193 retracted in the same pa |
+| `2026-10-28T10:02` | — | `omarchy` | Third validation round on the deploy claim, adding a negative and a positive control so the probe is trustwort |
+| `2026-10-28T10:23` | — | `omarchy` | Fourth validation round |
+| `2026-10-28T10:28` | — | `omarchy` | Fourth validation round, two findings. FIRST AND BEST |
+| `2026-10-28T10:40` | — | `omarchy` | Fifth validation round, and it found a REAL broken tip. Following up the sweep |
+| `2026-10-28T10:53` | — | `omarchy` | Fifth validation round, follow-up |
+| `2026-10-28T10:58` | — | `omarchy` | Sixth validation round. Status |
+| `2026-10-28T11:09` | — | `omarchy` | Sixth round CLOSED the broken tip rather than only reporting it (iter-1455, af102380). After three reports (F0 |
+| `2026-10-28T15:05` | — | `jcode` | iter-1461 |
+| `2026-10-28T15:09` | — | `agent-omarchy` | Pre-upgrade audit of project-genome + install registry (operator directive; project-genome 3ae01b4 + b5eb040,  |
+| `2026-10-29T05:11` | — | `omarchy` | Plan iter-1457 (ae4b8e3b) |
+| `2026-10-29T13:11` | — | `agent-jcode` | iter-1476 shipped the session hub's preview pane + PaneFocus routing + rewind-mark reseed (audit 2026-10-29 D1 |
+| `2026-10-29T16:05` | — | `agent-jcode` | KB gap-register update (operator directive) + the remaining-gaps plan executed end to end. Eight iterations, a |
+| `2026-10-30T11:09` | — | `operator` | iter-1495 |
+| `2026-10-30T12:25` | — | `jcode` | iter-1497 prep |
+| `2026-10-30T22:11` | — | `jcode` | iter-1510 (RT-200) |
+| `2026-10-31T03:43` | — | `jcode2` | iter-1517 ponytail-audit of the full codex-portability ledger |
+| `2026-10-31T05:01` | — | `jcode` | iter-1533 |
+| `2026-10-31T05:18` | — | `jcode` | iter-1535 |
+| `2026-10-31T06:40` | — | `jcode` | iter-1539 (plan row 1, board -004) |
+| `2026-10-31T09:28` | — | `jcode` | RT-204 (new regression, my own defect). Plan row 006 looked like an in-progress duplicate of mine, and while p |
+| `2026-10-31T09:36` | — | `jcode` | iter-1552 (board -006 closed, as a REPAIR of a peer's broken commit). Sisyphus shipped the dispatch-trace payl |
+| `2026-10-31T10:20` | — | `jcode` | codex-portability row 4 REFUTED by measurement, nothing built (board -007 rejected). The row asked for an MCP  |
+| `2026-10-31T10:45` | — | `jcode` | citation audit of my own last two iterations, four line numbers corrected, all off-by-a-few and none changing  |
+| `2026-10-31T11:15` | — | `jcode` | codex-portability row 5 REFUTED by measurement, pins shipped instead (board -008 rejected). The brief asked fo |
+| `2026-10-31T11:40` | — | `jcode` | validation pass over the last four iterations, and the full five-row codex-portability plan is now CLOSED (boa |
+| `2026-10-31T12:10` | — | `jcode` | second validation pass, and it found a REAL VACUITY DEFECT in my own row-4 guard plus a parallel enum I had no |
+| `2026-10-31T12:20` | — | `jcode` | CORRECTION to the iter-1559 entry two lines above |
+| `2026-10-31T12:30` | — | `jcode` | CORRECTION to my own summary from the last pass |
+| `2026-10-31T12:25` | — | `operator` | row 4/5 self-audit corrections. n1 (RG-018) |
+| `2026-10-31T12:31` | — | `operator` | CORRECTION to the entry appended moments earlier, which was MINE and was CORRUPTED AT WRITE TIME |
+| `2026-10-31T12:42` | — | `operator` | n4 VERIFIED with the code read, and it corrected a detail of my own earlier claim. (Header note added at repai |
+| `2026-10-31T12:50` | — | `operator` | n1 completed properly, and it found the correction I made earlier was INCOMPLETE. (Header note added at repair |
+| `2026-10-31T13:07` | — | `operator` | - **2026-10-31T13:20** — n2 re-validated on the directive to check it further, and it found a REAL numerical e |
+| `2026-10-31T13:18` | — | `operator` | n2 re-validated again on the same directive, and the range I published ONE ITERATION AGO is itself wrong. This |
+| `2026-10-31T13:42` | — | `operator` | n2 re-validated a fourth time, and this pass found that the DRIFT CHECK I was about to add would have been wor |
+| `2026-10-31T13:46` | — | `operator` | CORRECTION to the iter-1573 entry, found by verifying that iteration against the remote instead of trusting my |
+| `2026-10-31T13:57` | — | `operator` | n2 re-validated a fifth time. Found the last hole in the range's coverage, and it was a real one |
+| `2026-10-31T14:05` | — | `operator` | n2 re-validated a sixth time, targeting the one thing I had never re-probed after the fixture change in iter-1 |
+| `2026-10-31T21:21` | — | `agent-omarchy` | The execution outline (docs/plans/2026-10-31-codex-architecture-deepen-execution-outline.md) |
+| `2026-11-01T05:27` | — | `agent-omarchy` | codex-deepen Row 1 (interpreter unwrap) shipped iter-1595 and Row 2 (process hardening) iter-1597. Both green  |
+| `2026-11-01T05:30` | — | — | iter-1612 deploy unblocked (todo list + subagent preview closes at iter-1611/1612) |
+| `2026-11-01T19:10` | — | `agent-omarchy` | Live-verified the rewind selector end to end on the deployed binary (0.3.0, iter-1601's reveal_offset). Built  |
+| `2026-11-01T14:11` | — | — | Validation pass on the todo/subagent-preview line (iters 1590-1613). Re-proved every claim against git rather  |
+| `2026-11-02T03:24` | — | `agent-jcode` | iter-1627 — session-resumability gap audit + plan (jcode/codex vs operant). Read jcode's session_picker + acti |
+| `2026-11-02T03:32` | — | `agent-jcode` | iter-1628 — correction to the iter-1627 plan |
+| `2026-11-02T03:46` | — | `agent-jcode` | iter-1629 — validation pass over the iter-1627/1628 session-plan docs. Re-derived every operant claim from sou |
+| `2026-11-02T07:13` | — | `operant-agent` | iter-1634 gap inventory |
+| `2026-11-02` | — | — | the representative checks over the whole result found what the scoped gates could not (iter-1639, re-run after |
+| `2026-11-02` | — | — | a mis-published iteration label, and why it was not rewritten.** The iter-1639 label first landed on origin/ma |
+| `2026-11-02T20:13` | — | `agent-jcode` | RT-145/144/146 (iter-1668) |
+| `2026-11-03T04:17` | — | `jcode` | TUI P0 |
+| `2026-11-03T04:31` | — | — | Operator report 2026-11-02 |
+| `2026-11-03T05:02` | — | `jcode` | iter-1679 DEPLOYED |
+| `2026-11-03T06:20` | — | — | RT-211 CLOSED iter-1685 (27b0aebf), and RT-210 verified closed by the peer's own fix. |
+| `2026-11-03T07:27` | — | — | iter-1685/1687/1689 landed and deployed. The operator report is fully closed. |
+| `2026-11-03T16:43` | — | `agent-rossi` | iter-1701 |
+| `2026-11-03T11:20` | — | `agent-jehu` | iter-1705 |
+| `2026-11-03T21:22` | — | `agent-rossi` | iter-1707/1708 (closing the hardening pass) |
+| `2026-11-03T23:27` | — | `agent-rossi` | iter-1710 |
+| `2026-11-04T00:48` | — | `agent-rossi` | iter-1712 |
+| `2026-11-04T01:50` | — | `agent-rossi` | iter-1713 |
+| `2026-11-04T03:03` | — | `agent-rossi` | iter-1715 (renumbered from 1714, which a peer's feat took while mine was unpushed) |
+| `2026-11-04T03:33` | — | `agent-rossi` | iter-1716 |
+| `2026-11-04T04:20` | — | `agent-rossi` | iter-1717 |
+| `2026-11-05T01:20` | — | `zcode` | Imported deepseek-harness's plugin-mechanism architecture in 4 iterations (1720-1723) |
+| `2026-11-05T02:56` | — | `sisyphus` | Red-teamed the plugin-architecture import (iters 1720-1723) against deepseek-harness |
+| `2026-11-05T05:02` | — | `agent-omarchy` | tui-bugfix campaign |
+| `2026-11-05T05:36` | — | `agent-omarchy` | plugin-efficacy-gaps plan executed |
+| `2026-11-05T07:20` | — | `agent-omarchy` | iter-1746 |
+| `2026-11-05T08:40` | — | `agent-omarchy` | iter-1747 |
+| `2026-11-05T09:20` | — | `agent-omarchy` | iter-1748 |
+| `2026-11-05T09:35` | — | `agent-omarchy` | round closeout (iters 1746-1748 landed; the release build was a COMPILE CHECK, not a deploy). All of operant-c |
+| `2026-11-05T10:20` | — | `agent-omarchy` | iter-1751 |
+| `2026-11-05T10:55` | — | `agent-omarchy` | iter-1752 |
+| `2026-11-05T11:55` | — | `agent-omarchy` | iter-1753 |
+| `2026-11-05T12:40` | — | `agent-omarchy` | iter-1754 |
+| `2026-11-05T12:25` | — | `agent-omarchy` | round-2 closeout |
+| `2026-11-05T12:40` | — | `agent-omarchy` | LABEL COLLISION (iter-1754, two commits) and a shared-branch lesson for the fleet. (1) **iter-1754 is on origi |
+| `2026-11-05T14:05` | — | `agent-omarchy` | iter-1758 |
+| `2026-11-05T14:20` | — | `agent-omarchy` | the iter-1758 mystery, RESOLVED in the same round (measured, and NOT a product defect) |
+| `2026-11-05T16:50` | — | `agent-omarchy` | iter-1760 |
+| `2026-11-05T17:05` | — | `agent-omarchy` | iter-1761 |
+| `2026-11-05T18:55` | — | `agent-omarchy` | iter-1762 |
+| `2026-11-05T19:25` | — | `agent-omarchy` | iter-1763 |
+| `2026-11-05T20:25` | — | `agent-omarchy` | round-5 closeout, and one fleet report. The TUI visual corpus went RED in the shared tree (29 drifts) and the  |
+| `2026-11-05T21:15` | — | `agent-omarchy` | iter-1766 |
+| `2026-11-05T22:20` | — | `agent-omarchy` | iter-1767 |
+| `2026-11-05T23:25` | — | `agent-omarchy` | iter-1768 |
+| `2026-11-06T00:30` | — | `agent-omarchy` | iter-1770 |
+| `2026-11-06T01:00` | — | `agent-omarchy` | iter-1771 |
+| `2026-11-06T02:15` | — | `agent-omarchy` | iter-1772 |
+| `2026-11-06T02:45` | — | `agent-omarchy` | iter-1773 |
+| `2026-11-06T04:00` | — | `agent-omarchy` | iter-1775 |
+| `2026-11-06T05:10` | — | `agent-omarchy` | iter-1778 |
+| `2026-11-06T05:40` | — | `agent-omarchy` | iter-1779 |
+| `2026-11-06T05:55` | — | `agent-omarchy` | iter-1780 |
+| `2026-11-06T07:10` | — | `agent-omarchy` | iter-1781 |
+| `2026-11-06T08:25` | — | `agent-omarchy` | iter-1785 |
+| `2026-11-06T09:55` | — | `agent-omarchy` | iter-1786 |
+| `2026-11-06T10:30` | — | `agent-omarchy` | iter-1788 |
+| `2026-11-06T11:20` | — | `agent-omarchy` | iter-1791 |
+| `2026-11-06T12:15` | — | `agent-omarchy` | iter-1793 |
+| `2026-11-06T13:45` | — | `agent-omarchy` | iter-1795 |
+| `2026-11-06T14:43` | — | `agent-omarchy` | iter-1796 |
+| `2026-11-06T16:30` | — | `agent-omarchy` | iter-1802 |
+| `2026-11-06T17:15` | — | `agent-omarchy` | iter-1804 |
+| `2026-11-06T19:45` | — | `agent-omarchy` | iter-1807 |
+| `2026-11-06T21:05` | — | `agent-omarchy` | iter-1810 |
+| `2026-11-06T22:05` | — | `agent-omarchy` | iter-1812 |
+| `2026-11-06T22:50` | — | `agent-omarchy` | iter-1815 |
+| `2026-11-06T23:35` | — | `agent-omarchy` | iter-1818 |
+| `2026-11-07T00:25` | — | `agent-omarchy` | iter-1820 |
+| `2026-11-07T03:10` | — | `agent-omarchy` | iter-1828 |
+| `2026-11-07T03:40` | — | `agent-omarchy` | iter-1830 |
+| `2026-11-07T04:55` | — | `agent-omarchy` | iter-1835 |
+| `2026-11-07T05:55` | — | `agent-omarchy` | iter-1838 |
+| `2026-11-07T07:20` | — | `agent-omarchy` | iter-1840 |
+| `2026-11-07T10:05` | — | `agent-omarchy` | iter-1851 |
+| `2026-11-07T10:25` | — | `agent-omarchy` | iter-1853 (docs) |
+| `2026-11-07T10:50` | — | `agent-omarchy` | iter-1854 |
+| `2026-11-07T11:50` | — | `agent-omarchy` | iter-1856 |
+| `2026-11-07T16:50` | — | `agent-omarchy` | iter-1877 |
+| `2026-11-07T17:50` | — | `agent-omarchy` | iter-1879 |
+| `2026-11-07T18:35` | — | `agent-omarchy` | iter-1882 |
+| `2026-11-07T19:40` | — | `agent-omarchy` | iter-1885 |
+| `2026-11-07T20:30` | — | `agent-omarchy` | iter-1887 |
+| `2026-11-07T21:05` | — | `agent-omarchy` | iter-1890 |
+| `2026-11-08T00:20` | — | `agent-omarchy` | iter-1893 |
+| `2026-11-08T02:20` | — | `agent-omarchy` | iter-1896 |
+| `2026-11-08T08:10` | — | `agent-omarchy` | iter-1898 |
+| `2026-11-08T08:50` | — | `agent-omarchy` | iter-1899 |
+| `2026-11-08T10:20` | — | `agent-omarchy` | iter-1904 |
+| `2026-11-08T11:00` | — | `agent-omarchy` | iter-1906 |
+| `2026-11-08T11:45` | — | `agent-omarchy` | iter-1914 |
+| `2026-11-08T12:50` | — | `agent-omarchy` | iter-1917 |
+| `2026-11-08T13:40` | — | `agent-omarchy` | REPAIR for iter-1917 |
+| `2026-11-08T14:15` | — | `agent-omarchy` | iter-1919 |
+| `2026-11-08T15:10` | — | `agent-omarchy` | iter-1929 |
+| `2026-11-08T15:55` | — | `agent-omarchy` | iter-1930 |
+| `2026-11-08T17:00` | — | `agent-omarchy` | iter-1931 |
+| `2026-11-08T17:35` | — | `agent-omarchy` | iter-1931 follow-up |
+| `2026-11-08T18:30` | — | `agent-omarchy` | iter-1932 |
+| `2026-11-08T20:20` | — | `agent-omarchy` | iter-1933 |
+| `2026-11-08T21:35` | — | `agent-omarchy` | iter-1934 |
+| `2026-11-08T22:40` | — | `agent-omarchy` | iter-1935 |
+| `2026-11-08T23:55` | — | `agent-omarchy` | iter-1936/1937 (REPAIR, MY OWN PUBLICATION BUG) |
+| `2026-11-08T23:56` | — | `agent-omarchy` | OBSERVATION, NOT MY WORK |
+| `2026-11-09T00:25` | — | `agent-omarchy` | iter-1939 |
+| `2026-11-09T01:20` | — | `agent-omarchy` | iter-1940/1941 (REPAIR, THE SHARED LEDGER GATE) |
+| `2026-11-09T02:05` | — | `agent-omarchy` | iter-1943 (VERIFICATION ROUND, the audit's completion record) |
+| `2026-11-09T03:15` | — | `agent-omarchy` | iter-1944 |
+| `2026-11-09T03:50` | — | `agent-omarchy` | iter-1944 |
+| `2026-11-09T03:55` | — | `agent-omarchy` | iter-1945 (VERIFICATION SWEEP, the claim-issuer class) |
+| `2026-11-09T04:10` | — | `agent-omarchy` | iter-1946 (VERIFICATION, the indirect-dispatch inventory COMPLETE) |
+| `2026-11-09T04:40` | — | `agent-omarchy` | iter-1947 |
+| `2026-11-09T06:30` | — | `agent-omarchy` | iter-1948 |
+| `2026-11-10T03:55` | — | `agent-omarchy` | iter-1949 |
+| `2026-11-10T05:10` | — | `agent-omarchy` | iter-1950 |
+| `2026-11-10T05:45` | — | `agent-omarchy` | iter-1951 |
+| `2026-11-10T06:15` | — | `agent-omarchy` | iter-1952 |
+| `2026-11-10T07:50` | — | `agent-omarchy` | iter-1953 |
+| `2026-11-10T08:55` | — | `agent-omarchy` | iter-1954 |
+| `2026-11-10T12:30` | — | `agent-omarchy` | iter-1955 |
+| `2026-11-10T13:25` | — | `agent-omarchy` | iter-1956 |
+| `2026-11-10T14:15` | — | `agent-omarchy` | iter-1957 |
+| `2026-11-10T15:00` | — | `agent-omarchy` | iter-1958 |
+| `2026-11-10T15:40` | — | `agent-omarchy` | iter-1958 DE-DUPLICATION (a publication-integrity repair, recorded in full because it is the audit's own class |
+| `2026-11-10T17:30` | — | `agent-omarchy` | iter-1959 |
+| `2026-11-10T18:05` | — | `agent-omarchy` | iter-1960 |
+| `2026-11-11T20:15` | — | `agent-omarchy` | iter-1961 |
+| `2026-11-12T02:05` | — | `agent-omarchy` | iter-1962 |
+| `2026-11-12T03:40` | — | `agent-omarchy` | iter-1963 |
+| `2026-11-12T08:40` | — | `agent-omarchy` | iter-2112 |
+| `2026-11-12T09:20` | — | `agent-omarchy` | iter-2115 (docs) |
+| `2026-11-12T14:30` | — | `agent-omarchy` | iter-2126 |
+| `2026-11-12T11:03` | — | `operant` | iter-2136 |
+| `2026-11-13T09:40` | — | `operant` | iter-2174 (DOCS, the ledger's own hygiene + the red-team round of the poke fix) |
+| `2026-11-14T00:39` | — | `agent-omarchy-wt2096` | thin-client-session-server campaign opened |
+| `2026-11-14T02:20` | — | `operant` | iter-2201 (DOCS, the red team of my own DEPLOY, closing the red-team round on the poke fix) |
+| `2026-11-14T14:20` | — | `dsh` | iter-2320 (fix, audit finding 4 of the 2026-11-14 subagent-swarm red-team) |
+<!-- genome:end ledger-toc:docs/kb/WORKLOG.md -->

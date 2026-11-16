@@ -62,6 +62,7 @@ they describe. The front door is [docs/library/README.md](library/README.md); th
 | File | Owns | Not for |
 |---|---|---|
 | `docs/library/README.md` | the library's front door and maintenance law | any single mechanism |
+| `docs/library/STANDARD.md` | the contract a library page is held to: the two questions, the required sections, the derivation rules | any mechanism (that is the page it describes) |
 | `docs/library/agent-loop.md` | the ReAct loop: turn structure, streaming, retries, fallback, iteration budget, turn-end seam | context eviction (`context-management.md`) |
 | `docs/library/context-management.md` | tiered eviction, decay curve, the 4-rung compaction ladder, the frozen-prefix law | injection of NEW content into a turn (`context-injection.md`) |
 | `docs/library/memory.md` | the memory-wire engine: lifecycle, retrieval, the consolidated tool pair, import, degradation contract | the session transcript (`sessions.md`), session search (`sessions.md`) |

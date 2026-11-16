@@ -3,6 +3,19 @@
 Dated-frozen: published `2026-11-02`. Registered in `genome.toml`
 `core.living_plans`.
 
+## Contents
+
+- [What was measured, and against what](#what-was-measured-and-against-what)
+- [The honest headline](#the-honest-headline)
+- [Gap 1 — "which session did I quit out of?"](#gap-1--which-session-did-i-quit-out-of--nothing-answers-it)
+- [Gap 2 — the Ctrl+C resume-after-close round trip](#gap-2--the-ctrlc-resume-after-close-round-trip-is-not-discoverable)
+- [Gap 3 — no crash/liveness distinction](#gap-3--no-crashliveness-distinction)
+- [Gap 4 — gateway session navigation requires an opaque id](#gap-4--gateway-session-navigation-requires-an-opaque-id)
+- [Gap 5 — no session status vocabulary](#gap-5--no-session-status-vocabulary)
+- [Gap 6 — `list_sessions` sorts on a stale timestamp](#gap-6--list_sessions-sorts-on-a-timestamp-that-goes-stale-found-on-validation)
+- [What this plan deliberately does NOT do](#what-this-plan-deliberately-does-not-do-ponytail-exclusions)
+- [The plan](#the-plan)
+
 ## What was measured, and against what
 
 The operator asked how `../external-repos/{jcode,codex}` implement session

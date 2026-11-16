@@ -3,6 +3,14 @@
 Dated-frozen: published `2026-10-24`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
+## Contents
+
+- [Mechanism](#mechanism) — word classes, the `@` mention grammar, file discovery, ghost text
+- [Design decisions](#design-decisions)
+- [Milestones](#milestones-each--one-iteration-scoped-check--tests--clippy-gate--commit--push--release-deploy)
+- [Gates / success criteria](#gates--success-criteria)
+- [Cost](#cost)
+
 ## Mechanism
 
 Three operator asks, all modeled on oh-my-pi (OMP, at

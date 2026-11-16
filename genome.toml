@@ -1,6 +1,6 @@
 [genome]
 schema_version = 2
-modules = ["core", "records", "agents", "ops"]
+modules = ["core", "records", "agents", "ops", "outline"]
 
 # kb.toml — the role→path map. Edit freely; roles keep their meaning.
 [paths]
@@ -39,6 +39,11 @@ pointer_ignore = "SKILL.md autonomous-status.toml settings.json auth.json manife
 # same-day v3 churn: an execution plan with open iterations is amended in
 # place under this key, per the dated-frozen header's own escape clause.
 living_plans = ["docs/plans/plan-2026-11-15-context-lifecycle-residual-gaps.md", "docs/plans/2026-10-28-unified-session-management-v2-jcode-picker-pane-omp-hub-empl.md", "docs/plans/plan-2026-11-02-session-resumability-and-gateway-session-navigation.md", "docs/plans/2026-11-02-session-resumability-remaining-gaps-after-iter-1634.md", "docs/plans/plan-2026-11-02-codex-parity-composer-and-session-organiser.md", "docs/plans/plan-2026-11-03-tool-row-click-expand-acceptance.md", "docs/plans/plan-2026-11-13-codex-command-center-port.md"]
+# The two append-only ledgers carry a GENERATED table of contents: every entry
+# adds a line, so a hand-written contents block is stale on the next append.
+# `genome log` and `genome post` refresh the zone as part of the append, and
+# E015 fails the lint if a zone is ever behind the entries.
+ledger_tocs = ["docs/kb/WORKLOG.md", "docs/kb/feed.md"]
 # the gate the repo's own iteration loop names: fast checks, then the workspace suite
 gate = "./scripts/check.sh check --workspace && cargo test --workspace"
 # the judgement the iteration loop makes mandatory, in its own order
@@ -64,3 +69,20 @@ owner_globs = ["docs/library/*.md"]
 # the gate catches instead of a reader.
 link_surfaces = ["docs/INDEX.md", "docs/library/*.md"]
 link_prefixes = ["crates/", "scripts/", "docs/", "kernel-sidecar/"]
+
+# E311 — the OTHER direction from E301. E301 asks whether every doc is listed
+# in the ownership map; this asks whether every code unit is NAMED by a doc.
+# The mechanism library's real failure is silent: a subsystem ships, nobody
+# writes its page, and no gate says so. `genome lint` now does.
+# The unit is one source file and the name that must appear is its stem, so
+# `crates/operant-core/src/agent/rewind.rs` is covered by any library page
+# that says `rewind`. Depth is a reviewer's judgement; existence is mechanical.
+coverage_surfaces = ["docs/library/*.md"]
+coverage_units = ["crates/*/src/**/*.rs"]
+coverage_label = "library"
+# Each row is a unit with no library page AND a reason. An empty reason is not
+# an exemption, it is a deferral with the paperwork missing.
+coverage_exempt = [
+  # Leaf modules a reader reaches only through the page that owns their family;
+  # each is named in its owner's prose even though its own stem is not.
+]

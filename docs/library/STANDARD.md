@@ -1,0 +1,78 @@
+# The documentation standard — read this before writing any page
+
+This is the contract every `docs/library/` page is held to. It exists because
+"documented" is not a binary: a page can cite a module and still leave a reader
+unable to answer the two questions that matter — *how does this work* and *how do
+I use it*.
+
+## The two questions every page answers
+
+1. **How it works** — the mechanism, its data flow, the seams it crosses, and
+   why it is built that way (the constraint or incident that shaped it).
+2. **How to use it** — the surface a human or an agent actually touches: the
+   config keys, the CLI commands, the tool names, the failure modes and what the
+   operator sees when they fire.
+
+A page that answers only (1) is a design note. A page that answers only (2) is a
+man page. The library is both, because its readers are both.
+
+## Required structure
+
+```markdown
+# <Element> — <the one-line claim>
+
+Owns: <what question this page answers>
+Not for: <which sibling page answers the adjacent question> ([sibling.md](sibling.md))
+
+Source: `crates/.../module.rs` (what it holds), `crates/.../other.rs` (what it does)
+
+## <The mechanism, in prose a newcomer follows>
+## <Data flow / lifecycle — a numbered walk or a mermaid diagram>
+## <The seams: what this crosses and what crosses it>
+## Configuration — the keys, their defaults, and what each actually changes
+## Surfaces — the CLI commands, tools, slash commands, or API a user touches
+## Failure modes — what breaks, what the operator sees, what to do
+## Intention — why it is this way, and what it deliberately is not
+```
+
+Not every section applies to every element. A pure-internal module may have no
+Configuration section — but then it says so in one line, because an absent
+section and an unconsidered one look identical to a reader.
+
+## Rules
+
+1. **Every factual claim is derived from the code, never copied from another
+   doc** (RG-008). A count moves when the code moves; if you state a count,
+   state it as of the commit you read.
+2. **Every `crates/...` path you cite must exist** — `genome lint` E303 fails the
+   build on a stale one.
+3. **Config keys must be real.** Quote them from `crates/operant-core/src/config.rs`
+   (or the `operant-config` schema) and give the default you read there. A key
+   that does not exist is worse than no key.
+4. **Tool names must be the registered names**, not the prose names. Check
+   `crates/operant-core/src/tools/builtin.rs` and the family module.
+5. **Name the failure mode, not the happy path only.** The library's value over
+   a README is that it says what happens when the subprocess is missing, when the
+   key is absent, when the provider 429s.
+6. **Cross-link, do not duplicate.** If a mechanism is owned by another page,
+   link it in `Not for:` and move on.
+7. **No em dashes in new prose.** (Repo style; the existing pages predate it and
+   are not being rewritten for it.)
+8. **End with `## Intention`.** The mechanism exists for a reason; a reader who
+   knows the reason can predict the next change.
+
+## Depth target
+
+A page that owns a subsystem of N modules should cite at least the modules a
+reader must open to change it, and should be long enough that a competent engineer
+who has never seen the code can make a correct small change after reading it.
+Pages under ~120 lines that own more than three modules are under-documented;
+pages over ~400 lines that own one module are over-explaining.
+
+## The coverage gate
+
+`genome lint` E311 fails when a source file is named by no library page. If you
+write a page that covers a previously-undocumented module, its E311 row
+disappears. If a module genuinely needs no page (a test fixture, a generated
+file), add it to `ops.coverage_exempt` in `genome.toml` **with the reason** — an
+exemption without a reason is a deferral with the paperwork missing.

@@ -19,6 +19,11 @@ mechanisms as they exist in the code; frozen plans and audits
 (`docs/plans/`, `docs/audit/`) carry the history of how they got here, and
 `docs/decisions/` carries the why-decisions that outlive the code shape.
 
+If you are here to WRITE a page rather than read one, read
+[STANDARD.md](STANDARD.md) first: it is the contract a page is held to, and it
+names the two questions (how it works, how to use it) that separate a library
+page from a design note.
+
 ## Contents
 
 ### The agentic core
