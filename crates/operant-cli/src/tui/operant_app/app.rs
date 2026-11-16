@@ -202,12 +202,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/model", "List or switch models"),
     RegisteredCommand::public("/models", "Alias for /model"),
     RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
-    // (plan 2026-11-15 T2) `/bar` — the status bar style, by name. The style
-    // existed (iter-2410) but only as a row inside `/config`, so the operator
-    // asking for "a /bar command to configure the bar" found none: this table
-    // is what `/help` and the command-existence guard read, and `/bar` was in
-    // neither.
-    RegisteredCommand::public("/bar", "Show or set the status bar style (/bar <style>)"),
     RegisteredCommand::public("/agents", "Configure models for agent roles"),
     RegisteredCommand::public("/todos", "Show the session todo list as a card in the chat"),
     RegisteredCommand::hidden("/todo", "Alias for /todos"),

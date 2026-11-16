@@ -592,7 +592,11 @@ fn roles_for_field(field: &str) -> &'static [Role] {
         // themes' `text_light`.
         "text_light" => &[Role::UserText, Role::HeaderSession],
         "text" => &[Role::AiText, Role::HeaderName],
-        "panel_bg" => &[Role::UserBg],
+        // The composer band was historically a luminance lift of the SAME base
+        // the user bubble uses; it now seeds from the same field as its own role
+        // rather than a computed lift, so a theme's panel colour reaches the
+        // input area coherently and `[tui.colors] composer_bg` can pin it.
+        "panel_bg" => &[Role::UserBg, Role::ComposerBg],
         "border" => &[Role::Border],
         "selection_bg" => &[Role::SelectionBg],
         // Lifecycle indicators borrow the status colours they already use:
@@ -1330,7 +1334,6 @@ pub(crate) mod tests {
     /// claims them, and `every_role_is_reachable_through_the_live_theming_path`
     /// proves that path works.
     const LITERAL_SEEDED_ROLES: &[Role] = &[
-        Role::StatusLineBg,
         Role::MdHeading,
         Role::MdLink,
         Role::MdLinkUrl,

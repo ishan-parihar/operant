@@ -244,20 +244,6 @@ pub(crate) fn detect_kv_cache_problem(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     Model,
-    /// The status-bar style picker (`/bar`).
-    ///
-    /// (plan 2026-11-16 B1) The operator's report: "/bar is very irritating to
-    /// navigate and implement." The command existed but took the style as a
-    /// typed ARGUMENT, so choosing one meant leaving the keyboard's normal
-    /// grammar — type a slash command, remember one of eight spellings, get a
-    /// text notice back, and have no way to see what any of them looked like
-    /// before committing. Every other list-shaped choice in this TUI is a
-    /// picker; this one was the odd one out.
-    ///
-    /// Its own kind rather than a reuse, for the reason `Effort` documents: a
-    /// shared kind shares the apply path, and a bar row must not fall into the
-    /// model branch.
-    Bar,
     /// The reasoning-effort picker (`/effort`).
     ///
     /// (2026-11-15, model plan M1) This surface used to be `PickerKind::Model`
@@ -387,22 +373,6 @@ impl PickerKind {
                 shows_default_shortcut_hint: false,
                 preview_activation_column: 0,
             },
-            // (plan 2026-11-16 B1) ONE column, like Effort: a bar row carries
-            // its style key and nothing else to choose between. The row's text
-            // already renders the separator itself (see `open_bar_picker`), so
-            // the picker is the sample — there is no second column that could
-            // say anything the row does not.
-            Self::Bar => InlineInteractiveSchema {
-                layout: InlineInteractiveLayout::Compact,
-                primary_label: "BAR STYLE",
-                secondary_label: "",
-                secondary_preview_label: "",
-                tertiary_label: "",
-                preview_submit_hint: "  ↵ set",
-                active_submit_hint: "  ↑↓/jk ↵ Esc",
-                shows_default_shortcut_hint: false,
-                preview_activation_column: 0,
-            },
         }
     }
 }
@@ -465,14 +435,6 @@ pub enum AgentModelTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
     Model,
-    /// (plan 2026-11-16 B1) A status-bar style row. The string is the
-    /// `SeparatorStyle` config KEY (`dot`, `powerline`, …), not the row's
-    /// display label — the label carries a rendered sample and may be
-    /// capitalised or padded, while the key is what `set_style` and the TOML
-    /// take. Keeping the wire value here rather than parsing it back out of
-    /// `PickerEntry::name` is the same separation `Effort` documents for
-    /// `PickerEntry::effort`.
-    BarStyle(String),
     /// (plan 2026-10-30) A MODEL SLOT role row: Entering it sets that slot's
     /// model rather than switching the conversation. `slot` is the
     /// `operant_core::model_roles::ModelSlot` the row names, so the apply arm
