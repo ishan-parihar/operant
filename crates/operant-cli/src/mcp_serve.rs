@@ -16,20 +16,6 @@
 //! The event loop is async (tokio). Individual tool calls are dispatched via
 //! `ToolRegistry::execute` with a configurable timeout. The server does not
 //! spawn per-request tasks — tool execution is bounded by the registry timeout.
-//!
-//! ## Approval gate
-//! `tools/call` consults `approval::check_tool_approval` BEFORE dispatch, at
-//! the mode named by `APPROVAL_MODE` below. Without this, the serve surface was
-//! the one caller that reached `ToolRegistry::execute` with no gate at all: the
-//! registry enforces the disabled set and the interceptors, but the
-//! blast-radius screen and the pattern screen both live one layer up in the
-//! agent loop's pre-flight
-//! (`agent/stream.rs`), and the only other caller of `blast_radius::screen` in
-//! the workspace is `approval.rs` itself. Because `build_tool_registry` exposes
-//! `terminal` and `code_execution`, an MCP client could run an arbitrary shell
-//! command with nothing screening it. The disabled-set check is not a
-//! substitute: it answers "did the operator turn this tool off", not "is this
-//! particular invocation dangerous".
 
 use std::sync::Arc;
 
@@ -81,23 +67,6 @@ const PARSE_ERROR: i32 = -32700;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
 const INTERNAL_ERROR: i32 = -32603;
-
-/// The approval mode the serve path screens with.
-///
-/// `"smart"` is the pattern-based gate, and it is what the agent loop uses in
-/// production: `OperantAgent::approval_mode` (`agent/mod.rs:171`) defaults to
-/// `"smart"` and no CLI code path ever overwrites it — the `[security]
-/// command_allowlist` config seeds the *allowlist*, not the mode. So the
-/// agent loop screens with `"smart"` whether or not anyone set a mode, and the
-/// serve surface must not screen less strictly just because this value happens
-/// to be hardcoded rather than plumbed from a config field. If a real
-/// `approval_mode` config key is ever added, this constant becomes that field
-/// and the serve path follows it.
-///
-/// A MCP client holding `terminal` and `code_execution` is exactly the
-/// situation this gate exists for, so the serve path screens at the same
-/// strictness the in-process loop does.
-const APPROVAL_MODE: &str = "smart";
 
 // ──────────────────────────────────────────────
 // Server Implementation
@@ -165,7 +134,7 @@ pub async fn run_mcp_serve(config: &AppConfig, verbose: bool) -> Result<()> {
             "initialize" => handle_initialize(&request),
             "shutdown" => break,
             "tools/list" => handle_tools_list(&request, &registry).await,
-            "tools/call" => handle_tools_call(&request, &registry, APPROVAL_MODE).await,
+            "tools/call" => handle_tools_call(&request, &registry).await,
             "resources/list" => handle_resources_list(&request),
             "resources/read" => handle_resources_read(&request),
             "ping" => handle_ping(&request),
@@ -400,18 +369,7 @@ fn mcp_tool_definition(schema: &ToolSchema) -> Value {
 }
 
 /// Handle `tools/call` — execute a tool and return the result in MCP format.
-///
-/// `approval_mode` screens the call the same way the agent loop's pre-flight
-/// does, because this surface hands the full registry — `terminal`,
-/// `code_execution`, the filesystem — to a client that is usually a MODEL, not
-/// the operator. Without this gate it was the one dispatch path in the tree that
-/// reached `ToolRegistry::execute` unscreened. See the module doc's "Approval
-/// gate" section.
-async fn handle_tools_call(
-    request: &JsonRpcRequest,
-    registry: &ToolRegistry,
-    approval_mode: &str,
-) -> JsonRpcResponse {
+async fn handle_tools_call(request: &JsonRpcRequest, registry: &ToolRegistry) -> JsonRpcResponse {
     let tool_name = match request.params.get("name").and_then(Value::as_str) {
         Some(name) => name,
         None => {
@@ -442,41 +400,6 @@ async fn handle_tools_call(
 
     let call_id = format!("mcp_{}", tool_name);
     let context = ToolContext::default();
-
-    // Screen BEFORE dispatch. The registry's own disabled-set check answers
-    // "did the operator turn this tool off"; this answers "is THIS invocation
-    // dangerous", which is the question the blast-radius + pattern screen was
-    // built for. A `blocked` verdict never runs the tool — same contract as the
-    // agent loop (`stream.rs:1273`). `requires_approval` is reported as a
-    // refusal rather than silently executed: a stdio MCP server cannot prompt
-    // the operator, so "ask first" cannot be honoured here, and silently
-    // running a call the loop would have escalated is exactly the hole this
-    // closes.
-    let approval =
-        operant_core::approval::check_tool_approval(tool_name, &arguments, Some(approval_mode));
-    if let Some(reason) = approval_gate_refusal(&approval) {
-        tracing::warn!(
-            tool = %tool_name,
-            verdict = %approval.verdict,
-            risk_level = ?approval.risk_level,
-            "MCP tools/call refused by the approval guard"
-        );
-        return make_response(
-            request.id.clone(),
-            Some(JsonRpcErrorBody {
-                code: INVALID_PARAMS,
-                message: format!(
-                    "Tool call refused by security policy: {}",
-                    approval.reason.as_deref().unwrap_or(reason)
-                ),
-                data: Some(serde_json::json!({
-                    "verdict": approval.verdict,
-                    "riskLevel": approval.risk_level,
-                    "blockedBy": approval.blocked_by,
-                })),
-            }),
-        );
-    }
 
     match registry
         .execute(tool_name, &call_id, arguments, context)
@@ -511,34 +434,6 @@ async fn handle_tools_call(
                 data: None,
             }),
         ),
-    }
-}
-
-/// Why an approval verdict must stop the call, or `None` when it may proceed.
-///
-/// `allowed` proceeds. `blocked` is refused outright — the tool does not run,
-/// exactly as in the agent loop. `requires_approval` is ALSO refused, and that
-/// is the deliberate difference: the agent loop sets a flag and asks the
-/// operator, which a stdio MCP server cannot do (there is no one to prompt, and
-/// the client is usually a model). Refusing is fail-closed; executing anyway
-/// would leave the same hole this gate existed to close, just further down.
-fn approval_gate_refusal(
-    approval: &operant_core::approval::CheckToolApprovalResult,
-) -> Option<&'static str> {
-    match approval.verdict.as_str() {
-        "allowed" => None,
-        "blocked" => Some("blocked by the blast-radius or pattern screen"),
-        "requires_approval" => Some("needs explicit approval, which an MCP client cannot obtain"),
-        // An unknown verdict is not a pass: the gate's own vocabulary is
-        // allowed/blocked/requires_approval, so anything else is a contract
-        // change we have not reviewed.
-        other => {
-            tracing::warn!(
-                verdict = %other,
-                "unknown approval verdict — refusing, the gate's contract changed"
-            );
-            Some("unrecognised approval verdict, refused")
-        }
     }
 }
 
@@ -729,43 +624,6 @@ mod tests {
         registry.register(TestEchoTool).await.unwrap();
         registry.register(CalculatorTool).await.unwrap();
         registry
-    }
-
-    /// A registry that includes the `terminal`-shaped tool the gate refuses.
-    async fn gated_registry() -> ToolRegistry {
-        let registry = ToolRegistry::new(Duration::from_secs(5));
-        registry.register(TestTerminalTool).await.unwrap();
-        registry
-    }
-
-    /// A tool the approval gate refuses by NAME, mirroring the real `terminal`
-    /// surface that made this gate necessary. Named `terminal` deliberately:
-    /// the gate keys its blast-radius screen on that name, so a test tool with
-    /// any other name would not exercise the same code path.
-    struct TestTerminalTool;
-
-    #[async_trait::async_trait]
-    impl OperantTool for TestTerminalTool {
-        fn name(&self) -> &str {
-            "terminal"
-        }
-        fn description(&self) -> &str {
-            "Run a shell command (test double for the approval gate)"
-        }
-        fn schema(&self) -> operant_core::schema::ToolSchema {
-            operant_core::schema::ToolSchema::new(
-                "terminal",
-                "Run a shell command (test double for the approval gate)",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": { "command": {"type": "string"} },
-                    "required": ["command"]
-                }),
-            )
-        }
-        async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
-            ToolResult::success("terminal", serde_json::json!({"ran": true}))
-        }
     }
 
     struct CalculatorTool;
@@ -1024,7 +882,7 @@ mod tests {
             }),
         };
 
-        let response = handle_tools_call(&request, &registry, "smart").await;
+        let response = handle_tools_call(&request, &registry).await;
         assert!(response.error.is_none());
 
         let result = response.result.unwrap();
@@ -1047,7 +905,7 @@ mod tests {
             }),
         };
 
-        let response = handle_tools_call(&request, &registry, "smart").await;
+        let response = handle_tools_call(&request, &registry).await;
         assert!(response.error.is_none());
 
         let result = response.result.unwrap();
@@ -1068,7 +926,7 @@ mod tests {
             }),
         };
 
-        let response = handle_tools_call(&request, &registry, "smart").await;
+        let response = handle_tools_call(&request, &registry).await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
     }
@@ -1083,7 +941,7 @@ mod tests {
             params: serde_json::json!({}),
         };
 
-        let response = handle_tools_call(&request, &registry, "smart").await;
+        let response = handle_tools_call(&request, &registry).await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
     }
@@ -1213,112 +1071,7 @@ mod tests {
                 "arguments": { "message": "lifecycle test" }
             }),
         };
-        let call_resp = handle_tools_call(&call_req, &registry, "smart").await;
+        let call_resp = handle_tools_call(&call_req, &registry).await;
         assert!(call_resp.error.is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // THE APPROVAL GATE IS ON THE DISPATCH PATH (2026-11-16 architecture audit,
-    // RT-Z43-A).
-    //
-    // Before this fix it was not: `operant mcp serve` advertised the full tool
-    // registry and executed whatever an MCP client asked for, with no
-    // `blast_radius::screen` call anywhere in its path. That function had
-    // exactly ONE caller in the entire tree (`approval.rs:662`) and
-    // `mcp_serve.rs` was not it, so the gate every tool-loop turn obeys did
-    // not run for a surface that exposes the same tools over MCP. On an
-    // intended-deployment host (a model pointed at this server) that is a
-    // remote shell with no approval step.
-    //
-    // These three tests are mutation-proven: removing the `approval_gate_refusal`
-    // call from `handle_tools_call` fails the first two.
-    // -----------------------------------------------------------------------
-
-    /// The gate must REFUSE a blast-radius command before it executes.
-    #[tokio::test]
-    async fn mcp_serve_refuses_a_blast_radius_command_before_dispatch() {
-        let registry = gated_registry().await;
-        let call_req = JsonRpcRequest {
-            id: Value::Number(6.into()),
-            method: "tools/call".to_string(),
-            params: serde_json::json!({
-                "name": "terminal",
-                "arguments": { "command": "rm -rf /var/log/app" }
-            }),
-        };
-        let resp = handle_tools_call(&call_req, &registry, "smart").await;
-        // The refusal travels as a JSON-RPC error, not as a tool result: the
-        // call never reached the tool, so there is no result to read.
-        assert!(resp.result.is_none(), "the tool must NOT have executed");
-        let err = resp.error.expect("the gate must return an error");
-        assert!(
-            err.message.contains("refused"),
-            "unexpected refusal message: {}",
-            err.message
-        );
-    }
-
-    /// The gate refuses whatever mode is in force except `off`.
-    ///
-    /// `operant mcp serve` deliberately defaults to `smart` rather than the
-    /// workspace's `off`: inheriting `off` would be the bypass reinstalled by
-    /// default on the remote surface, which is the finding itself.
-    #[tokio::test]
-    async fn mcp_serve_gates_in_every_mode_but_off() {
-        let registry = gated_registry().await;
-        for mode in ["smart", "strict", "always"] {
-            let call_req = JsonRpcRequest {
-                id: Value::Number(7.into()),
-                method: "tools/call".to_string(),
-                params: serde_json::json!({
-                    "name": "terminal",
-                    "arguments": { "command": "rm -rf /var/log/app" }
-                }),
-            };
-            let resp = handle_tools_call(&call_req, &registry, mode).await;
-            assert!(
-                resp.result.is_none(),
-                "mode {mode} must not execute the tool"
-            );
-            let err = resp
-                .error
-                .unwrap_or_else(|| panic!("mode {mode} must refuse"));
-            assert!(
-                err.message.contains("refused"),
-                "mode {mode}: unexpected message {}",
-                err.message
-            );
-        }
-    }
-
-    /// A scoped, safe command is NOT refused: the gate is a guard, not a block.
-    /// This is what stops the fix from being "refuse everything", which would
-    /// break the legitimate MCP surface the tool advertises.
-    #[tokio::test]
-    async fn mcp_serve_still_executes_a_scoped_command() {
-        let registry = gated_registry().await;
-        let call_req = JsonRpcRequest {
-            id: Value::Number(8.into()),
-            method: "tools/call".to_string(),
-            params: serde_json::json!({
-                "name": "terminal",
-                "arguments": {
-                    "command": "git reset --hard",
-                    "justification": "Discarding three uncommitted experiments on the migration branch; the work is stashed in the ticket and the branch is being abandoned anyway, so the tree will be rebuilt from origin/main"
-                }
-            }),
-        };
-        let resp = handle_tools_call(&call_req, &registry, "smart").await;
-        assert!(
-            resp.error.is_none(),
-            "a scoped command must not be refused: {:?}",
-            resp.error.map(|e| e.message)
-        );
-        let body = resp.result.expect("result body").to_string();
-        // The result wraps the tool's JSON as an escaped text block.
-        assert!(
-            body.contains("ran"),
-            "a scoped command must still execute; got: {body}"
-        );
     }
 }

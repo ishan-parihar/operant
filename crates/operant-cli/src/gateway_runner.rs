@@ -1942,6 +1942,19 @@ async fn handle_runtime_command(
         // so a bare `/search` must not read as "nothing anywhere". It
         // reports the STORE, not this chat, and says so.
         "search" | "find" => {
+            // The operator's disable policy is a listing filter on the registry
+            // path but nothing at all here: this arm constructs
+            // `SessionSearchTool` itself and calls `OperantTool::execute` on it,
+            // so `operant tools disable session_search` used to leave the
+            // channel command searching. Every direct-execute arm asks first
+            // (RT-3's rule, `enrichment.rs:213`).
+            if direct_call_is_disabled("session_search") {
+                return Some(
+                    "🔎 `session_search` is disabled by operator policy — re-enable it with \
+                     `operant tools enable session_search`."
+                        .to_string(),
+                );
+            }
             let reply = handler
                 .run_session_scoped_command(session_key, move |agent, session_id| async move {
                     let db = agent.session_store().db();

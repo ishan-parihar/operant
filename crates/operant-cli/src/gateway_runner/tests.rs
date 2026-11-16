@@ -4036,3 +4036,57 @@ async fn publishing_without_a_subscriber_retains_no_ring() {
             .collect::<Vec<_>>()
     );
 }
+
+/// (2026-11-16 architecture audit, RT-Z43-B) The gateway `/search` arm honors
+/// the operator's disabled-tool policy.
+///
+/// `operant tools disable session_search` is a listing filter on the registry
+/// path and was NOTHING on this one: `/search` constructs `SessionSearchTool`
+/// itself and calls `OperantTool::execute` on it, so the channel command kept
+/// searching after the operator turned the tool off. Same defect shape as RT-3
+/// (the voice arm), same fix (ask `direct_call_is_disabled` first).
+///
+/// Mutation-proven: deleting the guard in `handle_runtime_command` makes the
+/// first assertion fail.
+#[tokio::test]
+async fn a_disabled_session_search_stops_the_gateway_search_command() {
+    let _env_lock = crate::config::test_env_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let previous_home = std::env::var("HERMES_HOME").ok();
+    // SAFETY: serialised by the crate's environment lock.
+    unsafe { std::env::set_var("HERMES_HOME", dir.path()) };
+
+    let skills_root = dir.path().join("skills");
+    let handler = handler_for_skills(skills_root, dir.path());
+
+    // With no policy, the command runs the tool rather than refusing.
+    let allowed = super::handle_runtime_command(&handler, "search", "probe", "telegram:dm:u1")
+        .await
+        .expect("a bare /search answers");
+    assert!(
+        !allowed.contains("disabled by operator policy"),
+        "an unconfigured operator must not see the refusal, got: {allowed}"
+    );
+
+    // Write the state file `operant tools disable` writes.
+    let state_path = dir.path().join("tool_state.json");
+    std::fs::write(&state_path, r#"{"disabled": ["session_search"]}"#).expect("state file");
+
+    let refused = super::handle_runtime_command(&handler, "search", "probe", "telegram:dm:u1")
+        .await
+        .expect("the refusal is still a reply");
+    assert!(
+        refused.contains("disabled by operator policy"),
+        "a disabled session_search must be refused on the channel path, got: {refused}"
+    );
+    assert!(
+        refused.contains("operant tools enable session_search"),
+        "the refusal must name the undo command, got: {refused}"
+    );
+
+    // SAFETY: serialised by the crate's environment lock.
+    match previous_home {
+        Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+        None => unsafe { std::env::remove_var("HERMES_HOME") },
+    }
+}
