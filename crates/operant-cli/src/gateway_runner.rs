@@ -1354,23 +1354,15 @@ async fn handle_runtime_command(
                 // would leave the other slots on the stale list.
                 let build = || {
                     let mut mgr = operant_core::skills::SkillManager::new(skills_dir.clone());
-                    // The vendor roots across a reload (iter-2159) — the
-                    // installed content integrations plus the plugin roots the
-                    // handler captured at start. A rescan that dropped them
-                    // would make /skill ponytail-review fail right after a
-                    // reload.
-                    #[cfg(feature = "plugins-wasm")]
-                    let host = handler.wasm_plugin_skill_roots.clone();
-                    #[cfg(not(feature = "plugins-wasm"))]
-                    let host: Vec<std::path::PathBuf> = Vec::new();
-                    for root in operant_core::skills::vendor_skill_roots(&host) {
+                    // The SAME roots skill_roots_for offers every other gateway
+                    // surface: the vendor roots (installed integrations + the
+                    // handler's captured plugin roots) AND the operator's
+                    // `[skills] extra_roots`. The manual two-step this used to
+                    // perform is now the ONE helper, so a rescan that dropped an
+                    // extra root — making /skill ponytail-review fail right after
+                    // a reload — is no longer possible.
+                    for root in skill_roots_for(handler) {
                         mgr.add_extra_root(Some(root));
-                    }
-                    // The operator's configured extra roots: a `/reload-skills`
-                    // that dropped them would make every skill in them fail right
-                    // after a reload.
-                    for root in &handler.skills_extra_roots {
-                        mgr.add_extra_root(Some(root.clone()));
                     }
                     mgr.load_all().map(|loaded| (mgr, loaded.len()))
                 };
