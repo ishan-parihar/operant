@@ -5,9 +5,18 @@
 //! already accepts these keys — so this module adds the file, not a vocabulary.
 //!
 //! Lookup: `<config dir>/themes/<name>.toml`, where `<config dir>` is
-//! `OPERANT_CONFIG_DIR` when set and non-empty, else `~/.operant` — the same
-//! rule `operant-core`'s loader follows, restated here because that helper is
-//! `pub(crate)`.
+//! `OPERANT_CONFIG_DIR` when set and non-empty, else the RESOLVED operant home.
+//!
+//! THIS USED TO RESTATE THE RULE, AND THE RESTATEMENT WAS THE BUG. It spelled
+//! the default as `env::var("HOME")/.operant`, which ignores BOTH `HERMES_HOME`
+//! and the sticky active profile. A profile switched with `operant profile use`
+//! therefore read the DEFAULT profile's `themes/` - the operator's own themes
+//! vanished, and `one_home_resolver` could not see it because the guard only
+//! looked for the `dirs::home_dir()` spelling (RT-Z43-F).
+//!
+//! The rule now comes from operant-core, in two calls, so there is nothing here
+//! to drift: `operant_config_dir_override()` is the loader's own helper and
+//! `operant_home()` is the one resolver.
 //!
 //! Precedence is deliberately one-way: a BUILT-IN name is never shadowed by a
 //! file. That is OMP's rule too (`loader.ts:26-42`), and the alternative —
@@ -18,25 +27,10 @@ use std::path::PathBuf;
 
 /// The directory operator themes are read from.
 pub fn dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("OPERANT_CONFIG_DIR") {
-        let custom = custom.trim();
-        if !custom.is_empty() {
-            let expanded = match custom.strip_prefix('~') {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-                    match std::env::var("HOME") {
-                        Ok(home) => home + rest,
-                        Err(_) => custom.to_string(),
-                    }
-                }
-                _ => custom.to_string(),
-            };
-            return PathBuf::from(expanded).join("themes");
-        }
+    if let Some(custom) = operant_core::config::operant_config_dir_override() {
+        return custom.join("themes");
     }
-    match std::env::var("HOME") {
-        Ok(home) => PathBuf::from(home).join(".operant").join("themes"),
-        Err(_) => PathBuf::from("themes"),
-    }
+    operant_core::platform::operant_home().join("themes")
 }
 
 /// Every operator theme name, sorted. A missing or unreadable directory is
@@ -114,6 +108,56 @@ pub fn load(name: &str) -> Option<Vec<(String, String)>> {
 mod tests {
     use super::*;
 
+    /// (RT-Z43-F) THE resolver test. `dir()` must follow `HERMES_HOME`.
+    ///
+    /// It used to spell the default as `env::var("HOME")/.operant`, which
+    /// ignores BOTH `HERMES_HOME` and the sticky active profile. An operator
+    /// who ran `operant profile use work` therefore got the DEFAULT profile's
+    /// `themes/` - their own theme files vanished and nothing said why.
+    ///
+    /// Mutation-proven: restoring the `env::var("HOME")` spelling fails the
+    /// second assertion, because that spelling cannot see `HERMES_HOME` at all.
+    #[test]
+    fn the_themes_directory_follows_hermes_home() {
+        let _guard = crate::config::test_env_lock();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let base = std::env::temp_dir().join(format!(
+            "operant-themes-home-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&base).expect("fixture");
+
+        let previous = std::env::var("HERMES_HOME").ok();
+        let previous_operant = std::env::var("OPERANT_CONFIG_DIR").ok();
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HERMES_HOME", &base) };
+        unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") };
+
+        let resolved = dir();
+        assert!(
+            resolved.starts_with(&base),
+            "the themes dir must live under HERMES_HOME ({base:?}), got {resolved:?}"
+        );
+        assert!(
+            resolved.ends_with("themes"),
+            "the themes dir must end in `themes`, got {resolved:?}"
+        );
+
+        // SAFETY: serialised by the crate's environment lock.
+        match previous {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+        match previous_operant {
+            Some(v) => unsafe { std::env::set_var("OPERANT_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("OPERANT_CONFIG_DIR") },
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// The themes directory must be scoped, never empty, and the name guard
     /// must reject anything that could name a path outside it.
     #[test]
@@ -182,6 +226,12 @@ mod tests {
     /// `colors` table is no theme at all.
     #[test]
     fn a_file_is_its_colors_table() {
+        // The comment below has always SAID "serialized by the crate-wide
+        // test_env_lock" but the lock was never taken, so this test raced every
+        // other one that touches OPERANT_CONFIG_DIR. It passed by luck until a
+        // sibling test started setting HERMES_HOME. Taking the lock is what the
+        // comment promised.
+        let _guard = crate::config::test_env_lock();
         let root = std::env::temp_dir().join(format!("operant-theme-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("themes")).unwrap();
@@ -193,7 +243,7 @@ mod tests {
         std::fs::write(root.join("themes/broken.toml"), "name = \"broken\"\n").unwrap();
 
         let saved = std::env::var("OPERANT_CONFIG_DIR").ok();
-        // SAFETY: serialized by the crate-wide test_env_lock below.
+        // SAFETY: serialized by the crate-wide test_env_lock above.
         unsafe {
             std::env::set_var("OPERANT_CONFIG_DIR", &root);
         }

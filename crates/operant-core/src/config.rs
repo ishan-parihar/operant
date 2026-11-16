@@ -3647,7 +3647,11 @@ pub fn set_nested_json(target: &mut serde_json::Value, segments: &[&str], raw: &
 /// CLI `run`/`gateway`/`cron`, the `config_manage` tool, and the gateway
 /// service — resolves to the same isolated config the user asked for
 /// instead of silently falling back to `~/.operant/operant.toml`.
-pub(crate) fn operant_config_dir_override() -> Option<PathBuf> {
+/// Public because `operant-cli`'s theme loader MUST agree with this rule.
+/// It used to restate it, and the restatement drifted: it ignored
+/// `HERMES_HOME` and the sticky active profile, so a non-default profile
+/// read the DEFAULT profile's `themes/` (RT-Z43-F).
+pub fn operant_config_dir_override() -> Option<PathBuf> {
     let custom = std::env::var("OPERANT_CONFIG_DIR").ok()?;
     let custom = custom.trim();
     if custom.is_empty() {

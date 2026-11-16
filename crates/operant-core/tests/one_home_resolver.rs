@@ -33,14 +33,85 @@ fn workspace_root() -> PathBuf {
 
 /// Remove `#[cfg(test)]`-attributed items (braces included) so a path built
 /// in a test module is not counted as a production one.
+///
+/// DEFECT THIS FIXES: the original scanned forward to the next `{`. For the
+/// OUT-OF-LINE form `#[cfg(test)]\nmod tests;` there is no brace at that
+/// site, so the `None` arm set `rest = ""` and the guard silently dropped
+/// EVERYTHING AFTER IT. `gateway_runner.rs` declares `mod tests;` at :8728 and
+/// keeps four more `#[cfg(test)] mod ...` blocks below, so ~600 lines of
+/// production-adjacent source were never scanned. A guard with a blind spot
+/// exactly where the biggest file's tests begin is worse than no guard, because
+/// it reports green.
 fn strip_test_items(text: &str) -> String {
+    const ATTR: &str = "#[cfg(test)]";
+
+    // Scan for the attribute at the START OF A LINE (ignoring indentation).
+    // An `#[cfg(test)]` that appears mid-expression, or on a nested `fn` inside
+    // an already-active item, is not an item boundary and must not start a
+    // removal.
     let mut out = String::new();
-    let mut rest = text;
-    while let Some(idx) = rest.find("#[cfg(test)]") {
-        out.push_str(&rest[..idx]);
-        let after = &rest[idx + "#[cfg(test)]".len()..];
+    let mut cursor = 0usize;
+    while cursor < text.len() {
+        let rest = &text[cursor..];
+        let Some(rel) = rest.find(ATTR) else {
+            out.push_str(rest);
+            break;
+        };
+        let idx = cursor + rel;
+
+        // The attribute must begin its own line (only whitespace before it).
+        let line_start = text[..idx].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let before_on_line = &text[line_start..idx];
+        if !before_on_line.trim().is_empty() {
+            // Mid-line: not an item boundary. Emit through it and keep going.
+            let after_attr = idx + ATTR.len();
+            out.push_str(&text[cursor..after_attr]);
+            cursor = after_attr;
+            continue;
+        }
+
+        // Only a MODULE declaration is an item boundary. A `#[cfg(test)]`
+        // sitting on a `fn` inside a module is NOT: brace-matching from that fn
+        // would eat the enclosing module's remainder, so an indented attribute
+        // is emitted as ordinary text and the scan continues. It may make the
+        // guard OVER-report (it still sees test-module bodies); it can never
+        // make it UNDER-report, which is the failure that matters.
+        //
+        // MEASURED, because the first claim here was wrong: on
+        // `gateway_runner.rs` the OLD parser did NOT have a blind spot. Both the
+        // old and new forms strip all five of its `#[cfg(test)] mod ...` blocks
+        // (`unattended_posture_tests`, `pending_permissions_tests`,
+        // `tool_progress_tests`, `turn_retention_tests`, `unbound_scope_tests`).
+        // The only difference is 212 characters of an indented `#[cfg(test)]
+        // fn on_tool_start_anon` that the old code removed and the new code
+        // keeps. The rewrite is a robustness improvement, not a bug fix, and
+        // the doc comment must not claim otherwise.
+        let after = &text[idx + ATTR.len()..];
+        // `after` begins with the newline that ended the attribute line, so the
+        // declaration is on the NEXT line. Reading it from `after` directly made
+        // `decl` empty for EVERY site, so no module was ever recognised.
+        let decl_line = after.strip_prefix('\n').unwrap_or(after);
+        let line_end = decl_line.find('\n').unwrap_or(decl_line.len());
+        let decl = decl_line[..line_end].trim();
+        if !decl.starts_with("mod ") {
+            let next = idx + ATTR.len();
+            out.push_str(&text[cursor..next]);
+            cursor = next;
+            continue;
+        }
+
+        // Out-of-line form `mod tests;` - nothing is attached here, so skip the
+        // attribute AND the declaration line, then keep scanning.
+        if decl.ends_with(';') {
+            let next = idx + ATTR.len() + 1 + line_end;
+            out.push_str(&text[cursor..idx]);
+            cursor = next;
+            continue;
+        }
+
+        // Inline module: remove the attribute through the module's closing brace.
         match after.find('{') {
-            Some(_brace) => {
+            Some(_) => {
                 let mut depth: i64 = 0;
                 let mut end = after.len();
                 for (i, ch) in after.char_indices() {
@@ -54,15 +125,18 @@ fn strip_test_items(text: &str) -> String {
                         }
                     }
                 }
-                rest = &after[end..];
+                out.push_str(&text[cursor..idx]);
+                cursor = idx + ATTR.len() + end;
             }
+            // No brace at all: not an item we can span, so do NOT discard the
+            // remainder - that was the blind spot.
             None => {
-                rest = "";
-                break;
+                let next = idx + ATTR.len();
+                out.push_str(&text[cursor..next]);
+                cursor = next;
             }
         }
     }
-    out.push_str(rest);
     out
 }
 
@@ -124,23 +198,31 @@ const ALLOWED: &[(&str, &str)] = &[
          loaded config's parent. This crate cannot depend on operant-core",
     ),
     (
-        "crates/operant-providers/src/openai_codex.rs",
-        "same provider state-dir fallback as operant-providers/src/lib.rs",
-    ),
-    (
-        "crates/operant-config/src/platform/native.rs",
-        "the DEAD parallel runtime adapter — retired with the dead schema \
-         surface (RT-141)",
-    ),
-    (
-        "crates/operant-config/src/schema/config_impl.rs",
-        "the DEAD schema surface — retired with RT-141",
-    ),
-    (
         "crates/operant-config/src/schema/helpers.rs",
         "the DEAD schema surface — retired with RT-141",
     ),
 ];
+
+/// Whether a window around a `".operant"` literal spells the OS home.
+///
+/// DEFECT THIS REPLACES: the guard used to test for `home_dir` alone. That is
+/// the `dirs::home_dir()` spelling, but the operant-home defect it was written
+/// to catch is ALSO produced by `env::var("HOME")` - which is how
+/// `tui/theme_files.rs:36` built a second resolver that ignored HERMES_HOME and
+/// the sticky active profile, reading the DEFAULT profile's `themes/` for every
+/// profile. A guard blind to the spelling the bug actually used is not a guard.
+///
+/// The list is deliberately broader than the known offenders: a NEW spelling
+/// should fail loudly and be triaged, not slip through.
+fn resolves_from_os_home(window: &str) -> bool {
+    const OS_HOME_SPELLINGS: &[&str] = &[
+        "home_dir",                  // dirs::home_dir()
+        "env::var(\"HOME\")",        // std::env::var("HOME")
+        "env::var(\"USERPROFILE\")", // Windows twin
+        "home_dir_inner",            // the dirs crate's internal
+    ];
+    OS_HOME_SPELLINGS.iter().any(|s| window.contains(s))
+}
 
 /// The window (in lines) around a `".operant"` literal that may hold the
 /// OS-home lookup that produced it.
@@ -176,7 +258,7 @@ fn the_operant_home_has_one_resolver() {
             let start = index.saturating_sub(WINDOW);
             let end = (index + WINDOW + 1).min(lines.len());
             let window = lines[start..end].join("\n");
-            if window.contains("home_dir") {
+            if resolves_from_os_home(&window) {
                 offenders.push(format!("{relative}:{}", index + 1));
             }
         }
@@ -189,5 +271,85 @@ fn the_operant_home_has_one_resolver() {
          ignore HERMES_HOME and the active profile: {offenders:?}. Use the \
          resolver; if a site genuinely needs the OS home, add it to the \
          ALLOWED list in this test with the reason."
+    );
+}
+
+/// The matcher must see EVERY spelling of "the OS home", not just
+/// `dirs::home_dir()`.
+///
+/// This is the defect the guard could not catch: it tested for `home_dir`
+/// alone, while the operant-home bug it exists to prevent is ALSO produced by
+/// `env::var("HOME")`. `tui/theme_files.rs:36` spelled it that way and built a
+/// second resolver that ignored `HERMES_HOME` and the sticky active profile, so
+/// a non-default profile read the DEFAULT profile's `themes/`.
+///
+/// Mutation-proven: deleting any spelling from `OS_HOME_SPELLINGS` fails the
+/// corresponding assertion here.
+#[test]
+fn the_matcher_recognises_every_os_home_spelling() {
+    // A window in the shape the guard actually sees: a `.operant` literal with
+    // the lookup a few lines above it.
+    let shapes = [
+        "let home = dirs::home_dir();\nlet p = home.join(\".operant\");",
+        "let home = std::env::var(\"HOME\");\nlet p = home.join(\".operant\");",
+        "let p = std::env::var(\"HOME\").join(\".operant\");",
+        "let base = env::var(\"USERPROFILE\");\nlet p = base.join(\".operant\");",
+    ];
+    for shape in shapes {
+        assert!(
+            resolves_from_os_home(shape),
+            "the matcher must recognise this OS-home spelling: {shape}"
+        );
+    }
+
+    // And it must NOT fire on a window that reaches the resolver instead. A
+    // guard that flags everything is a guard nobody can satisfy.
+    let clean =
+        "let home = operant_core::platform::operant_home();\nlet p = home.join(\".operant\");";
+    assert!(
+        !resolves_from_os_home(clean),
+        "the one resolver must not be flagged: {clean}"
+    );
+}
+
+/// The `strip_test_items` scanner must strip an inline test module and KEEP
+/// scanning after it.
+///
+/// Both forms have to work, because a file mixes them: `gateway_runner.rs`
+/// declares `mod tests;` (out-of-line) at :8728 and four braced
+/// `#[cfg(test)] mod ...` blocks after it.
+#[test]
+fn test_items_are_stripped_without_swallowing_the_rest() {
+    let source = "\
+fn production_one() {
+    let p = std::env::var(\"HOME\").join(\".operant\");
+}
+
+#[cfg(test)]
+mod inline_tests {
+    #[test]
+    fn a_test() {}
+}
+
+#[cfg(test)]
+mod out_of_line_tests;
+
+fn production_two() {
+    let p = std::env::var(\"HOME\").join(\".operant\");
+}
+";
+    let stripped = strip_test_items(source);
+    assert!(
+        !stripped.contains("a_test"),
+        "the inline test module must be stripped, got: {stripped}"
+    );
+    assert!(
+        stripped.contains("production_one"),
+        "code before the test module must survive"
+    );
+    assert!(
+        stripped.contains("production_two"),
+        "code AFTER the test module must survive - the old parser dropped \
+         everything past an out-of-line `mod tests;`, got: {stripped}"
     );
 }
