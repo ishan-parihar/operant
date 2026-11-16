@@ -1,4 +1,5 @@
 pub mod db;
+pub mod lock;
 pub mod schedule;
 pub mod scheduler;
 pub mod suggestions;
@@ -21,6 +22,7 @@ pub fn db_path(database_path: &std::path::Path) -> std::path::PathBuf {
 pub use db::{
     CreateJobParams, CronDb, CronJob, CronRewriteDrop, CronRewriteMapping, CronRewriteReport,
 };
+pub use lock::gateway_daemon_lock_path;
 pub use schedule::normalize_schedule;
 pub use scheduler::{CronDelivery, CronScheduler};
 pub use suggestions::{CronSuggestion, SuggestionStore, curated_catalog};

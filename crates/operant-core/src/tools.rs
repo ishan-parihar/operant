@@ -823,6 +823,31 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Whether the operator's disabled sets cover a tool: its own name is in
+    /// the name set, or its toolset is in the toolset set.
+    ///
+    /// THE definition of "disabled" (audit finding Z17) — the single place
+    /// that answers it, for the schema filters AND for dispatch. It was two
+    /// implicit copies before, and they disagreed: the filters at
+    /// [`Self::get_schemas`] / [`Self::get_available_schemas_filtered`] read
+    /// both sets, `execute()` read neither, so `operant tools disable <name>`
+    /// stopped the model from SEEING a tool and did not stop the tool from
+    /// RUNNING — a cached prompt, a sub-agent, a gateway path or a direct
+    /// registry call still reached it.
+    ///
+    /// The guards are BORROWED, not taken: every caller already holds them
+    /// for the tool map, and taking each lock twice per call would double the
+    /// read traffic on the per-request schema build. No caller holds a guard
+    /// across an `.await`.
+    fn is_disabled(
+        name: &str,
+        toolset: &str,
+        disabled_names: &HashSet<String>,
+        disabled_toolsets: &HashSet<String>,
+    ) -> bool {
+        disabled_names.contains(name) || disabled_toolsets.contains(toolset)
+    }
+
     /// The model-visible tool list for a default turn: registered ∩ available ∩
     /// not-disabled. Every schema carries the shared `intent` parameter — see
     /// [`ToolRegistry::get_schemas_all`].
@@ -834,11 +859,13 @@ impl ToolRegistry {
         tools
             .values()
             .filter(|t| {
-                if t.is_available() {
-                    !disabled_names.contains(t.name()) && !disabled_toolsets.contains(t.toolset())
-                } else {
-                    false
-                }
+                t.is_available()
+                    && !Self::is_disabled(
+                        t.name(),
+                        t.toolset(),
+                        &disabled_names,
+                        &disabled_toolsets,
+                    )
             })
             .map(|t| {
                 // The operator's deferral set wins over the type's own
@@ -904,10 +931,7 @@ impl ToolRegistry {
                 if !t.is_available() {
                     return false;
                 }
-                if disabled_names.contains(t.name()) {
-                    return false;
-                }
-                if disabled_toolsets.contains(t.toolset()) {
+                if Self::is_disabled(t.name(), t.toolset(), &disabled_names, &disabled_toolsets) {
                     return false;
                 }
                 if !filter.is_empty() && !filter.contains(&t.name().to_string()) {
@@ -1100,6 +1124,66 @@ impl ToolRegistry {
             let tools = self.tools.read().await;
             tools.get(&resolved).cloned()
         };
+
+        // ── The disabled set is an ENFORCEMENT boundary, not a filter ───
+        //
+        // (audit finding Z17) Before this, the only readers of
+        // `disabled_names` / `disabled_toolsets` were the two schema paths
+        // (`get_schemas`, `get_available_schemas_filtered`), so a disabled
+        // tool was merely DE-ADVERTISED: it never entered the model-visible
+        // array, but every dispatch route still ran it — a cached prompt, a
+        // sub-agent, the kernel bridge, `operant test <tool>`, and a direct
+        // `registry.execute` call. (The `tool_call` bridge already screened
+        // with `is_available`, which is why it was the one path that did
+        // not leak.) The reachable-in-the-default case is the AFT dedup: with
+        // `aft_enabled = true` and a live bridge, `main.rs` adds
+        // `file_read`/`file_write`/`patch`/`terminal`/`file_search`/
+        // `file_list` to the disabled set to keep them from duplicating the
+        // aft_* tools — so `terminal` was hidden from the model and still
+        // executing.
+        //
+        // AGENTS.md advertises `operant tools disable` as removing a tool
+        // "from the agent's toolset", so the runtime now treats it as the
+        // ban it reads as: the model gets an error that NAMES the tool and
+        // says how to undo the disable.
+        //
+        // BOTH sets are read once here, before any `.await` below, and the
+        // guards are dropped at the end of the block: no lock is ever held
+        // across an await. A tool whose TYPE reports `is_available() == false`
+        // (missing key, missing binary) is refused here too, so the dispatch
+        // boundary answers with one rule rather than three.
+        let refusal = {
+            let disabled_names = self.disabled_names.read().await;
+            let disabled_toolsets = self.disabled_toolsets.read().await;
+            match &tool {
+                Some(t) if !t.is_available() => Some(format!(
+                    "Tool '{resolved}' is unavailable in this build and was not executed."
+                )),
+                Some(t)
+                    if Self::is_disabled(
+                        &resolved,
+                        t.toolset(),
+                        &disabled_names,
+                        &disabled_toolsets,
+                    ) =>
+                {
+                    Some(format!(
+                        "Tool '{resolved}' is disabled (by name or by its '{}' toolset) and was not \
+                     executed. Re-enable it with `operant tools enable {resolved}`, or remove it from \
+                     [tools] disabled_tools / disabled_toolsets in operant.toml.",
+                        t.toolset()
+                    ))
+                }
+                _ => None,
+            }
+        };
+        if let Some(reason) = refusal {
+            warn!(
+                tool = %resolved,
+                "Tool refused before dispatch — disabled (unavailable or in the operator's disabled set)"
+            );
+            return Ok(ToolResult::error_with_name(&resolved, tool_call_id, reason));
+        }
 
         match tool {
             Some(tool) => {
@@ -1336,6 +1420,145 @@ mod tests {
 
         assert!(result.success);
         assert!(result.content.contains("Processed:"));
+    }
+
+    // ── The disabled set is ENFORCED at dispatch (audit finding Z17) ─────
+    //
+    // `get_schemas` / `get_available_schemas_filtered` already dropped a
+    // disabled tool from the model-visible array. Nothing stopped the tool
+    // from RUNNING: `execute()` read neither set, so a cached prompt, a
+    // sub-agent, the kernel bridge, `operant test <tool>` or a direct
+    // registry call all reached it. The default config makes that live —
+    // the AFT dedup disables `terminal` and the native file tools when the
+    // bridge pings healthy (`main.rs`), which de-advertised them without
+    // banning them.
+
+    /// The args every dispatch test sends: `TestTool` answers a missing
+    /// `query` with an error, which would make a PASSING refusal look green.
+    fn test_args() -> Value {
+        serde_json::json!({ "query": "disabled probe" })
+    }
+
+    /// `operant tools disable <name>` must stop the tool RUNNING, not just
+    /// hide its schema — and the error has to name the tool, or the model
+    /// is told "a tool you called failed" with nothing to act on.
+    #[tokio::test]
+    async fn a_tool_disabled_by_name_is_refused_by_execute() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        registry.disable_tool("test_tool").await;
+
+        // The schema really is gone, so this is the enforcement case and
+        // not a test that would pass on a listing quirk.
+        assert!(
+            !registry
+                .get_schemas()
+                .await
+                .iter()
+                .any(|s| s.name == "test_tool"),
+            "the disabled tool must not be advertised"
+        );
+
+        let result = registry
+            .execute("test_tool", "call_1", test_args(), ToolContext::default())
+            .await
+            .expect("a refused tool is a ToolResult error, not a transport failure");
+
+        assert!(!result.success, "a disabled tool must not run");
+        let error = result.error.as_deref().unwrap_or("<no error text>");
+        assert!(
+            error.contains("test_tool"),
+            "the refusal must name the tool the model called: {error}"
+        );
+        assert!(
+            error.contains("disabled"),
+            "the refusal must say WHY it was refused: {error}"
+        );
+        // No payload: a refused call must not hand back content the caller
+        // could mistake for the tool's own output.
+        assert!(result.content.is_empty(), "{}", result.content);
+    }
+
+    /// The toolset half of the same rule. A tool the operator never named
+    /// is still banned when its whole toolset is — the
+    /// `[tools] disabled_toolsets` path.
+    #[tokio::test]
+    async fn a_tool_disabled_by_toolset_is_refused_by_execute() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        // `TestTool` never overrides `toolset()`, so it is "builtin".
+        assert_eq!(TestTool.toolset(), "builtin");
+        registry.disable_toolset("builtin").await;
+
+        assert!(
+            !registry
+                .get_schemas()
+                .await
+                .iter()
+                .any(|s| s.name == "test_tool"),
+            "a disabled toolset must not be advertised"
+        );
+
+        let result = registry
+            .execute("test_tool", "call_1", test_args(), ToolContext::default())
+            .await
+            .expect("a refused tool is a ToolResult error, not a transport failure");
+
+        assert!(!result.success, "a toolset-disabled tool must not run");
+        let error = result.error.as_deref().unwrap_or("<no error text>");
+        assert!(
+            error.contains("test_tool") && error.contains("disabled"),
+            "the refusal must name the tool and say it is disabled: {error}"
+        );
+    }
+
+    /// The non-regression guard in the other direction: an ENABLED tool
+    /// still runs and its own result comes back untouched. Without this,
+    /// "refuse everything" would pass the two tests above.
+    #[tokio::test]
+    async fn an_enabled_tool_still_executes_normally() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+        // A non-empty disabled set that does NOT cover this tool: the
+        // refusal must be a name/toolset match, not "a disabled set exists".
+        registry.disable_tool("some_other_tool").await;
+        registry.disable_toolset("some_other_toolset").await;
+
+        let result = registry
+            .execute("test_tool", "call_1", test_args(), ToolContext::default())
+            .await
+            .expect("the enabled tool executes");
+
+        assert!(result.success, "{}", result.error.as_deref().unwrap_or(""));
+        assert!(
+            result.content.contains("Processed: disabled probe"),
+            "the tool's own payload must reach the caller: {}",
+            result.content
+        );
+    }
+
+    /// With an EMPTY disabled set the happy path must be exactly what it was
+    /// before the check existed: same success flag, same payload, same
+    /// stamped name/id. This is the byte-identical non-regression pin.
+    #[tokio::test]
+    async fn an_empty_disabled_set_leaves_the_happy_path_unchanged() {
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry.register(TestTool).await.unwrap();
+
+        let result = registry
+            .execute("test_tool", "call_1", test_args(), ToolContext::default())
+            .await
+            .expect("execute returns Ok on the happy path");
+
+        assert!(result.success);
+        assert_eq!(result.name, "test_tool", "the executor stamps the name");
+        assert_eq!(result.tool_call_id, "call_1");
+        assert_eq!(result.error, None);
+        assert!(!result.timed_out);
+        assert_eq!(
+            result.content,
+            serde_json::json!({"result": "Processed: disabled probe"}).to_string()
+        );
     }
 
     /// RT-315: the schema advertises camelCase (rename_all on the args

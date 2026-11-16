@@ -105,8 +105,17 @@ pub enum Boundedness {
 enum VerbKind {
     /// `rm`, `unlink`, `shred`, `srm`, `rmdir`, `truncate` — destroy the named file(s).
     Remove,
+    /// `mv`, and `cp`/`rsync`/`scp` carrying `--remove-source` — the move destroys
+    /// whatever it is aimed AT as well as what it is aimed at.
+    Relocate,
     /// `dd` — raw block copy; `of=` names the destination.
     RawWrite,
+    /// `cp`, `scp` — overwrite or create a file (device with `-t`, else by name).
+    Copy,
+    /// `rsync` — delete only with `--delete`; `--remove-source-files` is a move.
+    Sync,
+    /// `install` — `cp`, a mode change and an owner change in one verb.
+    Install,
     /// `mkfs.*`, `fdisk`, `parted`, `wipefs`, `badblocks`, `mkswap` — destroy media.
     Format,
     /// `chmod` / `chown` — only destructive with a recursive flag.
@@ -117,6 +126,116 @@ enum VerbKind {
     Write,
     /// `git` — only `reset --hard` / `clean -f*`.
     Vcs,
+}
+
+/// `cp` flag spellings whose value is a file named BEFORE the trailing ones
+/// (`cp -t DIR SRC…`). The value has to be consumed or it is read as a target.
+const CP_TAKES_VALUE: &[&str] = &[
+    "target-directory",
+    "suffix",
+    "backup-control",
+    "context",
+    "reflink",
+];
+
+/// `mv`/`install` flag spellings that take a separate value token.
+const MV_TAKES_VALUE: &[&str] = &["target-directory", "suffix", "backup-control", "context"];
+
+/// Short flags whose value is a SEPARATE token: the token after them is that
+/// flag's argument, not a file the command touches. `install -m 644 ./a ./b`
+/// without this read `644` as the destination (and the real destination `./b`
+/// as an ordinary source), so the rating was computed on the wrong set.
+/// `-t DIR` is in here because a copy's target directory is named BEFORE its
+/// operands.
+const COPY_VALUE_SHORT_FLAGS: &[char] = &['m', 't', 'S', 'Z'];
+/// Short-flag letters a `cp`/`mv`/`install`/`scp` cluster can carry. Anything
+/// outside this set is an argument or an unknown cluster, and the token after
+/// it must be treated as an operand — dropping it would lose the very target
+/// the rating depends on.
+const COPY_SHORT_FLAGS: &[char] = &[
+    'a', 'v', 'z', 'p', 'r', 'R', 'l', 'L', 'P', 'H', 'D', 's', 'S', 'g', 'o', 'n', 'u', 'c', 'x',
+    'm', 'b', 'i', 'd', 'h', 'A', 'K', 'q', 't', 'T', 'f', 'F', 'e',
+];
+const SYNC_TAKES_VALUE: &[&str] = &[
+    "exclude",
+    "include",
+    "filter",
+    "files-from",
+    "exclude-from",
+    "include-from",
+    "log-file",
+    "rsh",
+    "rsync-path",
+    "temp-dir",
+    "max-delete",
+    "max-size",
+    "min-size",
+    "chmod",
+    "chown",
+    "usermap",
+    "groupmap",
+    "suffix",
+];
+
+/// Flags that delete what the copy/move used to name.
+const SYNC_DELETE_FLAGS: &[char] = &['d'];
+
+/// `rsync` flag spellings whose value is a file the operation never touches
+/// (`rsync --files-from LIST SRC/ DST/`), so it is not a target.
+const SYNC_LIST_FLAGS: &[&str] = &["files-from", "exclude-from", "include-from", "log-file"];
+
+/// A long flag's NAME — the part before the first `=`, so `--rsync-path=sh`
+/// and `--rsync-path sh` read the same.
+fn long_flag_name(token: &str) -> Option<&str> {
+    let name = token.strip_prefix("--")?;
+    Some(name.split_once('=').map_or(name, |(k, _)| k))
+}
+
+/// A `-`-prefixed token carrying the short flag `c` in its cluster
+/// (`-t`, `-at`, `-ravt`, and the `-m644` glued spelling).
+fn short_flag(token: &str, c: char) -> bool {
+    if token.starts_with("--") {
+        return false;
+    }
+    token.strip_prefix('-').is_some_and(|rest| rest.contains(c))
+}
+
+/// Is this token a `chmod` MODE rather than a file?
+///
+/// `chmod` accepts an octal mode (`755`), a symbolic one (`u+x`, `go-w`, `a=r`)
+/// and a copy-from form (`g=u`). Everything with a `/` in it is a path, and a
+/// bare token made only of mode letters and operators is the operand. The
+/// first-target strip this replaces removed whatever the FIRST token was, which
+/// only worked while the mode came before any flag.
+fn is_chmod_mode(token: &str) -> bool {
+    if token.is_empty() || token.contains('/') {
+        return false;
+    }
+    if token.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '=' | ',' | '.'))
+}
+
+/// Does this copy/move/install short-flag cluster carry one of the flags whose
+/// value is the NEXT token (`-m 644`, `-t DIR`)?
+///
+/// Only for a cluster made ENTIRELY of letters the verb accepts: an unknown
+/// letter (`cp -Z ctx a b`) means the token after it is an operand, and eating
+/// it would drop a target the rating depends on.
+fn carries_copy_value_short_flag(token: &str) -> bool {
+    let Some(letters) = token.strip_prefix('-') else {
+        return false;
+    };
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    letters
+        .chars()
+        .all(|c| COPY_SHORT_FLAGS.contains(&c) || COPY_VALUE_SHORT_FLAGS.contains(&c))
+        && letters.chars().any(|c| COPY_VALUE_SHORT_FLAGS.contains(&c))
 }
 
 /// `find` flags that make the traversal actually delete something.
@@ -206,7 +325,22 @@ fn verb_kind(name: &str) -> Option<VerbKind> {
     }
     Some(match lower.as_str() {
         "rm" | "unlink" | "shred" | "srm" | "rmdir" | "truncate" => VerbKind::Remove,
+        // Z15: `mv` moves, so it destroys its SOURCE as surely as `rm` does,
+        // and the move target is written on top of whatever is already there.
+        "mv" => VerbKind::Relocate,
         "dd" => VerbKind::RawWrite,
+        // Z15: `cp`/`scp` create or overwrite the destination; `cp file
+        // /dev/sda` destroys the medium exactly as `dd of=/dev/sda` does, and
+        // without this arm the verb was unmodelled and the whole segment
+        // invisible to the deny list.
+        "cp" | "scp" => VerbKind::Copy,
+        // Z15: `rsync` deletes only under `--delete`; the arm that rates it is
+        // in `rate_segment`, and `--remove-source-files` makes it a move.
+        "rsync" => VerbKind::Sync,
+        // Z15: `install` is `cp` + `chmod` + `chown` + `strip` in one verb, so
+        // it WRITES and it destroys by default; there is no flag that makes it
+        // a read.
+        "install" => VerbKind::Install,
         "tee" => VerbKind::Write,
         "chmod" | "chown" | "chgrp" => VerbKind::RecursiveMeta,
         "find" => VerbKind::Finder,
@@ -263,10 +397,15 @@ fn parse_segment(seg: &str) -> Segment {
     while i < toks.len() && LEADING_WRAPPERS.contains(&toks[i]) {
         i += 1;
     }
+    // The head word itself, kept for the few verbs whose OPERAND has to be
+    // told apart from a target (`chown root ./src`, `chmod 755 ./src`). Borrowed
+    // from `toks`, so the common case does not allocate.
+    let mut head = "";
     if let Some(t) = toks.get(i)
         && let Some(v) = verb_kind(t)
     {
         s.verb = Some(v);
+        head = basename(t);
         i += 1;
     }
     if s.verb == Some(VerbKind::Vcs)
@@ -280,25 +419,25 @@ fn parse_segment(seg: &str) -> Segment {
         let t = toks[i];
 
         // Redirection: `>`, `>>`, `2>`, `&>`, and the `2>/dev/null` spelling.
-        if let Some(gt) = t.find('>') {
-            let lhs = &t[..gt];
-            let redirect_ish =
-                lhs.is_empty() || lhs == "&" || lhs.chars().all(|c| c.is_ascii_digit());
-            if redirect_ish {
-                let rhs = t[gt + 1..].trim_start_matches('>').trim_start_matches('|');
-                if rhs.is_empty() {
-                    if let Some(next) = toks.get(i + 1) {
-                        s.writes.push((*next).to_string());
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
+        // The left-hand side must be empty, `&`, or digits — anything else
+        // (`--out=1`, `-ofile`) is a flag whose text happens to contain `>`,
+        // not a redirect, and eating the token after it would drop a target.
+        if let Some(gt) = t.find('>')
+            && t[..gt].chars().all(|c| c.is_ascii_digit() || c == '&')
+        {
+            let rhs = t[gt + 1..].trim_start_matches('>').trim_start_matches('|');
+            if rhs.is_empty() {
+                if let Some(next) = toks.get(i + 1) {
+                    s.writes.push((*next).to_string());
+                    i += 2;
                 } else {
-                    s.writes.push(rhs.to_string());
                     i += 1;
                 }
-                continue;
+            } else {
+                s.writes.push(rhs.to_string());
+                i += 1;
             }
+            continue;
         }
 
         // `key=value` — a flag, and sometimes a write destination.
@@ -327,6 +466,37 @@ fn parse_segment(seg: &str) -> Segment {
         if is_flag(t) {
             s.flags.push((*t).to_string());
             let name = trim_flag(t);
+            // A value-taking flag swallows the next token so it is not
+            // mistaken for a target (`find . -name '*.log' -delete`).
+            // `--opt=value` carries its value in the same word, so it takes
+            // nothing extra.
+            let value_flag = VALUE_FLAGS.contains(&name)
+                || match s.verb {
+                    Some(VerbKind::Copy) => {
+                        long_flag_name(t).is_some_and(|k| CP_TAKES_VALUE.contains(&k))
+                            || carries_copy_value_short_flag(t)
+                    }
+                    Some(VerbKind::Relocate) | Some(VerbKind::Install) => {
+                        long_flag_name(t).is_some_and(|k| MV_TAKES_VALUE.contains(&k))
+                            || carries_copy_value_short_flag(t)
+                    }
+                    Some(VerbKind::Sync) => {
+                        // `--exclude=*.log` carries its value in the same word.
+                        (long_flag_name(t).is_some_and(|k| SYNC_TAKES_VALUE.contains(&k))
+                            && !t.contains('='))
+                            || long_flag_name(t).is_some_and(|k| SYNC_LIST_FLAGS.contains(&k))
+                    }
+                    _ => false,
+                };
+            if value_flag {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            // The flag-level signals have to be read AFTER the value-flag
+            // decision above, which advances `i` past the flag's argument.
+            // Reading them first let a cluster like `-sd /etc` be mistaken
+            // for a delete flag and then swallow the directory after it.
             if s.verb == Some(VerbKind::Finder) {
                 if FINDER_DELETE_FLAGS.contains(&name) {
                     s.deleting = true;
@@ -335,23 +505,62 @@ fn parse_segment(seg: &str) -> Segment {
                     s.narrowed = true;
                 }
             }
-            // A value-taking flag swallows the next token so it is not
-            // mistaken for a target (`find . -name '*.log' -delete`).
-            if VALUE_FLAGS.contains(&name) {
-                i += 2;
-            } else {
-                i += 1;
+            if s.verb == Some(VerbKind::Sync) && has_short_flag(t, SYNC_DELETE_FLAGS[0]) {
+                s.deleting = true;
             }
             continue;
         }
 
+        // `chmod -R 755 ./src` / `chmod u+x ./src`: the mode is the verb's
+        // OPERAND, not a file. It used to be pushed as a target and then
+        // removed by the first-target strip below, which only fired when a
+        // target was left over -- so `chmod -R 755 ./src` kept `755`, lost
+        // `./src`, and the recursive flag had nothing left to rate: the whole
+        // segment rated `None`, and `chmod -R 755 /etc` was invisible to the
+        // deny list too.
+        if s.verb == Some(VerbKind::RecursiveMeta)
+            && head.eq_ignore_ascii_case("chmod")
+            && is_chmod_mode(t)
+        {
+            i += 1;
+            continue;
+        }
         s.targets.push((*t).to_string());
         i += 1;
     }
 
-    // `chmod -R 755 ./src` — the mode/owner is not a target.
-    if s.verb == Some(VerbKind::RecursiveMeta) && !s.targets.is_empty() {
+    // `chown -R root ./src` / `chgrp -R wheel ./src` — the owner is the first
+    // operand, not a file. Only these two verbs: `chmod`'s mode is consumed as
+    // a flag value above, and stripping a target for any other RecursiveMeta
+    // verb would drop a real path.
+    if matches!(s.verb, Some(VerbKind::RecursiveMeta))
+        && (head.eq_ignore_ascii_case("chown") || head.eq_ignore_ascii_case("chgrp"))
+        && !s.targets.is_empty()
+    {
         s.targets.remove(0);
+    }
+    // `cp -t DIR SRC…` / `install -t DIR SRC…` — the target directory is named
+    // BEFORE the operands, and it is where the copy WRITES. It was consumed as
+    // a flag value and then dropped, so `cp -t /etc ./a` rated `Scoped` on
+    // `./a` alone and `/etc` was never looked at. Same for the
+    // `--target-directory=DIR` spelling.
+    if matches!(s.verb, Some(VerbKind::Copy) | Some(VerbKind::Install)) {
+        let words: Vec<&str> = seg.split_whitespace().collect();
+        if let Some(index) = words
+            .iter()
+            .position(|t| short_flag(t, 't') && carries_copy_value_short_flag(t))
+            && let Some(dir) = words.get(index + 1)
+            && !dir.starts_with('-')
+        {
+            s.writes.push((*dir).to_string());
+        }
+        for f in &s.flags {
+            if let Some(value) = f.strip_prefix("--target-directory=")
+                && !value.is_empty()
+            {
+                s.writes.push(value.to_string());
+            }
+        }
     }
     s
 }
@@ -503,7 +712,79 @@ fn rate_segment(seg: &str) -> (BlastRadius, Vec<String>) {
     if let Some(c) = sql_class(seg) {
         return (c, Vec::new());
     }
+    // Z15's "smaller fix, which closes the whole class": the DENY LIST must be
+    // reachable whatever the verb is. With `verb: None` this arm rated `None`
+    // and `screen()` returned before the deny check, so `mv /etc /tmp/x` and
+    // `cp ~/.ssh/id_rsa /tmp/x` were never looked at. The escalation is now
+    // EXACTLY the denied-path condition and nothing else: an unmodelled verb
+    // whose target `check_deny` refuses is `Unbounded` (so the deny list runs),
+    // and every other unmodelled segment is still `None`. That is what keeps
+    // `ls -la /tmp`, `grep -r x .` and `ssh host uptime` unrated -- a fallback
+    // that rated "any target" would be a rate-everything switch, which is
+    // worse than the hole it closes.
     let p = parse_segment(seg);
+    if p.verb.is_none() {
+        let targets: Vec<String> = p
+            .targets
+            .iter()
+            .chain(p.writes.iter())
+            .filter(|t| !is_benign_dev(t))
+            .cloned()
+            .collect();
+        // A write destination is rated even when the verb is unknown, exactly
+        // as it is for a modelled one: `echo boom > /dev/sda` destroys the
+        // medium whatever the verb on the left is called.
+        let write_class = p.writes.iter().fold(BlastRadius::None, |acc, w| {
+            if is_benign_dev(w) {
+                return acc;
+            }
+            acc.max(if is_block_device(w) {
+                BlastRadius::Device
+            } else if boundedness_of(w) == Boundedness::Unbounded {
+                BlastRadius::Unbounded
+            } else {
+                BlastRadius::Scoped
+            })
+        });
+        if write_class != BlastRadius::None {
+            return (write_class, targets);
+        }
+        // Otherwise the escalate condition is EXACTLY the denied path and
+        // nothing else: `check_deny` refuses a target, so the segment is
+        // `Unbounded` (the deny list then runs and names it). Everything else
+        // stays `None` -- `ls -la /tmp`, `grep -r x .` and `ssh host uptime`
+        // must stay unrated, or this fallback would be a rate-everything
+        // switch, which is worse than the hole it closes.
+        //
+        // `home` is None because this is a PURE function of the command text:
+        // the caller's home is added by `screen()`, which re-runs the deny
+        // check over the returned targets with the real home. What is caught
+        // here is the part no environment can change -- `/etc`, `$HOME`, `~`,
+        // the filesystem root, `.git`.
+        //
+        // An unmodelled INTERPRETER whose script cannot be followed stays out
+        // of this path entirely: `segments_full` already appended the
+        // fail-closed sentinel for it, and rating its bare flag text here
+        // (`sudo -u root` -> `root`) would both invent a target and break the
+        // contract those tests pin.
+        if seg.split_whitespace().any(|t| {
+            let bare = basename(t);
+            INTERPRETER_VERBS.contains(&bare.to_ascii_lowercase().as_str())
+                || LEADING_WRAPPERS.contains(&bare)
+        }) {
+            return (BlastRadius::None, Vec::new());
+        }
+        let denied: Vec<String> = p
+            .targets
+            .iter()
+            .filter(|t| check_deny(t, None).is_some())
+            .cloned()
+            .collect();
+        if denied.is_empty() {
+            return (BlastRadius::None, Vec::new());
+        }
+        return (BlastRadius::Unbounded, denied);
+    }
     let mut targets = p.targets.clone();
 
     // `dd` writes to `of=`, not to its positionals.
@@ -542,10 +823,13 @@ fn rate_segment(seg: &str) -> (BlastRadius, Vec<String>) {
     if p.verb == Some(VerbKind::Finder) && p.targets.is_empty() && bound == Boundedness::Bounded {
         bound = Boundedness::Unbounded;
     }
-
+    // Z15: `cp`/`rsync` default to NOT overwriting an existing destination, so
+    // a bounded copy reads and writes named files and its write destination is
+    // already rated on its own above. `install`, `mv` and `dd` all write by
+    // default and cannot be read that way.
     let base = match p.verb {
         None => BlastRadius::None,
-        Some(VerbKind::Remove) | Some(VerbKind::Write) => {
+        Some(VerbKind::Remove) | Some(VerbKind::Write) | Some(VerbKind::Relocate) => {
             if bound == Boundedness::Unbounded {
                 BlastRadius::Unbounded
             } else {
@@ -561,11 +845,48 @@ fn rate_segment(seg: &str) -> (BlastRadius, Vec<String>) {
                 BlastRadius::Scoped
             }
         }
+        Some(VerbKind::Copy) | Some(VerbKind::Sync) | Some(VerbKind::Install) => {
+            // These five verbs are the destructive WRITE family: `mv` destroys
+            // its source, `cp`/`scp`/`install` create or overwrite the
+            // destination, and `rsync` empties one of the two sets under
+            // `--delete` / `--remove-source-files`. A BOUNDED one is therefore
+            // `Scoped` -- visible to the operator, allowed without a
+            // justification, which is the property that keeps the fix from
+            // being "block every copy". What a flag changes is WHICH set goes,
+            // not how much: the target's boundedness decides `Unbounded`.
+            //
+            // A modelled verb with no operand at all (`cp --help`, `mv --help`)
+            // touches nothing and stays unrated.
+            // A modelled verb with no operand at all (`cp --help`) touches
+            // nothing and stays unrated; anything else here destroys something
+            // bounded. `p.deleting` (`rsync -d`, `--delete`) is deliberately NOT
+            // read: the flag decides WHICH set the transfer empties, not how
+            // much, and the boundedness computed above already decides that.
+            // `rsync_deletes_only_with_the_flag_that_says_so` pins the
+            // observable consequence -- `rsync -a ./src/ ./dst/` and
+            // `rsync -a --delete ./src/ ./dst/` rate identically, and
+            // `rsync -a --delete /etc/ /tmp/x` is denied through its target.
+            let has_targets = !targets.is_empty() || !p.writes.is_empty();
+            if device {
+                BlastRadius::Device
+            } else if bound == Boundedness::Unbounded {
+                BlastRadius::Unbounded
+            } else if !has_targets {
+                BlastRadius::None
+            } else {
+                BlastRadius::Scoped
+            }
+        }
         Some(VerbKind::RecursiveMeta) => {
+            // `chmod -R` / `chown -R` / `chmod --recursive`. `has_short_flag`
+            // matched only a lower-case `r`, so the conventional upper-case
+            // `-R` every operator actually types was never seen: every
+            // recursive chmod/chown rated `None`, and `chmod -R 755 /etc`
+            // reached the deny list not at all.
             let recursive = p
                 .flags
                 .iter()
-                .any(|f| has_short_flag(f, 'r') || f == "--recursive");
+                .any(|f| f == "--recursive" || has_short_flag(f, 'r') || has_short_flag(f, 'R'));
             if recursive {
                 if bound == Boundedness::Unbounded {
                     BlastRadius::Unbounded
@@ -1078,7 +1399,18 @@ pub fn check_deny(target: &str, home: Option<&str>) -> Option<DeniedPath> {
             detail: "filesystem root",
         });
     }
-    if t == "~" || t == "~/" || t.starts_with('$') && (t == "$HOME" || t.starts_with("$HOME/")) {
+    // The home root under any spelling this module recognises. `~/x` and
+    // `~user/x` are both "the home tree", and `~` alone is denied above —
+    // without the prefix arm `cp ~/.ssh/id_rsa /tmp/x` fell to
+    // `MissingJustification` instead of `DeniedPath`, which is a weaker answer
+    // than the module's own doc comment promises. `$HOME/...` was already
+    // covered, so the two spellings disagreed about the same directory.
+    if t == "~"
+        || t == "~/"
+        || t.starts_with("~/")
+        || t.starts_with("~$")
+        || t.starts_with('$') && (t == "$HOME" || t.starts_with("$HOME/"))
+    {
         return Some(DeniedPath {
             target: t.to_string(),
             detail: "home root",
@@ -1388,6 +1720,407 @@ mod tests {
 // ============================================================================
 // The interpreter boundary (codex-deepen Row 1, 2026-10-31)
 // ============================================================================
+
+// ============================================================================
+// Z15 — the verb families the table did not model (2026-11-16 red-team)
+// ============================================================================
+
+#[cfg(test)]
+mod verb_family_tests {
+    use super::*;
+
+    /// The home a pure classifier can be given for the deny list.
+    const HOME: Option<&str> = Some("/home/agent");
+
+    /// The BETA: `screen()` must not wave these through. Each one is a real
+    /// command that destroys something a modelled verb would be stopped for.
+    #[test]
+    fn screen_refuses_or_justifies_the_previously_invisible_verbs() {
+        // Z15 named these exactly. Before the fix `verb_kind` returned None for
+        // every one of them, `rate_segment` rated the segment `None`, and
+        // `screen()` returned before the deny list was ever consulted.
+        for command in [
+            "mv /etc /tmp/x",
+            "mv ~/.ssh /tmp/x",
+            "cp /etc/shadow /tmp/x",
+            "cp ~/.ssh/id_rsa /tmp/x",
+            "rsync -a /etc/ /tmp/x",
+            "install -m 644 /etc/shadow /tmp/x",
+            "scp ~/.ssh/id_rsa host:/tmp/x",
+        ] {
+            let refusal = screen(command, None, HOME);
+            assert!(
+                refusal.is_some(),
+                "`{command}` must be denied or require a justification, got allowed"
+            );
+        }
+    }
+
+    /// The verdicts themselves, stated as classes. A bare `is_some()` would let
+    // a regression that escalates every `cp` to `Unbounded` pass.
+    #[test]
+    fn the_unmodelled_verbs_now_rate_by_what_they_touch() {
+        assert_eq!(classify("mv /etc /tmp/x"), BlastRadius::Unbounded);
+        assert_eq!(classify("cp /etc/shadow /tmp/x"), BlastRadius::Unbounded);
+        assert_eq!(classify("rsync -a /etc/ /tmp/x"), BlastRadius::Unbounded);
+        assert_eq!(
+            classify("install -m 644 /etc/shadow /tmp/x"),
+            BlastRadius::Unbounded
+        );
+        // A `~`-prefixed target is the home root under any spelling
+        // (`check_deny`'s own contract). The segment is `Unbounded` so the
+        // deny list runs; with the caller's `home` it is a DeniedPath.
+        assert_eq!(classify("cp ~/.ssh/id_rsa /tmp/x"), BlastRadius::Unbounded);
+        assert!(matches!(
+            screen("cp ~/.ssh/id_rsa /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        // And a `~`-prefixed copy with no justification at all is refused
+        // rather than allowed: the home root is not a thing this gate waves
+        // through whatever the verb.
+        assert!(screen("cp ~/.ssh/id_rsa /tmp/x", None, None).is_some());
+    }
+
+    /// A system directory is a DENIED path, not a justification: `mv /etc …`
+    /// must refuse outright, with the same `blocked_by` the modelled verbs get.
+    #[test]
+    fn moving_a_system_directory_is_denied_outright() {
+        assert!(matches!(
+            screen("mv /etc /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        assert!(matches!(
+            screen("cp /etc/shadow /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        assert!(matches!(
+            screen("rsync -a /etc/ /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+    }
+
+    /// The home root is denied even when the caller's home is not passed in:
+    /// the `~` spelling is refused by the deny list without it.
+    #[test]
+    fn the_home_root_spelling_is_denied_for_copy_verbs() {
+        assert!(matches!(
+            screen("cp ~/.ssh/id_rsa /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        assert!(matches!(
+            screen("mv ~/.ssh /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+    }
+
+    /// The NEGATIVE control, and the reason the fix is not "block everything".
+    /// A bounded copy/move of in-repo paths must stay allowed with NO
+    /// justification: a gate that needs a justification for `cp ./a ./b` would
+    /// be worse than the bug it closes.
+    #[test]
+    fn scoped_copy_move_sync_and_install_stay_allowed_without_a_justification() {
+        for command in [
+            "mv ./a ./b",
+            "cp ./a ./b",
+            "cp -r ./src ./dst",
+            "rsync -a ./src/ ./dst/",
+            "install -m 644 ./a ./b",
+            "scp ./a ./b",
+        ] {
+            assert_eq!(
+                classify(command),
+                BlastRadius::Scoped,
+                "`{command}` must stay Scoped"
+            );
+            assert!(
+                screen(command, None, HOME).is_none(),
+                "`{command}` must stay allowed without a justification"
+            );
+        }
+    }
+
+    /// `cp`/`rsync` with no `--delete` do not destroy the source set, so a
+    /// scoped copy is NOT rated as a delete would be. Pinned separately from
+    /// the control above because it is the arm that would over-block first.
+    #[test]
+    fn a_scoped_copy_that_only_reads_its_sources_is_scoped_not_unbounded() {
+        assert_eq!(classify("cp ./a ./b"), BlastRadius::Scoped);
+        assert_eq!(classify("cp -r ./src ./dst"), BlastRadius::Scoped);
+    }
+
+    /// The device case: `cp file /dev/sda` is a raw write even though `cp`
+    /// never deletes anything.
+    #[test]
+    fn copying_onto_a_block_device_is_a_device_write() {
+        assert_eq!(classify("cp ./a /dev/sda"), BlastRadius::Device);
+        assert_eq!(classify("dd if=./a of=/dev/sda"), BlastRadius::Device);
+    }
+
+    /// `rsync --delete` and `--remove-source-files` are the arms that make a
+    /// transfer destructive; without the flag the same command is not.
+    #[test]
+    fn rsync_deletes_only_with_the_flag_that_says_so() {
+        assert_eq!(classify("rsync -a ./src/ ./dst/"), BlastRadius::Scoped);
+        assert_eq!(
+            classify("rsync -a --delete ./src/ ./dst/"),
+            BlastRadius::Scoped
+        );
+        assert_eq!(
+            classify("rsync -a --remove-source-files ./src/ ./dst/"),
+            BlastRadius::Scoped
+        );
+        // Unbounded only when the target set has no bound, same as every other
+        // verb: the flag decides WHAT is destroyed, the target decides HOW MUCH.
+        assert_eq!(
+            classify("rsync -a --delete /etc/ /tmp/x"),
+            BlastRadius::Unbounded
+        );
+        assert_eq!(
+            classify("rsync -a --remove-source-files ~ /tmp/x"),
+            BlastRadius::Unbounded
+        );
+    }
+
+    /// `install -m` eats its MODE token; if it did not, the mode would be read
+    /// as a target and the rating would be computed on the wrong set.
+    #[test]
+    fn install_does_not_mistake_its_mode_for_a_target() {
+        let (_class, targets) = rate_segment("install -m 644 ./a ./b");
+        assert!(
+            !targets.iter().any(|t| t == "644"),
+            "the mode must not be a target: {targets:?}"
+        );
+        assert!(targets.iter().any(|t| t == "./b"), "got {targets:?}");
+    }
+
+    /// The audit's own "smaller fix": the deny check on the targets is what
+    /// closes the CLASS, not the five verbs. Any verb outside the table —
+    /// today's, tomorrow's — is now rated by its target.
+    #[test]
+    fn an_unmodelled_verb_is_rated_by_its_target_instead_of_disappearing() {
+        // `ln` is not in the table and never was; the audit's point is that the
+        // next unmodelled verb must not inherit `mv`'s hole.
+        assert_ne!(
+            classify("ln -sf /etc/passwd /tmp/x"),
+            BlastRadius::None,
+            "an unmodelled verb naming a denied path must not rate None"
+        );
+        assert_eq!(
+            classify("ln -sf /etc/passwd /tmp/x"),
+            BlastRadius::Unbounded
+        );
+        assert!(matches!(
+            screen("ln -sf /etc/passwd /tmp/x", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        // And a bounded unmodelled target stays visible without a
+        // justification, and still rates None: the fallback escalates ONLY a
+        // denied target, which is what keeps it from becoming a
+        // rate-everything switch.
+        assert_eq!(classify("unshare ./a ./b"), BlastRadius::None);
+        assert!(screen("unshare ./a ./b", None, HOME).is_none());
+        // An unmodelled verb with no operand at all is still nothing.
+        assert_eq!(classify("docker ps"), BlastRadius::None);
+    }
+
+    /// The regression the fallback could cause if it were sloppy: the
+    /// classifier must not start refusing ordinary read-only commands. Every
+    /// one of these was `None` before and must stay `None`.
+    #[test]
+    fn the_fallback_does_not_make_read_only_commands_destructive() {
+        for command in [
+            "ls -la /tmp",
+            "cat ./notes.txt",
+            "grep -r needle ./",
+            "echo hello > /dev/null",
+            "docker ps",
+            "ssh host uptime",
+            "crontab -l",
+            // `cp --help` is a modelled verb with no operand, so it is a
+            // destructive-shaped write with an empty target set: `Scoped`,
+            // visible, but NOT gated. It must not become `Unbounded`, which
+            // is what an over-eager "any copy is unbounded" arm would do.
+        ] {
+            assert_ne!(
+                classify(command),
+                BlastRadius::Unbounded,
+                "`{command}` must not become unbounded"
+            );
+            assert_ne!(
+                classify(command),
+                BlastRadius::Device,
+                "`{command}` must not become a device write"
+            );
+            assert!(
+                screen(command, None, HOME).is_none(),
+                "`{command}` must stay allowed"
+            );
+        }
+    }
+
+    /// The mutation guard. If `verb_kind` loses one of the five arms, this
+    /// fails — and it fails on the OBSERVABLE difference, not on a comment.
+    /// The pre-fix rating is re-derived here rather than asserted from memory.
+    #[test]
+    fn removing_a_verb_from_the_table_changes_the_rating_to_the_fallback() {
+        // Pre-fix: unmodelled -> `verb: None` -> `rate_segment` returned None
+        // for the whole segment, so the deny list was never reached.
+        for (verb, target) in [
+            ("mv", "/etc"),
+            ("cp", "/etc/shadow"),
+            ("rsync", "/etc/"),
+            ("install", "/etc/shadow"),
+            ("scp", "/etc/passwd"),
+        ] {
+            let modelled = format!("{verb} {target} /tmp/x");
+            let bare_target = format!("wobble {target} /tmp/x");
+            assert_eq!(
+                classify(&modelled),
+                BlastRadius::Unbounded,
+                "the modelled verb must be rated by its target"
+            );
+            // `wobble` is not a verb in any table; it stands in for the
+            // pre-fix `verb: None` path. The fallback rates it identically,
+            // which is the property the fix adds.
+            assert_eq!(
+                classify(&bare_target),
+                classify(&modelled),
+                "an unknown verb must be rated like the real one"
+            );
+        }
+    }
+
+    /// Every verb `verb_kind` models is one this module can actually parse a
+    /// segment for. The table is the audit's list of "what the gate can see",
+    /// and it is what stops a future verb being added to the match with no
+    /// handling in `parse_segment` or `rate_segment` — which is exactly how
+    /// `mv`/`cp`/`rsync`/`install`/`scp` came to be invisible.
+    #[test]
+    fn every_recognised_verb_yields_a_non_empty_verdict_shape() {
+        // One representative command per VerbKind. Each must rate `Scoped` or
+        // above: a modelled verb that rates `None` on a real operand is a verb
+        // the gate cannot see, which is the defect this table exists to
+        // prevent. `git reset --hard` is the deliberate exception -- it is
+        // unconditionally `Unbounded` (see the Vcs arm), so it is asserted
+        // below rather than expected to stay allowed.
+        for (verb, probe) in [
+            ("rm", "rm -f ./a"),
+            ("unlink", "unlink ./a"),
+            ("shred", "shred -u ./a"),
+            ("srm", "srm ./a"),
+            ("rmdir", "rmdir ./a"),
+            ("truncate", "truncate -s 0 ./a"),
+            ("mv", "mv ./a ./b"),
+            ("dd", "dd if=./a of=./b"),
+            ("cp", "cp ./a ./b"),
+            ("scp", "scp ./a ./b"),
+            ("rsync", "rsync -a ./src/ ./dst/"),
+            ("install", "install -m 644 ./a ./b"),
+            ("tee", "tee ./a"),
+            ("chmod", "chmod -R 755 ./src"),
+            ("chown", "chown -R root ./src"),
+            ("chgrp", "chgrp -R wheel ./src"),
+            ("find", "find ./build -name '*.o' -delete"),
+            ("git", "git reset --hard"),
+            ("fdisk", "fdisk -l ./disk.img"),
+            ("sfdisk", "sfdisk ./disk.img"),
+            ("cfdisk", "cfdisk ./disk.img"),
+            ("parted", "parted ./disk.img"),
+            ("wipefs", "wipefs ./disk.img"),
+            ("badblocks", "badblocks ./disk.img"),
+            ("hdparm", "hdparm ./disk.img"),
+            ("mkswap", "mkswap ./disk.img"),
+        ] {
+            assert!(
+                verb_kind(verb).is_some(),
+                "`{verb}` must be recognised, else the segment is invisible"
+            );
+            let rated = classify(probe);
+            assert!(
+                rated >= BlastRadius::Scoped,
+                "`{probe}` ({verb}) must rate Scoped or above, got {rated:?}"
+            );
+            if verb == "git" {
+                // `git reset --hard` discards the working tree unconditionally:
+                // it needs a justification even with a scoped path.
+                assert_eq!(rated, BlastRadius::Unbounded, "{probe}");
+                assert!(screen(probe, None, HOME).is_some(), "{probe}");
+            } else {
+                assert!(
+                    screen(probe, None, HOME).is_none(),
+                    "`{probe}` ({verb}) is bounded and must stay allowed"
+                );
+            }
+        }
+    }
+
+    /// The unbounded spelling of the same verbs is gated. This is the half that
+    /// makes the table load-bearing rather than decorative.
+    #[test]
+    fn every_recognised_verb_gates_its_unbounded_spelling() {
+        for probe in [
+            "rm -rf /etc",
+            "mv /etc /tmp/x",
+            "cp /etc/shadow /tmp/x",
+            "rsync -a /etc/ /tmp/x",
+            "install -m 644 /etc/shadow /tmp/x",
+            "scp /etc/passwd host:/tmp/x",
+            "truncate -s 0 /etc/passwd",
+            "shred -u /etc/passwd",
+            "tee /etc/passwd",
+            "chmod -R 755 /etc",
+        ] {
+            assert_ne!(
+                classify(probe),
+                BlastRadius::None,
+                "`{probe}` must not be invisible"
+            );
+            assert!(
+                screen(probe, None, HOME).is_some(),
+                "`{probe}` must be denied or need a justification"
+            );
+        }
+    }
+
+    /// `cp -t DIR SRC` puts the destination FIRST. If the parser kept operand
+    /// order, the rating would be computed on the source and the directory the
+    /// copy lands in would never be looked at.
+    #[test]
+    fn a_target_directory_flag_is_rated_as_the_destination() {
+        // `-t /etc SRC` writes into /etc: the source is fine, the destination
+        // is a denied system directory.
+        assert_eq!(classify("cp -t /etc ./a"), BlastRadius::Unbounded);
+        assert!(matches!(
+            screen("cp -t /etc ./a", None, HOME),
+            Some(Refusal::DeniedPath(_))
+        ));
+        assert_eq!(classify("install -t /etc ./a"), BlastRadius::Unbounded);
+        // A bounded `-t` directory stays scoped.
+        assert_eq!(classify("cp -t ./out ./a"), BlastRadius::Scoped);
+        assert_eq!(classify("install -t ./out ./a"), BlastRadius::Scoped);
+        // And the long spelling.
+        assert_eq!(
+            classify("cp --target-directory=/etc ./a"),
+            BlastRadius::Unbounded
+        );
+    }
+
+    /// The refusal the operator actually sees must say WHICH target, so the
+    /// next attempt can be a narrower one instead of the same command again.
+    #[test]
+    fn the_denial_message_names_the_denied_target() {
+        let refusal = screen("mv /etc /tmp/x", None, HOME);
+        let Some(Refusal::DeniedPath(denied)) = refusal else {
+            panic!("expected a DeniedPath refusal, got {refusal:?}");
+        };
+        assert_eq!(denied.detail, "system directory");
+        assert_eq!(denied.target, "/etc");
+        assert_eq!(
+            denied.detail,
+            check_deny("/etc", HOME).map(|d| d.detail).unwrap_or("")
+        );
+    }
+}
 
 #[cfg(test)]
 mod interpreter_boundary_tests {

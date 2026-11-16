@@ -4638,31 +4638,271 @@ fn the_message_context_menu_offers_only_the_actions_that_exist() {
     );
 }
 
+/// Z22 (2026-11-16 W3): `/model roles` opens the RENDERED unified picker on
+/// its Roles scope, not a panel that paints nothing.
+///
+/// The defect: the command used to set `models_panel.visible`, a surface with
+/// state, a key handler and an opener but NO renderer. The frame painted the
+/// unchanged chat while `key_handling` routed every key into the invisible
+/// panel, so arrow keys moved an invisible cursor and `x` could write the
+/// config from a panel the operator could not see.
+///
+/// Mutation-proof: repointing the arm back at `models_panel` fails the first
+/// assertion (no picker is open and the frame shows no role rows).
 #[test]
-fn test_right_click_targets_row_message_instead_of_last_message() {
-    let mut app = make_app();
-    app.last_msg_area.set(ratatui::layout::Rect {
-        x: 0,
-        y: 0,
-        width: 80,
-        height: 10,
+fn model_roles_opens_the_rendered_picker_on_its_roles_scope() {
+    // `/model` needs credentials before it reaches the picker at all.
+    let mut app = with_cleared_auth_env(|| {
+        let mut app = make_app();
+        app.has_credentials = true;
+        // The Roles scope lists the slots that HOLD a model (an unassigned row
+        // is not offered — `slot_role_rows`), so the fixture must assign a
+        // non-conversation slot for the scope to have a row at all.
+        app.config.agent.fallback_models = vec!["fallback-model-x".to_string()];
+        app
     });
-    app.message_row_map.borrow_mut().insert(3, 1);
 
+    assert!(
+        app.handle_tui_command("model", "roles"),
+        "/model roles must be consumed by the TUI, never fall through to the model"
+    );
+
+    let picker = app
+        .inline_interactive
+        .as_ref()
+        .expect("/model roles must open the unified inline picker");
+    assert_eq!(
+        picker.kind,
+        crate::tui::operant_app::tui_fns::PickerKind::Model,
+        "the MODELS picker, so its own keys apply"
+    );
+    assert_eq!(
+        app.model_scope,
+        crate::tui::model_scope::ModelScope::Roles,
+        "and on its Roles scope: the one surface that lists the model SLOTS"
+    );
+    assert!(
+        !picker.filtered.is_empty(),
+        "the Roles scope must select rows — an empty body is the phantom surface this fixes"
+    );
+    // At least one row must be a model SLOT, not a bare model: the scope is
+    // the whole point of the arm.
+    let role_slots = picker
+        .filtered
+        .iter()
+        .filter(|&&index| {
+            matches!(
+                picker.entries[index].action,
+                crate::tui::operant_app::tui_fns::PickerAction::ModelSlot(_)
+            )
+        })
+        .count();
+    assert!(
+        role_slots > 0,
+        "the Roles scope must select at least one model SLOT row; selected rows: {:?}",
+        picker
+            .filtered
+            .iter()
+            .map(|&index| picker.entries[index].name.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // The PAINTED half: the frame must actually show the role rows. A command
+    // that opens state nobody renders is the defect, so assert on the screen.
+    let rows = screen_rows(&app);
+    let flat = rows.join("\n");
+    let slot_names = picker
+        .filtered
+        .iter()
+        .map(|&index| picker.entries[index].name.clone())
+        .collect::<Vec<_>>();
+    for name in &slot_names {
+        assert!(
+            flat.contains(name.as_str()),
+            "the painted frame must show the role row {name:?}: {flat}"
+        );
+    }
+}
+
+/// Z23 (2026-11-16 W3): a right-click over a TRANSCRIPT row opens a MESSAGE
+/// context menu naming the message under the pointer.
+///
+/// The defect: the hit test asked `App::message_row_map`, a screen-row map
+/// nothing in production ever wrote, so the branch below it always ran —
+/// right-click over the transcript DISMISSED the menu every time.
+///
+/// The transcript is drawn once so the frame's own message boundaries and the
+/// published content rect exist; the click then resolves through exactly the
+/// geometry the paint produced.
+#[test]
+fn right_click_over_a_transcript_row_opens_a_message_context_menu() {
+    let mut app = make_app();
+    app.add_message(Role::User, "first message alpha".to_string());
+    app.add_message(Role::Assistant, "second message beta".to_string());
+
+    // One real frame: this publishes `last_chat_frame` (the message
+    // boundaries) and the chat content rect. The SCREEN also carries a Header
+    // section above the body (the operant banner, rows 0..20 here), so the
+    // rows are resolved through the frame's own Body section rather than by
+    // searching the screen for text — the banner contains the same words and
+    // would match first.
+    let rows = screen_rows(&app);
+    let flat = rows.join("\n");
+    let frame = crate::tui::operant_ui::last_chat_frame()
+        .unwrap_or_else(|| panic!("the frame must be published: {flat}"));
+    let body = frame
+        .sections
+        .iter()
+        .find(|section| {
+            matches!(
+                section.kind,
+                crate::tui::operant_model::PreparedSectionKind::Body
+            )
+        })
+        .expect("a Body section");
+    let body_row = |needle: &str| {
+        (0..body.prepared.wrapped_lines.len())
+            .find(|&line| {
+                let raw = body
+                    .prepared
+                    .wrapped_line_map
+                    .get(line)
+                    .map(|map| map.raw_line)
+                    .unwrap_or(line);
+                body.prepared.wrapped_plain_lines[raw].contains(needle)
+            })
+            .unwrap_or_else(|| panic!("the body must render {needle:?}: {flat}"))
+    };
+    // A Body line to a SCREEN row: the section's own offset, which is exactly
+    // what the hit test subtracts.
+    let screen_row = |line: usize| (body.line_start + line) as u16;
+    let content = crate::tui::operant_ui::chat_content_area();
+    assert!(
+        content.width > 0 && content.height > 0,
+        "the frame must publish the transcript rect the hit test resolves against"
+    );
+
+    // Right-click the FIRST message's row.
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Right),
-        column: 12,
-        row: 3,
+        column: content.x,
+        row: screen_row(body_row("first message alpha")),
         modifiers: KeyModifiers::empty(),
     });
+    assert!(
+        matches!(
+            app.context_menu_state,
+            Some(ContextMenuState {
+                kind: ContextMenuKind::Message { message_index: 0 },
+                ..
+            })
+        ),
+        "a right-click on the first message's row must open the MESSAGE menu for index 0, got {:?}",
+        app.context_menu_state
+    );
 
-    assert!(matches!(
-        app.context_menu_state,
-        Some(ContextMenuState {
-            kind: ContextMenuKind::Message { message_index: 1 },
-            ..
-        })
-    ));
+    // And a right-click on the SECOND message's row must name index 1 — not
+    // the same message twice, which is what a stale row map would do.
+    app.context_menu_state = None;
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: content.x,
+        row: screen_row(body_row("second message beta")),
+        modifiers: KeyModifiers::empty(),
+    });
+    assert!(
+        matches!(
+            app.context_menu_state,
+            Some(ContextMenuState {
+                kind: ContextMenuKind::Message { message_index: 1 },
+                ..
+            })
+        ),
+        "a right-click on the second message's row must open the MESSAGE menu for index 1, got {:?}",
+        app.context_menu_state
+    );
+}
+
+/// Z23: the keyboard path (Ctrl+Shift+M) resolves the SAME way the pointer
+/// does, so it can open a MESSAGE menu too.
+///
+/// This is the other half of the defect: with the map never written, this
+/// chord could only ever produce a selection-only menu, even with the
+/// transcript under the reader.
+#[test]
+fn ctrl_shift_m_over_the_transcript_opens_a_message_context_menu() {
+    let mut app = make_app();
+    app.add_message(Role::User, "only message gamma".to_string());
+
+    // One real frame, so the message boundaries and the content rect exist.
+    let rows = screen_rows(&app);
+    let flat = rows.join("\n");
+    let frame = crate::tui::operant_ui::last_chat_frame()
+        .unwrap_or_else(|| panic!("the frame must be published: {flat}"));
+    assert!(
+        frame.sections.iter().any(|section| {
+            matches!(
+                section.kind,
+                crate::tui::operant_model::PreparedSectionKind::Body
+            )
+        }),
+        "the frame must carry a Body section: {flat}"
+    );
+
+    // The chord resolves the TOP of the visible transcript: `scroll_offset`
+    // rows below the content rect. With the reader at the top (`scroll_offset
+    // == 0`) that is the content rect's own first row, which is frame line 0 —
+    // inside the Body section, i.e. the message under the reader. The rect is
+    // the one the real frame publishes (the Header is painted INSIDE the
+    // transcript band, which is why its `line_start` is 21 while the band's
+    // own `y` is 0).
+    let content = crate::tui::operant_ui::chat_content_area();
+    assert!(
+        content.width > 0 && content.height > 0,
+        "the frame must publish the transcript rect the chord resolves against"
+    );
+    app.scroll_offset = 0;
+    app.last_msg_area.set(content);
+    crate::tui::operant_ui::set_last_resolved_chat_scroll(0);
+
+    app.open_context_menu_at_cursor();
+    assert!(
+        matches!(
+            app.context_menu_state,
+            Some(ContextMenuState {
+                kind: ContextMenuKind::Message { message_index: 0 },
+                ..
+            })
+        ),
+        "Ctrl+Shift+M over the transcript must open the MESSAGE menu, got {:?}",
+        app.context_menu_state
+    );
+}
+
+/// Z23, negative half: a row ABOVE the transcript text (the prompt-preview /
+/// pinned-todo top band) is NOT message 0.
+///
+/// A hit test that clamps instead of declining would open a context menu for
+/// the wrong message — the bug class the tool-row hit test already documents.
+#[test]
+fn a_row_above_the_transcript_is_not_a_message() {
+    let mut app = make_app();
+    app.add_message(Role::User, "body text delta".to_string());
+    let rows = screen_rows(&app);
+    let flat = rows.join("\n");
+    assert!(
+        crate::tui::operant_ui::last_chat_frame().is_some(),
+        "the frame must be published: {flat}"
+    );
+
+    // Row 0 of the SCREEN is chrome (the Header section above the body),
+    // never the first transcript row. The content rect is what separates the
+    // two, so a row above it must DECLINE rather than clamp to line 0.
+    assert_eq!(
+        crate::tui::operant_ui::message_index_at_screen_row(0, 1, 0),
+        None,
+        "a screen row above the content rect must resolve to nothing"
+    );
 }
 
 /// (iter-1798) The wheel must never scroll the transcript BEHIND an open

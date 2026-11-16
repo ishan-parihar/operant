@@ -12,9 +12,6 @@ use crate::cronjobs::db::{CronDb, CronJob};
 
 /// iter-669: total transient retries armed per job between successes.
 const MAX_TRANSIENT_RETRIES: u8 = 2;
-/// iter-669: backoff per retry attempt, seconds. The 60s tick loop bounds
-/// the effective latency — a 30s re-arm lands within the next tick.
-const TRANSIENT_RETRY_BACKOFFS_SECS: [u64; 2] = [30, 120];
 use crate::error::Error;
 use crate::org::worklog::UsageAccumulator;
 
@@ -329,6 +326,17 @@ impl CronScheduler {
         self.replay_stale_deliveries(DELIVERY_RECLAIM_AFTER_SECS)
             .await;
 
+        // W2 (Z29): settle the claims whose dispatch never settled — a
+        // process that died between the claim and the outcome write. The
+        // occurrence is ABANDONED (skipped, never re-dispatched); see
+        // `claim_stale_claims` for why the safe direction is skip.
+        //
+        // It runs BEFORE the due scan on purpose: the scan's anti-join
+        // already hides claimed rows, so this only clears the ledger of the
+        // ones nobody will ever settle. Doing it first also means a wedged
+        // job's claim cannot accumulate across ticks.
+        self.claim_stale_claims();
+
         let due_jobs = self.db.get_due_jobs()?;
         if due_jobs.is_empty() {
             // No coordinator check happens here, and none is claimed: the
@@ -356,9 +364,95 @@ impl CronScheduler {
         Ok(())
     }
 
+    /// W2 (Z29): the occurrence key this dispatch is claimed under — the
+    /// job's OWN `next_run_at` string, the same value `tick()`'s
+    /// `WHERE next_run_at <= now` selected the row on.
+    ///
+    /// Keying by the row's scheduled moment is what makes the guard tight:
+    /// an attempt that crashed mid-occurrence and a restart that re-selects
+    /// that row both present the SAME key, so the second one collides with
+    /// the first one's open claim. An attempt that ran long and outlived its
+    /// own cadence keeps the same key for its whole run, so it is still the
+    /// same occurrence even after the next boundary has passed. Only when
+    /// the attempt settles does `mark_job_run` advance `next_run_at`, which
+    /// mints a fresh key for the next occurrence — and that one is free to
+    /// fire.
+    ///
+    /// `None` (a row with no `next_run_at` — an operator-inserted or
+    /// legacy row) falls back to the run's own start instant, so such a row
+    /// is still claimed rather than running unguarded.
+    pub(crate) fn claim_occurrence_key(&self, job: &CronJob, run_started_at: &str) -> String {
+        job.next_run_at
+            .clone()
+            .unwrap_or_else(|| run_started_at.to_string())
+    }
+
+    /// W2 (Z29): the horizon past which an unsettled claim is ABANDONED —
+    /// the job's own cadence, or this floor when the cadence is shorter
+    /// than the floor (or cannot be parsed at all: a legacy 5-field
+    /// expression stored raw, a malformed phrase).
+    ///
+    /// The floor matters as much as the cadence: a one-second job would
+    /// otherwise abandon its own live claim between two ticks. The floor is
+    /// 2.5× the tick period (`start()` sleeps 60 s), so the ordinary "the
+    /// dispatch is still running across a tick boundary" case is never
+    /// mistaken for abandonment — the claim must be open for a cadence AND
+    /// a half before anyone calls it dead.
+    pub(crate) fn claim_horizon_secs(job: &CronJob) -> i64 {
+        let cadence = crate::cronjobs::schedule::interval_seconds(&job.schedule);
+        cadence
+            .unwrap_or(Self::CLAIM_HORIZON_FLOOR_SECS)
+            .max(Self::CLAIM_HORIZON_FLOOR_SECS)
+    }
+
+    /// The floor of [`Self::claim_horizon_secs`] — also the horizon the
+    /// conservative per-tick scan uses (see [`Self::claim_stale_claims`]).
+    const CLAIM_HORIZON_FLOOR_SECS: i64 = 150;
+
+    /// W2 (Z29): abandon claims whose dispatch never settled before its
+    /// cadence expired. One bounded scan per tick.
+    ///
+    /// THE SCAN IS DELIBERATELY CONSERVATIVE. It settles at the FLOOR
+    /// horizon, never at the abandoned job's own (longer) horizon: settling
+    /// early only ever costs one skipped occurrence, which is the safe
+    /// direction this whole mechanism is built around, whereas waiting for
+    /// every job's own horizon would need a per-job scan on every tick and
+    /// could leave a crashed job's claim open for a week. The occurrence
+    /// that was abandoned is never re-dispatched either way — the row is
+    /// settled, so the claim is closed for good.
+    fn claim_stale_claims(&self) {
+        let horizon = chrono::Duration::seconds(Self::CLAIM_HORIZON_FLOOR_SECS);
+        match self.db.claim_stale_claims(horizon) {
+            Ok(0) => {}
+            Ok(n) => warn!(
+                "abandoned {n} cron claim(s) older than {}s — the occurrence is skipped, not re-dispatched",
+                horizon.num_seconds()
+            ),
+            Err(e) => warn!("cron claim reclaim scan failed: {e}"),
+        }
+    }
+
+    /// W2 (Z29): settle this dispatch's claim after the attempt.
+    ///
+    /// Audit-layer discipline: the run's outcome is already recorded by
+    /// `mark_job_run`, so a claim write that fails warns and never fails a
+    /// run whose side effects have already happened. The failure mode it
+    /// leaves is a claim that stays open until the reclaim abandons it,
+    /// which costs one skipped occurrence — never a double fire.
+    fn settle_run_claim(&self, job: &CronJob, key: &str, success: bool, error: Option<&str>) {
+        let outcome = if success { "ok" } else { "error" };
+        if let Err(e) = self.db.settle_claim(&job.id, key, outcome, error) {
+            warn!(
+                "cron claim settle failed for {}/{key}: {e} (outcome already recorded)",
+                job.id
+            );
+        }
+    }
+
     async fn run_job(&self, job: &CronJob) -> Result<(), Error> {
         info!("Executing cron job {}: {}", job.id, job.name);
         let run_started_at = chrono::Utc::now().to_rfc3339();
+        let claim_key = self.claim_occurrence_key(job, &run_started_at);
 
         // ── iter-678: cron-path budget gate (gap 1) ────────────────────
         // Mirrors the gateway's turn-start gate: a run that would START
@@ -370,11 +464,49 @@ impl CronScheduler {
             return self.record_budget_block(job, reason);
         }
 
+        // ── W2 (Z29): CLAIM BEFORE DISPATCH ─────────────────────────────
+        // This write is the whole fix. Everything below it is the attempt;
+        // everything above it is bookkeeping. A crash between the claim and
+        // `mark_job_run` leaves the occurrence claimed, so the restart's
+        // `tick()` sees the row due again, calls in here, and LOSES the
+        // claim race — it skips instead of repeating the side effects that
+        // may already have gone out.
+        //
+        // A refusal is NOT an error: the occurrence is already owned (this
+        // process, another process, or a crashed attempt), and skipping is
+        // the correct outcome. Returning Ok keeps the tick loop's
+        // error-accounting honest — nothing failed, we declined.
+        let claimed = self
+            .db
+            .claim_job_occurrence(&job.id, &claim_key, "scheduler")
+            .map_err(|e| Error::Agent(format!("cron claim failed for {}: {e}", job.id)))?;
+        if !claimed {
+            let holder = self
+                .db
+                .get_claim(&job.id, &claim_key)
+                .ok()
+                .flatten()
+                .map(|c| c.origin)
+                .unwrap_or_else(|| "unknown".to_string());
+            warn!(
+                "cron job {} occurrence {} is already claimed (by {}) — skipping this dispatch",
+                job.id, claim_key, holder
+            );
+            return Ok(());
+        }
+
         let (success, _output, final_response, error_msg, transient) = if job.no_agent {
             self.run_script_job(job).await
         } else {
             self.run_agent_job(job).await
         };
+
+        // Settle the claim from the attempt's real outcome, BEFORE the
+        // bookkeeping below: the claim's job is to say "this occurrence is
+        // over", and the outcome is known the moment the attempt returns.
+        // `mark_job_run` is still the write that advances `next_run_at` —
+        // this only closes the occurrence.
+        self.settle_run_claim(job, &claim_key, success, error_msg.as_deref());
 
         // Record the run FIRST (writes last_run_at/last_status/last_error and
         // bumps repeat_completed) — mirroring hermes's order, where the run's
@@ -2158,5 +2290,304 @@ mod tests {
             guidance: String::new(),
         };
         assert!(should_arm_transient_retry(&err));
+    }
+
+    // ── W2 (Z29): the dispatch claim ledger — the double-fire window ──
+
+    /// A due, script-backed job and its `next_run_at` — the row shape a tick
+    /// actually sees, so the claim key this test asserts on is the one
+    /// production computes.
+    fn due_script_job(
+        db: &Arc<super::CronDb>,
+        script: &str,
+    ) -> (String, crate::cronjobs::db::CronJob) {
+        // Every second: the row is due immediately on any tick.
+        let id = db
+            .create_job(crate::cronjobs::db::CreateJobParams {
+                name: "double-fire probe".to_string(),
+                prompt: "unused".to_string(),
+                schedule: "* * * * * *".to_string(),
+                schedule_display: "every second".to_string(),
+                repeat_times: None,
+                deliver: "none".to_string(),
+                origin_platform: None,
+                origin_chat_id: None,
+                origin_thread_id: None,
+                skill: None,
+                skills: None,
+                model: None,
+                provider: None,
+                base_url: None,
+                script: Some(script.to_string()),
+                context_from: None,
+                enabled_toolsets: None,
+                workdir: None,
+                no_agent: true,
+            })
+            .expect("create job");
+        db.set_next_run(&id, Some(chrono::Utc::now().to_rfc3339()))
+            .expect("force due now");
+        let job = db.get_job(&id).expect("read").expect("row");
+        (id, job)
+    }
+
+    /// THE CRASH WINDOW (Z29), reproduced exactly: the claim is written, the
+    /// attempt runs, the process dies BEFORE `mark_job_run` — so
+    /// `next_run_at` is still in the past, and the next `tick()` selects the
+    /// same row again.
+    ///
+    /// The crash is not simulated by killing the test process: it is the
+    /// state a crash leaves, written exactly where `run_job` leaves it.
+    /// `run_job` claims the occurrence, dispatches, settles the claim, THEN
+    /// writes `mark_job_run` (and the "crash" is that it never reaches that
+    /// last write). Everything before the crash is production code.
+    ///
+    /// The assertion is on the SIDE EFFECT count, not the row: a marker
+    /// file per run. Two dispatches of one occurrence = two markers.
+    #[tokio::test]
+    async fn a_crash_between_dispatch_and_mark_job_run_does_not_refire() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("ran.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let (id, job) = due_script_job(&cron_db, &format!("printf x >> {}", marker.display()));
+        let occurrence = job
+            .next_run_at
+            .clone()
+            .expect("fixture: the row is due, so it carries an occurrence");
+
+        // The production path up to the crash point: claim, dispatch,
+        // settle the claim. `mark_job_run` is never reached.
+        assert!(
+            scheduler.run_job(&job).await.is_ok(),
+            "the first dispatch must succeed"
+        );
+        let after_first = std::fs::read_to_string(&marker)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        assert!(
+            after_first > 0,
+            "the script ran exactly once: {after_first}"
+        );
+
+        // The crash state: undo the ONE write that lands after the attempt.
+        // This is the exact residue of a SIGKILL between dispatch and
+        // `mark_job_run` — `next_run_at` still reads the past occurrence.
+        cron_db
+            .set_next_run(&id, Some(occurrence.clone()))
+            .expect("restore the past occurrence");
+
+        // The restart: the scheduler's own tick over the same database.
+        scheduler.tick().await.expect("the restart tick");
+
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .map(|s| s.len())
+                .unwrap_or(0),
+            after_first,
+            "the restart must NOT re-dispatch the crashed occurrence — the \
+             claim written before the dispatch is what blocks it"
+        );
+    }
+
+    /// The other half of the contract: the claim must not wedge the job. A
+    /// completed occurrence (claim settled, `next_run_at` advanced) fires
+    /// again on the next tick — that is the job's whole purpose.
+    #[tokio::test]
+    async fn a_settled_claim_lets_the_next_occurrence_fire() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("ran.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let (id, job) = due_script_job(&cron_db, &format!("printf x >> {}", marker.display()));
+        let first_occurrence = job
+            .next_run_at
+            .clone()
+            .expect("fixture: the row is due, so it carries an occurrence");
+
+        // The full production path, including `mark_job_run`: this occurrence
+        // is dispatched, settled and its key is retired.
+        scheduler.run_job(&job).await.expect("first dispatch");
+        let after_first = std::fs::read_to_string(&marker)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        assert!(after_first > 0, "the first run happened");
+        assert!(
+            !cron_db
+                .claim_is_open(&id, &first_occurrence)
+                .expect("read claim"),
+            "a completed dispatch settles its own claim"
+        );
+
+        // The next cadence occurrence arrives the way production computes it.
+        cron_db
+            .set_next_run(&id, Some(chrono::Utc::now().to_rfc3339()))
+            .expect("arm the next occurrence");
+        let job = cron_db.get_job(&id).expect("read").expect("row");
+        let second_occurrence = job
+            .next_run_at
+            .clone()
+            .expect("the next occurrence is a fresh key");
+        assert_ne!(
+            second_occurrence, first_occurrence,
+            "the next occurrence must be a NEW key, or the guard would wedge"
+        );
+
+        scheduler.tick().await.expect("the next tick");
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .map(|s| s.len())
+                .unwrap_or(0),
+            after_first + 1,
+            "the next legitimate occurrence fires — one more run, not more"
+        );
+    }
+
+    /// The stale-claim POLICY, driven through the scheduler: a claim whose
+    /// dispatch never settled is ABANDONED by the tick's reclaim (skipped,
+    /// never re-dispatched) and the job's NEXT occurrence still fires.
+    ///
+    /// WHY SKIP, in one paragraph. The claim cannot distinguish "the process
+    /// died before the side effect" from "the process died after it" — that
+    /// ambiguity is the entire reason a claim exists. Re-dispatching an
+    /// abandoned occurrence would risk a SECOND delivery of a message that
+    /// may already have gone out, and cron's side effects (messages, channel
+    /// posts) are the irreversible kind. Skipping costs one missed occurrence
+    /// of one job, which the next cadence makes up. The third option — leaving
+    /// the claim open so the occurrence is never re-dispatched but the job is
+    /// never wedged either — is what "abandoned" IS: the row is settled, so
+    /// it is closed for good and nothing re-seeks it.
+    #[tokio::test]
+    async fn an_abandoned_claim_is_skipped_not_retried_and_the_next_run_lives() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("ran.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let (id, job) = due_script_job(&cron_db, &format!("printf x >> {}", marker.display()));
+        let crashed_occurrence = job
+            .next_run_at
+            .clone()
+            .expect("fixture: the row is due, so it carries an occurrence");
+
+        // The crash residue: the claim is OPEN (production wrote it before
+        // dispatch), the row is still due, and nothing settled the claim.
+        assert!(
+            scheduler
+                .db
+                .claim_job_occurrence(&id, &crashed_occurrence, "scheduler")
+                .expect("claim"),
+            "the crashed dispatch's claim is what the row carries"
+        );
+        let after_crash = std::fs::read_to_string(&marker)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        assert_eq!(
+            after_crash, 0,
+            "the crashed dispatch never ran — the crash was before dispatch"
+        );
+
+        // The restart's tick, with the claim backdated past the horizon: the
+        // reclaim settles it as abandoned and the due scan skips the row.
+        cron_db
+            .backdate_claim_for_tests(&id, &crashed_occurrence, "2000-01-01T00:00:00+00:00")
+            .expect("backdate the claim");
+        scheduler.tick().await.expect("the restart tick");
+
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .map(|s| s.len())
+                .unwrap_or(0),
+            0,
+            "the abandoned occurrence is SKIPPED — never re-dispatched"
+        );
+        let claim = cron_db
+            .get_claim(&id, &crashed_occurrence)
+            .expect("read claim")
+            .expect("the row survives");
+        assert_eq!(
+            claim.outcome.as_deref(),
+            Some("abandoned"),
+            "the ledger records WHY the occurrence never ran"
+        );
+
+        // The job is not wedged: its next occurrence fires normally.
+        cron_db
+            .set_next_run(&id, Some(chrono::Utc::now().to_rfc3339()))
+            .expect("arm the next occurrence");
+        scheduler.tick().await.expect("the next tick");
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .map(|s| s.len())
+                .unwrap_or(0),
+            1,
+            "the job's next cadence occurrence fires despite the abandonment"
+        );
+    }
+
+    /// The horizon is the job's own cadence, floored so a short cadence
+    /// cannot abandon its own live dispatch between two ticks.
+    #[test]
+    fn the_claim_horizon_is_the_cadence_floored_at_two_and_a_half_ticks() {
+        let mut job = test_job();
+
+        // A cadence the schedule module can parse: interval phrases.
+        job.schedule = "every 30m".to_string();
+        assert_eq!(
+            super::CronScheduler::claim_horizon_secs(&job),
+            1800,
+            "a 30-minute job gets its own 30-minute horizon"
+        );
+
+        // A cadence shorter than the floor is LIFTED, not followed: a
+        // one-second job must not abandon its live claim inside one tick.
+        job.schedule = "every 1s".to_string();
+        assert_eq!(
+            super::CronScheduler::claim_horizon_secs(&job),
+            super::CronScheduler::CLAIM_HORIZON_FLOOR_SECS,
+            "the floor wins over a sub-floor cadence"
+        );
+
+        // An unparseable schedule gets the floor rather than zero.
+        job.schedule = "0 0 31 2 *".to_string();
+        assert_eq!(
+            super::CronScheduler::claim_horizon_secs(&job),
+            super::CronScheduler::CLAIM_HORIZON_FLOOR_SECS,
+            "a schedule the horizon cannot read falls back to the floor"
+        );
+    }
+
+    /// The crash-window fixture, inverted: with the guard REMOVED the same
+    /// sequence DOES refire. This is the test that proves the guard is the
+    /// thing closing the window, not an unrelated behaviour change in `tick`.
+    #[tokio::test]
+    async fn without_the_claim_the_same_crash_window_refires_the_job() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("ran.txt");
+        let (scheduler, cron_db) = scheduler_for_manual_run(dir.path());
+
+        let (id, job) = due_script_job(&cron_db, &format!("printf x >> {}", marker.display()));
+        scheduler.run_job(&job).await.expect("first dispatch");
+
+        // The crash residue AND the claim ledger's absence: the row is due
+        // again and no claim stands in the way — the pre-fix world.
+        //
+        // The occurrence is taken from the job ROW (which `mark_job_run`
+        // just advanced), then forced back into the past: a resumed
+        // `next_run_at` is what a crash before that write leaves behind.
+        cron_db
+            .set_next_run(&id, Some("2000-01-01T00:00:00+00:00".to_string()))
+            .expect("restore the past occurrence");
+        cron_db
+            .claim_stale_claims(chrono::Duration::zero())
+            .expect("settle every open claim — the pre-fix db had none");
+
+        scheduler.tick().await.expect("the restart tick");
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .map(|s| s.len())
+                .unwrap_or(0),
+            2,
+            "the pre-fix sequence double-fires — which is the defect"
+        );
     }
 }

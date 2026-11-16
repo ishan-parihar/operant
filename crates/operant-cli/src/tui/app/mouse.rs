@@ -115,10 +115,6 @@ impl App {
         }
     }
 
-    pub(super) fn message_index_at_row(&self, row: u16) -> Option<usize> {
-        self.message_row_map.borrow().get(&row).copied()
-    }
-
     pub(super) fn clear_selection(&mut self) {
         self.selection_anchor = None;
         self.selection_focus = None;
@@ -522,17 +518,48 @@ impl App {
     // Open context menu at the current cursor/selection position via keyboard
     // (Ctrl+Shift+M). Uses the current scroll position to determine location,
     // or the current text selection if any.
+    //
+    // (2026-11-16 W3, audit Z23) The MESSAGE half used to resolve through
+    // `App::message_row_map`, a map nothing in production ever wrote, so the
+    // branch was unreachable and every press fell through to the
+    // selection-only menu. It now resolves the same way the POINTER does —
+    // the frame's own published geometry plus the prepared frame's message
+    // rows — so the keyboard path and the right-click path agree.
     pub(super) fn open_context_menu_at_cursor(&mut self) {
         let msg_area = self.last_msg_area.get();
         let has_selection = !self.selection_text.borrow().trim().is_empty();
 
-        // Calculate the row at the current scroll position (top of visible area)
-        let visible_row = msg_area.y.saturating_add(self.scroll_offset as u16);
+        // The row at the top of the visible transcript, resolved to the
+        // transcript's own content rect exactly as the click handler does.
+        let content = crate::tui::operant_ui::chat_content_area();
+        let content = if content.width == 0 || content.height == 0 {
+            msg_area
+        } else {
+            content
+        };
+        let first_row = content.y.saturating_add(self.scroll_offset as u16);
+        let scroll = crate::tui::operant_ui::last_resolved_chat_scroll();
 
-        // Try to find message at the visible scroll position
-        if let Some(message_index) = self.message_index_at_row(visible_row)
-            && message_index < self.messages.len()
-        {
+        // The top visible row is NOT necessarily transcript: the frame carries
+        // a Header section (the banner) above the Body, so screen row 0 lands
+        // in a section that owns no message at all. Probing exactly one row
+        // therefore resolved to nothing on every fresh session — the chord's
+        // message branch could never fire even with the transcript full behind
+        // it. Walk down to the first row that does name a message, which is
+        // what "the message at the cursor" means when the cursor starts on
+        // chrome.
+        let mut resolved = None;
+        for row in first_row..content.y.saturating_add(content.height) {
+            if let Some(index) =
+                crate::tui::operant_ui::message_index_at_screen_row(row, content.y, scroll)
+                && index < self.messages.len()
+            {
+                resolved = Some(index);
+                break;
+            }
+        }
+
+        if let Some(message_index) = resolved {
             let x = msg_area.x.saturating_add(2);
             let y = msg_area.y.saturating_add(2);
             self.show_context_menu(x, y, ContextMenuKind::Message { message_index });
@@ -1234,7 +1261,22 @@ impl App {
                     && mouse_event.row >= msg_area.y
                     && mouse_event.row < msg_area.y.saturating_add(msg_area.height)
                 {
-                    if let Some(message_index) = self.message_index_at_row(mouse_event.row) {
+                    // (2026-11-16 W3, audit Z23) Resolved through the drawn
+                    // frame's own geometry, not a screen-row map: see
+                    // `message_index_at_screen_row`.
+                    let content = crate::tui::operant_ui::chat_content_area();
+                    let content_top = if content.width == 0 || content.height == 0 {
+                        msg_area.y
+                    } else {
+                        content.y
+                    };
+                    let scroll = crate::tui::operant_ui::last_resolved_chat_scroll();
+                    if let Some(message_index) = crate::tui::operant_ui::message_index_at_screen_row(
+                        mouse_event.row,
+                        content_top,
+                        scroll,
+                    ) && message_index < self.messages.len()
+                    {
                         self.show_context_menu(
                             mouse_event.column,
                             mouse_event.row,
@@ -1327,16 +1369,22 @@ impl App {
                     && mouse_event.column >= selectable_area.x
                     && mouse_event.column < selectable_area.x.saturating_add(selectable_area.width);
 
-                // Check for click on a thinking block header (takes priority over text selection).
-                if let Some(&hash) = self.thinking_row_map.borrow().get(&mouse_event.row) {
-                    if self.thinking_expanded.contains(&hash) {
-                        self.thinking_expanded.remove(&hash);
-                    } else {
-                        self.thinking_expanded.insert(hash);
-                    }
-                    self.invalidate_transcript();
-                    return;
-                }
+                // (2026-11-16 W3, audit Z23) The click-to-collapse-thinking
+                // branch is GONE, together with `App::thinking_row_map` and
+                // `App::thinking_expanded`.
+                //
+                // The map was a screen-row → thinking-hash lookup that NOTHING
+                // in production ever wrote, so this branch was unreachable and
+                // `thinking_expanded` could never be non-empty: its only writer
+                // was the dead branch below. The feature was announced by the
+                // code's shape and never existed.
+                //
+                // What replaces it is the surface that DOES work: a past
+                // turn's trace already folds to one summary row through
+                // `ReasoningDisplayMode::Current`, toggled live with
+                // `/thinking-display`. Adding a second, hand-rolled collapse
+                // state beside that would be the same defect in a new shape —
+                // one more store the renderer would have to honour.
 
                 // (iter-1211) Click on the pinned band's `… +N more (todo)`
                 // row expands the card to show every row. The rect is

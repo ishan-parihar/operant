@@ -115,6 +115,89 @@ pub fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
     operant_core::cronjobs::db_path(&config.database_path)
 }
 
+// ── Z31: the gateway-daemon lock probe ──────────────────────────────────
+//
+// The scheduled cron dispatcher lives INSIDE the gateway daemon, which holds
+// an exclusive `flock` on `<operant home>/gateway.lock` for the life of the
+// process (`gateway_runner::acquire_gateway_daemon_lock`). `operant cron run
+// <id>` builds its OWN `CronDb`, agent and scheduler and runs the job in a
+// second process, where the `CronDb` connection mutex (`std::sync::Mutex`) is
+// per-process and serializes nothing. The file lock is the only machine-wide
+// statement that the scheduler is already running here.
+//
+// WHY THIS PROBES AND DOES NOT ACQUIRE. The daemon holds the lock for its
+// whole life; acquiring it here would either fail (correct detection, but then
+// the answer would have to be inferred from the failure) or succeed and then
+// release it the instant this function returned — a probe with a use-after-free
+// shape. The kernel answers the question directly: `LOCK_EX | LOCK_NB` on the
+// same inode succeeds ONLY when nobody else holds it, and the fd is closed
+// before returning, so this process never becomes a holder.
+//
+// The PATH comes from the core (`cronjobs::lock::gateway_daemon_lock_path`) so
+// the daemon and this probe cannot disagree about which file is the lock —
+// the same one-definition rule `cron_db_path` follows.
+//
+// The result is ADVISORY: see `cmd_run` for the refusal and why a daemon that
+// is running does not make a manual run impossible.
+
+/// Whether a live gateway daemon holds the machine-wide cron lock.
+///
+/// `Ok(true)` = the lock is held by another process, so the gateway daemon
+/// (and with it the scheduled cron dispatcher) is running on this machine.
+/// `Err` is a real failure to answer the question (the lock file cannot be
+/// opened) — the caller decides how to degrade, never silently "no".
+#[cfg(unix)]
+fn gateway_daemon_holds_lock() -> std::io::Result<bool> {
+    gateway_daemon_holds_lock_at(&operant_core::cronjobs::gateway_daemon_lock_path())
+}
+
+/// The probe at an explicit path — the seam a test drives, so the test does
+/// not depend on whether a real daemon happens to be running on the host.
+#[cfg(unix)]
+fn gateway_daemon_holds_lock_at(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    if let Some(parent) = path.parent() {
+        // A missing home is NOT a held lock: create the directory so the open
+        // below is probing the lock rather than reporting a filesystem error.
+        // The daemon's own path creation does the same thing.
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)?;
+    // SAFETY: `file` owns a live fd for the whole call, so `as_raw_fd()` is
+    // valid; LOCK_NB makes this a probe (never a wait) and the fd is closed
+    // on return, which RELEASES anything this probe might have taken.
+    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    Ok(!taken)
+}
+
+/// Non-unix stand-in: there is no `flock`, so the daemon's own lock is the
+/// best-effort pid-file shape and this probe cannot answer. `false` is the
+/// permissive answer — the manual run proceeds, exactly as it does today.
+#[cfg(not(unix))]
+fn gateway_daemon_holds_lock() -> std::io::Result<bool> {
+    Ok(false)
+}
+
+/// The refusal text for a manual run while the daemon is live. Pure so the
+/// wording is testable without a lock file.
+fn daemon_lock_refusal(job_id: &str, lock_path: &std::path::Path) -> String {
+    format!(
+        "The gateway daemon is running on this machine and it owns the cron scheduler.\n\
+         \x20 Job '{job_id}' would be dispatched by a SECOND scheduler in this process, \
+         so this run was refused rather than risking a double fire.\n\
+         \x20 Lock held: {}\n\
+         \x20 Either wait for the daemon's next tick, or stop it first \
+         (`operant gateway stop`) if you need to run the job by hand.",
+        lock_path.display()
+    )
+}
+
 /// Dispatch a cron subcommand.
 pub async fn handle_cron_command(
     config: &AppConfig,
@@ -601,6 +684,44 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
         return Ok(());
     }
 
+    // ── Z31: the daemon-lock gate ───────────────────────────────────────
+    // The scheduled dispatcher is a task inside the gateway daemon, and the
+    // daemon names itself with an exclusive flock on
+    // `<operant home>/gateway.lock`. A manual run from this process is a
+    // SECOND scheduler over the same rows, and the `CronDb` mutex that
+    // serializes writers is per-process — it cannot see the daemon. So the
+    // lock being held means "the scheduler you would race is live", and the
+    // run is refused with a message that names the daemon and the way out.
+    //
+    // This is a deliberate behaviour change: `cron run` used to work with a
+    // live daemon. The double fire it allowed is the defect (two agents, one
+    // `next_run_at` row, `repeat_completed` bumped twice for one cadence
+    // tick). The claim ledger (Z29) now also refuses a duplicate OCCURRENCE
+    // even across processes, but it cannot stop a manual run from firing an
+    // occurrence the daemon has already finished and whose `next_run_at` has
+    // moved on — that is a second dispatch of the same cadence, and only this
+    // gate sees it.
+    //
+    // The probe is advisory in the failure direction only: if the lock file
+    // cannot be read the run PROCEEDS (fail-open) — refusing every manual run
+    // because of a filesystem error would be a worse outage than the race it
+    // prevents, and the claim ledger is still there as the backstop.
+    match gateway_daemon_holds_lock() {
+        Ok(true) => {
+            let path = operant_core::cronjobs::gateway_daemon_lock_path();
+            println!("{}", daemon_lock_refusal(id, &path));
+            return Ok(());
+        }
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!(
+                "Warning: could not read the gateway daemon lock ({}): {e} — \
+                 proceeding; a concurrent scheduled run is still possible.",
+                operant_core::cronjobs::gateway_daemon_lock_path().display()
+            );
+        }
+    }
+
     // RT-135: this used to mark the job "triggered_manually" and print
     // "Manual execution via CLI is not yet implemented" — a bookkeeping write
     // standing in for a run, so an operator testing a job saw nothing happen
@@ -917,6 +1038,111 @@ mod tests {
         assert!(
             !shown.is_empty() && shown != "—",
             "an unscheduled job still has a next occurrence: {shown}"
+        );
+    }
+
+    // ── Z31: the daemon-lock refusal ──
+
+    /// The refusal must NAME the daemon and give the operator a way out. A
+    /// bare "busy" would leave the operator with a job they cannot run and no
+    /// idea that the gateway is the thing holding it.
+    #[test]
+    fn the_daemon_lock_refusal_names_the_daemon_the_lock_and_the_way_out() {
+        let msg = daemon_lock_refusal(
+            "cron_abc123",
+            std::path::Path::new("/home/u/.operant/gateway.lock"),
+        );
+        assert!(
+            msg.contains("gateway daemon"),
+            "it must say WHAT is running: {msg}"
+        );
+        assert!(
+            msg.contains("cron_abc123"),
+            "it must name the job the operator asked for: {msg}"
+        );
+        assert!(
+            msg.contains("double fire") || msg.contains("SECOND scheduler"),
+            "it must say WHY the run is refused, not just that it is: {msg}"
+        );
+        assert!(
+            msg.contains("/home/u/.operant/gateway.lock"),
+            "it must show the lock file, so the holder is checkable: {msg}"
+        );
+        assert!(
+            msg.contains("operant gateway stop"),
+            "it must name the command that changes the situation: {msg}"
+        );
+    }
+
+    /// The probe reads the same path the core hands the daemon, so the two
+    /// cannot disagree about which file is the lock. A probe against a
+    /// DIFFERENT path would report "free" while the daemon holds the real
+    /// one — the failure this one-definition rule exists to prevent.
+    #[test]
+    fn the_probe_uses_the_core_lock_path_not_a_second_guess() {
+        let path = operant_core::cronjobs::gateway_daemon_lock_path();
+        assert!(
+            path.ends_with("gateway.lock"),
+            "the probe and the daemon must name the same file: {}",
+            path.display()
+        );
+        assert!(
+            path.starts_with(operant_core::platform::operant_home()),
+            "and it must live under the resolved operant home: {}",
+            path.display()
+        );
+    }
+
+    /// The probe's answer, both ways, over a lock file this test owns. This is
+    /// the whole Z31 mechanism: the same `flock` the daemon holds, read
+    /// non-blocking, so "held" can only mean "a live daemon".
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_reports_held_while_a_daemon_style_holder_exists() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("gateway.lock");
+
+        // Nobody holds it: the probe says free, and probing does not TAKE it
+        // (a probe that leaked the lock would refuse every later caller).
+        assert!(
+            !gateway_daemon_holds_lock_at(&lock).expect("first probe"),
+            "an unheld lock reads free"
+        );
+        assert!(
+            !gateway_daemon_holds_lock_at(&lock).expect("second probe"),
+            "the probe is not a leak — the second read is still free"
+        );
+
+        // A holder that behaves exactly like the daemon: an open fd with
+        // LOCK_EX held for the life of the guard.
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock)
+            .expect("open the lock file");
+        // SAFETY: `file` owns the fd; LOCK_EX without LOCK_NB blocks only if
+        // a peer holds it, which this test has just proven nobody does.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        assert_eq!(rc, 0, "this test takes the lock the daemon shape takes");
+
+        assert!(
+            gateway_daemon_holds_lock_at(&lock).expect("held probe"),
+            "a held lock reads held — the refusal's whole trigger"
+        );
+
+        // Release: the same kernel call the daemon's process exit performs.
+        // SAFETY: the fd is still owned by `file`.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        assert_eq!(rc, 0, "release the lock");
+        drop(file);
+        assert!(
+            !gateway_daemon_holds_lock_at(&lock).expect("released probe"),
+            "after the holder goes away the lock reads free again — a crashed \
+             daemon never wedges manual runs"
         );
     }
 }

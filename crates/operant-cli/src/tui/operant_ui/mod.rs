@@ -140,6 +140,7 @@ pub(crate) use messages::{
 pub(crate) use pinned_ui::clear_side_panel_debug_snapshot;
 use pinned_ui::draw_side_panel_markdown;
 use viewport::draw_messages;
+pub(crate) use viewport::message_index_at_screen_row;
 pub(crate) use viewport::pinned_todo_more_area;
 pub(crate) use viewport::tool_row_region_at;
 

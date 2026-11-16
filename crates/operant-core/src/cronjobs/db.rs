@@ -105,6 +105,22 @@ pub struct CronRun {
     pub origin: String,
 }
 
+/// One dispatch claim in the `cron_claims` ledger (W2 / Z29).
+///
+/// Written BEFORE the attempt, settled (or abandoned) after. An open row
+/// for the same `(job_id, occurrence)` means "this occurrence is being (or
+/// was being) dispatched" — the scheduler must not dispatch it again.
+pub struct CronClaim {
+    pub id: i64,
+    pub job_id: String,
+    pub occurrence: String,
+    pub origin: String,
+    pub claimed_at: String,
+    pub settled_at: Option<String>,
+    pub outcome: Option<String>,
+    pub error: Option<String>,
+}
+
 /// One pending/settled delivery row from the `cron_deliveries` ledger
 /// (iter-720), as returned to the scheduler for replay. `payload` is the
 /// fully rendered message (header included) — replay resends it verbatim.
@@ -249,6 +265,40 @@ impl CronDb {
                 ON cron_deliveries(state, last_attempt_at);
             CREATE INDEX IF NOT EXISTS idx_cron_deliveries_job
                 ON cron_deliveries(job_id, id);
+    "#,
+        // v4 (W2 / Z29): the dispatch claim ledger. The double-fire window:
+        // `run_job` ran the agent/script FIRST and only `mark_job_run` — the
+        // single write that advances `next_run_at` — ran after. A crash in
+        // between left `next_run_at` in the past, so the next `tick()`
+        // re-selected the row (`WHERE enabled = 1 AND next_run_at <= ?1`)
+        // and repeated the side effects (sending messages, posting to
+        // channels).
+        //
+        // ONE row per (job_id, occurrence), claimed BEFORE the dispatch and
+        // settled (or abandoned) after. The occurrence key is the job's own
+        // `next_run_at` string: an attempt that crashed mid-occurrence and an
+        // attempt that ran long both carry the SAME key, so a re-selection of
+        // that occurrence collides with the live claim and is skipped. When
+        // the attempt finishes normally, `mark_job_run` advances
+        // `next_run_at` and the NEXT occurrence mints a fresh key and fires.
+        //
+        // No FK, same as cron_runs/cron_deliveries: the ledger must be able
+        // to explain a job that has since been deleted.
+        r#"
+            CREATE TABLE IF NOT EXISTS cron_claims (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id         TEXT NOT NULL,
+                occurrence     TEXT NOT NULL,
+                origin         TEXT NOT NULL,
+                claimed_at     TEXT NOT NULL,
+                settled_at     TEXT,
+                outcome        TEXT,
+                error          TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_claims_occurrence
+                ON cron_claims(job_id, occurrence);
+            CREATE INDEX IF NOT EXISTS idx_cron_claims_open
+                ON cron_claims(job_id, settled_at);
     "#,
     ];
 
@@ -1020,12 +1070,210 @@ impl CronDb {
         Ok(report)
     }
 
+    // ── W2 / Z29: the dispatch claim ledger (`cron_claims`) ──
+    //
+    // WHY this exists: `run_job` ran the agent/script FIRST and only
+    // `mark_job_run` — the one write that advances `next_run_at` — ran after.
+    // A crash between the two left `next_run_at` in the past, so the next
+    // `tick()` re-selected the row (`WHERE enabled = 1 AND next_run_at <= ?1`)
+    // and repeated the side effects (sending messages, posting to channels).
+    //
+    // The claim is the only dispatch-side write: it happens BEFORE the attempt
+    // and it is keyed by the job's own `next_run_at` occurrence string, so an
+    // attempt that crashed mid-occurrence and an attempt that ran long both
+    // collide with their own live claim and are skipped rather than repeated.
+
+    /// Claim ONE occurrence of `job_id` for dispatch.
+    ///
+    /// `Ok(true)` — this caller owns the dispatch; the job may run.
+    /// `Ok(false)` — an OPEN claim already exists for that occurrence: a
+    /// live dispatch in this or another process, or a dispatch that crashed
+    /// before it settled. The caller must SKIP, never re-dispatch.
+    ///
+    /// `claim_stale_claims` is what resolves the crashed case (an abandoned
+    /// claim is settled as `abandoned` and its occurrence is skipped for
+    /// good — see there). The INSERT is the atomicity: the
+    /// `idx_cron_claims_occurrence` unique index makes two concurrent
+    /// claimants of the same occurrence a constraint conflict, so the
+    /// in-process mutex can never be the thing that decides.
+    pub fn claim_job_occurrence(
+        &self,
+        job_id: &str,
+        occurrence: &str,
+        origin: &str,
+    ) -> Result<bool, Error> {
+        let conn = self.lock_conn()?;
+        let outcome = conn.execute(
+            "INSERT OR IGNORE INTO cron_claims
+                (job_id, occurrence, origin, claimed_at, settled_at, outcome, error)
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL)",
+            params![job_id, occurrence, origin, chrono::Utc::now().to_rfc3339()],
+        );
+        match outcome {
+            Ok(1) => Ok(true),
+            // 0 rows: the unique index found an existing row for this
+            // (job_id, occurrence). Both a live claim and an unsettled one
+            // mean "do not dispatch this occurrence again".
+            Ok(_) => Ok(false),
+            Err(e) => Err(Error::Agent(format!(
+                "Failed to claim cron occurrence {job_id}/{occurrence}: {e}"
+            ))),
+        }
+    }
+
+    /// Settle a claim after the attempt: the occurrence's dispatch is over,
+    /// success or failure. Idempotent (a second report changes nothing).
+    ///
+    /// The audit-layer discipline the other cron writers follow: a failure
+    /// here warns at the caller and never fails the run whose outcome is
+    /// already recorded — the row is already settled-or-abandoned either way.
+    pub fn settle_claim(
+        &self,
+        job_id: &str,
+        occurrence: &str,
+        outcome: &str,
+        error: Option<&str>,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE cron_claims
+                SET settled_at = ?1, outcome = ?2, error = ?3
+              WHERE job_id = ?4 AND occurrence = ?5 AND settled_at IS NULL",
+            params![
+                chrono::Utc::now().to_rfc3339(),
+                outcome,
+                error,
+                job_id,
+                occurrence
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to settle cron claim: {e}")))?;
+        Ok(())
+    }
+
+    /// Resolve claims that a crashed dispatch never settled.
+    ///
+    /// A claim older than `older_than` (the job's own cadence — see
+    /// `scheduler::claim_stale_claims`) is ABANDONED: it is settled with
+    /// outcome `abandoned` and its occurrence is SKIPPED for good.
+    ///
+    /// WHY SKIP RATHER THAN RE-DISPATCH. The claim cannot tell "the process
+    /// died before the side effect" from "the process died after the side
+    /// effect" — that is the whole reason it exists. Re-dispatching
+    /// therefore risks a SECOND delivery of a message that may already have
+    /// gone out, and cron's side effects are exactly the irreversible kind
+    /// (sending a message, posting to a channel). Skipping costs one missed
+    /// occurrence of one job; double-firing costs a duplicate side effect
+    /// the operator cannot take back. A wedged job is the third option and
+    /// the worst: it would never run again, so the claim is settled rather
+    /// than left open. The next cadence occurrence mints a fresh key and
+    /// fires normally, which is why a stale claim can never wedge a job.
+    pub fn claim_stale_claims(&self, older_than: chrono::Duration) -> Result<usize, Error> {
+        let conn = self.lock_conn()?;
+        let cutoff = (chrono::Utc::now() - older_than).to_rfc3339();
+        let changed = conn
+            .execute(
+                "UPDATE cron_claims
+                    SET settled_at = ?1, outcome = 'abandoned',
+                        error = 'dispatch never settled before its cadence expired'
+                  WHERE settled_at IS NULL AND claimed_at <= ?2",
+                params![chrono::Utc::now().to_rfc3339(), cutoff],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to abandon stale cron claims: {e}")))?;
+        Ok(changed)
+    }
+
+    /// Whether an OPEN claim exists for `(job_id, occurrence)` — the read
+    /// side of the double-fire guard, and the seam a test drives without
+    /// racing the wall clock.
+    pub fn claim_is_open(&self, job_id: &str, occurrence: &str) -> Result<bool, Error> {
+        let conn = self.lock_conn()?;
+        let found: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM cron_claims
+                  WHERE job_id = ?1 AND occurrence = ?2 AND settled_at IS NULL",
+                params![job_id, occurrence],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Agent(format!("Failed to read cron claim: {e}")))?;
+        Ok(found.is_some())
+    }
+
+    /// One claim row, for the `operant cron` surfaces that report state.
+    pub fn get_claim(&self, job_id: &str, occurrence: &str) -> Result<Option<CronClaim>, Error> {
+        let conn = self.lock_conn()?;
+        let claim = conn
+            .query_row(
+                "SELECT id, job_id, occurrence, origin, claimed_at, settled_at, outcome, error
+                   FROM cron_claims WHERE job_id = ?1 AND occurrence = ?2",
+                params![job_id, occurrence],
+                |row| {
+                    Ok(CronClaim {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        occurrence: row.get(2)?,
+                        origin: row.get(3)?,
+                        claimed_at: row.get(4)?,
+                        settled_at: row.get(5)?,
+                        outcome: row.get(6)?,
+                        error: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Agent(format!("Failed to read cron claim: {e}")))?;
+        Ok(claim)
+    }
+
+    /// W2 / Z29 — TEST SEAM. Backdate a claim's `claimed_at` so a test can
+    /// drive the stale-claim reclaim without waiting out the horizon.
+    ///
+    /// Production only ever writes "now"; the aging that makes a claim stale
+    /// is the passage of time. A test that had to sleep for a cadence to
+    /// prove the reclaim would be a slow test nobody runs, so the seam is
+    /// here rather than in the test's own SQL.
+    #[cfg(test)]
+    pub(crate) fn backdate_claim_for_tests(
+        &self,
+        job_id: &str,
+        occurrence: &str,
+        claimed_at: &str,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE cron_claims SET claimed_at = ?1 WHERE job_id = ?2 AND occurrence = ?3",
+            params![claimed_at, job_id, occurrence],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to backdate cron claim: {e}")))?;
+        Ok(())
+    }
+
+    /// The due rows that are FREE to dispatch: due by `next_run_at` AND not
+    /// holding an OPEN claim for their current occurrence (W2 / Z29).
+    ///
+    /// The SQL predicate is what closes the crash window in the same place
+    /// the crash leaves its evidence: `next_run_at` is still in the past
+    /// after a crash before `mark_job_run`, so a plain due-scan would
+    /// re-select the row and re-dispatch it. The anti-join makes the
+    /// re-selection itself fail — the claim written BEFORE the dispatch is
+    /// what the scan sees.
     pub fn get_due_jobs(&self) -> Result<Vec<CronJob>, Error> {
         let conn = self.lock_conn()?;
         let now = chrono::Utc::now().to_rfc3339();
 
         let mut stmt = conn
-            .prepare("SELECT * FROM cron_jobs WHERE enabled = 1 AND next_run_at <= ?1")
+            .prepare(
+                "SELECT j.* FROM cron_jobs j
+                  WHERE j.enabled = 1
+                    AND j.next_run_at <= ?1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM cron_claims c
+                         WHERE c.job_id = j.id
+                           AND c.occurrence = j.next_run_at
+                           AND c.settled_at IS NULL
+                    )",
+            )
             .map_err(|e| Error::Agent(format!("Failed to prepare get_due_jobs: {}", e)))?;
 
         let rows = stmt
@@ -1426,6 +1674,213 @@ mod tests {
         assert_eq!(
             stale[0].payload, "old",
             "replay resends the rendered payload verbatim"
+        );
+    }
+
+    // ── W2 / Z29: the dispatch claim ledger ──
+
+    /// A claim is exclusive per (job, occurrence), and a SETTLED claim frees
+    /// the occurrence's key for a later, different occurrence. The
+    /// `INSERT OR IGNORE` against the unique index is the whole mechanism —
+    /// the in-process mutex plays no part.
+    #[test]
+    fn a_claim_is_exclusive_per_occurrence_and_frees_its_key_once_settled() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, None);
+        let occ = "2030-01-01T00:00:00+00:00";
+
+        assert!(
+            db.claim_job_occurrence(&id, occ, "test").unwrap(),
+            "the first claimant owns the occurrence"
+        );
+        assert!(
+            !db.claim_job_occurrence(&id, occ, "test").unwrap(),
+            "a second claimant of the SAME occurrence must lose the race"
+        );
+        assert!(
+            db.claim_is_open(&id, occ).unwrap(),
+            "the losing claimant did not settle anything"
+        );
+
+        // Settling closes the occurrence for good — the row is the record
+        // that this occurrence was already dispatched.
+        db.settle_claim(&id, occ, "ok", None).unwrap();
+        assert!(!db.claim_is_open(&id, occ).unwrap());
+        assert!(
+            !db.claim_job_occurrence(&id, occ, "test").unwrap(),
+            "a settled occurrence is still taken: re-dispatching it is the \
+             double fire this ledger exists to prevent"
+        );
+
+        // A DIFFERENT occurrence (the next cadence) is a fresh key and is
+        // claimable — the guard must not wedge the job forever.
+        let next = "2030-01-01T01:00:00+00:00";
+        assert!(
+            db.claim_job_occurrence(&id, next, "test").unwrap(),
+            "the next occurrence mints a fresh key and fires"
+        );
+    }
+
+    /// A stale claim (a crash before `settle_claim`) is ABANDONED, not
+    /// retried: the occurrence is closed and never dispatched again, while
+    /// the job's later occurrences are untouched.
+    #[test]
+    fn stale_claims_are_abandoned_and_never_re_dispatched() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, None);
+        let crashed = "2030-01-01T00:00:00+00:00";
+
+        assert!(db.claim_job_occurrence(&id, crashed, "scheduler").unwrap());
+
+        // Nothing is stale while the horizon has not passed.
+        assert_eq!(
+            db.claim_stale_claims(chrono::Duration::hours(2)).unwrap(),
+            0,
+            "a fresh claim is not abandoned"
+        );
+        assert!(db.claim_is_open(&id, crashed).unwrap());
+
+        // Backdate the claim past the horizon (in-module tests reach the raw
+        // connection; production only writes now).
+        {
+            let conn = db.lock_conn().unwrap();
+            conn.execute(
+                "UPDATE cron_claims SET claimed_at = '2000-01-01T00:00:00+00:00'",
+                params![],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            db.claim_stale_claims(chrono::Duration::hours(2)).unwrap(),
+            1,
+            "the backdated claim is abandoned"
+        );
+        let claim = db
+            .get_claim(&id, crashed)
+            .unwrap()
+            .expect("the abandoned row stays inspectable");
+        assert_eq!(claim.outcome.as_deref(), Some("abandoned"));
+        assert!(claim.settled_at.is_some());
+        assert!(
+            !db.claim_is_open(&id, crashed).unwrap(),
+            "abandoned means settled — the row will not block the next tick"
+        );
+        assert!(
+            !db.claim_job_occurrence(&id, crashed, "scheduler").unwrap(),
+            "the abandoned occurrence is never re-dispatched"
+        );
+        assert!(
+            db.claim_job_occurrence(&id, "2030-01-01T01:00:00+00:00", "scheduler")
+                .unwrap(),
+            "the job itself is not wedged — its next occurrence is claimable"
+        );
+    }
+
+    /// The due-scan anti-join: a row whose CURRENT occurrence is claimed is
+    /// not returned by `get_due_jobs` even though its `next_run_at` is still
+    /// in the past. This is the read side that closes the crash window.
+    #[test]
+    fn a_due_row_with_an_open_claim_is_not_re_dispatched() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, None);
+
+        // The fixture is due: `* * * * * *` with a next_run_at in the past.
+        // `create_job` stamps `next_run_at` from the schedule, which lands a
+        // few milliseconds in the FUTURE — so it is forced due explicitly,
+        // which is the shape a tick eventually sees.
+        let occurrence = "2000-01-01T00:00:00+00:00".to_string();
+        db.set_next_run(&id, Some(occurrence.clone())).unwrap();
+        assert!(
+            db.get_due_jobs()
+                .unwrap()
+                .iter()
+                .any(|j| j.id == id && j.next_run_at.as_deref() == Some(occurrence.as_str())),
+            "fixture: the job must be due before the claim"
+        );
+
+        // Claim that occurrence the way a dispatch that then crashed would.
+        assert!(
+            db.claim_job_occurrence(&id, &occurrence, "scheduler")
+                .unwrap()
+        );
+
+        assert!(
+            db.get_due_jobs().unwrap().iter().all(|j| j.id != id),
+            "a claimed occurrence must not be re-selected by the due scan"
+        );
+
+        // Settle it (as a completed attempt would) and the NEXT occurrence
+        // is selectable again — the guard does not wedge the job.
+        db.settle_claim(&id, &occurrence, "ok", None).unwrap();
+        db.mark_job_run(
+            &id,
+            true,
+            None,
+            None,
+            Some("2030-01-01T00:00:00Z".to_string()),
+        )
+        .unwrap();
+        let next_due = db.get_due_jobs().unwrap();
+        assert!(
+            next_due.iter().all(|j| j.id != id),
+            "fixture: the advanced next_run_at (2030) is in the FUTURE, so the \
+             job is correctly not due — the point is only that nothing holds \
+             it back but its own schedule"
+        );
+
+        // And when that future occurrence actually arrives, it is free: the
+        // settled claim does not follow the row forward.
+        db.set_next_run(&id, Some("2000-01-01T00:00:00+00:00".to_string()))
+            .unwrap();
+        assert!(
+            db.get_due_jobs().unwrap().iter().any(|j| j.id == id),
+            "once the next occurrence is due, the settled claim does not \
+             block it — the guard cannot wedge the job"
+        );
+    }
+
+    /// The v4 migration is additive: a database written by an older build
+    /// (v3, the delivery-ledger era) gains `cron_claims` without disturbing
+    /// anything it already holds.
+    #[test]
+    fn the_v4_claim_ledger_migrates_a_pre_v4_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cron.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cron_jobs (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
+                    schedule TEXT NOT NULL, schedule_display TEXT NOT NULL,
+                    repeat_times INTEGER, repeat_completed INTEGER NOT NULL DEFAULT 0,
+                    deliver TEXT NOT NULL DEFAULT 'local', origin_platform TEXT,
+                    origin_chat_id TEXT, origin_thread_id TEXT, skill TEXT, skills TEXT,
+                    model TEXT, provider TEXT, base_url TEXT, script TEXT,
+                    context_from TEXT, enabled_toolsets TEXT, workdir TEXT,
+                    no_agent BOOLEAN NOT NULL DEFAULT 0, enabled BOOLEAN NOT NULL DEFAULT 1,
+                    state TEXT NOT NULL DEFAULT 'scheduled', paused_at TEXT,
+                    paused_reason TEXT, created_at TEXT NOT NULL, next_run_at TEXT,
+                    last_run_at TEXT, last_status TEXT, last_error TEXT,
+                    last_delivery_error TEXT);
+                 INSERT INTO cron_jobs (id, name, prompt, schedule, schedule_display, created_at)
+                    VALUES ('j', 'legacy', 'p', '* * * * * *', 'every second', 't0');
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+
+        let db = CronDb::init(path).unwrap();
+        assert_eq!(
+            crate::migrations::current_version(&db.lock_conn().unwrap()).unwrap(),
+            4,
+            "the file lands at v4"
+        );
+        let job = db.get_job("j").unwrap().expect("the legacy row survives");
+        assert_eq!(job.name, "legacy");
+        assert!(
+            db.get_claim("j", "anything").unwrap().is_none(),
+            "a migrated db has an empty claim ledger"
         );
     }
 }

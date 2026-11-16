@@ -57,7 +57,15 @@ pub mod model_effort;
 pub mod model_recent;
 pub mod model_scope;
 pub mod model_selector;
-pub mod models_panel;
+// (2026-11-16, audit Z22) `models_panel` DELETED. It was a 391-line panel with
+// state, a key handler and an opener but NO renderer: `/model roles` set
+// `.visible`, the frame painted the unchanged chat, and key_handling routed
+// EVERY key into the invisible panel -- so `x` on an assigned slot called
+// `persist_config_key(key_path, "")` and wrote the config from a panel the
+// operator could not see. It was also absent from `overlay_flags()`, so
+// `any_modal_open()` reported false while the panel owned the keyboard. The
+// render half was announced and never landed. `/model roles` now opens the
+// inline picker's Roles scope, which is painted.
 pub mod notifications;
 pub mod operant_anim;
 #[cfg_attr(

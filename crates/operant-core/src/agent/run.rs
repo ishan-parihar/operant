@@ -307,6 +307,56 @@ impl OperantAgent {
         schemas
     }
 
+    /// The reasoning-effort rejection recovery (plan 03), shared by BOTH arms
+    /// of the request ladder.
+    ///
+    /// The request was fine except the effort field: record that `model`
+    /// rejects it (so `fitted_request` stops attaching it for the rest of the
+    /// session), tell the user once, and rebuild the request WITHOUT the field.
+    /// The caller still issues it — a streaming arm sends it through
+    /// `chat_streaming`, the non-streaming arm through `chat` — and the retry
+    /// is free: it consumes no retry-budget.
+    ///
+    /// `None` means this was not a reasoning rejection, or this turn already
+    /// spent its one-shot attempt: the caller must fall through to the next
+    /// rung of its ladder rather than retry.
+    ///
+    /// Z16 (2026-11-16 red team): this lived ONLY in the streaming arm, so
+    /// `[agent] stream = false` re-sent the rejected field on every compressed
+    /// re-issue — the provider rejected it identically each time and the turn
+    /// burned its whole retry budget on a request that could never succeed.
+    /// The handling is hoisted here, not copied, because two copies of one
+    /// retry rule is how the arms drifted apart in the first place (RT-286).
+    async fn retry_without_reasoning_effort(
+        &self,
+        classified: &crate::agent::error_classifier::ClassifiedError,
+        retry_state: &mut turn_retry_state::TurnRetryState,
+        messages: &[Message],
+    ) -> Option<ChatRequest> {
+        if classified.reason
+            != crate::agent::error_classifier::FailoverReason::ReasoningParamRejected
+            || retry_state.reasoning_param_attempted
+        {
+            return None;
+        }
+        retry_state.reasoning_param_attempted = true;
+        let model = self.effective_model();
+        self.mark_effort_unsupported(&model);
+        self.emit(AgentEvent::Notice {
+            text: format!("Reasoning effort isn't supported by {model}; continuing without it"),
+        })
+        .await;
+        warn!(
+            model = %model,
+            "Reasoning-effort field rejected — retrying without it"
+        );
+        let tools = self.tools_for_turn(messages).await;
+        Some(
+            self.fitted_request(&self.effective_model(), messages, tools)
+                .with_reasoning_effort(None),
+        )
+    }
+
     /// Tokens the EAGER tool schemas add to every request.
     ///
     /// The schemas ride every request beside the messages and are never
@@ -1866,27 +1916,18 @@ impl OperantAgent {
                         // mark the model, tell the user once, and retry the
                         // SAME request without the field. This retry is
                         // free — it does not consume the retry budget.
-                        if classified.reason
-                            == crate::agent::error_classifier::FailoverReason::ReasoningParamRejected
-                            && !retry_state.reasoning_param_attempted
+                        // Z16: the recovery itself is
+                        // `retry_without_reasoning_effort`, shared with the
+                        // non-streaming arm below so the two ladders cannot
+                        // drift apart on this rule again.
+                        if let Some(retry_request) = self
+                            .retry_without_reasoning_effort(
+                                &classified,
+                                &mut retry_state,
+                                &messages,
+                            )
+                            .await
                         {
-                            retry_state.reasoning_param_attempted = true;
-                            let model = self.effective_model();
-                            self.mark_effort_unsupported(&model);
-                            self.emit(AgentEvent::Notice {
-                                text: format!(
-                                    "Reasoning effort isn't supported by {model}; continuing without it"
-                                ),
-                            })
-                            .await;
-                            warn!(
-                                model = %model,
-                                "Reasoning-effort field rejected — retrying without it"
-                            );
-                            let tools = self.tools_for_turn(&messages).await;
-                            let retry_request = self
-                                .fitted_request(&self.effective_model(), &messages, tools)
-                                .with_reasoning_effort(None);
                             // Under the loop ceiling like every other request:
                             // a re-issue that can hang forever is the same
                             // bug the ceiling exists to prevent.
@@ -1897,9 +1938,8 @@ impl OperantAgent {
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
                             // fall back to deterministic decay/eviction.
-                            let (compressed, _) = self
-                                .compress_context_overflow_reporting(messages)
-                                .await;
+                            let (compressed, _) =
+                                self.compress_context_overflow_reporting(messages).await;
                             messages = compressed;
                             // Refund the iteration since the original LLM call
                             // was wasted on a context overflow — the retry gets
@@ -1932,8 +1972,10 @@ impl OperantAgent {
                                     let retry_classified =
                                         FallbackModelClient::classify_error(&retry_err);
                                     if retry_classified.should_compress {
-                                        let tokens = crate::context_management::
-                                            estimate_total_tokens(&messages);
+                                        let tokens =
+                                            crate::context_management::estimate_total_tokens(
+                                                &messages,
+                                            );
                                         let (required, minimum_window, minimum_hard_cap) =
                                             self.unshrinkable_and_advice(&messages, 0).await;
                                         return Err(Error::ContextExhausted {
@@ -1975,8 +2017,10 @@ impl OperantAgent {
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     self.fitted_request(&self.effective_model(), &messages, tools);
-                                self.call_with_loop_timeout(self.client.chat_streaming(retry_request))
-                                    .await?
+                                self.call_with_loop_timeout(
+                                    self.client.chat_streaming(retry_request),
+                                )
+                                .await?
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
                                 return Err(e);
@@ -2001,55 +2045,55 @@ impl OperantAgent {
                             {
                                 Ok(stream) => stream,
                                 Err(last_error) => {
-                            // The provider call failed and the turn's retry
-                            // budget is spent. A DETERMINISTIC failure ends
-                            // the turn (the poke's guard); a TRANSIENT one
-                            // gets the bounded poke — the seam the
-                            // 2026-11-12 audit reports as "the poke does not
-                            // work on an interruption": the error path used
-                            // to return the error DEAD, so a slow provider
-                            // ended the seat's work with an error card while
-                            // the poke — whose guard had already recorded the
-                            // error — was never asked.
-                            // Only a CLASSIFIED transient failure earns the
-                            // poke. An UNCLASSIFIED error ends the turn: the
-                            // operator's contract — "an error ends the turn",
-                            // pinned by review_discipline's
-                            // `error_exit_skips_the_armed_review` — and a
-                            // retry on a coin flip is how a deterministic
-                            // failure turns into a slow one.
-                            let pokeable = classified.earns_recovery();
-                            if pokeable
-                                && self
-                                .maybe_poke(
-                                    &mut messages,
-                                    &mut poke,
-                                    true,
-                                    &TurnEndContext {
-                                        session_id: &session_id,
-                                        user_query: &user_query,
-                                        counters: TurnCounters {
-                                            iteration,
-                                            tool_calls: total_tool_calls,
-                                            succeeded: successful_tool_calls,
-                                        },
-                                        review_skills: review_skills_pending,
-                                        review_memory: review_memory_pending,
-                                        timing: TurnTiming {
-                                            start: turn_start,
-                                            inference: turn_inference,
-                                            saw_inference,
-                                        },
-                                    },
-                                )
-                                .await?
-                            {
-                                continue;
+                                    // The provider call failed and the turn's retry
+                                    // budget is spent. A DETERMINISTIC failure ends
+                                    // the turn (the poke's guard); a TRANSIENT one
+                                    // gets the bounded poke — the seam the
+                                    // 2026-11-12 audit reports as "the poke does not
+                                    // work on an interruption": the error path used
+                                    // to return the error DEAD, so a slow provider
+                                    // ended the seat's work with an error card while
+                                    // the poke — whose guard had already recorded the
+                                    // error — was never asked.
+                                    // Only a CLASSIFIED transient failure earns the
+                                    // poke. An UNCLASSIFIED error ends the turn: the
+                                    // operator's contract — "an error ends the turn",
+                                    // pinned by review_discipline's
+                                    // `error_exit_skips_the_armed_review` — and a
+                                    // retry on a coin flip is how a deterministic
+                                    // failure turns into a slow one.
+                                    let pokeable = classified.earns_recovery();
+                                    if pokeable
+                                        && self
+                                            .maybe_poke(
+                                                &mut messages,
+                                                &mut poke,
+                                                true,
+                                                &TurnEndContext {
+                                                    session_id: &session_id,
+                                                    user_query: &user_query,
+                                                    counters: TurnCounters {
+                                                        iteration,
+                                                        tool_calls: total_tool_calls,
+                                                        succeeded: successful_tool_calls,
+                                                    },
+                                                    review_skills: review_skills_pending,
+                                                    review_memory: review_memory_pending,
+                                                    timing: TurnTiming {
+                                                        start: turn_start,
+                                                        inference: turn_inference,
+                                                        saw_inference,
+                                                    },
+                                                },
+                                            )
+                                            .await?
+                                    {
+                                        continue;
+                                    }
+                                    return Err(last_error);
+                                }
                             }
-                            return Err(last_error);
                         }
-                    }
-                }
                     }
                 };
                 // ── Mid-stream drop recovery (hermes parity) ─────────────
@@ -2263,7 +2307,38 @@ impl OperantAgent {
                         {
                             self.learn_context_limit(&messages, &e);
                         }
-                        if classified.should_compress && !retry_state.compress_attempted {
+                        // ── Reasoning-effort rejection (plan 03) ──────────────
+                        // The request was fine except the effort field: mark
+                        // the model, tell the user once, and retry WITHOUT the
+                        // field. Free — no retry-budget consumed.
+                        //
+                        // Z16 (2026-11-16 red team): this rung existed only in
+                        // the STREAMING arm. With `[agent] stream = false` a
+                        // rejection fell through to `reissue_with_budget`,
+                        // whose `fitted_request` re-attached the very field the
+                        // provider had just rejected — so every compressed
+                        // re-issue was the identical doomed request and the
+                        // turn burned its whole retry budget (and its wall
+                        // clock) on it, while the model stayed marked as
+                        // effort-capable and the NEXT turn repeated it.
+                        if let Some(retry_request) = self
+                            .retry_without_reasoning_effort(
+                                &classified,
+                                &mut retry_state,
+                                &messages,
+                            )
+                            .await
+                        {
+                            match self
+                                .call_with_loop_timeout(self.client.chat(retry_request))
+                                .await
+                            {
+                                Ok(response) => response,
+                                Err(retry_err) => {
+                                    return Err(self.annotate_thinking_timeout(retry_err));
+                                }
+                            }
+                        } else if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
@@ -5338,6 +5413,309 @@ mod overflow_typed_tests {
         assert!(
             region.contains(&typed),
             "the non-streaming compression arm must fail typed (Error::ContextExhausted), not propagate the raw provider error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod z16_reasoning_param_tests {
+    //! Z16 (2026-11-16 red team): `ReasoningParamRejected` was handled only in
+    //! the STREAMING arm of the request ladder (`agent/run.rs`, the
+    //! `request.stream` branch). With `[agent] stream = false` a provider that
+    //! rejects `reasoning_effort` fell through to the generic re-issue, whose
+    //! `fitted_request` re-attached the very field the provider had just
+    //! rejected — so every compressed re-issue was the identical doomed request
+    //! and the turn burned its whole retry budget on it.
+    //!
+    //! These tests drive the REAL `OperantAgent::run` loop (no stubs) and
+    //! assert on the request the client actually receives, not on a flag.
+    //! All use the NON-STREAMING arm (`stream: false`) — the arm Z16 is about.
+    //! The streaming arm is unaffected (see the sibling `overflow_typed_tests`
+    //! and the `agent::` streaming tests).
+
+    use super::*;
+    use crate::agent::model_client::{ChatRequest, ModelClient, StreamChunk};
+    use crate::agent::turn_retry_state::TurnRetryState;
+    use crate::client::{ChatResponse, Choice, MessageDelta, Usage};
+    use crate::database::Database;
+    use crate::tools::ToolRegistry;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// One recorded request: the reasoning field as the CLIENT saw it, plus
+    /// whether the `reasoning` object shape was present.
+    #[derive(Debug, Clone, PartialEq)]
+    enum Effort {
+        /// `reasoning_effort` carried this value.
+        Field(String),
+        /// The reasoning-object shape carried this effort.
+        Object(String),
+        /// No reasoning field at all.
+        None,
+    }
+
+    /// A scripted provider for the non-streaming path.
+    ///
+    /// Behavior is scripted per call:
+    ///   - `Some(status)`  → return that provider error (body explains it).
+    ///   - `None`          → return a normal assistant response.
+    ///
+    /// Every request is recorded (via the shared `seen` log) so a test can
+    /// assert on the reasoning field of the RETRY, not just on the call count.
+    struct ScriptedNonStreaming {
+        calls: Arc<AtomicUsize>,
+        seen: Arc<Mutex<Vec<Effort>>>,
+        /// Error status for call index `i` (0-based); `None` = succeed.
+        script: Vec<Option<u16>>,
+    }
+
+    impl ScriptedNonStreaming {
+        fn effort_of(request: &ChatRequest) -> Effort {
+            match (&request.reasoning_effort, &request.reasoning_shape) {
+                (Some(e), _) => Effort::Field(e.clone()),
+                (None, crate::client::ReasoningShape::ReasoningObject) => {
+                    Effort::Object(String::new())
+                }
+                (None, _) => Effort::None,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelClient for ScriptedNonStreaming {
+        fn provider_name(&self) -> &str {
+            "scripted-nonstreaming"
+        }
+
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen
+                .lock()
+                .expect("seen lock")
+                .push(Self::effort_of(&request));
+            match self.script.get(call).copied().flatten() {
+                Some(400) => Err(Error::Provider {
+                    status: 400,
+                    body: r#"{"error":"Unrecognized request argument supplied: reasoning_effort"}"#
+                        .to_string(),
+                    retry_after: None,
+                }),
+                Some(status) => Err(Error::Provider {
+                    status,
+                    body: "scripted failure".to_string(),
+                    retry_after: None,
+                }),
+                None => Ok(ChatResponse {
+                    id: format!("resp-{call}"),
+                    object: "chat.completion".to_string(),
+                    created: 0,
+                    model: "scripted".to_string(),
+                    choices: vec![Choice {
+                        index: 0,
+                        message: MessageDelta {
+                            role: Some(Role::Assistant),
+                            content: Some("answered".to_string()),
+                            reasoning_content: None,
+                            tool_calls: None,
+                        },
+                        finish_reason: Some("stop".to_string()),
+                    }],
+                    usage: Usage {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        total_tokens: 2,
+                    },
+                }),
+            }
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<futures::stream::BoxStream<'static, Result<StreamChunk>>> {
+            // The non-streaming arm never reaches this. Present so the client
+            // is total; it is not part of these tests' contract.
+            Ok(Box::pin(futures::stream::iter(vec![Ok(StreamChunk::new(
+                Some("streaming".to_string()),
+                None,
+                None,
+            ))])))
+        }
+    }
+
+    fn scripted_agent(
+        stream: bool,
+        script: Vec<Option<u16>>,
+    ) -> (OperantAgent, Arc<AtomicUsize>, Arc<Mutex<Vec<Effort>>>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db =
+            Arc::new(Database::init(dir.path().join("z16-reasoning.sqlite")).expect("test db"));
+        // Keep the dir alive for the whole test: Database holds the file open,
+        // and a tempfile::TempDir dropped here would delete it under us.
+        std::mem::forget(dir);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let agent = OperantAgent::new(
+            AgentConfig {
+                // An effort is set so `fitted_request` WOULD attach it — the
+                // precondition Z16 requires. The fix is that the retry omits it.
+                reasoning_effort: "high".to_string(),
+                stream,
+                context_window: 200_000,
+                max_iterations: 5,
+                ..AgentConfig::default()
+            },
+            Box::new(ScriptedNonStreaming {
+                calls: calls.clone(),
+                seen: seen.clone(),
+                script,
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            db,
+        );
+        (agent, calls, seen)
+    }
+
+    /// Z16 regression (the fix): a NON-STREAMING request that the provider
+    /// rejects with `ReasoningParamRejected` is retried with NO `reasoning_effort`.
+    ///
+    /// Fails without the fix: the old non-streaming ladder had no
+    /// reasoning-param rung, so the retry was rebuilt by `fitted_request`,
+    /// which re-read `self.reasoning_effort` (never cleared) and sent the field
+    /// again. This asserts on the actual recorded request.
+    #[tokio::test]
+    async fn non_streaming_retry_after_reasoning_rejection_omits_the_effort_field() {
+        let (agent, calls, seen) = scripted_agent(false, vec![Some(400), None]);
+        let result = agent.run("hi".to_string()).await;
+        assert!(
+            result.is_ok(),
+            "the retry without the effort field must succeed: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "exactly one re-issue after the reasoning rejection"
+        );
+        let seen = seen.lock().expect("seen lock");
+        assert_eq!(seen.len(), 2, "two requests recorded: {seen:?}");
+        // First attempt: the effort field WAS attached (the precondition).
+        assert_eq!(
+            seen[0],
+            Effort::Field("high".to_string()),
+            "the first request must carry the effort field, else the test proves nothing: {seen:?}"
+        );
+        // The fix: the RETRY must not carry it.
+        assert_eq!(
+            seen[1],
+            Effort::None,
+            "the retry after a reasoning rejection must carry NO reasoning_effort: {seen:?}"
+        );
+    }
+
+    /// Z16 non-regression: a provider that ACCEPTS the reasoning field keeps
+    /// receiving it — the fix is a targeted suppression, not a global strip.
+    ///
+    /// Script: call 0 fails with a NON-reasoning error (a plain provider 500),
+    /// so the generic re-issue fires; the field must still be attached there.
+    #[tokio::test]
+    async fn a_provider_that_accepts_reasoning_is_unaffected() {
+        let (agent, calls, seen) = scripted_agent(false, vec![Some(500), None]);
+        let result = agent.run("hi".to_string()).await;
+        assert!(
+            result.is_ok(),
+            "a provider that accepts the field recovers via the generic re-issue: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "one generic re-issue after the 500"
+        );
+        let seen = seen.lock().expect("seen lock");
+        assert_eq!(seen.len(), 2, "two requests recorded: {seen:?}");
+        assert_eq!(
+            seen[1],
+            Effort::Field("high".to_string()),
+            "a provider that never rejected the field must keep receiving it: {seen:?}"
+        );
+    }
+
+    /// Z16 one-shot guard: once the effort has been rejected and stripped, a
+    /// SECOND rejection does not loop. Script: reject twice; the turn ends on
+    /// the second rejection's error (no infinite retry).
+    #[tokio::test]
+    async fn the_reasoning_rejection_retry_is_one_shot() {
+        let (agent, calls, seen) = scripted_agent(false, vec![Some(400), Some(400), None]);
+        let result = agent.run("hi".to_string()).await;
+        // The retry (call 1) also rejects; the loop must NOT keep re-sending.
+        assert!(
+            result.is_err(),
+            "a second rejection ends the turn instead of looping: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "exactly two calls: the initial and the single stripped retry: {seen:?}"
+        );
+        let seen = seen.lock().expect("seen lock");
+        assert_eq!(
+            seen[1],
+            Effort::None,
+            "the one-shot retry still strips the field: {seen:?}"
+        );
+    }
+
+    /// The one-shot guard lives in `TurnRetryState`, not in this test file's
+    /// imagination: assert the field the helper reads is set after a retry.
+    /// (The source contract below is the belt-and-braces for the wiring.)
+    #[test]
+    fn turn_retry_state_has_a_reasoning_param_guard() {
+        let mut state = TurnRetryState::new(Some(3));
+        assert!(!state.reasoning_param_attempted);
+        state.reasoning_param_attempted = true;
+        assert!(
+            state.reasoning_param_attempted,
+            "the guard must be settable so the helper's one-shot check can hold"
+        );
+    }
+
+    /// Source contract (the repo's own shape for retry-ladder parity, cf.
+    /// `overflow_typed_tests::the_non_streaming_compression_arm_fails_typed`):
+    ///
+    /// BOTH arms of the request ladder must call the shared reasoning-param
+    /// helper. Needles are assembled by concatenation so this test's own
+    /// source cannot satisfy them. The streaming arm is the FIRST `if let
+    /// Some(retry_request)` in the file; the non-streaming arm is the SECOND.
+    #[test]
+    fn both_arms_call_the_shared_reasoning_param_helper() {
+        let src = include_str!("run.rs");
+        // The call is rustfmt-broken across lines (the three args sit on their
+        // own rows), so the needle is the qualified name itself. Two call sites
+        // (streaming + non-streaming), one definition: the definition's `fn`
+        // prefix is what distinguishes it from the `.method(` call form.
+        let call = format!(".{}(", "retry_without_reasoning_effort");
+        assert_eq!(
+            src.matches(&call).count(),
+            2,
+            "both the streaming and the non-streaming ladder must call the shared \
+             reasoning-param recovery — a missing call is Z16: {call}"
+        );
+        // And there must be exactly ONE definition of the helper, so a future
+        // arm cannot drift into re-implementing (or dropping) the rule.
+        let def = format!("{}retry_without_reasoning_effort(", "async fn ");
+        assert_eq!(
+            src.matches(&def).count(),
+            1,
+            "exactly one shared helper: a second copy is how the two arms drifted \
+             apart in the first place"
+        );
+        // The helper must call the suppression writer, or a caller-side call
+        // site alone would prove nothing.
+        let marks = format!("self.mark_effort_unsupported({}", "&model");
+        assert!(
+            src.contains(&marks),
+            "the shared helper must mark the model's effort unsupported, so \
+             fitted_request stops attaching the rejected field"
         );
     }
 }

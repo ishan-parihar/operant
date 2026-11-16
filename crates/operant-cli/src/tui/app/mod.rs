@@ -693,7 +693,8 @@ pub struct App {
     pub settings_screen: SettingsScreen,
     /// (panels plan S3) The models panel: one row per model slot, with the
     /// scope axis beside it. Opened by `/model roles`.
-    pub models_panel: crate::tui::models_panel::ModelsPanel,
+    // (2026-11-16, audit Z22) the `models_panel` field is gone with the panel;
+    // see the module note in `tui/mod.rs`.
     /// Theme picker overlay (/theme).
     pub theme_screen: ThemeScreen,
     /// Token/cost analytics dialog.
@@ -991,10 +992,16 @@ pub struct App {
     pub last_input_area: Cell<ratatui::layout::Rect>,
     /// Which area of the TUI currently has keyboard focus.
     pub focus: FocusTarget,
-    /// Maps virtual_row_index → thinking_block_hash for click detection.
-    pub thinking_row_map: RefCell<std::collections::HashMap<u16, u64>>,
-    /// Maps screen row → transcript message index for right-click hit testing.
-    pub message_row_map: RefCell<std::collections::HashMap<u16, usize>>,
+    // (2026-11-16, audit Z23) `thinking_row_map` and `message_row_map` DELETED.
+    // Both were `RefCell<HashMap>` hit-test maps that NOTHING in production ever
+    // wrote -- the only insert in the whole tree was a unit test. Their readers
+    // therefore always took the fallback branch: right-click over the transcript
+    // always dismissed the menu, Ctrl+Shift+M always produced a selection-only
+    // menu, and click-to-collapse-thinking was unreachable (which also meant
+    // `thinking_expanded` could never be non-empty, since its only writer was
+    // that dead branch). Hit testing now resolves against the prepared frame's own
+    // message boundaries via `operant_ui::message_index_at_screen_row`, so the
+    // pointer and the painting share one geometry instead of two.
     /// Scroll offset from the last render frame (used for selection validation).
     pub last_render_scroll_offset: Cell<u16>,
     /// Content address of the transcript row painted at the TOP of the viewport

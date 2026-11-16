@@ -763,15 +763,18 @@ impl App {
                 // argument was only ever a filter string, so `/model slow:xhigh`
                 // narrowed the list to nothing and set nothing.
                 let selector = args.trim();
-                // `/model roles` opens the models panel on its Roles view: the
-                // one surface that shows every slot, assigned or not, with an
-                // unassign. `/agents` keeps its own menu — that one lists the
-                // RUNNING subagents, which is a different question from "what
-                // is each slot configured with", and repointing it would take
-                // away a working surface rather than add one.
+                // `/model roles` opens the unified inline picker on its Roles
+                // scope: the surface that lists one row per model SLOT, assigned
+                // or not, and applies an assignment to `operant.toml` on Enter.
+                //
+                // (2026-11-16 W3, audit Z22) This used to open `models_panel`,
+                // a second surface that owned the keyboard and could write the
+                // config while painting NOTHING. Deleted: the picker already
+                // renders the role rows through `ModelScope::Roles`, so there
+                // was no capability to lose, only a phantom surface.
                 if selector.eq_ignore_ascii_case("roles") {
-                    self.models_panel
-                        .open(crate::tui::model_scope::ModelScope::Roles);
+                    self.open_model_picker_inline("");
+                    self.apply_model_scope(crate::tui::model_scope::ModelScope::Roles);
                     return true;
                 }
                 if selector.is_empty() {

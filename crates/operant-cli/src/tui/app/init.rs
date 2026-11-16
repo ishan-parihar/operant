@@ -243,7 +243,8 @@ impl App {
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),
-            models_panel: crate::tui::models_panel::ModelsPanel::default(),
+            // (2026-11-16, audit Z22) the `models_panel` initialiser is gone with
+            // the panel; see the module note in `tui/mod.rs`.
             pending_inline_images: std::cell::RefCell::new(Vec::new()),
             theme_screen: ThemeScreen::new(),
             stats_dialog: StatsDialogState::new(),
@@ -412,8 +413,8 @@ impl App {
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
             last_input_area: Cell::new(ratatui::layout::Rect::default()),
             focus: FocusTarget::Input,
-            thinking_row_map: RefCell::new(std::collections::HashMap::new()),
-            message_row_map: RefCell::new(std::collections::HashMap::new()),
+            // (2026-11-16, audit Z23) the two dead hit-test maps that lived here are
+            // gone; see the note on their former fields in `app/mod.rs`.
             last_render_scroll_offset: Cell::new(0),
             last_render_content_pos: Cell::new(None),
             last_resolved_scroll: Cell::new(None),

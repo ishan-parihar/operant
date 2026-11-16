@@ -1683,7 +1683,7 @@ fn set_pinned_todo_more_area(area: Option<Rect>) {
 /// (iter-1211) The rect was written every frame and read by nothing, so the
 /// band advertised a truncation affordance a click could not dismiss. The
 /// click handler now asks this before it starts a text selection, the same
-/// way the thinking-block header is dispatched through `thinking_row_map`.
+/// way a tool row is dispatched through `TOOL_ROW_REGIONS`.
 pub(crate) fn pinned_todo_more_area() -> Option<Rect> {
     PINNED_TODO_MORE_AREA.lock().ok().and_then(|area| *area)
 }
@@ -1731,13 +1731,54 @@ pub(crate) fn tool_row_region_at(
     content_top: u16,
     scroll: usize,
 ) -> Option<crate::tui::operant_model::ToolRowRange> {
-    if screen_row < content_top {
-        return None;
-    }
-    let abs_line = scroll + (screen_row - content_top) as usize;
+    let abs_line = wrapped_line_at_screen_row(screen_row, content_top, scroll)?;
     tool_row_regions()
         .into_iter()
         .find(|region| abs_line >= region.start_line && abs_line < region.end_line)
+}
+
+/// Resolve a SCREEN row to a wrapped line in the last drawn frame.
+///
+/// The one place the `content_top` / `scroll` subtraction lives, so the
+/// tool-row hit test and the transcript message hit test cannot disagree about
+/// which line a row is. `None` when the row sits above the transcript text
+/// (the prompt-preview / pinned-todo top band) — a caller must read that as
+/// "not transcript", never as line 0.
+fn wrapped_line_at_screen_row(screen_row: u16, content_top: u16, scroll: usize) -> Option<usize> {
+    if screen_row < content_top {
+        return None;
+    }
+    Some(scroll + (screen_row - content_top) as usize)
+}
+
+/// The transcript MESSAGE index under a screen row, from the last drawn frame.
+///
+/// (2026-11-16 W3, audit Z23) Right-click and Ctrl+Shift+M both need "which
+/// message is the operator pointing at?". They used to ask
+/// `App::message_row_map`, a screen-row map NOTHING in production ever wrote
+/// (its only insert was a unit test), so both callers silently took their
+/// fallback branch: right-click over the transcript always dismissed the menu,
+/// and Ctrl+Shift+M always produced a selection-only menu.
+///
+/// The frame already carries the answer in content coordinates —
+/// [`crate::tui::operant_model::PreparedChatFrame::message_index_at_line`]
+/// over the Body section's cumulative message boundaries — and those
+/// boundaries are in the SAME frame-coordinate space as `tool_row_ranges`, so
+/// the two hit tests resolve against one geometry instead of two.
+///
+/// The returned index is into `App::display_messages()`, which is the vector
+/// the Body section was built from — so it names the row the operator is
+/// actually pointing at. A caller that wants an `App::messages` index has to
+/// map across, and the two are NOT interchangeable: a tool row, a reasoning
+/// trace and a background card each occupy a display row without being an app
+/// message.
+pub(crate) fn message_index_at_screen_row(
+    screen_row: u16,
+    content_top: u16,
+    scroll: usize,
+) -> Option<usize> {
+    let abs_line = wrapped_line_at_screen_row(screen_row, content_top, scroll)?;
+    super::last_chat_frame()?.message_index_at_line(abs_line)
 }
 
 fn compute_prompt_preview_line_count(
