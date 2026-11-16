@@ -115,7 +115,17 @@ pub fn run_config_checks(
     section_header("Configuration Files");
 
     let env_path = hh.join(".env");
+    // THE SIBLING SURFACE. The config file's mode is checked below; `.env`
+    // holds as many credentials and had no mode check at all, so a `0644`
+    // `.env` — the umask default from any writer that does not go through
+    // `env_store`'s owner-only open — was invisible here.
     if env_path.exists() {
+        if is_world_or_group_readable(&env_path) {
+            check_warn(
+                &format!("{}/.env is group/world-readable", dhh),
+                &format!("run: chmod 600 {}", env_path.display()),
+            );
+        }
         check_ok(&format!("{}/.env file exists", dhh), "");
         match std::fs::read_to_string(&env_path) {
             Ok(content) => {
@@ -165,7 +175,16 @@ pub fn run_config_checks(
     }
 
     let yaml_path = hh.join("config.yaml");
-    let toml_path = hh.join("operant.toml");
+    // The config the PROCESS actually loaded, not merely the file in the home.
+    // `operant -c <path> doctor` and `HERMES_CONFIG` both point the run at
+    // another file; checking only `~/.operant/operant.toml` would report the
+    // credentials of a file this run never read, and stay silent about the one
+    // it did. Found by red-teaming the first implementation (2026-11-16): a
+    // probe config carrying six live secrets produced no warning at all
+    // because the scan was reading the home copy.
+    let toml_path = operant_core::config::loaded_config_path()
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| hh.join("operant.toml"));
 
     if yaml_path.exists() {
         check_ok(
@@ -173,12 +192,21 @@ pub fn run_config_checks(
             "(Python compatibility)",
         );
     }
+    // `dhh` collapses the home to `~`, so it may only be used for a file that
+    // really IS under the home. Printing "~/.operant/operant.toml exists" while
+    // reading a `-c` target elsewhere is the same lie this check was just
+    // fixed for: the message and the file must be the same file.
+    let toml_label = if toml_path.starts_with(&hh) {
+        format!("{dhh}/operant.toml")
+    } else {
+        toml_path.display().to_string()
+    };
     if toml_path.exists() {
-        check_ok(&format!("{}/operant.toml exists", dhh), "");
+        check_ok(&format!("{toml_label} exists"), "");
         // The file exists; say whether it carries a live credential in the
         // clear. Nothing else in doctor read the config's TEXT, so a key
         // pasted here was invisible to every check (2026-11-16, live).
-        check_plaintext_credentials(&toml_path, &dhh);
+        check_plaintext_credentials(&toml_path);
     }
     if !yaml_path.exists() && !toml_path.exists() {
         check_warn(
@@ -619,35 +647,55 @@ pub async fn check_context_window(
 /// The LLM summarizer's route.
 ///
 /// Compaction claims to summarize the middle with an LLM. When
-/// Credential keys that can appear in a config file, as the dotted paths the
-/// operator would use to set them. Every one of these is written to disk in
-/// PLAINTEXT: nothing in this tree encrypts them at rest, and the loader
-/// never decrypts (RT-154).
+/// Whether a config KEY NAME identifies a credential.
 ///
-/// This is the list the *config file* can carry. `.env` is a separate surface
-/// with its own check above; a name here is matched only as a TOML key, so an
-/// `.env`-only key is never double-reported.
-const SECRET_CONFIG_KEYS: &[&str] = &[
-    "client.api_key",
-    "vision.api_key",
-    "gateway.telegram_token",
-    "gateway.discord_token",
-    "gateway.slack_token",
-    "gateway.whatsapp_token",
-];
+/// A NAME rule, not a list of dotted paths. The first implementation shipped a
+/// hardcoded list of six paths and was wrong on both sides at once: it MISSED
+/// ten live credential fields (`auxiliary_models.*.api_key`,
+/// `advisor.model.api_key`, `stt.groq_api_key`, `stt.openai_api_key`,
+/// `tools.web.tavily_api_key`, `tools.web.exa_api_key`,
+/// `tools.terminal.ssh.key_path`, `memory.agentmemory_secret`,
+/// `mcp.servers[].auth_token`, `gateway.webhooks_secret`), and it encoded paths
+/// (`vision.api_key`, `client.api_key`) that a hand-edit never produces in that
+/// form. A list has to be maintained in two places — the struct and this scan —
+/// and the struct is the one that keeps changing.
+///
+/// The suffix rule covers every one of those and the next field someone adds:
+/// a key whose name ends in `_key`, `_token`, `_secret` or `_password` (or IS
+/// one of `api_key`, `token`, `secret`, `password`) carries a credential.
+///
+/// Deliberately about the NAME only, so `telegram_enabled` and `search_url`
+/// never match, and so a future `*_api_key` is covered the day it lands.
+fn is_secret_key_name(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    const EXACT: &[&str] = &["api_key", "apikey", "token", "secret", "password", "passwd"];
+    if EXACT.contains(&key.as_str()) {
+        return true;
+    }
+    const SUFFIXES: &[&str] = &[
+        "_api_key",
+        "_apikey",
+        "_token",
+        "_secret",
+        "_password",
+        "_key",
+    ];
+    SUFFIXES.iter().any(|suffix| key.ends_with(suffix))
+}
 
-/// Every `(dotted key, value)` pair a config file assigns to one of
-/// [`SECRET_CONFIG_KEYS`].
+/// Every credential-looking key a config file assigns a value to, as dotted
+/// paths, in file order.
 ///
-/// Deliberately a TEXT scan rather than a parse of `AppConfig`: the fields are
-/// `Option<String>` and a `None` is indistinguishable from an absent key, but
-/// the operator's question is "is a live secret sitting in this file", and a
+/// A TEXT scan rather than a parse of `AppConfig`: the fields are
+/// `Option<String>`, so a `None` and an absent key are indistinguishable — but
+/// the operator's question is "is a live value sitting in this file", and a
 /// value that parses to `None` was never written. The scan also sees a key
-/// inside a section the running build ignores, which is exactly where a
-/// stale secret hides.
+/// inside a section the running build ignores, which is exactly where a stale
+/// secret hides (`[memory] agentmemory_secret` is retired, still accepted, and
+/// still a secret on disk).
 ///
-/// A value is reported by NAME only. The caller prints the dotted path and
-/// never the bytes, because doctor's output is routinely pasted into issues.
+/// Values are never returned — only names — because doctor's output is pasted
+/// into issues and bug reports.
 fn plaintext_secrets_in(text: &str) -> Vec<String> {
     let mut section = String::new();
     let mut found = Vec::new();
@@ -657,6 +705,8 @@ fn plaintext_secrets_in(text: &str) -> Vec<String> {
             continue;
         }
         if trimmed.starts_with('[') {
+            // `[[mcp.servers]]` is an array-of-tables header; the repeated
+            // element has no key of its own, so the name alone is enough.
             section = trimmed
                 .trim_matches(|c| c == '[' || c == ']')
                 .trim()
@@ -674,18 +724,37 @@ fn plaintext_secrets_in(text: &str) -> Vec<String> {
         if value.is_empty() {
             continue;
         }
-        // A table header can be quoted or dotted (`[gateway]`); compare on the
-        // joined path so `[client] api_key` and `client.api_key = …` both hit.
+        if !is_secret_key_name(key) || names_a_secret_but_is_not_one(key) {
+            continue;
+        }
+        // `.env` variable names are UPPER_SNAKE (`TELEGRAM_BOT_TOKEN`,
+        // `OPENAI_API_KEY`). They belong to the `.env` surface, which has its
+        // own check above; a config that happens to carry one is not holding a
+        // config FIELD, and reporting it here would tell the operator to move a
+        // key out of the file it is already the right file for. Config keys are
+        // lower_snake by convention everywhere in this schema.
+        if key.chars().any(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        // A table header can be dotted (`[gateway]`); compare on the joined
+        // path so `[client] api_key` and a top-level `client.api_key = …` both
+        // read as the same field.
         let dotted = if section.is_empty() {
             key.to_string()
         } else {
             format!("{section}.{key}")
         };
-        if SECRET_CONFIG_KEYS.contains(&dotted.as_str()) {
-            found.push(dotted);
-        }
+        found.push(dotted);
     }
     found
+}
+
+/// Config keys that name a credential but hold no secret, so they must not be
+/// reported. `key_path` is the one that matters: `tools.terminal.ssh.key_path`
+/// points at a file, and the file is the secret — naming the path would send an
+/// operator to chmod a config that holds no credential.
+fn names_a_secret_but_is_not_one(key: &str) -> bool {
+    key.to_ascii_lowercase().ends_with("_path")
 }
 
 /// Whether a file is readable by anyone other than its owner.
@@ -727,7 +796,7 @@ fn is_world_or_group_readable(_path: &std::path::Path) -> bool {
 /// - a plaintext secret at all → the operator should know where it lives;
 /// - a plaintext secret in a LOOSELY permissioned file → urgent, because
 ///   every local account can read it right now.
-fn check_plaintext_credentials(config_path: &std::path::Path, dhh: &str) {
+fn check_plaintext_credentials(config_path: &std::path::Path) {
     let Ok(text) = std::fs::read_to_string(config_path) else {
         return;
     };
@@ -742,7 +811,7 @@ fn check_plaintext_credentials(config_path: &std::path::Path, dhh: &str) {
         check_warn(
             &format!(
                 "{} holds plaintext credentials and is group/world-readable",
-                dhh
+                config_path.display()
             ),
             &format!(
                 "{} — run: chmod 600 {}",
@@ -752,7 +821,7 @@ fn check_plaintext_credentials(config_path: &std::path::Path, dhh: &str) {
         );
     } else {
         check_warn(
-            &format!("{} holds plaintext credentials", dhh),
+            &format!("{} holds plaintext credentials", config_path.display()),
             &format!(
                 "{} (owner-only, but unencrypted — prefer ~/.operant/.env for keys)",
                 shown.join(", ")
@@ -1164,18 +1233,19 @@ mod tests {
 
     // ── Plaintext credential detection ──────────────────────────────────
     //
-    // The live gap (2026-11-16): `~/.operant/operant.toml` carried a real
-    // provider `api_key` in the clear and no doctor check read the file's
-    // TEXT. These pin the scan that closes it.
+    // The live gap (2026-11-16): `~/.operant/operant.toml` carried real
+    // credentials in the clear and no doctor check read the file's TEXT.
+    // These pin the name rule that closes it.
 
+    /// The two fields live on this host, and the shape a hand-edit produces.
     #[test]
     fn a_client_api_key_in_a_section_is_reported() {
         let text = "[client]\nbase_url = \"https://x/v1\"\napi_key = \"sk-live-123\"\n";
         assert_eq!(plaintext_secrets_in(text), vec!["client.api_key"]);
     }
 
-    /// The dotted spelling (`client.api_key = …` at top level) is the other
-    /// form a hand-edit can take, and `persist_config_key` writes that way.
+    /// The dotted spelling is the other form a hand-edit can take, and the one
+    /// `persist_config_key` writes. Both must resolve to the same field.
     #[test]
     fn a_dotted_top_level_secret_key_is_reported() {
         assert_eq!(
@@ -1192,16 +1262,76 @@ telegram_token = \"111:aaa\"
 discord_token = \"bbb\"
 slack_token = \"ccc\"
 whatsapp_token = \"ddd\"
+webhooks_secret = \"whsec\"
 ";
         let found = plaintext_secrets_in(text);
-        assert_eq!(found.len(), 4, "got: {found:?}");
-        assert!(found.contains(&"gateway.telegram_token".to_string()));
+        assert_eq!(found.len(), 5, "got: {found:?}");
+        assert!(found.contains(&"gateway.webhooks_secret".to_string()));
         assert!(found.contains(&"gateway.whatsapp_token".to_string()));
     }
 
+    /// THE COVERAGE HOLE THE FIRST IMPLEMENTATION HAD. A hardcoded six-path
+    /// list missed these entirely, so a config carrying them produced NO
+    /// warning. Each is a real `Option<String>` on a live struct.
+    #[test]
+    fn every_struct_level_secret_field_is_covered() {
+        let text = "\
+[auxiliary_models.compression]
+api_key = \"sk-A\"
+[advisor.model]
+api_key = \"sk-B\"
+[stt]
+groq_api_key = \"sk-C\"
+openai_api_key = \"sk-D\"
+[tools.web]
+tavily_api_key = \"sk-E\"
+exa_api_key = \"sk-F\"
+[memory]
+agentmemory_secret = \"sk-G\"
+[[mcp.servers]]
+name = \"s\"
+auth_token = \"sk-H\"
+";
+        let found = plaintext_secrets_in(text);
+        for expected in [
+            "auxiliary_models.compression.api_key",
+            "advisor.model.api_key",
+            "stt.groq_api_key",
+            "stt.openai_api_key",
+            "tools.web.tavily_api_key",
+            "tools.web.exa_api_key",
+            "memory.agentmemory_secret",
+            "mcp.servers.auth_token",
+        ] {
+            assert!(
+                found.iter().any(|k| k == expected),
+                "missing {expected} — got {found:?}"
+            );
+        }
+    }
+
+    /// A *_api_key added tomorrow is covered without touching this file, which
+    /// is the whole reason the rule is a name rule and not a list.
+    #[test]
+    fn an_unknown_future_api_key_field_is_covered_by_the_name_rule() {
+        let text = "[some_new_section]\nfuture_service_api_key = \"sk-NEW\"\n";
+        assert_eq!(
+            plaintext_secrets_in(text),
+            vec!["some_new_section.future_service_api_key"]
+        );
+    }
+
+    /// `key_path` holds a PATH, not a credential. Reporting it would send the
+    /// operator to chmod a config that carries no secret.
+    #[test]
+    fn a_path_named_like_a_key_is_not_reported() {
+        let text = "[tools.terminal.ssh]\nkey_path = \"/home/me/.ssh/id\"\n";
+        assert!(plaintext_secrets_in(text).is_empty());
+    }
+
     /// An empty value is an unset field, not a leaked secret — the loader
-    /// reads it as `None`, and warning about it would be a false positive on
-    /// every template-derived config.
+    /// reads it as `None`, and warning would false-positive on every
+    /// template-derived config.
     #[test]
     fn an_empty_secret_value_is_not_reported() {
         assert!(plaintext_secrets_in("[client]\napi_key = \"\"\n").is_empty());
@@ -1216,24 +1346,50 @@ whatsapp_token = \"ddd\"
         assert!(plaintext_secrets_in(text).is_empty());
     }
 
+    /// The `.env` surface: a `0644` `.env` holds every provider key and is
+    /// readable by every local account, so it must be named distinctly from
+    /// the config-file warning rather than folded into it.
+    #[test]
+    fn a_loose_env_file_is_named_as_its_own_finding() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = dir.path().join(".env");
+        std::fs::write(&env, "OPENAI_API_KEY=sk-x\n").expect("write");
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+        assert!(
+            is_world_or_group_readable(&env),
+            "a 0644 .env is the case this finding exists for"
+        );
+    }
+
+    /// An owner-only `.env` must not warn, or the check trains the operator to
+    /// ignore it.
+    #[test]
+    fn an_owner_only_env_file_is_quiet() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = dir.path().join(".env");
+        std::fs::write(&env, "OPENAI_API_KEY=sk-x\n").expect("write");
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).expect("chmod 600");
+        assert!(!is_world_or_group_readable(&env), "0600 is quiet");
+    }
+
     /// A commented-out key is documentation, not a live credential.
     #[test]
     fn a_commented_out_secret_is_not_reported() {
         assert!(plaintext_secrets_in("# api_key = \"sk-old\"\n[client]\n").is_empty());
     }
 
-    /// `.env` names are a different surface. `TELEGRAM_BOT_TOKEN` inside a
-    /// config file is not one of the config's own fields, so it is not
-    /// reported here — the `.env` check above owns it.
+    /// `.env` names are a different surface with their own check. A bare
+    /// `TELEGRAM_BOT_TOKEN = …` in the config is not one of the config's own
+    /// fields, so it is not reported here.
     #[test]
     fn an_env_only_name_is_not_reported_as_a_config_secret() {
         assert!(plaintext_secrets_in("TELEGRAM_BOT_TOKEN = \"111:aaa\"\n").is_empty());
     }
 
-    /// THE OUTPUT CONTRACT: doctor's text is pasted into issues and bug
-    /// reports, so the scan returns KEY NAMES and the value never appears in
-    /// what is printed. If a future edit ever puts the value in the vector,
-    /// this fails.
+    /// THE OUTPUT CONTRACT: doctor's text is pasted into issues, so the scan
+    /// returns KEY NAMES and the value never appears in what is printed.
     #[test]
     fn the_reported_names_never_include_the_value() {
         let secret = "sk-SUPER-SECRET-VALUE-do-not-print";
@@ -1246,9 +1402,8 @@ whatsapp_token = \"ddd\"
         );
     }
 
-    /// A real file at `0600` is NOT loose. This is the negative half: without
-    /// it, a check hardcoded to always report "loose" would pass the positive
-    /// test.
+    /// A real file at `0600` is NOT loose. The negative half: without it a
+    /// check hardcoded to always report "loose" would pass the positive test.
     #[cfg(unix)]
     #[test]
     fn an_owner_only_file_is_not_loose() {
@@ -1272,8 +1427,8 @@ whatsapp_token = \"ddd\"
         assert!(is_world_or_group_readable(&path), "0644 is world-readable");
     }
 
-    /// `0640` is group-readable but not world-readable; it still counts,
-    /// because "every local account" is not the only risk — a group is.
+    /// `0640` is group-readable but not world-readable; it still counts — a
+    /// group is a wider audience than the owner.
     #[cfg(unix)]
     #[test]
     fn a_group_readable_file_is_loose() {
@@ -1285,8 +1440,8 @@ whatsapp_token = \"ddd\"
         assert!(is_world_or_group_readable(&path), "0640 is group-readable");
     }
 
-    /// The whole check against a real file: a secret in a 0600 file still
-    /// warns (it is plaintext), because owner-only is not encrypted.
+    /// The live shape: a real key in a 0600 file. Detected, and reported as
+    /// plaintext (owner-only is not encrypted).
     #[cfg(unix)]
     #[test]
     fn a_live_config_with_a_secret_produces_a_warning() {
@@ -1302,7 +1457,7 @@ whatsapp_token = \"ddd\"
         assert_eq!(
             plaintext_secrets_in(&std::fs::read_to_string(&path).expect("read")),
             vec!["client.api_key"],
-            "the live shape (a real key in a 0600 file) is detected"
+            "the live shape is detected"
         );
     }
 }
