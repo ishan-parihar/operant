@@ -386,27 +386,32 @@ fn write_default_config(path: &PathBuf) -> Result<()> {
 }
 
 fn handle_env_path() -> Result<()> {
-    let env_path = if let Ok(config_dir) = std::env::var("HERMES_CONFIG") {
-        PathBuf::from(config_dir).join(".env")
-    } else if let Ok(config_dir) = std::env::var("HERMES_CONFIG_DIR") {
-        PathBuf::from(config_dir).join(".env")
-    } else if let Some(config_dir) = dirs::config_dir() {
-        config_dir.join("operant").join(".env")
-    } else {
-        PathBuf::from("~/.config/operant/.env")
-    };
+    // ONE resolver, the one the LOADERS use. `load_env`,
+    // `save_env` and `delete_env` all read `env_store::operant_env_path()`
+    // (env_store.rs:58,117,171), which is `HERMES_HOME`-aware through
+    // `platform::operant_home()`.
+    //
+    // The previous implementation built its own candidate list
+    // (`HERMES_CONFIG`, `HERMES_CONFIG_DIR`, `dirs::config_dir()`) and printed
+    // the FIRST one that merely existed. That is a different rule from the one
+    // the app uses, so on a machine with a stray `~/.config/operant/.env` this
+    // command confidently named a file the agent never reads, and the operator
+    // who then edited it changed nothing (RT-Z43-E). A diagnostic that names
+    // the wrong file is worse than one that admits it cannot tell.
+    let env_path = crate::env_store::operant_env_path();
 
     if env_path.exists() {
         let display = env_path.canonicalize().unwrap_or_else(|_| env_path.clone());
         println!("{}", display.display());
-    } else if crate::env_store::operant_env_path().exists() {
-        let alt = crate::env_store::operant_env_path();
-        let display = alt.canonicalize().unwrap_or_else(|_| alt.clone());
-        println!("{}", display.display());
+        Ok(())
     } else {
-        println!("No .env file found.");
+        // Report the path the app WOULD read, not a generic "not found": an
+        // operator who has not created one yet still needs to know where to put
+        // it, and that location is a fact even when the file is absent.
+        println!("{}", env_path.display());
+        eprintln!("No .env file found at that path.");
+        Ok(())
     }
-    Ok(())
 }
 
 /// `operant config backups list|restore`.
