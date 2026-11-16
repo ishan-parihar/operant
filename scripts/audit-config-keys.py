@@ -445,14 +445,36 @@ def _parse_registry(src: str) -> list[tuple[str, str, str]]:
 
 
 def base_registry_keys() -> set[str] | None:
-    """The dotted keys `origin/main`'s registry declares, or None if unreadable.
+    """The dotted keys the branch's BASE revision declares, or None if unreadable.
 
     None means "cannot tell", and every caller treats it as the strict reading.
+
+    THE MERGE BASE, not `origin/main`'s tip. "The keys this change adds" is a
+    question about what THIS BRANCH did, and the branch started at the merge
+    base; a peer who adds and then removes a key upstream would otherwise make
+    that key read as newly added here the moment the removal landed. Observed:
+    `tui.bar_style` was added in iter-2370 and later dropped on `main`, so a
+    branch forked before the removal carries it and every run of this gate
+    reported it as a new key with no heal or doctor row — a defect the branch
+    inherited and did not introduce.
+
+    `origin/main` is still the authority for what the release line contains; it
+    is just not the right baseline for a question about this branch's delta.
     """
     rel = REGISTRY.relative_to(ROOT).as_posix()
+    rev = "origin/main"
+    try:
+        mb = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            capture_output=True, text=True, check=False,
+        )
+        if mb.returncode == 0 and mb.stdout.strip():
+            rev = mb.stdout.strip()
+    except OSError:
+        pass
     try:
         base = subprocess.run(
-            ["git", "show", f"origin/main:{rel}"],
+            ["git", "show", f"{rev}:{rel}"],
             capture_output=True, text=True, check=False,
         )
     except OSError:
@@ -471,11 +493,28 @@ def _const_block(src: str, name: str) -> str:
     m = re.search(rf"pub\s+const\s+{re.escape(name)}\b[^=]*=\s*&\[", src)
     if not m:
         return ""
+    # Skip STRING LITERALS while counting brackets (red-team iter-2481).
+    # A note is free prose and may carry an unmatched bracket — "see `[agent"
+    # for details" — and counting it left depth at +1 past the constant's own
+    # `]`, so the block ran on into SETTING_ROWS. Nothing is lost today because
+    # a `SettingRow` does not match the 3-tuple pattern, but the function's
+    # contract ("the body of THIS constant") was silently violated, and a
+    # future table that DID hold tuples would be parsed as this one's keys.
     depth, i = 1, m.end()
     while i < len(src) and depth:
-        if src[i] == "[":
+        ch = src[i]
+        if ch == '"':
+            i += 1
+            while i < len(src):
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == '"':
+                    break
+                i += 1
+        elif ch == "[":
             depth += 1
-        elif src[i] == "]":
+        elif ch == "]":
             depth -= 1
         i += 1
     return src[m.end():i - 1]

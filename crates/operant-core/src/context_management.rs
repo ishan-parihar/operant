@@ -1780,8 +1780,15 @@ const DECAY_DROPPED_FRAMED_BLOCK: &str =
 /// asks that question — it asks only whether a cut CHANGED the balance, so a
 /// message that was already unbalanced (`Vec<Message>`, `2 < 3 and 4 > 1`,
 /// prose with a stray `<`) is left exactly as it was.
+///
+/// A STACK, not a counter (red-team iter-2481). The counter let an unmatched
+/// CLOSE cancel a later unclosed OPEN: `</a><b>text` scored 0 — the `</a>`
+/// contributed -1 and the `<b>` +1 — so it read as balanced and the truncated
+/// `<b>` was emitted anyway. An unmatched close is now an immediate "no", which
+/// also makes a stray `</a>` in prose classify as unbalanced rather than as a
+/// balanced message the guard may rewrite.
 fn markup_is_balanced(text: &str) -> bool {
-    let mut depth: i64 = 0;
+    let mut stack: Vec<&str> = Vec::new();
     let mut rest = text;
     while let Some(i) = rest.find('<') {
         let after = &rest[i + 1..];
@@ -1791,17 +1798,21 @@ fn markup_is_balanced(text: &str) -> bool {
         };
         let tag = &after[..j];
         if tag.starts_with('/') {
-            depth -= 1;
+            // A close with nothing open is malformed on its own, and letting it
+            // through is what made the counter version cancellable.
+            if stack.pop().is_none() {
+                return false;
+            }
         } else if !tag.starts_with('!')
             && !tag.starts_with('?')
             && !tag.ends_with('/')
             && !tag.trim().is_empty()
         {
-            depth += 1;
+            stack.push(tag);
         }
         rest = &after[j + 1..];
     }
-    depth <= 0
+    stack.is_empty()
 }
 
 /// How far the natural render overshoots the budget it must fit.
@@ -4421,5 +4432,50 @@ mod tests {
             total > 40 * 20,
             "the estimate must not collapse to nothing: {total} tokens for 40 skills"
         );
+    }
+    /// The counter version let an unmatched close cancel a later unclosed open.
+    ///
+    /// `</a><b>text` scored 0 (a -1 then a +1), so it read as balanced and a
+    /// truncated `<b>` was emitted into the request.
+    #[test]
+    fn an_unmatched_close_does_not_cancel_a_later_unclosed_open() {
+        // The full message is well-formed; the cut is not.
+        let full = "<a><b>text</b></a>";
+        let cut = "<a><b>text";
+        assert!(markup_is_balanced(full), "the whole message is fine");
+        assert!(
+            !markup_is_balanced(cut),
+            "a stray close must not hide the unclosed <b>"
+        );
+
+        // The end-to-end consequence: decay must replace the block, not emit
+        // a broken one. The ORIGINAL is balanced; the cut is what breaks.
+        let long = format!(
+            "<a><b>{}</b></a>",
+            "padding to exceed the target ".repeat(20)
+        );
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, long),
+            make_msg(Role::User, "current"),
+        ];
+        let out = decay_render(msgs, 100, 20.0, 0);
+        let kept = &out[1].content;
+        assert!(
+            kept.contains(DECAY_DROPPED_FRAMED_BLOCK) || !kept.contains("<b>"),
+            "an unclosed <b> was emitted: {kept}"
+        );
+    }
+
+    /// A stray closing tag in prose is unbalanced, not a balanced message the
+    /// guard may silently rewrite.
+    #[test]
+    fn a_stray_closing_tag_in_prose_is_unbalanced() {
+        assert!(!markup_is_balanced("</a>"));
+        assert!(!markup_is_balanced("see </a> for details"));
+        // Balanced prose is still balanced.
+        assert!(markup_is_balanced("plain prose with no markup at all"));
+        assert!(markup_is_balanced("<b>bold</b> and <i>italic</i>"));
+        assert!(markup_is_balanced("<br/> and <hr />"));
     }
 }
