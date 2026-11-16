@@ -363,3 +363,48 @@ fn loadable_skills_includes_the_vendor_roots() {
         "a missing vendor root must not empty the pool"
     );
 }
+
+/// Two skills that match a query EQUALLY well resolve by ROOT PRECEDENCE, not
+/// by the alphabet (iter-2469).
+///
+/// `search_skills_in` truncates with `take(limit)`, so the ordering of a tie
+/// decides which skill survives. Before this it broke ties on the NAME, which
+/// meant a pool skill called `zzz-*` lost to a vendor skill called `aaa-*` --
+/// the operator's own skill dropped in favour of an integration's, for no
+/// reason but spelling.
+///
+/// MUTATION-PROOF: reverting the sort to `(tier, name)` fails the first
+/// assertion. The fixture is deliberately built so the pool skill sorts
+/// alphabetically LATER than the vendor one; a fixture where the pool skill
+/// won on the alphabet too would pass either way and prove nothing.
+#[test]
+fn search_breaks_a_match_tie_by_root_precedence_not_the_alphabet() {
+    let pool = tempfile::tempdir().expect("pool dir");
+    let vendor = tempfile::tempdir().expect("vendor dir");
+
+    // `zzz-pool` is the operator's, `aaa-vendor` is the integration's. Both
+    // match the query as a name PREFIX, so they are the same tier.
+    for (root, name) in [(&pool, "zzz-pool"), (&vendor, "aaa-vendor")] {
+        std::fs::create_dir_all(root.path().join(name)).unwrap();
+        std::fs::write(
+            root.path().join(name).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: tier skill\n---\n\nbody\n"),
+        )
+        .unwrap();
+    }
+
+    // limit 1: only one row survives, so the tiebreak is observable.
+    let hits = search_skills(pool.path(), &[vendor.path().to_path_buf()], "tier", 1);
+    let ranked: Vec<&str> = hits.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        ranked,
+        vec!["zzz-pool"],
+        "the operator's pool skill must survive the limit over the vendor's, \
+         even though its name sorts later"
+    );
+
+    // And with room for both, precedence still puts the pool first.
+    let hits = search_skills(pool.path(), &[vendor.path().to_path_buf()], "tier", 10);
+    let ranked: Vec<&str> = hits.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(ranked, vec!["zzz-pool", "aaa-vendor"]);
+}

@@ -536,6 +536,11 @@ pub struct SkillManager {
     /// This side map is the smallest thing that fixes that: the winner's
     /// directory, keyed by the skill name it won.
     skill_paths: HashMap<String, PathBuf>,
+    /// Precedence index of the root each skill was loaded from, keyed by the
+    /// skill's NAME: 0 is the operator pool, higher is lower precedence.
+    /// Consulted by [`Self::root_rank_of`] so search can break a match-quality
+    /// tie by root precedence rather than alphabetically (iter-2469).
+    skill_ranks: HashMap<String, usize>,
     /// Problems the last `load_all` found: dead symlinks and refused roots.
     issues: Vec<RootIssue>,
     /// Whether the last `load_all` hit the walk cap.
@@ -550,6 +555,7 @@ impl SkillManager {
             extra_roots: Vec::new(),
             skills: HashMap::new(),
             skill_paths: HashMap::new(),
+            skill_ranks: HashMap::new(),
             issues: Vec::new(),
             truncated: false,
         }
@@ -600,6 +606,7 @@ impl SkillManager {
         // Must be cleared WITH `skills`: a stale winner path would make a
         // shadow report name a file the current load never chose.
         self.skill_paths.clear();
+        self.skill_ranks.clear();
         self.issues.clear();
         self.truncated = false;
 
@@ -607,16 +614,19 @@ impl SkillManager {
         // Same borrow shape as the extra-roots loop below: load_root takes
         // &mut self, so the root path is cloned out first.
         let primary = self.skills_dir.clone();
-        self.load_root(&primary, SkillOrigin::OperatorPool, &mut loaded)?;
+        // Index 0 is the operator pool, so the rank map and search's tiebreak
+        // agree with the precedence the resolver already enforces. The rank is
+        // recorded per skill inside `load_root`, where the name is known.
+        self.load_root(&primary, SkillOrigin::OperatorPool, 0, &mut loaded)?;
         // Take the extra roots out of self for the loop — load_root needs
         // &mut self (it inserts into the cache), so iterating a self-borrow
         // in the loop head would not compile.
         let extra_roots = std::mem::take(&mut self.extra_roots);
-        for root in &extra_roots {
+        for (index, root) in extra_roots.iter().enumerate() {
             // A missing integration dir is a normal state (not installed
             // yet) — skip it silently, never a load error.
             if root.is_dir() {
-                self.load_root(root, SkillOrigin::Integration, &mut loaded)?;
+                self.load_root(root, SkillOrigin::Integration, index + 1, &mut loaded)?;
             }
         }
         self.extra_roots = extra_roots;
@@ -631,6 +641,23 @@ impl SkillManager {
         &self.issues
     }
 
+    /// The precedence index of the root each skill was loaded from, keyed by
+    /// skill name: 0 is the operator pool, higher is lower precedence.
+    ///
+    /// Search ranks by match quality first and needs a SECOND, stable key for
+    /// skills that match equally well, because it truncates (iter-2469). The
+    /// alphabetical tiebreak it used before meant `zzz-vendor` beat
+    /// `aaa-pool`, so a limit could drop the operator's own skill in favour of
+    /// an integration's. Root precedence is the order every other surface
+    /// already uses; this exposes it to the one that did not.
+    #[must_use]
+    pub fn root_rank_of(&self, name: &str) -> Option<usize> {
+        // 0 is the pool, so `None` (a name inserted outside `load_root`) has to
+        // sort LAST, never first: an unknown origin must not outrank the
+        // operator's own skill.
+        self.skill_ranks.get(name).copied()
+    }
+
     /// True when a walk hit [`SKILL_ROOT_WALK_LIMIT`] and the loaded set is
     /// known to be incomplete.
     #[must_use]
@@ -643,6 +670,7 @@ impl SkillManager {
         &mut self,
         root: &Path,
         origin: SkillOrigin,
+        root_rank: usize,
         loaded: &mut Vec<Skill>,
     ) -> Result<()> {
         if !root.is_dir() {
@@ -747,6 +775,16 @@ impl SkillManager {
                     // Remember WHERE the winner lives so a later shadow report
                     // can name it (iter-2468).
                     self.skill_paths.insert(skill.name.clone(), path.clone());
+                    // The skill's own precedence, keyed by NAME.
+                    //
+                    // Keyed by ROOT this was always usize::MAX, because
+                    // `skill_paths` holds SKILL directories and the rank map
+                    // held ROOT directories -- two key spaces that never
+                    // intersected, so every lookup missed and every skill
+                    // looked equally unranked. The test caught it (iter-2469),
+                    // which is why the fixture makes the pool skill sort
+                    // alphabetically LATER than the vendor one.
+                    self.skill_ranks.insert(skill.name.clone(), root_rank);
                     // The directory alias is best-effort: an existing entry
                     // (the operator's own alias, or another root's) wins.
                     if dir_key != skill.name {
