@@ -1260,3 +1260,27 @@ implemented." That is `Z34` verbatim, from a second session.
   it. This closes lane G's `F-3` (the description limit being a clip with no
   write-time reject), which this audit had recorded as ASSERTED and therefore
   excluded from the ranking. Nothing in `Z1`–`Z37` depended on it.
+
+### Addendum — post-publication re-check (after iter-2480/2481/2482/2483)
+
+The audit was published as iter-2478. Peers continued to land work in sibling
+worktrees, so the two findings most likely to have been closed were re-checked
+against the newest tree available:
+
+- **`Z8` (`scripts/audit-ledger-index.py` fails) — STILL OPEN.** Re-run at the
+  current tree: `python3 scripts/audit-ledger-index.py` exits **1**, reporting
+  four distinct defects: one index row (RT-554) not CLOSED while its checkboxes
+  are; RT-555 used by two index rows *and* two detail sections (the documented
+  two-agents-one-id collision); and RT-553/RT-554 index rows with no detail
+  section. The script's own advice ("the later publisher renumbers forward and
+  records an ID NOTE") has not been applied.
+- **`Z1`/`Z2` (clippy gate) — NOT closed by iter-2480.** iter-2480
+  (`39f15d88`) repaired `scripts/audit-config-keys.py`'s `added_keys()`, a
+  **different** gate: it compared leaf names against `origin/main`'s field
+  names, so 13 shared leaf names (`enabled` by 22 keys, `model` by 15) made a
+  new `skills.enabled` read as pre-existing. That fix is real and worth noting
+  — but it touches `audit-config-keys.py`, not `clippy-warning-gate.sh` or
+  `.ci/clippy-allowlist.txt`, which is still 0 bytes.
+
+No `Z` finding was found closed by post-publication work. `Z34` remains the
+only one, closed by iter-2474 before publication.
