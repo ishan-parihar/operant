@@ -155,24 +155,31 @@ fn handle_set(key: String, value: String) -> Result<()> {
     Ok(())
 }
 
-/// Print the resolved config file path.
+/// The TOML config file `config path` reports: the first existing candidate
+/// from the LOADER's own list, canonicalised.
 ///
-/// Checks (in order) the `HERMES_CONFIG` env var and then the default search
-/// paths. Prints the first existing file found.
-fn handle_path() -> Result<()> {
-    // (A8-cli-surface MEDIUM-2) Resolve the same way the loader does. This used
-    // to check `HERMES_CONFIG` FIRST and print it unconditionally, so
-    // `config path` and `config edit` could name different files: `path` named
-    // the YAML CLI config, `edit` fell back to the TOML candidates.
-    for path in operant_core::config::default_config_paths() {
-        if path.exists() {
-            let display = path.canonicalize().unwrap_or_else(|_| path.clone());
-            println!("{}", display.display());
-            return Ok(());
-        }
-    }
+/// (A8-cli-surface MEDIUM-2) Split out of `handle_path` so the resolution is
+/// testable without capturing stdout. It used to be inlined in a function that
+/// printed, and the only test available was "does not panic" -- which passes
+/// with either the old `HERMES_CONFIG`-first behaviour or the fixed one. A test
+/// that cannot fail is not a test.
+///
+/// `HERMES_CONFIG` is deliberately NOT consulted: it names the YAML CLI config
+/// (`CliConfig::load`), not this TOML one, and honouring it here is what made
+/// `config path` name a file `config edit` would never resolve.
+fn resolved_config_path() -> Option<std::path::PathBuf> {
+    operant_core::config::default_config_paths()
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.canonicalize().unwrap_or(p))
+}
 
-    println!("No configuration file found. Using built-in defaults.");
+/// Print the resolved config file path.
+fn handle_path() -> Result<()> {
+    match resolved_config_path() {
+        Some(path) => println!("{}", path.display()),
+        None => println!("No configuration file found. Using built-in defaults."),
+    }
     Ok(())
 }
 
@@ -685,6 +692,67 @@ mod tests {
         let mut obj = serde_json::json!({});
         operant_core::config::set_nested_json(&mut obj, &["a", "b", "c"], "42").unwrap();
         assert_eq!(obj["a"]["b"]["c"], 42);
+    }
+
+    /// (A8-cli-surface MEDIUM-2) `config path` resolves the TOML config, never
+    /// the YAML `HERMES_CONFIG`.
+    ///
+    /// This test can actually fail. The FIRST version asserted
+    /// `handle_path().is_ok()`, which passes with the old env-first branch and
+    /// the fixed one alike -- mutation-proving it (restoring the old branch)
+    /// left it green. What distinguishes the two is the RESOLVED PATH, which is
+    /// why the resolution is now a function that returns one.
+    ///
+    /// SAFETY: sets `HERMES_CONFIG` and `OPERANT_CONFIG_DIR` for the duration.
+    /// The only test in this module that sets either.
+    #[test]
+    fn config_path_resolution_ignores_a_yaml_hermes_config() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_cfg_path_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // The YAML that HERMES_CONFIG documents, and a real TOML under a
+        // controlled config home. The loader checks OPERANT_CONFIG_DIR first.
+        let yaml = dir.join("config.yaml");
+        std::fs::write(&yaml, "delegation: {}\n").expect("write yaml");
+        let toml_dir = dir.join("isolated");
+        std::fs::create_dir_all(&toml_dir).expect("create isolated dir");
+        let toml = toml_dir.join("operant.toml");
+        std::fs::write(&toml, "[agent]\nmodel = \"cfg-path-test\"\n").expect("write toml");
+
+        unsafe {
+            std::env::set_var("HERMES_CONFIG", &yaml);
+            std::env::set_var("OPERANT_CONFIG_DIR", &toml_dir);
+        }
+        let resolved = resolved_config_path();
+        unsafe {
+            std::env::remove_var("HERMES_CONFIG");
+            std::env::remove_var("OPERANT_CONFIG_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let resolved = resolved.expect(
+            "the isolated config home holds a real operant.toml, so the loader \
+             must resolve it",
+        );
+        assert_ne!(
+            resolved, yaml,
+            "`config path` must not resolve the YAML HERMES_CONFIG as the TOML \
+             config -- that variable names the YAML CLI config (CliConfig), and \
+             honouring it here is what made `config path` and `config edit` \
+             name different files"
+        );
+        assert!(
+            resolved.ends_with("operant.toml"),
+            "the resolved path must be the TOML config, got: {}",
+            resolved.display()
+        );
     }
 
     #[test]
