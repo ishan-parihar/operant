@@ -3452,6 +3452,60 @@ pub fn validate_context_window(tokens: usize) -> Result<()> {
 /// The caller owns the target. This is the test- and embedding-safe seam:
 /// tests never have to install a process-global write target, and a
 /// read-only helper cannot redirect another writer by loading a config.
+/// The shared tail of every surgical config write.
+///
+/// Render the document, write it to a sibling temp file OWNER-ONLY, carry the
+/// original's mode across, validate through the REAL loader, snapshot the
+/// pre-write bytes, then rename. Both writers — set and remove — go through
+/// here, so the contract (never leave a broken config, never lose a secret to
+/// the umask, never discard a failed mode carry-over) is stated once rather
+/// than twice. The duplicated form is what RT-418 was about: two copies drift,
+/// and the one that drifts is the one nobody re-reads.
+///
+/// `operation` names the write in the rejection message ("config key 'x'" or
+/// "removing config key 'x'"), so the operator can tell which one failed.
+fn write_config_document(
+    path: &Path,
+    doc: &toml_edit::DocumentMut,
+    original: &[u8],
+    operation: &str,
+) -> Result<PathBuf> {
+    let tmp = path.with_extension("toml.tmp");
+    let rendered = doc.to_string();
+    crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
+        .map_err(|e| Error::Config(format!("write {}: {e}", tmp.display())))?;
+    if let Ok(mode) = std::fs::metadata(path).map(|m| m.permissions()) {
+        // RT-418: the mode round-trip's failure was discarded, so the file
+        // above promised to keep the original's mode ("must survive the
+        // round-trip") silently did not: the temp file stays owner-only
+        // (0600, from write_secret_file) and that is what the rename puts in
+        // place. The fallback is the SAFER mode, so this is not a leak — but
+        // the user's config file changes permissions with nothing said.
+        if let Err(e) = std::fs::set_permissions(&tmp, mode) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "the config file's original mode could not be carried over — the \
+                 rewritten file keeps the owner-only mode it was created with"
+            );
+        }
+    }
+    if let Err(e) = parse_config_file_without_recording(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::Config(format!(
+            "{operation} was rejected by the config loader ({e}); {} left unchanged",
+            path.display()
+        )));
+    }
+    // The pre-write bytes become recoverable only once the new contents are
+    // known good. A snapshot taken before validation would offer a rejected
+    // write as a restorable "known good" version of a file that never changed.
+    crate::config_backup::snapshot_before_write(path, original);
+    std::fs::rename(&tmp, path)
+        .map_err(|e| Error::Config(format!("rename {}: {e}", path.display())))?;
+    Ok(path.to_path_buf())
+}
+
 pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Result<PathBuf> {
     let original = std::fs::read(path)
         .map_err(|e| crate::error::Error::Config(format!("read {}: {e}", path.display())))?;
@@ -3492,51 +3546,90 @@ pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Resu
     };
     table.insert(leaf[0], item);
 
-    // Write to a sibling temp file with the original's mode, validate it
-    // through the REAL loader, and only then rename over — the user's
-    // config is never left broken by a typo from `operant config set`, and
-    // a reader never sees a half-written file. The mode (0600 where
-    // secrets live by design) must survive the round-trip.
-    let tmp = path.with_extension("toml.tmp");
-    // The config can carry provider keys, so the temp file is written
-    // OWNER-ONLY — the mode is applied by the same open(2) that creates it.
-    // A plain write would leave it at the umask default (0644 on a stock
-    // system) until the chmod below, with the secret already inside.
-    let rendered = doc.to_string();
-    crate::fs_secrets::write_secret_file(&tmp, rendered.as_bytes())
-        .map_err(|e| crate::error::Error::Config(format!("write {}: {e}", tmp.display())))?;
-    if let Ok(mode) = std::fs::metadata(path).map(|m| m.permissions()) {
-        // RT-418: the mode round-trip's failure was discarded, so the file
-        // above promised to keep the original's mode ("must survive the
-        // round-trip") silently did not: the temp file stays owner-only
-        // (0600, from write_secret_file) and that is what the rename puts in
-        // place. The fallback is the SAFER mode, so this is not a leak — but
-        // the user's config file changes permissions with nothing said.
-        if let Err(e) = std::fs::set_permissions(&tmp, mode) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "the config file's original mode could not be carried over — the \
-                 rewritten file keeps the owner-only mode it was created with"
-            );
-        }
-    }
-    let validation = parse_config_file_without_recording(&tmp);
-    if let Err(e) = validation {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(crate::error::Error::Config(format!(
-            "config key '{dotted}' was rejected by the config loader ({e}); \
-             {} left unchanged",
-            path.display()
+    write_config_document(path, &doc, &original, &format!("config key '{dotted}'"))
+}
+
+/// Remove one dotted key (`agent.model`) from the config file the process
+/// actually loaded, keeping every other key and every comment byte-for-byte.
+///
+/// The unassign path. `persist_config_key(key, "")` is a scalar write, and a
+/// scalar `""` is not "unassigned" for every shape: `agent.fallback_models`
+/// is a `Vec<String>` and `moa.references` is a `Vec<AuxiliaryModelConfig>`,
+/// so `""` fails the loader round-trip and the clear refuses on exactly the
+/// two slots that need it most. Removing the leaf is the one representation
+/// every consumer agrees on — the field falls back to its default, which is
+/// the documented `auto` state.
+///
+/// A missing leaf is a no-op that still reports the path: "clear a slot that
+/// was never assigned" must not be an error, and the caller's notice has to
+/// name where the write would have landed either way. Empty parent tables are
+/// LEFT in place — a `[agent]` header with no keys is valid TOML and removing
+/// it would reshuffle the operator's layout for no gain.
+///
+/// The same contract as [`persist_config_key_at`]: temp file, validate
+/// through the REAL loader, snapshot the old bytes, then rename. A removal
+/// that would leave an unloadable file never lands.
+pub fn remove_config_key(dotted: &str) -> Result<PathBuf> {
+    let path = match loaded_config_path() {
+        Some(path) => path,
+        None => default_config_paths().into_iter().next().ok_or_else(|| {
+            Error::Config(
+                "no config file is loaded in this process and no default config path is available"
+                    .to_string(),
+            )
+        })?,
+    };
+    ensure_config_file_exists(&path)?;
+    remove_config_key_at(&path, dotted)
+}
+
+/// The path-taking body of [`remove_config_key`], so a test can aim it at a
+/// fixture instead of the process-global write target.
+pub fn remove_config_key_at(path: &Path, dotted: &str) -> Result<PathBuf> {
+    let segments: Vec<&str> = dotted.split('.').collect();
+    if segments.is_empty() || segments.iter().any(|s| s.is_empty()) {
+        return Err(Error::Config(format!(
+            "config key '{dotted}' must be a non-empty dotted path"
         )));
     }
-    // The pre-write bytes become recoverable only once the new contents are
-    // known good. A snapshot taken before validation would offer a rejected
-    // write as a restorable "known good" version of a file that never changed.
-    crate::config_backup::snapshot_before_write(path, &original);
-    std::fs::rename(&tmp, path)
-        .map_err(|e| crate::error::Error::Config(format!("rename {}: {e}", path.display())))?;
-    Ok(path.to_path_buf())
+
+    let original =
+        std::fs::read(path).map_err(|e| Error::Config(format!("read {}: {e}", path.display())))?;
+    let mut doc: toml_edit::DocumentMut = std::str::from_utf8(&original)
+        .map_err(|e| Error::Config(format!("{}: not UTF-8: {e}", path.display())))?
+        .parse()
+        .map_err(|e| Error::Config(format!("{}: not valid TOML: {e}", path.display())))?;
+
+    let (tables, leaf) = segments.split_at(segments.len() - 1);
+    // A free function, not a loop: the loop form re-borrows `table` through a
+    // closure whose region NLL cannot shorten, and the recursive form ties the
+    // returned table's lifetime to the root explicitly.
+    fn table_at<'a>(
+        root: &'a mut toml_edit::Table,
+        segments: &[&str],
+    ) -> Option<&'a mut toml_edit::Table> {
+        let mut table = root;
+        for segment in segments {
+            table = table.get_mut(segment)?.as_table_mut()?;
+        }
+        Some(table)
+    }
+    let present = match table_at(doc.as_table_mut(), tables) {
+        Some(table) => table.remove(leaf[0]).is_some(),
+        None => false,
+    };
+    if !present {
+        // Nothing to remove. Reporting success here is deliberate: the caller
+        // asked for the slot to be unassigned, and it already is.
+        return Ok(path.to_path_buf());
+    }
+
+    write_config_document(
+        path,
+        &doc,
+        &original,
+        &format!("removing config key '{dotted}'"),
+    )
 }
 
 /// Publish an already-written, already-validated file over a config path.
@@ -6983,4 +7076,102 @@ fn a_held_config_path_guard_stops_a_second_threads_load_from_stealing_the_write_
     if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
         *slot = None;
     }
+}
+
+/// REMOVING A KEY IS THE ONLY HONEST UNASSIGN.
+///
+/// `persist_config_key(key, "")` writes a scalar, and a scalar `""` is not
+/// "unassigned" for every shape: `agent.fallback_models` is a `Vec<String>`
+/// and `moa.references` is a `Vec<AuxiliaryModelConfig>`, so the empty string
+/// fails the loader round-trip and the clear refuses on exactly the two
+/// list-shaped slots. These three tests pin the removal seam that replaces it.
+#[test]
+fn removing_a_scalar_key_restores_the_default_without_touching_its_siblings() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(
+        &path,
+        "# keep this comment\n[agent]\nmodel = \"gpt-4\"\ncontext_window = 200000\n",
+    )
+    .expect("write config");
+
+    remove_config_key_at(&path, "agent.model").expect("remove the model leaf");
+
+    let text = std::fs::read_to_string(&path).expect("read back");
+    assert!(!text.contains("model ="), "the leaf is gone: {text}");
+    assert!(
+        text.contains("context_window = 200000"),
+        "its sibling survives: {text}"
+    );
+    assert!(
+        text.contains("# keep this comment"),
+        "comments survive a removal exactly as they survive a write: {text}"
+    );
+    let cfg = load_app_config_read_only(Some(&path)).expect("the file still loads");
+    assert_eq!(
+        cfg.config.agent.model,
+        AppConfig::default().agent.model,
+        "an absent key falls back to the default rather than to an empty string"
+    );
+}
+
+/// A LIST-SHAPED SLOT CLEARS, WHERE THE SCALAR WRITE COULD NOT.
+///
+/// This is the regression the models panel's `x` hit: `""` into
+/// `agent.fallback_models` fails validation, so the clear refused. Removing the
+/// key is the representation every consumer agrees on.
+#[test]
+fn removing_a_list_key_clears_a_slot_the_scalar_write_could_not() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(
+        &path,
+        "[agent]\nmodel = \"gpt-4\"\nfallback_models = [\"a\", \"b\"]\n",
+    )
+    .expect("write config");
+
+    // The old path, stated as the contrast: this is what the panel used to do.
+    assert!(
+        persist_config_key_at(&path, "agent.fallback_models", "").is_err(),
+        "the scalar write is rejected for a list-shaped slot — the defect"
+    );
+
+    remove_config_key_at(&path, "agent.fallback_models").expect("the removal lands");
+    let cfg = load_app_config_read_only(Some(&path)).expect("the file still loads");
+    assert!(
+        cfg.config.agent.fallback_models.is_empty(),
+        "the slot is unassigned, not blank: {:?}",
+        cfg.config.agent.fallback_models
+    );
+    assert_eq!(
+        cfg.config.agent.model, "gpt-4",
+        "the sibling slot is untouched"
+    );
+}
+
+/// CLEARING WHAT WAS NEVER SET IS A NO-OP, NOT AN ERROR.
+///
+/// The caller's notice has to name where the write would have landed either
+/// way, and an unassigned slot is the common case on a fresh profile.
+#[test]
+fn removing_an_absent_key_reports_the_path_and_changes_nothing() {
+    let _guard = config_path_test_guard();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operant.toml");
+    std::fs::write(&path, "[agent]\nmodel = \"gpt-4\"\n").expect("write config");
+    let before = std::fs::read_to_string(&path).expect("read before");
+
+    let landed = remove_config_key_at(&path, "moa.references").expect("a no-op is not an error");
+
+    assert_eq!(
+        landed, path,
+        "the caller still learns where the write would land"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after"),
+        before,
+        "an absent key leaves the file byte-identical"
+    );
 }

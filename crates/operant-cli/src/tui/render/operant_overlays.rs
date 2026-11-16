@@ -200,6 +200,7 @@ overlay_visible_guards!(
     is_visible_free_mode_dialog => free_mode_dialog,
     is_visible_command_palette => command_palette,
     is_visible_session_hub => session_hub,
+    is_visible_models_panel => models_panel,
     is_visible_export_dialog => export_dialog,
     is_visible_context_viz => context_viz,
 );
@@ -365,6 +366,12 @@ const OVERLAYS: &[Entry] = &[
         sink: Sink::Frame,
     },
     Entry {
+        name: "models_panel",
+        visible: is_visible_models_panel,
+        paint: paint_models_panel,
+        sink: Sink::Frame,
+    },
+    Entry {
         name: "export_dialog",
         visible: is_visible_export_dialog,
         paint: paint_export_dialog,
@@ -444,6 +451,15 @@ fn paint_permission_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 fn paint_settings_screen(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_settings_screen(frame, &app.settings_screen, ctx.size);
+}
+
+/// Full-frame page, the `session_hub` pattern: renders INSTEAD of the chat
+/// frame, never both. The Clear is load-bearing for the same reason the hub's
+/// is — `terminal.draw` flushes a cell diff, so without it the chat frame's
+/// composer and status bar survive underneath the panel's own rows.
+fn paint_models_panel(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
+    frame.render_widget(ratatui::widgets::Clear, frame.area());
+    crate::tui::models_panel::render_models_panel(frame, &app.models_panel, frame.area());
 }
 
 fn paint_theme_screen(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
@@ -691,6 +707,7 @@ mod tests {
         ("free_mode_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
         ("session_hub", Sink::Frame),
+        ("models_panel", Sink::Frame),
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),
         ("selection_highlight", Sink::Frame),
@@ -733,6 +750,44 @@ mod tests {
                 want_sink.as_str(),
             );
         }
+    }
+
+    /// Every full-frame surface in the catalogue has a paint row.
+    ///
+    /// (iter-2457) `models_panel` had a key gate, a `DialogPriority` slot
+    /// waiting to be added, and NO render row: `/model roles` opened a surface
+    /// that swallowed ↑/↓/Enter/x/Esc and painted nothing at all. The existing
+    /// guards compared the catalogue to the KEY-ROUTING chains, so an invisible
+    /// panel was invisible to every one of them — this compares it to the PAINT
+    /// table, which is the one list it was missing from.
+    ///
+    /// The suffix rule is deliberately narrow: a `*_panel`, `*_screen`, `*_hub`
+    /// or `*_view` is a full-frame page by construction, and the four that
+    /// exist today (settings_screen, theme_screen, session_hub, models_panel)
+    /// all paint through a row. A new one must too.
+    #[test]
+    fn every_full_frame_surface_has_a_paint_row() {
+        let app = crate::tui::app::tests::make_app();
+        let src = include_str!("operant_overlays.rs");
+        let mut missing: Vec<&str> = Vec::new();
+        for (surface, _) in app.overlay_flags() {
+            let full_frame = surface.ends_with("_panel")
+                || surface.ends_with("_screen")
+                || surface.ends_with("_hub")
+                || surface.ends_with("_view");
+            if !full_frame {
+                continue;
+            }
+            let has_row = src.contains(&format!("name: \"{surface}\""));
+            if !has_row {
+                missing.push(surface);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these catalogue surfaces have no row in OVERLAYS, so they paint \
+             nothing while still gating the keyboard: {missing:?}"
+        );
     }
 
     /// No row may quietly become a second name for the same surface. The order

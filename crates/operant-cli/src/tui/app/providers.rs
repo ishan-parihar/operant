@@ -209,6 +209,32 @@ impl App {
         names
     }
 
+    /// Open the full-frame models panel on a scope.
+    ///
+    /// The panel is data-only until this fills it: the catalogue is the
+    /// configured models plus the cached models.dev rows for the active
+    /// provider (synchronous — the panel must open without waiting on a
+    /// fetch), and the recency list is the per-profile MRU file. Both are read
+    /// once at open, so the render path stays syscall-free and the rows cannot
+    /// shift under the cursor.
+    pub(super) fn open_models_panel(&mut self, scope: crate::tui::model_scope::ModelScope) {
+        let provider =
+            crate::provider::provider_from_url(self.config.client.base_url.trim_end_matches('/'))
+                .map(|p| p.name)
+                .unwrap_or_default();
+        let mut catalogue = self.configured_model_ids();
+        catalogue.extend(operant_core::models_dev::cached_agentic_models(provider));
+        catalogue.sort();
+        catalogue.dedup();
+        let recent: Vec<String> = crate::tui::model_recent::RecentModels::load()
+            .models()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        self.models_panel
+            .open(scope, &self.config, &recent, &catalogue);
+    }
+
     pub(super) fn open_model_picker_inline(&mut self, filter: &str) {
         let base_url = self
             .config

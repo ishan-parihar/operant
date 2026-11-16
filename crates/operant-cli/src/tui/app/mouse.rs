@@ -731,6 +731,7 @@ impl App {
             && !self.history_search_overlay.visible
             && !self.settings_screen.visible
             && !self.theme_screen.visible
+            && !self.models_panel.visible
             && !self.text_dialog_visible()
             && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Insert
     }
@@ -1014,6 +1015,17 @@ impl App {
                 crate::tui::settings_screen::select_prev_visible(&mut self.settings_screen);
             } else {
                 crate::tui::settings_screen::select_next_visible(&mut self.settings_screen);
+            }
+            return true;
+        }
+        if self.models_panel.visible {
+            // The panel's wheel rule is its own cursor movement — the same
+            // object ↑/↓ moves — so the wheel cannot scroll a list the keys
+            // are not looking at.
+            if up {
+                self.models_panel.move_selection(-1);
+            } else {
+                self.models_panel.move_selection(1);
             }
             return true;
         }

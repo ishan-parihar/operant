@@ -239,6 +239,7 @@ impl App {
             || self.command_palette.visible
             || self.inline_interactive.is_some()
             || self.settings_screen.visible
+            || self.models_panel.visible
             || self.export_dialog.visible
             || self.bypass_permissions_dialog.visible
             || self.key_input_dialog.visible

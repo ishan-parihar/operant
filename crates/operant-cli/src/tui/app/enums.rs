@@ -113,6 +113,11 @@ pub enum DialogPriority {
     ContextViz = 180,
     /// Session hub (the unified full-frame picker, plan 2026-10-28)
     SessionHub = 190,
+    /// The models panel (panels plan S3). Its own full-frame surface, the
+    /// `session_hub` pattern: gated here and in the dispatcher from the day it
+    /// gained a render row, because a surface that paints but does not route
+    /// keys is the invisible keyboard trap iter-2457 was opened for.
+    ModelsPanel = 200,
     /// Global search
     GlobalSearch = 220,
     /// History search overlay

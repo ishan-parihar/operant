@@ -53,6 +53,9 @@ impl App {
         if self.session_hub.visible {
             return Some(DialogPriority::SessionHub);
         }
+        if self.models_panel.visible {
+            return Some(DialogPriority::ModelsPanel);
+        }
         if self.global_search.visible {
             return Some(DialogPriority::GlobalSearch);
         }

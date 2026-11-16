@@ -3391,35 +3391,38 @@ impl App {
     /// the row's options and applies on the last column, Esc clears the
     /// filter first and closes second. Returns true when the key was
     /// consumed (the caller must not forward it).
-    /// (panels plan S3) Keys while the models panel is up.
+    /// (panels plan S3, shipped) Keys while the models panel is up.
     ///
     /// The panel is a two-step surface: the cursor picks a SLOT, then Enter
-    /// arms the assignment and the catalogue picks the MODEL. `x` clears the
-    /// slot under the cursor. Esc leaves the step it is in rather than the
-    /// panel, so an operator who armed an assignment by mistake gets one press
-    /// back to the list instead of out of the surface.
+    /// arms the assignment and the pick list chooses the MODEL. `x` removes the
+    /// assignment under the cursor. Esc leaves the step it is in rather than
+    /// the panel, so an operator who armed an assignment by mistake gets one
+    /// press back to the list instead of out of the surface.
+    ///
+    /// Every write goes through the SAME seams the slash command uses —
+    /// `operant_core::remove_config_key` for an unassign and
+    /// `persist_config_key` + `apply_slot_to_config` for an assignment — so a
+    /// channel and the panel cannot disagree about what a slot holds.
     pub(super) fn handle_models_panel_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
-        // Step two: choosing the model for an armed slot. The catalogue is the
-        // inline picker's, so this step hands over to it rather than growing a
-        // second catalogue here.
+        // Step two: choosing the model for an armed slot.
         if self.models_panel.assigning.is_some() {
             match key.code {
-                KeyCode::Esc => {
-                    self.models_panel.cancel_assign();
-                    return;
-                }
-                // The model list is the picker's; opening it keeps one
-                // catalogue. The slot stays armed so the picker's apply step
-                // knows what it is filling.
+                KeyCode::Esc => self.models_panel.cancel_assign(),
+                KeyCode::Up => self.models_panel.move_selection(-1),
+                KeyCode::Down => self.models_panel.move_selection(1),
                 KeyCode::Enter => {
-                    let slot = self.models_panel.assigning;
+                    let Some(slot) = self.models_panel.assigning else {
+                        return;
+                    };
+                    let Some(model) = self.models_panel.selected_pick().map(str::to_string) else {
+                        self.models_panel.refusal =
+                            Some("no model to assign — move the cursor".to_string());
+                        return;
+                    };
+                    self.assign_slot(slot, &model);
                     self.models_panel.cancel_assign();
-                    if let Some(slot) = slot {
-                        self.set_status_notice(format!("assigning {} — pick a model", slot.name()));
-                    }
-                    self.open_model_picker_inline("");
                 }
                 _ => {}
             }
@@ -3428,30 +3431,65 @@ impl App {
 
         match key.code {
             KeyCode::Esc => self.models_panel.close(),
-            KeyCode::Up => {
-                let total = self.models_panel.rows(&self.config).len();
-                self.models_panel.move_selection(-1, total);
-            }
-            KeyCode::Down => {
-                let total = self.models_panel.rows(&self.config).len();
-                self.models_panel.move_selection(1, total);
-            }
-            KeyCode::Enter => {
-                if let Some(slot) = self.models_panel.begin_assign(&self.config) {
-                    self.set_status_notice(format!(
-                        "{} — Enter to choose a model, Esc to cancel",
-                        slot.name()
-                    ));
+            KeyCode::Up => self.models_panel.move_selection(-1),
+            KeyCode::Down => self.models_panel.move_selection(1),
+            KeyCode::Left => self.models_panel.move_scope(-1),
+            KeyCode::Right => self.models_panel.move_scope(1),
+            KeyCode::Char('[') => self.models_panel.move_scope(-1),
+            KeyCode::Char(']') => self.models_panel.move_scope(1),
+            KeyCode::Enter => match self.models_panel.scope {
+                crate::tui::model_scope::ModelScope::Roles => {
+                    let catalogue: Vec<String> = {
+                        let mut all = self.configured_model_ids();
+                        let provider = crate::provider::provider_from_url(
+                            self.config.client.base_url.trim_end_matches('/'),
+                        )
+                        .map(|p| p.name)
+                        .unwrap_or_default();
+                        all.extend(operant_core::models_dev::cached_agentic_models(provider));
+                        all.sort();
+                        all.dedup();
+                        all
+                    };
+                    if self
+                        .models_panel
+                        .begin_assign(&self.config, &catalogue)
+                        .is_some()
+                    {
+                        self.models_panel.notice = None;
+                    }
                 }
-            }
+                _ => {
+                    // A model scope: Enter uses the highlighted model for this
+                    // session, exactly as the inline picker does. The panel
+                    // records it in the recency list either way.
+                    if let Some(model) = self.models_panel.selected_model().map(str::to_string) {
+                        self.pending_model = Some(model.clone());
+                        crate::tui::model_recent::RecentModels::record_and_save(&model);
+                        self.set_status_notice(format!("Model: {model} (applying…)"));
+                    }
+                }
+            },
             KeyCode::Char('x') => {
-                if let Some(key_path) = self.models_panel.clear_slot(&self.config) {
-                    // The write is the slot's own persist key, which is the
-                    // same seam the picker's assignment uses. An empty value
-                    // is "unassigned" in the config, so the slot falls back to
-                    // `auto` rather than being written as a blank model name.
-                    match operant_core::config::persist_config_key(key_path, "") {
+                if !matches!(
+                    self.models_panel.scope,
+                    crate::tui::model_scope::ModelScope::Roles
+                ) {
+                    self.models_panel.notice =
+                        Some("x clears an assignment — move to the Roles scope".to_string());
+                    return;
+                }
+                if let Some(key_path) = self.models_panel.clear_slot() {
+                    // Prefer the path this process actually loaded. Falling
+                    // back to the global seam keeps a channel-driven write
+                    // working when no explicit path is known.
+                    let removed = match self.config.config_path.clone() {
+                        Some(path) => operant_core::config::remove_config_key_at(&path, key_path),
+                        None => operant_core::config::remove_config_key(key_path),
+                    };
+                    match removed {
                         Ok(path) => {
+                            self.models_panel.refresh(&self.config);
                             self.models_panel.notice =
                                 Some(format!("cleared {key_path} ({})", path.display()))
                         }
@@ -3758,7 +3796,7 @@ impl App {
                 )
                 .map(|p| p.name)
                 .unwrap_or_default();
-                let capabilities = operant_core::models_dev::cached_capabilities(&provider, &head);
+                let capabilities = operant_core::models_dev::cached_capabilities(provider, &head);
                 if let Some(why) = slot.accepts(capabilities.as_ref()).refusal() {
                     self.set_status_notice(format!(
                         "{} slot refuses {}: {}",
@@ -3768,15 +3806,14 @@ impl App {
                     ));
                     return;
                 }
-                let outcome =
-                    match operant_core::config::persist_config_key(slot.persist_key(), &head) {
-                        Ok(path) => {
-                            self.apply_slot_to_config(slot, &head);
-                            format!("model: {head} (persisted to {})", path.display())
-                        }
-                        Err(e) => format!("model: {head} (persist failed: {e})"),
-                    };
-                self.set_status_notice(format!("{} slot → {}", slot.name(), outcome));
+                // (iter-2457) The ONE assignment write. This arm used to call
+                // `persist_config_key(slot.persist_key(), &head)` directly,
+                // which writes a scalar: `fallback_models` and `moa.references`
+                // are arrays, so the loader rejected the write and the slot
+                // changed only in the live process — it reverted on restart.
+                // `assign_slot` shapes the value by slot and owns the outcome
+                // notice, so the panel and this picker cannot disagree.
+                self.assign_slot(slot, &head);
             }
             _ => {
                 self.set_status_notice(format!("{} — no action in this picker", entry.name));
@@ -3787,6 +3824,67 @@ impl App {
     /// Write a slot's newly assigned model into this process's `AppConfig`, so
     /// the picker's own re-open and every reader see it without a restart.
     /// The config file is the durable copy; this is the live one.
+    /// Assign `model` to `slot`: validate, persist, apply to the live config,
+    /// and record the recency entry.
+    ///
+    /// This is the ONE assignment write, shared by the models panel and the
+    /// inline picker's slot rows. The acceptance check runs BEFORE anything is
+    /// written: a text-only model in the Vision slot is a row that looks right
+    /// and fails on the first image, and the surface must say so at the moment
+    /// of choosing rather than after the operator has moved on. Unknown
+    /// metadata is `Unverified`, not a refusal — the catalogue covers mapped
+    /// providers only, and a missing row must not lock the operator out of
+    /// their own config.
+    ///
+    /// The persisted VALUE is shaped by the slot, not by the model:
+    /// `agent.fallback_models` is a `Vec<String>` and `moa.references` is a
+    /// `Vec<AuxiliaryModelConfig>`, so a bare scalar is rejected by the
+    /// loader's round-trip validation and the write silently never lands. That
+    /// was the picker's slot path before this method existed: it wrote a scalar
+    /// for every slot, so assigning Fallback or MoaReference changed the live
+    /// process and reverted on restart.
+    pub(crate) fn assign_slot(&mut self, slot: operant_core::model_roles::ModelSlot, model: &str) {
+        let model = model.trim();
+        if model.is_empty() {
+            self.models_panel.refusal =
+                Some("that row carries no model — nothing to assign".to_string());
+            return;
+        }
+        let provider =
+            crate::provider::provider_from_url(self.config.client.base_url.trim_end_matches('/'))
+                .map(|p| p.name)
+                .unwrap_or_default();
+        let capabilities = operant_core::models_dev::cached_capabilities(provider, model);
+        if let Some(why) = slot.accepts(capabilities.as_ref()).refusal() {
+            let refusal = format!("{} refuses {model}: {why}", slot.name());
+            self.models_panel.refusal = Some(refusal.clone());
+            self.set_status_notice(refusal);
+            return;
+        }
+        let raw = slot_persist_value(slot, model, &self.config);
+        let write = match self.config.config_path.clone() {
+            Some(path) => {
+                operant_core::config::persist_config_key_at(&path, slot.persist_key(), &raw)
+            }
+            None => operant_core::config::persist_config_key(slot.persist_key(), &raw),
+        };
+        let outcome = match write {
+            Ok(path) => {
+                self.apply_slot_to_config(slot, model);
+                crate::tui::model_recent::RecentModels::record_and_save(model);
+                format!("{model} (persisted to {})", path.display())
+            }
+            Err(e) => format!("{model} (persist failed: {e})"),
+        };
+        self.models_panel.refresh(&self.config);
+        self.models_panel.refusal = None;
+        let notice = format!("{} slot → {outcome}", slot.name());
+        self.models_panel.notice = Some(notice.clone());
+        // The picker path has no panel to read `notice`; the status line is the
+        // only surface it has. Writing both keeps one outcome, one wording.
+        self.set_status_notice(notice);
+    }
+
     fn apply_slot_to_config(&mut self, slot: operant_core::model_roles::ModelSlot, model: &str) {
         use operant_core::config::AuxiliaryModelConfig;
         match slot {
@@ -3836,6 +3934,85 @@ impl App {
 /// `persist_config_key` writes the model leaf only. Replacing the whole slot
 /// with a default dropped them from the LIVE config, so the live copy
 /// disagreed with the file about where that slot's calls go.
+/// The durable TOML value an assignment writes for `slot`.
+///
+/// Scalar slots take a quoted string; `fallback` takes a one-element array; the
+/// append-shaped `moa.references` takes the WHOLE array (existing entries plus
+/// the new one), because there is no index-addressed write seam and replacing
+/// the array with a bare model would drop every other reference's route.
+///
+/// Quoting is explicit rather than relying on `coerce_scalar`'s guess: a model
+/// id of `123` or `true` would otherwise persist as an integer or a boolean,
+/// which the loader accepts and the consumer then reads as a missing model.
+fn slot_persist_value(
+    slot: operant_core::model_roles::ModelSlot,
+    model: &str,
+    cfg: &operant_core::config::AppConfig,
+) -> String {
+    let quoted = toml_quote(model);
+    match slot {
+        operant_core::model_roles::ModelSlot::Fallback => format!("[{quoted}]"),
+        operant_core::model_roles::ModelSlot::MoaReference => {
+            let mut references = cfg.moa.references.clone();
+            references.push(operant_core::config::AuxiliaryModelConfig {
+                model: Some(model.to_string()),
+                ..Default::default()
+            });
+            // The whole array, because there is no index-addressed write seam
+            // and replacing it with a bare model would drop every other
+            // reference's route. Written by hand rather than through serde:
+            // `toml_edit` is not a direct dependency of this crate, and one
+            // call is not a reason to add one.
+            let entries: Vec<String> = references
+                .iter()
+                .map(|reference| {
+                    let mut fields = vec![format!(
+                        "model = {}",
+                        toml_quote(reference.model.as_deref().unwrap_or(""))
+                    )];
+                    if let Some(provider) = &reference.provider {
+                        fields.push(format!("provider = {}", toml_quote(provider)));
+                    }
+                    if let Some(base_url) = &reference.base_url {
+                        fields.push(format!("base_url = {}", toml_quote(base_url)));
+                    }
+                    if let Some(api_key) = &reference.api_key {
+                        fields.push(format!("api_key = {}", toml_quote(api_key)));
+                    }
+                    format!("{{ {} }}", fields.join(", "))
+                })
+                .collect();
+            format!("[{}]", entries.join(", "))
+        }
+        _ => quoted,
+    }
+}
+
+/// A TOML basic string, quoted and escaped.
+///
+/// `{:?}` on a `&str` is close but not identical: Rust escapes non-ASCII as
+/// `\u{...}`, which TOML does not accept (it wants `\uXXXX`). Model ids, URLs
+/// and keys are ASCII in practice, but a writer that silently produces an
+/// unloadable file for one non-ASCII id is the defect class this whole seam
+/// exists to prevent.
+fn toml_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn slot_with_model(
     existing: Option<&operant_core::config::AuxiliaryModelConfig>,
     model: &str,

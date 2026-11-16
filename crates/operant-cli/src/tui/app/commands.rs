@@ -90,7 +90,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 29] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 30] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -113,6 +113,7 @@ impl App {
             // model_picker overlay.
             ("inline_interactive", self.inline_interactive.is_some()),
             ("session_hub", self.session_hub.visible),
+            ("models_panel", self.models_panel.visible),
             ("export_dialog", self.export_dialog.visible),
             ("context_viz", self.context_viz.visible),
             (
@@ -516,7 +517,18 @@ impl App {
             // already-handled command — route instead of falling through to
             // the model as literal text.
             "commands" => self.intercept_slash_command_with_args_impl("help", args),
-            "models" => self.intercept_slash_command_with_args_impl("model", args),
+            "models" => {
+                // Bare `/models` is the PANEL — "what can I switch to?", the
+                // question the scope axis answers. `/models <selector>` stays
+                // the picker grammar's alias (`/model gpt-4`), so a scripted or
+                // habitual invocation does not have to traverse a menu.
+                if args.trim().is_empty() {
+                    self.open_models_panel(crate::tui::model_scope::ModelScope::All);
+                    true
+                } else {
+                    self.intercept_slash_command_with_args_impl("model", args)
+                }
+            }
             "split" | "split-view" => {
                 // The alias tier routed these to a "splitview" arm that was
                 // never built: no such arm exists, and neither name is in any
@@ -818,8 +830,7 @@ impl App {
                 // is each slot configured with", and repointing it would take
                 // away a working surface rather than add one.
                 if selector.eq_ignore_ascii_case("roles") {
-                    self.models_panel
-                        .open(crate::tui::model_scope::ModelScope::Roles);
+                    self.open_models_panel(crate::tui::model_scope::ModelScope::Roles);
                     return true;
                 }
                 if selector.is_empty() {
@@ -2436,6 +2447,7 @@ impl App {
         self.free_mode_dialog.close();
         self.settings_screen.close();
         self.theme_screen.close();
+        self.models_panel.close();
     }
 
     pub fn any_modal_open(&self) -> bool {

@@ -197,21 +197,83 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 /// claimed one ("type port and see Gateway 3") and no code computed it — a comment
 /// describing an affordance that does not exist is worse than no comment, because
 /// the next reader trusts it. The search is tab-scoped and the empty state says so.
+/// The tab strip, scrolled to keep the selected tab visible.
+///
+/// All eight labels plus separators need 96 columns. At 80 — the width the
+/// operator's terminal actually is — the old single-line render truncated after
+/// "Gat" with no marker, so `Gateway` and `Advanced` looked like they did not
+/// exist and `]` appeared to do nothing. The strip now windows: it starts at the
+/// earliest tab that still shows the selection, extends as far right as fits,
+/// and marks a clipped edge with an ellipsis.
 fn render_tab_strip(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    for (index, tab) in SettingsTab::ALL.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(theme::dim_color())));
-        }
-        let is_current = *tab == screen.selected_tab;
-        let style = if is_current {
+    let width = area.width as usize;
+    let sep = " │ ";
+    let sep_width = sep.chars().count();
+    let tabs: Vec<(&str, bool)> = SettingsTab::ALL
+        .iter()
+        .map(|tab| (tab.label(), *tab == screen.selected_tab))
+        .collect();
+    let widths: Vec<usize> = tabs
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .collect();
+    let total: usize = widths.iter().sum::<usize>() + sep_width * tabs.len().saturating_sub(1);
+
+    let style_for = |is_current: bool| {
+        if is_current {
             Style::default()
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::muted())
+        }
+    };
+
+    let mut spans: Vec<Span> = Vec::new();
+    if total <= width {
+        for (index, (label, is_current)) in tabs.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(sep, Style::default().fg(theme::dim_color())));
+            }
+            spans.push(Span::styled(*label, style_for(*is_current)));
+        }
+    } else {
+        // The window must contain the selection. Start as far left as possible
+        // while still ending on or after it.
+        let selected = tabs
+            .iter()
+            .position(|(_, is_current)| *is_current)
+            .unwrap_or(0);
+        let span_width = |start: usize, end: usize| {
+            widths[start..=end].iter().sum::<usize>() + sep_width * (end - start)
         };
-        spans.push(Span::styled(tab.label(), style));
+        let mut start = 0;
+        while start < selected && span_width(start, selected) > width {
+            start += 1;
+        }
+        let mut end = selected;
+        while end + 1 < tabs.len() && span_width(start, end + 1) <= width {
+            end += 1;
+        }
+        let clipped_left = start > 0;
+        let clipped_right = end + 1 < tabs.len();
+        // Two ellipses cost two cells; drop the left marker first if the strip
+        // is too narrow to afford both, so the SELECTED label keeps its room.
+        let show_left = clipped_left && span_width(start, end) + 1 <= width;
+        let show_right = clipped_right && span_width(start, end) + usize::from(show_left) < width;
+        if show_left {
+            spans.push(Span::styled("…", Style::default().fg(theme::dim_color())));
+        }
+        for index in start..=end {
+            if index > start {
+                spans.push(Span::styled(sep, Style::default().fg(theme::dim_color())));
+            }
+            let (label, is_current) = tabs[index];
+            spans.push(Span::styled(label, style_for(is_current)));
+        }
+        if show_right {
+            spans.push(Span::styled("…", Style::default().fg(theme::dim_color())));
+        }
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(theme_colors::panel_bg())),

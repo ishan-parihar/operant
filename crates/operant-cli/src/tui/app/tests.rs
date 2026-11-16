@@ -18916,3 +18916,225 @@ mod bar_command_tests {
         cell::set_style(None);
     }
 }
+
+// ── (iter-2457) The models panel's assignment writes ────────────────────────
+//
+// The panel is a front end; the writes are what make it real. These four tests
+// drive `assign_slot` and the panel's clear against a SEEDED config file and
+// read the file back — the same "measured, not assumed" rule the bar tests
+// follow, because an assignment that only changes the live process is a
+// setting that reverts on restart.
+mod models_panel_writes {
+    use super::*;
+
+    /// Redirect the profile home for the duration of a test.
+    ///
+    /// `assign_slot` records recency through `RecentModels::record_and_save`,
+    /// which writes `recent-models.json` under `operant_home()`. Without this,
+    /// the assignment tests write test model names into the OPERATOR'S real
+    /// profile — measured, not feared: a first run of these tests left
+    /// `fb-model`, `ref-b` and `new-model` in `~/.operant/recent-models.json`.
+    /// `HERMES_HOME` is redirected too because `operant_home()` prefers it over
+    /// `$HOME`.
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: Option<std::ffi::OsString>,
+        hermes: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl HomeGuard {
+        fn new() -> Self {
+            let lock = crate::config::test_env_lock();
+            let home = std::env::var_os("HOME");
+            let hermes = std::env::var_os("HERMES_HOME");
+            let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("a scratch home");
+            // SAFETY: the env lock serialises every test that mutates the
+            // process environment; the restore in `Drop` puts both back.
+            unsafe {
+                std::env::set_var("HOME", dir.path());
+                std::env::set_var("HERMES_HOME", dir.path());
+            }
+            Self {
+                _lock: lock,
+                home,
+                hermes,
+                _dir: dir,
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: as above — the lock is held for the whole guard.
+            unsafe {
+                match &self.home {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+                match &self.hermes {
+                    Some(value) => std::env::set_var("HERMES_HOME", value),
+                    None => std::env::remove_var("HERMES_HOME"),
+                }
+            }
+        }
+    }
+
+    /// A scratch config under the manifest, not `/var/tmp`: a sandboxed run can
+    /// have a read-only temp dir, and a test that fails for that reason teaches
+    /// the next agent to delete it.
+    fn scratch_config(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("a scratch dir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, body).expect("seed the config");
+        (dir, path)
+    }
+
+    fn app_with(path: std::path::PathBuf) -> App {
+        let mut app = make_app();
+        // Load the SEEDED config into the live AppConfig. Without this the
+        // panel builds its rows from `AppConfig::default()`, so a slot the file
+        // assigns reads as unassigned and the write path has nothing to append
+        // to — the test would be measuring the default, not the fixture.
+        let loaded = operant_core::config::load_app_config_read_only(Some(&path))
+            .expect("the seeded config loads")
+            .config;
+        app.config = loaded;
+        app.config.config_path = Some(path);
+        app
+    }
+
+    #[test]
+    fn assigning_a_scalar_slot_persists_the_model_and_queues_the_switch() {
+        let _home = HomeGuard::new();
+        let (_dir, path) = scratch_config("[agent]\nmodel = \"old-model\"\n");
+        let mut app = app_with(path.clone());
+
+        app.assign_slot(
+            operant_core::model_roles::ModelSlot::Conversation,
+            "new-model",
+        );
+
+        let text = std::fs::read_to_string(&path).expect("readable");
+        assert!(
+            text.contains("model = \"new-model\""),
+            "the scalar slot must persist: {text}"
+        );
+        assert_eq!(
+            app.pending_model.as_deref(),
+            Some("new-model"),
+            "the conversation slot is the one that switches the live agent"
+        );
+    }
+
+    #[test]
+    fn assigning_the_fallback_slot_writes_an_array_not_a_scalar() {
+        let _home = HomeGuard::new();
+        // The defect this pins: `persist_config_key(key, "model")` writes a
+        // scalar into a `Vec<String>` field, the loader rejects it, and the
+        // assignment changes only the live process. The durable shape is a
+        // one-element array.
+        let (_dir, path) = scratch_config("[agent]\nmodel = \"old-model\"\n");
+        let mut app = app_with(path.clone());
+
+        app.assign_slot(operant_core::model_roles::ModelSlot::Fallback, "fb-model");
+
+        let text = std::fs::read_to_string(&path).expect("readable");
+        assert!(
+            text.contains("fallback_models = [\"fb-model\"]"),
+            "the list-shaped slot must persist as a list: {text}"
+        );
+        let loaded =
+            operant_core::config::load_app_config_read_only(Some(&path)).expect("the file loads");
+        assert_eq!(
+            loaded.config.agent.fallback_models,
+            vec!["fb-model".to_string()],
+            "and the loader reads the assignment back"
+        );
+    }
+
+    #[test]
+    fn assigning_the_reference_slot_appends_and_keeps_the_existing_route() {
+        let _home = HomeGuard::new();
+        // MoaReference is append-shaped and its entries carry a route
+        // (`base_url`, `api_key`). Replacing the array with the new model would
+        // drop the route of every existing reference, so the write must carry
+        // the whole array.
+        let (_dir, path) = scratch_config(
+            "[agent]\nmodel = \"old-model\"\n\
+             [[moa.references]]\nmodel = \"ref-a\"\nbase_url = \"https://a.example/v1\"\n",
+        );
+        let mut app = app_with(path.clone());
+
+        app.assign_slot(operant_core::model_roles::ModelSlot::MoaReference, "ref-b");
+
+        let loaded =
+            operant_core::config::load_app_config_read_only(Some(&path)).expect("the file loads");
+        let models: Vec<&str> = loaded
+            .config
+            .moa
+            .references
+            .iter()
+            .filter_map(|r| r.model.as_deref())
+            .collect();
+        assert_eq!(
+            models,
+            vec!["ref-a", "ref-b"],
+            "the existing reference survives and the new one is appended"
+        );
+        let first = loaded
+            .config
+            .moa
+            .references
+            .iter()
+            .find(|r| r.model.as_deref() == Some("ref-a"))
+            .expect("the first reference");
+        assert_eq!(
+            first.base_url.as_deref(),
+            Some("https://a.example/v1"),
+            "the existing route must survive the append"
+        );
+    }
+
+    #[test]
+    fn clearing_a_list_slot_removes_the_key_instead_of_writing_an_empty_scalar() {
+        let _home = HomeGuard::new();
+        let (_dir, path) =
+            scratch_config("[agent]\nmodel = \"old-model\"\nfallback_models = [\"a\", \"b\"]\n");
+        let mut app = app_with(path.clone());
+
+        // Put the cursor on the Fallback row and press `x` through the real
+        // key handler, so the wiring — not just the seam — is under test.
+        app.open_models_panel(crate::tui::model_scope::ModelScope::Roles);
+        let fallback = app
+            .models_panel
+            .roles
+            .iter()
+            .position(|row| row.slot == operant_core::model_roles::ModelSlot::Fallback)
+            .expect("the fallback row");
+        app.models_panel.selected = fallback;
+        app.handle_models_panel_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        let loaded =
+            operant_core::config::load_app_config_read_only(Some(&path)).expect("the file loads");
+        assert!(
+            loaded.config.agent.fallback_models.is_empty(),
+            "the list-shaped slot must be unassigned, not blank"
+        );
+        assert_eq!(
+            loaded.config.agent.model, "old-model",
+            "the sibling slot is untouched"
+        );
+        assert!(
+            app.models_panel
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("cleared")),
+            "the operator is told what landed: {:?}",
+            app.models_panel.notice
+        );
+    }
+}

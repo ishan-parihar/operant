@@ -1197,3 +1197,83 @@ fn a_settings_json_row_survives_a_reopen() {
         row.key
     );
 }
+
+/// THE TAB STRIP MUST NOT LIE AT 80 COLUMNS.
+///
+/// Measured on the real binary at 80x24: the strip rendered
+/// `Appearance │ Model │ Context │ Tools │ Skills │ Memory │ Gat` — Gateway
+/// and Advanced were cut off with no marker, so two of the eight tabs looked
+/// nonexistent and `]` looked inert. The strip now windows around the
+/// selection. This walks every tab and asserts its label is on screen when
+/// selected, at the width where the old render failed.
+#[test]
+fn the_tab_strip_keeps_the_selected_tab_visible_at_eighty_columns() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut screen = SettingsScreen::new();
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
+
+    for tab in SettingsTab::ALL {
+        screen.select_tab(tab);
+        terminal
+            .draw(|frame| {
+                render_settings_screen(frame, &screen, frame.area());
+            })
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol().to_string())
+            .collect::<String>();
+        assert!(
+            rendered.contains(tab.label()),
+            "the selected tab {:?} must be painted at 80x24 — the strip let \
+             the selection run off the end: {rendered}",
+            tab.label()
+        );
+    }
+}
+
+/// A NARROW STRIP STILL SHOWS THE SELECTION, NOT THE FIRST TAB.
+///
+/// The window must not degenerate into "always render from index 0": at a
+/// width that fits only one label, that would keep painting `Appearance` while
+/// the cursor was on `Advanced` — the precise lie the window exists to fix.
+#[test]
+fn a_narrow_tab_strip_follows_the_selection_rather_than_the_start() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // 40 columns: the inner strip is ~32 cells, enough for one short label and
+    // an ellipsis. The assertion is that the SELECTED label is what survives.
+    let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+    let mut screen = SettingsScreen::new();
+    screen.open(
+        AppConfig::default().agent.context_window,
+        &AppConfig::default(),
+    );
+    screen.select_tab(SettingsTab::Advanced);
+    terminal
+        .draw(|frame| {
+            render_settings_screen(frame, &screen, frame.area());
+        })
+        .unwrap();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol().to_string())
+        .collect::<String>();
+    assert!(
+        rendered.contains("Advanced"),
+        "the selected tab must survive a 40-column strip: {rendered}"
+    );
+}

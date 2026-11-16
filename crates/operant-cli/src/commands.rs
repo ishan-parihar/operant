@@ -624,11 +624,10 @@ pub fn tui_category(name: &str) -> TuiCategory {
         | "time" | "debug" | "credits" | "billing" | "insights" | "heapdump" | "mem" | "pet" => {
             TuiCategory::Diagnostics
         }
-        "config" | "theme" | "skin" | "bar" | "output-style" | "verbose" | "mcp" | "reload"
-        | "reload-mcp" | "reload-skills" | "hooks" | "import-config" | "setup" | "init"
-        | "redraw" | "quit" | "exit" | "keybindings" | "indicator" | "busy" => {
-            TuiCategory::Workspace
-        }
+        "config" | "settings" | "setting" | "theme" | "skin" | "bar" | "output-style"
+        | "verbose" | "mcp" | "reload" | "reload-mcp" | "reload-skills" | "hooks"
+        | "import-config" | "setup" | "init" | "redraw" | "quit" | "exit" | "keybindings"
+        | "indicator" | "busy" => TuiCategory::Workspace,
         "agents" | "tasks" | "memory" | "tools" | "skills" | "skill" | "plugins" | "bundle"
         | "journey" | "improve" | "refactor" | "triage" | "judge" | "cron" | "kanban"
         | "curator" | "suggestions" | "bundles" => TuiCategory::Tools,

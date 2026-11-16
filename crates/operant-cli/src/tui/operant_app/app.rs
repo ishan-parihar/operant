@@ -199,8 +199,18 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     ),
     RegisteredCommand::public("/?", "Show help and keyboard shortcuts"),
     RegisteredCommand::public("/commands", "Alias for /help"),
-    RegisteredCommand::public("/model", "List or switch models"),
-    RegisteredCommand::public("/models", "Alias for /model"),
+    RegisteredCommand::public(
+        "/model",
+        "Switch model for this session (/model roles assigns slots)",
+    ),
+    // (iter-2457) Bare `/models` opens the full-frame models PANEL — the
+    // scope axis plus one row per slot. It is an alias for `/model` only when
+    // an argument is given (`/models gpt-4`), so the description names the
+    // panel rather than the alias.
+    RegisteredCommand::public(
+        "/models",
+        "Open the models panel (browse scopes and assign role slots)",
+    ),
     RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
     // (plan 2026-11-15 T2) `/bar` — the status bar style, by name. The style
     // existed (iter-2410) but only as a row inside `/config`, so the operator
@@ -299,6 +309,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     // (iter-1786) The arm opens the TUI SETTINGS SCREEN; it does not show
     // a configuration dump.
     RegisteredCommand::public("/config", "Open the settings screen"),
+    // (iter-2457) `/settings` is the spelling operators reach for, and until
+    // now it existed ONLY as a match arm: absent from this table, so absent
+    // from `/help` and from the typeahead, which meant the one name an
+    // operator would guess was the one name the UI would not complete. The
+    // arm has been there since iter-1786; this row is the catalogue catching
+    // up with the dispatch.
+    RegisteredCommand::public("/settings", "Open the settings screen (alias of /config)"),
     RegisteredCommand::public(
         "/keys",
         "Show keybinding conflicts with your terminal and OS",
@@ -377,9 +394,15 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     // (iter-1773) The command now also accepts the level as an argument;
     // the description says so, because an argument that names a level used to
     // be ignored (the command cycled anyway).
-    RegisteredCommand::public(
+    // (iter-2457) RETIRED FROM THE CATALOGUE, not re-pointed. The arm refuses
+    // ("nothing reads the setting"), so a public row advertising "cycles it"
+    // was a help entry that lied — the exact defect iter-2452 retired the
+    // setting for. Hidden, not deleted: the name still resolves, so a habitual
+    // `/output-style` gets the honest refusal rather than falling through to
+    // the model as prompt text.
+    RegisteredCommand::hidden(
         "/output-style",
-        "Set the output style (auto|stream|verbose); no argument cycles it",
+        "Retired: nothing reads the output style in this build",
     ),
     RegisteredCommand::public("/personality", "Show or set the assistant personality"),
     RegisteredCommand::public(
@@ -416,9 +439,12 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/tasks", "Open the agents menu (same as /agents)"),
     RegisteredCommand::public("/theme", "Show or switch the theme"),
     RegisteredCommand::public("/undo", "Rewind the last N turns"),
-    RegisteredCommand::public(
+    // (iter-2457) Same retirement as /output-style above. The name also
+    // shadows the tool-progress sense of "verbose", so hidden beats deleted:
+    // the arm refuses for both reasons rather than half-honouring one.
+    RegisteredCommand::hidden(
         "/verbose",
-        "Set the output style (auto|stream|verbose); no argument cycles it (alias of /output-style)",
+        "Retired: nothing reads the output style in this build",
     ),
     RegisteredCommand::public("/vim", "Toggle vim keybindings"),
     RegisteredCommand::public("/whoami", "Show the saved user profile"),
@@ -436,41 +462,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/platforms", "Gateway status (operant gateway status)"),
     RegisteredCommand::public("/title", "Rename the session (alias of /rename)"),
 ];
-
-/// The commands a panel subsumes, and which panel it is.
-///
-/// (panels plan S4) The crossover rule, written as data so a test can hold it.
-/// A command appears here only when its ENTIRE effect is setting a value that
-/// persists — that is the line the plan drew, and it is why `/stats` is absent
-/// (it produces a report) and `/clear` is absent (it mutates a session).
-///
-/// The panel is an ADDITIONAL front end, never a replacement: every name here
-/// is still a `RegisteredCommand` and still dispatches for a channel. That is
-/// what makes the gateway's retention automatic rather than a special case.
-pub(crate) const PANEL_COMMANDS: &[(&str, PanelSurface)] = &[
-    ("/model", PanelSurface::Models),
-    ("/models", PanelSurface::Models),
-    ("/config", PanelSurface::Settings),
-    ("/effort", PanelSurface::Models),
-    ("/agents", PanelSurface::Models),
-];
-
-/// The panel a command opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanelSurface {
-    /// The models panel (settings plan S3).
-    Models,
-    /// The settings panel (settings plan S2).
-    Settings,
-}
-
-/// Which panel a command opens, if any.
-pub(crate) fn panel_for_command(name: &str) -> Option<PanelSurface> {
-    PANEL_COMMANDS
-        .iter()
-        .find(|(command, _)| *command == name)
-        .map(|(_, surface)| *surface)
-}
 
 /// Every non-hidden slash command with its one-line description, in
 /// registration order. The `/help` overlay uses this to list commands its
@@ -677,57 +668,15 @@ fn scan_slash_tokens(input: &str, mut on_token: impl FnMut(usize, usize)) {
 mod panel_crossover_tests {
     use super::*;
 
-    /// (panels plan S4) The crossover rule: a command moves behind a panel only
-    /// when its entire effect is setting a value that persists, and it never
-    /// STOPS being a command — that is what keeps the gateway working.
-    #[test]
-    fn every_panel_command_is_still_a_registered_command() {
-        for (name, _surface) in PANEL_COMMANDS {
-            assert!(
-                REGISTERED_COMMANDS
-                    .iter()
-                    .any(|command| command.name == *name),
-                "`{name}` opens a panel but is no longer a RegisteredCommand, so a \
-                 channel lost it — the gateway retention depends on this row existing"
-            );
-        }
-    }
-
-    #[test]
-    fn a_panel_command_never_replaced_its_command_row() {
-        // The same invariant stated the other way: the count of registered
-        // commands must not have gone DOWN when the panels landed. A sweep that
-        // deleted the overlay commands to "replace" them would pass the check
-        // above for the survivors and fail this one.
-        // 114 rows are written in the table; ONE is `#[cfg(any())]`, so the
-        // live count is 113. A count taken from the source text counts the dead
-        // row and reads a healthy table as shrunken — measure the compiled
-        // slice, not the file.
-        assert!(
-            !PANEL_COMMANDS.is_empty(),
-            "no command opens a panel, so the crossover did not happen"
-        );
-        for (name, _) in PANEL_COMMANDS {
-            assert!(
-                registered_command_help(name).is_some(),
-                "`{name}` opens a panel but has no help row, so /help and the \
-                 channel replies lost it"
-            );
-        }
-    }
-
-    #[test]
-    fn the_crossover_table_names_only_commands_that_exist() {
-        for (name, _) in PANEL_COMMANDS {
-            assert!(
-                REGISTERED_COMMANDS
-                    .iter()
-                    .any(|command| command.name == *name),
-                "`{name}` is in the crossover table but not in the catalogue"
-            );
-        }
-    }
-
+    /// (iter-2457) The three tests that pinned `PANEL_COMMANDS` are gone with
+    /// the table. They asserted that a hand-written crossover table named
+    /// registered commands — which it did — while the DISPATCH ignored it
+    /// entirely: `/model` opened the inline picker, `/effort` the effort
+    /// picker, `/agents` the agents menu, and `/config` the settings screen.
+    /// A guard that validates a fiction earns its keep by being wrong, so the
+    /// table and its guards were deleted together. What remains is the
+    /// invariant that does not depend on a parallel table: every command the
+    /// panel era added is still a command, with a help row.
     #[test]
     fn every_command_still_has_a_help_row() {
         // The gateway's channel replies and the /help overlay both read this
@@ -741,6 +690,42 @@ mod panel_crossover_tests {
                 "`{}` has no help text",
                 command.name
             );
+        }
+    }
+
+    /// (iter-2457) The names the panels front must be REGISTERED, because the
+    /// panel is an additional front end and never a replacement: a channel that
+    /// types `/models` or `/settings` must still resolve. This is the one
+    /// crossover invariant stated against the dispatch's actual names rather
+    /// than against a table nothing read.
+    #[test]
+    fn every_surface_front_end_has_a_registered_command() {
+        for name in ["/models", "/model", "/settings", "/config"] {
+            assert!(
+                REGISTERED_COMMANDS
+                    .iter()
+                    .any(|command| command.name == name),
+                "`{name}` is a panel front end but has no RegisteredCommand row,                  so a channel lost it"
+            );
+            assert!(
+                registered_command_help(name).is_some(),
+                "`{name}` has no help row, so /help lost it"
+            );
+        }
+    }
+
+    /// (iter-2457) The retired phantoms must not be ADVERTISED. They stay
+    /// registered (hidden) so the arm's honest refusal is reachable, but a
+    /// public row would put "cycles it" in `/help` for a command that cannot
+    /// cycle anything.
+    #[test]
+    fn retired_phantoms_are_hidden_not_advertised() {
+        for name in ["/output-style", "/verbose"] {
+            let command = REGISTERED_COMMANDS
+                .iter()
+                .find(|command| command.name == name)
+                .expect("the name still resolves, so the refusal is reachable");
+            assert!(command.hidden, "`{name}` must be hidden from /help");
         }
     }
 }
@@ -780,10 +765,15 @@ mod crossover_surface_tests {
             remote,
             all.len()
         );
-        // Every panel command is in BOTH views, so a channel still sees it.
-        for (name, _) in PANEL_COMMANDS {
-            assert!(all.contains(name), "`{name}` is not in the full catalogue");
-            assert!(local.contains(name), "`{name}` is not locally visible");
+        // The panel front ends are in BOTH views, so a channel still sees
+        // them. (iter-2457: this was the one assertion in this module worth
+        // keeping; it is now stated against the dispatch's real names.)
+        for name in ["/models", "/model", "/settings", "/config"] {
+            assert!(all.contains(&name), "`{name}` is not in the full catalogue");
+            assert!(
+                local.contains(&name),
+                "`{name}` is not locally visible, so the typeahead cannot offer it"
+            );
         }
     }
 }
