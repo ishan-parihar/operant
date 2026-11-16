@@ -19137,4 +19137,48 @@ mod models_panel_writes {
             app.models_panel.notice
         );
     }
+
+    #[test]
+    fn clearing_a_slot_also_unassigns_it_in_this_process() {
+        let _home = HomeGuard::new();
+        // The defect this pins: the clear removed the key from the FILE and
+        // reported "cleared", but `self.config` still held the model — so the
+        // panel rebuilt its own rows from a config that still said "assigned"
+        // and the running process kept using the cleared model until a
+        // restart. Both halves of the write are now under test, not just the
+        // durable one.
+        let (_dir, path) =
+            scratch_config("[agent]\nmodel = \"old-model\"\nfallback_models = [\"a\", \"b\"]\n");
+        let mut app = app_with(path.clone());
+        app.open_models_panel(crate::tui::model_scope::ModelScope::Roles);
+        let fallback = app
+            .models_panel
+            .roles
+            .iter()
+            .position(|row| row.slot == operant_core::model_roles::ModelSlot::Fallback)
+            .expect("the fallback row");
+        app.models_panel.selected = fallback;
+        app.handle_models_panel_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        assert!(
+            app.config.agent.fallback_models.is_empty(),
+            "the LIVE config must be unassigned too, else this process keeps \\
+             falling back to {:?} until a restart",
+            app.config.agent.fallback_models
+        );
+        let row = app
+            .models_panel
+            .roles
+            .iter()
+            .find(|r| r.slot == operant_core::model_roles::ModelSlot::Fallback)
+            .expect("the fallback row after the write");
+        assert!(
+            row.models.is_empty(),
+            "the row the operator is looking at must read as unassigned, got {:?}",
+            row.models
+        );
+    }
 }

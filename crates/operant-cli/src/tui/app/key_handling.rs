@@ -3479,7 +3479,8 @@ impl App {
                         Some("x clears an assignment — move to the Roles scope".to_string());
                     return;
                 }
-                if let Some(key_path) = self.models_panel.clear_slot() {
+                if let Some(slot) = self.models_panel.clear_slot() {
+                    let key_path = slot.persist_key();
                     // Prefer the path this process actually loaded. Falling
                     // back to the global seam keeps a channel-driven write
                     // working when no explicit path is known.
@@ -3489,6 +3490,11 @@ impl App {
                     };
                     match removed {
                         Ok(path) => {
+                            // Both halves of the unassign. The file alone is
+                            // not enough: this process reads `self.config`, so
+                            // without the live half the row keeps its `●` and
+                            // the slot keeps being used until a restart.
+                            self.apply_unassign_to_config(slot);
                             self.models_panel.refresh(&self.config);
                             self.models_panel.notice =
                                 Some(format!("cleared {key_path} ({})", path.display()))
@@ -3883,6 +3889,43 @@ impl App {
         // The picker path has no panel to read `notice`; the status line is the
         // only surface it has. Writing both keeps one outcome, one wording.
         self.set_status_notice(notice);
+    }
+
+    /// Undo a slot's assignment in THIS process's config, so the live copy
+    /// matches a file whose leaf was just removed.
+    ///
+    /// The mirror of [`Self::apply_slot_to_config`], and it exists because the
+    /// clear path originally had no live half at all: `remove_config_key`
+    /// dropped the leaf from the file, the notice said "cleared", and
+    /// `self.config` still held the model — so the panel's own row kept showing
+    /// it (the row is rebuilt from `self.config`) and the slot kept being used
+    /// until the process restarted.
+    ///
+    /// "Unassigned" means the built-in default, which is exactly what the
+    /// loader produces for a file without the leaf: the defaults are read from
+    /// one `AppConfig::default()` rather than hand-copied per field, so the
+    /// live and durable halves cannot drift apart.
+    fn apply_unassign_to_config(&mut self, slot: operant_core::model_roles::ModelSlot) {
+        use operant_core::model_roles::ModelSlot;
+        let defaults = operant_core::config::AppConfig::default();
+        match slot {
+            ModelSlot::Conversation => self.config.agent.model = defaults.agent.model,
+            ModelSlot::Fallback => {
+                self.config.agent.fallback_models = defaults.agent.fallback_models
+            }
+            ModelSlot::Recap => self.config.recap.model = defaults.recap.model,
+            ModelSlot::Vision => {
+                self.config.auxiliary_models.vision = defaults.auxiliary_models.vision
+            }
+            ModelSlot::Compression => {
+                self.config.auxiliary_models.compression = defaults.auxiliary_models.compression
+            }
+            ModelSlot::Memory => {
+                self.config.auxiliary_models.memory = defaults.auxiliary_models.memory
+            }
+            ModelSlot::MoaAggregator => self.config.moa.aggregator = defaults.moa.aggregator,
+            ModelSlot::MoaReference => self.config.moa.references = defaults.moa.references,
+        }
     }
 
     fn apply_slot_to_config(&mut self, slot: operant_core::model_roles::ModelSlot, model: &str) {

@@ -765,11 +765,19 @@ mod tests {
     /// or `*_view` is a full-frame page by construction, and the four that
     /// exist today (settings_screen, theme_screen, session_hub, models_panel)
     /// all paint through a row. A new one must too.
+    ///
+    /// A ROW IS NOT ENOUGH — the body behind it must paint. The name check
+    /// alone was mutation-proven hollow: replacing `paint_models_panel`'s body
+    /// with a comment left all nine guards in this module green, which is the
+    /// exact defect the guard was written for (a surface that paints nothing
+    /// while gating the keyboard) surviving one edit over. So each full-frame
+    /// surface's body must also pass `assert_real_paint_body`.
     #[test]
     fn every_full_frame_surface_has_a_paint_row() {
         let app = crate::tui::app::tests::make_app();
         let src = include_str!("operant_overlays.rs");
         let mut missing: Vec<&str> = Vec::new();
+        let mut hollow: Vec<&str> = Vec::new();
         for (surface, _) in app.overlay_flags() {
             let full_frame = surface.ends_with("_panel")
                 || surface.ends_with("_screen")
@@ -781,12 +789,27 @@ mod tests {
             let has_row = src.contains(&format!("name: \"{surface}\""));
             if !has_row {
                 missing.push(surface);
+                continue;
+            }
+            // `body_of` takes the declaration-shaped needle (see its doc), so a
+            // row that exists but paints nothing is reported as hollow rather
+            // than passing on its name.
+            let painter = format!("fn paint_{surface}(");
+            let body = body_of(&painter);
+            if !assert_real_paint_body(&painter, &body) {
+                hollow.push(surface);
             }
         }
         assert!(
             missing.is_empty(),
             "these catalogue surfaces have no row in OVERLAYS, so they paint \
              nothing while still gating the keyboard: {missing:?}"
+        );
+        assert!(
+            hollow.is_empty(),
+            "these catalogue surfaces have a row whose paint body delegates to \
+             no painter, so they paint nothing while still gating the keyboard: \
+             {hollow:?}"
         );
     }
 
@@ -895,9 +918,10 @@ mod tests {
     ///    would mask the pad's absence, which is precisely the regression the
     ///    two stale-cell tests in `render/mod.rs` exist to catch. So this guard
     ///    refuses it.
-    /// 2. the session hub DOES hold exactly one `Clear` on the full frame.
-    ///    Its panes each own only their own chunk, so a page-level clear is the
-    ///    only place that can fix the leak for the whole viewport.
+    /// 2. the full-frame pages DO each hold exactly one `Clear`: the session
+    ///    hub and the models panel both paint INSTEAD of the chat frame, and
+    ///    each of their panes owns only its own chunk, so a page-level clear is
+    ///    the only place that can fix the leak for the whole viewport.
     ///
     /// Both are source assertions because neither is reachable as a unit
     /// behaviour: a single fresh-buffer frame paints identically either way.
@@ -912,7 +936,7 @@ mod tests {
     /// problem. Both bodies are asserted to be the REAL one before either
     /// invariant is measured, so a rename reports itself.
     #[test]
-    fn only_the_session_hub_clears_the_whole_viewport() {
+    fn only_the_full_frame_pages_clear_the_whole_viewport() {
         let selectors = body_of("fn paint_rewind_selector(");
         assert!(
             assert_real_paint_body("paint_rewind_selector", &selectors),
@@ -937,6 +961,27 @@ mod tests {
             clears, 1,
             "the session hub must clear the viewport exactly once; the operator's \\
              2026-11-02 stale-screen report is what one full-frame Clear fixes"
+        );
+
+        // The full-frame pages, not one hub. The name above said "only the
+        // session hub" while `paint_models_panel` painted over that claim
+        // unchecked; iter-2473 added it as the second full-frame page, so the
+        // invariant is pinned to the set and both are proved to be real bodies
+        // before either Clear is counted. A third page must join this set
+        // deliberately — which is the point, since a Clear added by reflex on a
+        // modally-oriented surface costs a redraw.
+        let panel = body_of("fn paint_models_panel(");
+        assert!(
+            assert_real_paint_body("paint_models_panel", &panel),
+            "the panel body must be the real one before its Clear-count \\
+             invariant can mean anything"
+        );
+        assert_eq!(
+            1,
+            panel.matches("widgets::Clear").count(),
+            "the models panel must clear the viewport exactly once; it paints \\
+             INSTEAD of the chat frame, so a missing Clear leaves the composer \\
+             and status bar underneath its own rows"
         );
     }
 

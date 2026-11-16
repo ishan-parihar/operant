@@ -339,19 +339,27 @@ impl ModelsPanel {
         self.pick.get(self.pick_cursor).map(String::as_str)
     }
 
-    /// The config key to remove for the slot under the cursor.
+    /// The slot to unassign under the cursor.
     ///
     /// Returns `None` — with a notice — when the slot is already unassigned, so
     /// `x` on an empty row says so rather than writing a no-op key. The removal
     /// itself is `operant_core::remove_config_key`, called by the key layer:
     /// the panel names WHAT, the seam decides HOW.
-    pub fn clear_slot(&mut self) -> Option<&'static str> {
+    ///
+    /// The SLOT, not its persist key: the key layer needs both halves of the
+    /// write — the file (remove the leaf) and the live config (the field falls
+    /// back to its default) — and a caller holding only the string can do the
+    /// first and silently skip the second. That was the defect this signature
+    /// replaced: `x` removed the key, reported "cleared", and left
+    /// `app.config` still holding the model, so the row kept its `●` and the
+    /// process kept using the model until a restart.
+    pub fn clear_slot(&mut self) -> Option<ModelSlot> {
         let row = self.roles.get(self.selected)?;
         if row.models.is_empty() {
             self.notice = Some(format!("{} is already unassigned", row.slot.name()));
             return None;
         }
-        Some(row.slot.persist_key())
+        Some(row.slot)
     }
 
     /// Begin assigning a model to the selected slot.
@@ -542,14 +550,18 @@ mod tests {
     }
 
     #[test]
-    fn clearing_an_assigned_slot_names_the_key_that_lands() {
+    fn clearing_an_assigned_slot_names_the_slot_whose_key_lands() {
         let mut panel = ModelsPanel::default();
         let cfg = cfg_with("gpt-4");
         panel.open(ModelScope::Roles, &cfg, &[], &[]);
-        let key = panel
+        // The SLOT, not the key: the caller needs both halves of the write.
+        // Handing back only the string is what let the clear update the file
+        // and skip the live config.
+        let slot = panel
             .clear_slot()
             .expect("the conversation slot is assigned");
-        assert_eq!(key, ModelSlot::Conversation.persist_key());
+        assert_eq!(slot, ModelSlot::Conversation);
+        assert_eq!(slot.persist_key(), ModelSlot::Conversation.persist_key());
     }
 
     #[test]
