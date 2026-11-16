@@ -803,6 +803,56 @@ fn turn_progress_and_permissions_resolve_per_session_not_from_the_global() {
     );
 }
 
+/// (A1-gateway MED-1) The progress receiver HANDLES the events that explain a
+/// gap to the operator, rather than dropping them into a catch-all.
+///
+/// Four `AgentEvent` variants fell through `_ => {}` and vanished. Each one
+/// marks something the operator would otherwise misread:
+///
+///   CompactionStarted / CompactionCompleted -- the turn is rebuilding its
+///     context, not hung. The old behaviour showed a stall.
+///   RetryScheduled -- a classified failure is being reissued. Without it a
+///     retry looks like a slow model.
+///   ModelFallback -- a DIFFERENT model answered. That is a billing and
+///     behaviour fact the operator never agreed to, and it was silent.
+///
+/// The catch-all stays (the enum is large and most of it is internal), so
+/// this asserts the four are named, not that the wildcard is gone.
+#[test]
+fn the_progress_receiver_names_the_events_that_explain_a_gap() {
+    let source = include_str!("../gateway_runner.rs");
+    for (variant, needle) in [
+        ("AgentEvent::CompactionStarted", "compacting context ("),
+        ("AgentEvent::CompactionCompleted", "context compacted:"),
+        ("AgentEvent::RetryScheduled", "retry "),
+        ("AgentEvent::ModelFallback", "model fallback:"),
+    ] {
+        // Naming the arm is not enough: a no-op arm (`Variant { .. } => {}`)
+        // still names it and still drops the event. Each arm must also
+        // PRODUCE the line the operator reads, which is what the payload
+        // needle proves.
+        assert!(
+            source.contains(variant),
+            "{variant} must be handled by the progress receiver. Falling through the catch-all means the operator sees a stall, a slow model, or a silently different model, with no way to tell which"
+        );
+        assert!(
+            source.contains(needle),
+            "{variant} is named but never turns its payload into a message ({needle:?} is absent) -- the arm would drop the event while looking handled"
+        );
+    }
+
+    // And every one of those arms must actually reach the transport. Four
+    // `send_message_return_id` calls for four arms; a refactor that builds
+    // the string and forgets to send it fails here.
+    let sends = source
+        .matches("send_message_return_id(&platform, msg)")
+        .count();
+    assert!(
+        sends >= 4,
+        "expected at least 4 progress sends (the four gap-explaining arms); found {sends}. Building a line and not sending it is the same silent drop with extra steps"
+    );
+}
+
 /// (RT-534) The gateway sets the cron origin on the SLOT's agent, not in a
 /// process global.
 ///

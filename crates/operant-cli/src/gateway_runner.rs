@@ -6884,6 +6884,57 @@ pub async fn start_gateway(
                     // permission_rx task (iter-99). The event_rx copy is
                     // a duplicate — skip it.
                 }
+                // (A1-gateway MED-1) Four events the operator can act on used
+                // to fall through `_ => {}` and vanish. Each one explains a
+                // gap the operator would otherwise read as a stall or a
+                // silent substitution:
+                //
+                //   Compaction*  the turn is working, not hung -- the old
+                //                behaviour showed nothing at all while the
+                //                context was rebuilt.
+                //   Retry*       the request failed and is being reissued;
+                //                without this a classified failure looks like
+                //                a slow model.
+                //   Fallback*    a DIFFERENT model answered. That is a
+                //                billing and behaviour fact the operator never
+                //                agreed to, and it was invisible.
+                AgentEvent::CompactionStarted { tokens_before } => {
+                    let line = format!("compacting context ({tokens_before} tokens)");
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
+                AgentEvent::CompactionCompleted {
+                    tokens_before,
+                    tokens_after,
+                    ..
+                } => {
+                    let line =
+                        format!("context compacted: {tokens_before} -> {tokens_after} tokens");
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
+                AgentEvent::RetryScheduled {
+                    attempt,
+                    max_attempts,
+                    reason,
+                } => {
+                    let line = format!("retry {attempt}/{max_attempts}: {reason}");
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
+                AgentEvent::ModelFallback { from, to, reason } => {
+                    let line = format!("model fallback: {from} -> {to} ({reason})");
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
                 _ => {}
             }
         }
