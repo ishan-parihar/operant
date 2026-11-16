@@ -1284,3 +1284,37 @@ against the newest tree available:
 
 No `Z` finding was found closed by post-publication work. `Z34` remains the
 only one, closed by iter-2474 before publication.
+
+### `Z5` re-verified at the current tip — the ponytail cut list's largest row holds
+
+The synthesis ranks cut 1 (~2,400 dead LOC in `operant-config`) as the biggest
+single deletion, so it was re-derived rather than carried forward:
+
+```
+$ wc -l crates/operant-config/src/*.rs        → 6,725 total, 5,194 in these files
+   3791  policy.rs
+    958  secrets.rs
+    178  providers.rs
+    150  provider_aliases.rs
+     73  traits.rs
+     28  lib.rs
+     16  autonomy.rs
+
+$ rg 'operant_config::(secrets|provider_aliases|traits|autonomy)' --type rust crates/ \
+    | rg -v '^crates/operant-config'          → ZERO hits for all four
+
+$ rg 'operant_config::policy' --type rust crates/ | rg -v '^crates/operant-config'
+   crates/operant-core/src/tools/file_tools.rs:182:
+       operant_config::policy::split_unquoted_segments(command)   ← the ONE consumer
+```
+
+So `secrets.rs` + `provider_aliases.rs` + `traits.rs` + `autonomy.rs` =
+**1,197 LOC with zero external consumers**, and `policy.rs` (3,791 LOC) has
+exactly one live entry point. `SecurityPolicy` — the type the dead half is
+built around — has **no caller anywhere**: its only mention outside `policy.rs`
+is a doc comment in `crates/operant-api/src/lib.rs:34` ("Set by the agent loop,
+read by SecurityPolicy") describing a loop that does not read it.
+
+That doc comment is the trap in this cut: a reader who greps `SecurityPolicy`
+finds a reference and concludes the type is live. It is a comment about the
+type, not a use of it.
