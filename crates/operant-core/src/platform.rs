@@ -280,6 +280,26 @@ pub fn operant_data_dir() -> PathBuf {
     operant_home().join("data")
 }
 
+/// `<operant_home>/logs`
+pub fn operant_logs_dir() -> PathBuf {
+    operant_home().join("logs")
+}
+
+/// Where the daemon and the TUI write their log: `<home>/logs/operant.log`.
+///
+/// (A8-cli-surface MEDIUM-3) ONE resolver, because the reader and the writer
+/// had already disagreed: main.rs's TUI defaulted to `<home>/logs/operant.log`
+/// while `cmd_logs` read `<home>/data/operant.log`. The result was that
+/// `operant logs show` reported no log on a default install that had been
+/// writing one all along -- and the only way to notice was that the file the
+/// command named did not exist while a populated one sat next to it.
+///
+/// A path like this belongs to the platform module, not to whichever binary
+/// needs it this week: the writer and the reader must not each be allowed to pick.
+pub fn operant_log_file() -> PathBuf {
+    operant_logs_dir().join("operant.log")
+}
+
 /// `<operant_home>/memories`
 pub fn operant_memories_dir() -> PathBuf {
     operant_home().join("memories")
@@ -424,6 +444,41 @@ pub fn platform_info() -> PlatformInfo {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// (A8-cli-surface MEDIUM-3) The log path has ONE definition, and both the
+    /// writer and the reader go through it.
+    ///
+    /// They used to build it independently: the TUI wrote `<home>/logs/
+    /// operant.log` while `operant logs show` read `<home>/data/operant.log`.
+    /// On a default install that means the command reported no log next to a
+    /// populated one -- and nothing in either file said why.
+    ///
+    /// This asserts the shape of the answer, not the value: `operant_home()`
+    /// follows `HERMES_HOME` and the active profile, so a test that hardcoded
+    /// `~/.operant` would pass on the author's machine and fail everywhere else.
+    #[test]
+    fn the_log_file_lives_in_the_logs_dir_under_the_one_resolver() {
+        let log = operant_log_file();
+        assert_eq!(
+            log.parent(),
+            Some(operant_logs_dir().as_path()),
+            "the log file must sit in `operant_logs_dir()` -- the same directory              the TUI writes into"
+        );
+        assert_eq!(
+            log.file_name().and_then(|n| n.to_str()),
+            Some("operant.log"),
+            "the log file name is part of the contract: `operant logs show` and              the TUI's default log must name the same file"
+        );
+        assert!(
+            log.starts_with(operant_home()),
+            "the log must live under the resolved operant home, so a profile or              HERMES_HOME switch moves the log with it"
+        );
+        assert_ne!(
+            log,
+            operant_data_dir().join("operant.log"),
+            "the log must NOT be under `data/` -- that was the reader's old              path, and it is the divergence this resolver exists to prevent"
+        );
+    }
 
     // -- Shell detection ----------------------------------------------------
 

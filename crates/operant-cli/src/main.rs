@@ -840,10 +840,13 @@ fn tui_wants_default_log_file(logging: &LoggingSettings, effective_rich_output: 
 
 /// Where the default TUI log lives: the canonical home log, next to the
 /// gateway's, under the one resolver.
+///
+/// (A8-cli-surface MEDIUM-3) Delegates to `platform::operant_log_file`, the
+/// same function `operant logs show` reads. The two used to build the path
+/// independently and disagreed (`logs/` here, `data/` there), so the command
+/// reported no log on an install that had been writing one.
 fn default_tui_log_file() -> std::path::PathBuf {
-    operant_core::platform::operant_home()
-        .join("logs")
-        .join("operant.log")
+    operant_core::platform::operant_log_file()
 }
 
 fn apply_cli_overrides(cli: &Cli, config: &mut AppConfig) -> Result<()> {

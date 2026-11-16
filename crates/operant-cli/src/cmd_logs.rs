@@ -43,7 +43,11 @@ fn log_path(config: &AppConfig) -> Option<PathBuf> {
     if let Some(path) = &config.logging.log_file {
         return Some(PathBuf::from(path));
     }
-    let default = operant_core::platform::operant_data_dir().join("operant.log");
+    // ONE resolver, shared with the writer (main.rs's default TUI log). This
+    // used to build `<home>/data/operant.log` while the TUI wrote
+    // `<home>/logs/operant.log`, so on a default install the command reported
+    // no log next to a populated one (A8-cli-surface MEDIUM-3).
+    let default = operant_core::platform::operant_log_file();
     if default.exists() {
         return Some(default);
     }
@@ -293,5 +297,38 @@ mod tests {
         assert_eq!(position3.offset, 8);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap_or(&path));
+    }
+    /// (A8-cli-surface MEDIUM-3) `operant logs show` reads the file the TUI
+    /// writes.
+    ///
+    /// The reader used to build `<home>/data/operant.log` while the TUI's
+    /// default log was `<home>/logs/operant.log`. Nothing failed: on a default
+    /// install `log_path` simply returned `None`, the command printed "no log",
+    /// and the populated file sat one directory over. A silent wrong-path bug
+    /// is worse than a missing file, because the operator concludes there is
+    /// no log to look at.
+    ///
+    /// The assertion is that the CLI's own resolver and the TUI's resolver are
+    /// the SAME function, which is the only way they cannot drift.
+    #[test]
+    fn the_log_reader_and_the_tui_writer_resolve_the_same_path() {
+        // The TUI's default, computed exactly as main.rs does.
+        let writer = operant_core::platform::operant_log_file();
+        // The reader's default, with no explicit `[logging] log_file`.
+        let config = AppConfig::default();
+        assert!(
+            config.logging.log_file.is_none(),
+            "the default config must not set a log_file, or this test is \
+             proving nothing about the default path"
+        );
+        let reader = log_path(&config);
+
+        assert_eq!(
+            reader,
+            Some(writer),
+            "the log reader must resolve the same path the TUI writes to. A \
+             second, independently-built path is how `data/` and `logs/` \
+             diverged in the first place."
+        );
     }
 }
