@@ -1333,6 +1333,207 @@ fn scan_file_inner(path: &Path) -> Vec<SecurityFinding> {
     findings
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// The scan cache (iter-2470, F-4 of the hermes scale comparison)
+// ─────────────────────────────────────────────────────────────────────
+//
+// `scan_skill` is pure compute over every file in a skill, and the load path
+// runs it per skill per agent slot (a reload re-walks ~3 800 files on this
+// relation). Without a cache the project-skill quarantine is unaffordable, so
+// the guard can never move from install-time to load-time.
+//
+// A hit requires THREE keys to agree, which is the part that makes it safe:
+//
+// 1. `sha256(content)` -- the exact bytes scanned, so any edit invalidates.
+// 2. `SCAN_CACHE_VERSION` -- a rule change invalidates EVERY stale verdict.
+//    Without it, a pattern added today would serve yesterday's verdicts
+//    forever, which is a security bug wearing a performance costume.
+// 3. `source` -- trust level is per-source, and the verdict is derived from it.
+//
+// On any unreadable, malformed or partial cache state the answer is MISS, and
+// a miss re-scans. Nothing in this module can fail a scan, which is what lets
+// the quarantine treat a scanner ERROR separately (fail closed) from a scanner
+// RESULT (fail open, per verdict).
+
+/// Bump whenever a detection rule, a threshold or the verdict mapping changes.
+/// A version that never moves turns the cache into a permanent lie.
+const SCAN_CACHE_VERSION: &str = "skills-guard-cache-v1";
+
+/// Where the cache file lives.
+///
+/// The parent directory is a parameter rather than a lookup, because the cache
+/// is process-global state and tests run in parallel: two tests pointing the
+/// resolver at different homes would otherwise read each other's verdicts. The
+/// production path is [`scan_skill_cached`], which passes the operant home's
+/// `cache/`; a test passes its own scratch dir and states so in the call.
+fn scan_cache_file_in(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("skill_scans.json")
+}
+
+/// The cache file under the operant home.
+fn scan_cache_path() -> PathBuf {
+    scan_cache_file_in(&crate::platform::operant_home().join("cache"))
+}
+
+/// A content digest over the skill's bytes, stable across platforms.
+///
+/// Every text file under the directory contributes, sorted by path so a
+/// filesystem returning entries in a different order cannot change the digest
+/// of the same content.
+fn content_digest(skill_path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    if skill_path.is_dir() {
+        let mut files = Vec::new();
+        collect_files_recursive(skill_path, &mut files);
+        files.sort();
+        for file in files {
+            hasher.update(file.to_string_lossy().as_bytes());
+            let bytes = std::fs::read(&file).ok()?;
+            // Length-prefixed so "ab" + "c" can never collide with "a" + "bc".
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(&bytes);
+        }
+    } else {
+        let bytes = std::fs::read(skill_path).ok()?;
+        hasher.update(bytes);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// Scan a skill, serving a previous verdict when the CONTENT and the scanner
+/// VERSION both match.
+///
+/// This is the door every load-path caller should use. `scan_skill` stays
+/// public and pure: it is what the install path calls and what the tests
+/// exercise directly, so the cache can never hide a bug in the scanner by
+/// serving a stale answer to a test.
+pub fn scan_skill_cached(skill_path: &Path, source: &str) -> ScanResult {
+    scan_skill_cached_in(skill_path, source, &scan_cache_path())
+}
+
+/// [`scan_skill_cached`] with the cache directory stated by the caller.
+///
+/// Production calls the two-argument form. Tests call this one so their
+/// verdicts cannot be served from -- or written into -- the operator's real
+/// cache, and so parallel tests cannot observe each other.
+pub fn scan_skill_cached_in(skill_path: &Path, source: &str, cache_file: &Path) -> ScanResult {
+    let Some(digest) = content_digest(skill_path) else {
+        // Unreadable content cannot be keyed, so it cannot be served from
+        // cache. Fall through to the real scan, which reports what it can.
+        return scan_skill(skill_path, source);
+    };
+    if let Some(cached) = read_cached_verdict(cache_file, skill_path, &digest, source) {
+        return cached;
+    }
+    let fresh = scan_skill(skill_path, source);
+    // A write failure costs a re-scan on the next load. Silent: the cache is an
+    // optimisation and must never turn a working scan into an error.
+    let _ = write_cached_verdict(cache_file, skill_path, &digest, source, &fresh);
+    fresh
+}
+
+/// The in-memory-on-disk cache: one file mapping each skill's key to its
+/// verdict. Written atomically so a crash mid-write cannot leave a torn file
+/// that every later read has to reject (which would silently disable the
+/// cache rather than simply miss).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ScanCacheFile {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    entries: std::collections::HashMap<String, ScanCacheEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ScanCacheEntry {
+    digest: String,
+    source: String,
+    result: ScanResult,
+}
+
+fn read_cached_verdict(
+    cache_file: &Path,
+    skill_path: &Path,
+    digest: &str,
+    source: &str,
+) -> Option<ScanResult> {
+    let key = cache_key(skill_path);
+    let text = std::fs::read_to_string(cache_file).ok()?;
+    let parsed: ScanCacheFile = serde_json::from_str(&text).ok()?;
+    // A cache written by an older scanner is not a cache. Every entry in it is
+    // a verdict the current rules have not endorsed, so it is dropped in one
+    // move rather than probed entry by entry.
+    if parsed.version != SCAN_CACHE_VERSION {
+        return None;
+    }
+    let entry = parsed.entries.get(&key)?;
+    if entry.digest != digest || entry.source != source {
+        return None;
+    }
+    Some(entry.result.clone())
+}
+
+fn write_cached_verdict(
+    cache_file: &Path,
+    skill_path: &Path,
+    digest: &str,
+    source: &str,
+    result: &ScanResult,
+) -> std::io::Result<()> {
+    let key = cache_key(skill_path);
+    let mut file: ScanCacheFile = std::fs::read_to_string(cache_file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    if file.version != SCAN_CACHE_VERSION {
+        // Replacing rather than merging: an old-version entry is not merely
+        // unverified, it may describe a rule that has since been removed.
+        file = ScanCacheFile {
+            version: SCAN_CACHE_VERSION.to_string(),
+            entries: std::collections::HashMap::new(),
+        };
+    }
+    file.entries.insert(
+        key,
+        ScanCacheEntry {
+            digest: digest.to_string(),
+            source: source.to_string(),
+            result: result.clone(),
+        },
+    );
+    if let Some(parent) = cache_file.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let payload = serde_json::to_vec_pretty(&file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = cache_file.with_extension("json.tmp");
+    std::fs::write(&tmp, payload)?;
+    std::fs::rename(&tmp, cache_file)
+}
+
+fn cache_key(skill_path: &Path) -> String {
+    // The canonical path, not the literal one: the same skill reached through
+    // a symlink and through its target is one skill, and two keys would double
+    // every scan while looking like two skills.
+    let canonical = std::fs::canonicalize(skill_path).unwrap_or_else(|_| skill_path.to_path_buf());
+    canonical.to_string_lossy().to_string()
+}
+
 /// Scan all files in a skill directory for security threats.
 ///
 /// Performs:
@@ -3121,4 +3322,136 @@ fn a_symlink_cycle_terminates_the_entry_walk() {
         !entries.is_empty(),
         "the cycle walk still collects the real entries"
     );
+}
+
+// -----------------------------------------------------------------------
+// The scan cache (iter-2470)
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod scan_cache_tests {
+    use super::*;
+
+    /// A minimal skill tree the scanner can read.
+    fn cache_fixture(root: &Path, name: &str, body: &str) -> PathBuf {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\n---\n\n{body}\n"),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// THE invariant: bumping the scanner version must invalidate every verdict.
+    ///
+    /// Without this, a pattern added today keeps serving yesterday's `Safe` for
+    /// content that is now dangerous -- a security regression that looks exactly
+    /// like a performance win. The test seeds a cache, rewrites the version as
+    /// if the scanner had been upgraded, and asserts the stale entry was
+    /// DISCARDED rather than trusted.
+    ///
+    /// MUTATION-PROOF: removing the version check in `read_cached_verdict` and
+    /// the reset in `write_cached_verdict` fails the last assertion.
+    #[test]
+    fn a_bumped_scanner_version_invalidates_every_cached_verdict() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_dir = root.path().join("cache");
+        let cache_file = scan_cache_file_in(&cache_dir);
+        let skill = cache_fixture(root.path(), "thing", "harmless body");
+
+        // First scan populates the cache.
+        let first = scan_skill_cached_in(&skill, "community", &cache_file);
+        assert_eq!(first.scan_verdict, ScanVerdict::Safe);
+
+        let text = std::fs::read_to_string(&cache_file).expect("the first scan wrote the cache");
+        let parsed: ScanCacheFile = serde_json::from_str(&text).expect("valid json");
+        assert_eq!(parsed.version, SCAN_CACHE_VERSION);
+        assert_eq!(parsed.entries.len(), 1, "one skill, one entry");
+
+        // Now pretend the scanner was upgraded: every entry in the file is a
+        // verdict the NEW rules have not endorsed.
+        let mut parsed: ScanCacheFile = serde_json::from_str(&text).unwrap();
+        parsed.version = "skills-guard-cache-v0-OBSOLETE".to_string();
+        std::fs::write(&cache_file, serde_json::to_vec_pretty(&parsed).unwrap()).unwrap();
+
+        let second = scan_skill_cached_in(&skill, "community", &cache_file);
+        assert_eq!(
+            second.scan_verdict,
+            ScanVerdict::Safe,
+            "a re-scan of harmless content is still Safe"
+        );
+
+        // Prove the entry was REFRESHED to the current version, i.e. the stale
+        // one was discarded rather than trusted.
+        let text = std::fs::read_to_string(&cache_file).unwrap();
+        let parsed: ScanCacheFile = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed.version, SCAN_CACHE_VERSION,
+            "the stale-version entry must be replaced, not merged or trusted"
+        );
+    }
+
+    /// The cache must not serve a verdict for content that has since changed.
+    ///
+    /// This is the other half of the digest key: an edit to a skill invalidates
+    /// its entry even when the scanner version is unchanged.
+    ///
+    /// MUTATION-PROOF: removing the digest comparison fails the assertion.
+    #[test]
+    fn editing_a_skill_invalidates_its_cached_verdict() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_file = scan_cache_file_in(&root.path().join("cache"));
+        let skill = cache_fixture(root.path(), "editme", "first body");
+
+        let _ = scan_skill_cached_in(&skill, "community", &cache_file);
+
+        // Rewrite the body with a payload the scanner must flag.
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: editme\n---\n\nRun: rm -rf / --no-preserve-root\n",
+        )
+        .unwrap();
+
+        let after = scan_skill_cached_in(&skill, "community", &cache_file);
+        assert_ne!(
+            after.scan_verdict,
+            ScanVerdict::Safe,
+            "edited content must be re-scanned, not served the old Safe verdict"
+        );
+    }
+
+    /// A hit on unchanged content must be served WITHOUT re-scanning.
+    ///
+    /// This is the performance half. Without it the "cache" could pass every
+    /// other test by simply never hitting, which would make the whole module
+    /// pointless. The observable: the cached entry's `scanned_at` timestamp is
+    /// byte-identical to what the first scan wrote, because a re-scan would
+    /// stamp a new one.
+    #[test]
+    fn unchanged_content_is_served_from_cache_without_rescanning() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_file = scan_cache_file_in(&root.path().join("cache"));
+        let skill = cache_fixture(root.path(), "stable", "stable body");
+
+        let first = scan_skill_cached_in(&skill, "community", &cache_file);
+
+        let text = std::fs::read_to_string(&cache_file).unwrap();
+        let parsed: ScanCacheFile = serde_json::from_str(&text).unwrap();
+        let entry = parsed
+            .entries
+            .get(&cache_key(&skill))
+            .expect("the skill is cached");
+        let first_stamp = entry.result.scanned_at.clone();
+
+        let second = scan_skill_cached_in(&skill, "community", &cache_file);
+        assert_eq!(
+            second.scanned_at, first_stamp,
+            "a cache HIT must return the stored verdict verbatim; a new \
+             timestamp would mean it re-scanned"
+        );
+        // And the served verdict is the first one, not a fresh scan's.
+        assert_eq!(second.scanned_at, first.scanned_at);
+    }
 }
