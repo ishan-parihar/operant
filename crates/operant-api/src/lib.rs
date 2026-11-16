@@ -31,7 +31,13 @@ pub mod vad;
 
 tokio::task_local! {
     /// Current thread/sender ID for per-sender rate limiting.
-    /// Set by the agent loop, read by SecurityPolicy.
+    /// Set by the agent loop, read by the per-sender rate limiter.
+    ///
+    /// NOTE (iter-2499): this task-local currently has NO setter and NO reader in
+    /// the tree — every reference is this declaration. The comment previously
+    /// named `SecurityPolicy`, which iter-2498 deleted as dead (the live gate is
+    /// `operant_core::blast_radius`). Kept rather than deleted because removing
+    /// the crate's only `task_local!` is a separate audit, not a comment fix.
     pub static TOOL_LOOP_THREAD_ID: Option<String>;
 
     /// Override for tool choice mode, set by the agent loop.
