@@ -35,15 +35,17 @@ out short of a new build (`groq_model` / `openai_model`).
 
 The `text_to_speech` tool's dispatch (tts_tool.rs): `edge` (free,
 keyless), `elevenlabs`, `openai`, `minimax`, `mistral`, `gemini`, `xai`,
-`neutts`, `kittentts`, `piper` (local), `kokoro` (local, ONNX) — plus
+`neutts`, `kittentts`, `piper` (local), `phonon` (local, GGUF, default) — plus
 custom shell commands (`tts_command_provider.rs`) and plugin providers
 via the registry (`tts_registry.rs`).
 
-**Kokoro is the configured default** (`[tts] provider = "kokoro"` in
-`operant.example.toml`): the engine loads lazily via `kokoro-tiny`
-(TtsEngine), default voice `af_sky`, backed by the repo-provisioned
-ONNX Runtime. This is an operator design choice — do not switch the
-default away from Kokoro.
+**Phonon is the configured default** (`[tts] provider = "phonon"` in
+`operant.example.toml`): the engine loads lazily via `ptts`
+(`Synth::builder`), default voice `default`, backed by a revision-pinned
+GGUF checkpoint (`gradium/phonon-31m-en`, ~65 MB q8_0) cached under
+`~/.operant/cache/phonon/`. It replaced Kokoro (ONNX Runtime, `af_sky`)
+in iter-2513. This is an operator design choice — do not switch the
+default away from Phonon.
 
 ## The registry pattern
 

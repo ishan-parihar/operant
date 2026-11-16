@@ -76,23 +76,6 @@ else
 fi
 echo "  BINDGEN_EXTRA_CLANG_ARGS: $BINDGEN_EXTRA_CLANG_ARGS"
 
-# ── ONNX Runtime (for kokoro-tts) ──
-ORT_DIRS=(
-    "/home/ishanp/Documents/GitHub/MY-PROJECTS/local/onnxruntime-linux-x64-1.24.4/lib"
-    "/home/ishanp/local/onnxruntime-linux-x64-1.24.4/lib"
-)
-for d in "${ORT_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-        export ORT_LIB_LOCATION="$d"
-        export ORT_PREFER_DYNAMIC_LINK=1
-        echo "  ORT_LIB_LOCATION: $ORT_LIB_LOCATION"
-        break
-    fi
-done
-if [ -z "${ORT_LIB_LOCATION:-}" ]; then
-    echo "  WARNING: ONNX Runtime not found — kokoro-tts may fail to build"
-fi
-
 # ── PKG_CONFIG (ALSA for cpal) ──
 PKG_DIRS=(
     "/home/ishanp/Documents/GitHub/MY-PROJECTS/local/pkgconfig"
@@ -119,9 +102,6 @@ for d in "${LIB_DIRS[@]}"; do
         break
     fi
 done
-if [ -n "${ORT_LIB_LOCATION:-}" ]; then
-    export LD_LIBRARY_PATH="${ORT_LIB_LOCATION}:${LD_LIBRARY_PATH:-}"
-fi
 
 # ── CARGO settings ──
 export CARGO_INCREMENTAL=0

@@ -1681,7 +1681,7 @@ Example config defaults (already set in `operant.example.toml`):
 provider = "memory-wire"  # Default memory provider (memory-wire | builtin)
 
 [tts]
-provider = "kokoro"   # Default TTS provider
+provider = "phonon"   # Default TTS provider
 
 [agent]
 model = "gpt-4"       # Default model (override in user config)
