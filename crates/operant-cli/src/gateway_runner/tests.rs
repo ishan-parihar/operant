@@ -4090,3 +4090,94 @@ async fn a_disabled_session_search_stops_the_gateway_search_command() {
         None => unsafe { std::env::remove_var("HERMES_HOME") },
     }
 }
+
+/// (A3-gateway H-1) A cron job created from a SESSION SOCKET turn carries a
+/// delivery target.
+///
+/// The cron origin rides the TURN (RT-534): `cron_tool::handle_create` writes
+/// `origin_platform`/`origin_chat_id` from it, and the scheduler only delivers
+/// when both are non-NULL. The channel turn set the origin; the socket turn did
+/// not -- so `operant chat --attach` + `cron create` wrote a row with NULL
+/// origins, the scheduler found no target, and the result was dropped with a
+/// `warn!` after being computed.
+///
+/// The old test for this (`the_gateway_sets_the_cron_origin_on_the_slots_agent`)
+/// is a SOURCE-TEXT assertion: it proves the string `agent.set_cron_origin(Some(`
+/// appears somewhere in the file. It stays green if the socket path sets
+/// nothing, which is exactly the bug. This one checks the value.
+#[test]
+fn a_socket_turn_carries_a_cron_origin_with_a_delivery_target() {
+    let origin = super::socket_cron_origin("sess_abc123");
+
+    assert_eq!(
+        origin.platform, "session-socket",
+        "the platform must name a route the cron CONSUMER understands -- \
+         there is no `session-socket` adapter in the registry, so an adapter \
+         name here would make send_to_platform answer \"Unknown platform\" and \
+         the result would be just as dead as a NULL origin"
+    );
+    assert_eq!(
+        origin.chat_id, "sess_abc123",
+        "the chat id must be the session the turn addressed, so the delivery \
+         lands on the channel the attached client is subscribed to"
+    );
+    assert!(
+        origin.thread_id.is_none(),
+        "a socket turn has no thread concept -- inventing one would give the \
+         scheduler a target it cannot route"
+    );
+}
+
+/// The two callers must agree on the route name. A string literal repeated at
+/// the producer and the consumer is how these drift: change one and cron
+/// delivery silently dies again.
+#[test]
+fn the_cron_consumer_and_the_socket_origin_agree_on_the_route_name() {
+    let source = include_str!("../gateway_runner.rs");
+    let produced = super::socket_cron_origin("s").platform;
+    assert_eq!(
+        produced, "session-socket",
+        "socket_cron_origin must keep producing the route name"
+    );
+    assert!(
+        source.contains("delivery.platform == \"session-socket\""),
+        "the cron delivery consumer must branch on the SAME string \
+         socket_cron_origin produces; a mismatch means socket-originated jobs \
+         fall through to send_to_platform, which has no adapter for them"
+    );
+}
+
+/// (A3-gateway H-1, the mutation-proof half) The socket turn must actually
+/// CALL `socket_cron_origin`.
+///
+/// The test above only checks the value the helper returns. Delete the call
+/// site and it still passes, because the helper is still correct -- which is
+/// the same shape as the bug being fixed: a correct piece that nothing invokes.
+/// That was caught by mutating the call site away and watching the test stay
+/// green.
+///
+/// What this asserts is deliberately narrow -- that the CALL exists, in the
+/// socket arm, and nowhere else. The behavioural version would have to drive a
+/// whole socket turn through `handle`, which needs a slot, a session store and
+/// a client; the call site is the thing that actually broke, so it is the thing
+/// worth pinning.
+#[test]
+fn the_socket_turn_entry_sets_the_cron_origin_it_builds() {
+    let source = include_str!("../gateway_runner.rs");
+    let call = "set_cron_origin(Some(socket_cron_origin(&task_session)))";
+    assert!(
+        source.contains(call),
+        "the socket turn must set the cron origin on its slot's agent before \
+         it runs -- without this call, cron jobs created by a local turn have \
+         no delivery target and their results are computed and discarded"
+    );
+    // Exactly one call site: the socket arm. The channel arm sets its own
+    // origin from the incoming message, and a second socket-style call there
+    // would overwrite the chat's real target with a session id.
+    assert_eq!(
+        source.matches(call).count(),
+        1,
+        "exactly one socket-style cron-origin call, in the socket arm -- the \
+         channel arm must keep setting the origin from the message it received"
+    );
+}

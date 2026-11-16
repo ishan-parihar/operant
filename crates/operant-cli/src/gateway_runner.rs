@@ -3210,6 +3210,17 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     handler
                         .bind_slot_to_session(slot, &task_session, "session-socket")
                         .await;
+                    // (A3-gateway H-1) The socket turn must also carry a cron
+                    // origin. Without one, `cron create` from
+                    // `operant chat --attach` writes the row with NULL origin
+                    // columns, and the scheduler's delivery arm has no target:
+                    // the result is computed and then dropped with a `warn!`.
+                    // The channel path set it and the socket path did not, so
+                    // a reminder created locally could NEVER fire. The test
+                    // at `gateway_runner/tests.rs` asserts the channel path
+                    // only, so it stayed green.
+                    slot.agent
+                        .set_cron_origin(Some(socket_cron_origin(&task_session)));
                     // A message the operator QUEUED arrives WITH this turn,
                     // ahead of the draft they just submitted — the same rule
                     // the channel path applies at its turn entry.
@@ -5096,6 +5107,33 @@ fn runner() -> &'static Mutex<Option<Arc<Gateway>>> {
 /// Build platform adapters from config
 /// Platform adapter factory function type.
 type AdapterFactory = fn(&GatewayConfig) -> Option<Arc<dyn PlatformAdapter>>;
+
+/// The cron origin a SESSION SOCKET turn runs under.
+///
+/// A cron job's delivery target comes from the TURN's origin (RT-534): the
+/// agent hands `CronOrigin` to `cron_tool::handle_create`, which writes
+/// `origin_platform` / `origin_chat_id` onto the row. The scheduler only
+/// delivers when BOTH are non-NULL, and `cron create` with no origin writes
+/// NULLs and falls back to `deliver: "local"` -- a job that fires and then
+/// throws its result away with a `warn!`.
+///
+/// The channel turn sets an origin (see its own `set_cron_origin` call). The
+/// socket turn did not, so a reminder created through `operant chat --attach`
+/// could never be delivered.
+///
+/// `platform` names a route the cron CONSUMER understands: it publishes on the
+/// session bus rather than going through an adapter. There is no
+/// `session-socket` adapter in `platform_registry`, so `send_to_platform` would
+/// answer "Unknown platform" -- which is why the consumer branches on this
+/// string. `chat_id` is the session the turn addressed, exactly the channel an
+/// attached client is subscribed to.
+fn socket_cron_origin(task_session: &str) -> operant_core::tools::cron_tool::CronOrigin {
+    operant_core::tools::cron_tool::CronOrigin {
+        platform: "session-socket".to_string(),
+        chat_id: task_session.to_string(),
+        thread_id: None,
+    }
+}
 
 /// Platform registry entry — maps a platform name to its factory function
 /// and metadata. This replaces the hardcoded if/elif chain and allows
@@ -8506,6 +8544,14 @@ pub async fn start_gateway(
 
         // Delivery receiver — sends cron results to platforms
         let gw_for_cron = gateway.clone();
+        // (A3-gateway H-1, the other half) A cron job created from a SESSION
+        // SOCKET turn carries `platform: "session-socket"` and the session
+        // id as its chat id. That platform has no adapter in the registry —
+        // `send_to_platform` would answer "Unknown platform" and the result
+        // would be just as dead as before. What those jobs need is the
+        // session bus, the same channel a turn's own events ride, so an
+        // attached client receives the reminder as an event.
+        let bus_for_cron = std::sync::Arc::clone(&session_bus);
         // v6 outline row 5: the sender loop is the `CronDeliveryOutcome`
         // emitter — the one cron lifecycle event core never emits (the
         // consumer-side report contract, iter-720). Same observer the
@@ -8514,9 +8560,25 @@ pub async fn start_gateway(
         let cron_observer_sender = Arc::clone(&cron_observer);
         tokio::spawn(async move {
             while let Some(delivery) = cron_rx.recv().await {
-                let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
-                let send_result = gw_for_cron.send_to_platform(&delivery.platform, msg).await;
-                // Row 1 (outline v5 §1): close the ledger loop — settle
+                // A socket-originated delivery bypasses the adapter path
+                // entirely. `platform` is a plain string chosen by
+                // `set_cron_origin`, so the scheduler cannot know it means
+                // "publish on this session's bus" — the consumer has to.
+                let send_result = if delivery.platform == "session-socket" {
+                    // `Content`, not `Error`: this is a delivered reminder,
+                    // and rendering it as a failure card would tell the
+                    // operator their job failed when it worked.
+                    bus_for_cron.publish(
+                        &delivery.chat_id,
+                        AgentEvent::Content {
+                            text: delivery.content.clone(),
+                        },
+                    );
+                    Ok(())
+                } else {
+                    let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
+                    gw_for_cron.send_to_platform(&delivery.platform, msg).await
+                };
                 // the row the scheduler handed off. Success is terminal
                 // ('delivered'); failure records the error and leaves the
                 // row pending, where the 2h reclaim replays it. The
