@@ -892,6 +892,26 @@ fn resolve_background_target(
     pinned.or(slot)
 }
 
+/// (A3-gateway H-3) The per-event target resolution the progress/permission
+/// receivers use.
+///
+/// Split out from the two call sites so the decision is testable. The callers
+/// look up `pinned` for the event's own session and read `slot` from the
+/// process-global cell; this decides between them. A turn that names its own
+/// session can therefore never be routed to whichever chat most recently
+/// wrote the global cell -- which is exactly what happened when both readers
+/// read the cell alone.
+fn resolve_turn_channel(
+    event_session: Option<&str>,
+    pinned: Option<CurrentChannel>,
+    slot: Option<CurrentChannel>,
+) -> Option<CurrentChannel> {
+    match event_session {
+        Some(id) if !id.is_empty() => resolve_background_target(id, pinned, slot),
+        _ => slot,
+    }
+}
+
 /// Derive the gateway agent's stable session id (and therefore the chat's
 /// SEAT under the bylaws) from a routing key. Extracted from the turn
 /// dispatcher so `/permissions` computes the SAME seat the running agent
@@ -5667,7 +5687,18 @@ pub async fn start_gateway(
     // shared channel told every consumer only "an event happened". The slots
     // merge into the one consumer the rest of the gateway already reads, so
     // nothing downstream changed.
-    let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
+    //
+    // (A3-gateway H-3) The merge carried the event ALONE, so the session it
+    // came from was lost at exactly the point where it was still known, and
+    // the reader below resolved its reply target from one process-global cell.
+    // Two chats talking at once overwrote that cell each turn, so a turn's
+    // progress, permission prompts and questions were answered on whichever
+    // thread had most recently written it. The per-slot channel already knows
+    // the session (the bus publish below uses it) -- it just did not pass it
+    // on. Carrying `(session, event)` through the merge keeps the one consumer
+    // and gives it the identity it needs to resolve the way the background
+    // path already does.
+    let (event_tx, mut event_rx) = mpsc::channel::<(Option<String>, AgentEvent)>(256);
     // (platform, channel_id, telegram thread_id) — thread_id is forwarded so
     // all outbound progress/stream/error messages land in the same forum
     // topic the user sent from (hermes topic-reply parity).
@@ -5826,8 +5857,12 @@ pub async fn start_gateway(
                 if let Some(id) = session.as_deref() {
                     bus.publish(id, event.clone());
                 }
-                // The single consumer the rest of the gateway reads.
-                if merge.send(event).await.is_err() {
+                // The single consumer the rest of the gateway reads. The
+                // session travels WITH the event (A3-gateway H-3) so that
+                // consumer can resolve the reply target per event instead of
+                // reading one process-global slot that another chat's turn
+                // overwrote.
+                if merge.send((session.clone(), event)).await.is_err() {
                     break;
                 }
             }
@@ -6351,18 +6386,34 @@ pub async fn start_gateway(
         let mut last_edit_time = std::time::Instant::now();
         let mut last_stream_sent = String::new();
         tracing::info!("Tool progress + streaming event receiver started");
-        while let Some(event) = event_rx.recv().await {
-            let (platform, channel_id, thread_id) =
-                match current_channel_for_events.lock().await.as_ref() {
-                    Some((p, c, t)) => (p.clone(), c.clone(), *t),
-                    None => {
-                        tracing::debug!(
-                            "Dropping tool event (no active channel): {:?}",
-                            std::mem::discriminant(&event)
-                        );
-                        continue;
-                    }
-                };
+        while let Some((event_session, event)) = event_rx.recv().await {
+            // (A3-gateway H-3) Resolve the target for THIS event, not from a
+            // process-global slot. The session arrives with the event; its
+            // pinned channel is what the turn itself recorded at :8281. A
+            // second chat's turn writing the old global cell could not move
+            // this one's progress, because it is never consulted when the
+            // event names its own session. Same resolution order as the
+            // background path (`resolve_background_target`): pinned first,
+            // the shared slot as the fallback for single-DM setups where
+            // both are identical.
+            let pinned = match event_session.as_deref() {
+                Some(id) if !id.is_empty() => {
+                    session_channels_for_events.lock().await.get(id).cloned()
+                }
+                _ => None,
+            };
+            let slot_channel = current_channel_for_events.lock().await.clone();
+            let target = resolve_turn_channel(event_session.as_deref(), pinned, slot_channel);
+            let (platform, channel_id, thread_id) = match target {
+                Some((p, c, t)) => (p, c, t),
+                None => {
+                    tracing::debug!(
+                        "Dropping tool event (no active channel): {:?}",
+                        std::mem::discriminant(&event)
+                    );
+                    continue;
+                }
+            };
             let key = (platform.clone(), channel_id.clone(), thread_id);
 
             match event {
@@ -6858,6 +6909,7 @@ pub async fn start_gateway(
     // 4. If no response within 60s, auto-deny (safety timeout).
     let gw_for_perm = gw.clone();
     let current_channel_for_perm = current_channel.clone();
+    let session_channels_for_perm = session_channels.clone();
     // D-2 (owner ruling 2026-10-08): the unattended posture, captured at
     // start — the receiver consults it when nobody can answer a prompt.
     let unattended_posture_for_perm = app_config.bylaws.unattended_posture.clone();
@@ -6877,8 +6929,26 @@ pub async fn start_gateway(
                 "Permission request received — prompting user"
             );
 
-            // Get the current channel to send the prompt to
-            let channel_info = current_channel_for_perm.lock().await.clone();
+            // Get the channel to send the prompt to -- resolved for THIS ask,
+            // not from the process-global slot (A3-gateway H-3).
+            //
+            // `req.session_id` has been on the request since iter-2366 for
+            // exactly this reason (its doc names the failure: one chat's reply
+            // approving a tool that runs for a different session). Until now
+            // it was read only to tell a socket ask from a channel ask; the
+            // TARGET still came from the global cell, which another chat's
+            // turn overwrote. A permission prompt for session A landing in
+            // chat B is not a cosmetic mix-up: the operator approves a tool
+            // they never saw requested, on a turn they are not watching.
+            let pinned = match req.session_id.as_deref() {
+                Some(id) if !id.is_empty() => {
+                    session_channels_for_perm.lock().await.get(id).cloned()
+                }
+                _ => None,
+            };
+            let slot_channel = current_channel_for_perm.lock().await.clone();
+            let channel_info =
+                resolve_turn_channel(req.session_id.as_deref(), pinned, slot_channel);
 
             if let Some((platform, channel_id, thread_id)) = &channel_info {
                 // RT-179 plan mode: a channel that asked for read-only

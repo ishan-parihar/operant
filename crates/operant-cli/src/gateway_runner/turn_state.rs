@@ -257,6 +257,63 @@ mod tests {
         assert_eq!(resolve_background_target("gw_a", None, None), None);
     }
 
+    /// (A3-gateway H-3) A turn's progress and permission prompt are routed to
+    /// the channel its OWN session recorded, never to the process-global slot.
+    ///
+    /// Before this, the event and permission receivers resolved their reply
+    /// target from one `current_channel` cell. Two chats in one gateway
+    /// overwrote it every turn, so a turn's progress went to whichever thread
+    /// had most recently written it. For the permission receiver that is not a
+    /// cosmetic mix-up: an operator approves a tool they never saw requested,
+    /// on a turn they are not watching. The per-session pin already existed
+    /// (`session_channels`, written per turn) and the background path already
+    /// used it -- these two readers did not.
+    ///
+    /// The session-names-itself case must win over the slot, and the
+    /// sessionless case must still fall back to the slot (single-DM setups
+    /// where both are identical, and emitters with no tag).
+    #[test]
+    fn a_turns_own_channel_beats_the_process_global_slot() {
+        use crate::gateway_runner::resolve_turn_channel;
+
+        let session_a = ("telegram".to_string(), "chat-A".to_string(), Some(11));
+        // What another chat's turn last wrote to the global cell.
+        let other_slot = ("telegram".to_string(), "chat-B".to_string(), Some(22));
+
+        // Session A's turn must stay on A even though the global points at B.
+        let target = resolve_turn_channel(
+            Some("gw_a"),
+            Some(session_a.clone()),
+            Some(other_slot.clone()),
+        );
+        assert_eq!(
+            target,
+            Some(session_a.clone()),
+            "a turn must be answered on its own session's channel, not the \
+             global slot another chat overwrote"
+        );
+
+        // No pin (expired with the turn): fall back to the slot, so ordinary
+        // single-DM setups are unaffected.
+        let target = resolve_turn_channel(Some("gw_a"), None, Some(other_slot.clone()));
+        assert_eq!(
+            target,
+            Some(other_slot.clone()),
+            "no pin falls back to slot"
+        );
+
+        // An event with no session at all: slot, as before.
+        let target = resolve_turn_channel(None, Some(session_a), Some(other_slot.clone()));
+        assert_eq!(
+            target,
+            Some(other_slot),
+            "a sessionless event keeps the old slot behaviour"
+        );
+
+        // Nothing anywhere: dropped, not a panic.
+        assert_eq!(resolve_turn_channel(Some("gw_a"), None, None), None);
+    }
+
     /// iter-691 — the restart reaper's CLOSE path. A pending row closed as
     /// `interrupted` (with its exit columns) must never be re-detected on
     /// the next boot, even though the channel notice may never have been

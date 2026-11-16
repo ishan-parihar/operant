@@ -748,6 +748,61 @@ async fn two_slot_providers_keep_separate_scopes() {
     }
 }
 
+/// (A3-gateway H-3) The progress and permission receivers resolve their reply
+/// target from the event's OWN session, not from the process-global
+/// `current_channel` cell.
+///
+/// This is the same shape as RT-534 below (a process-global cell overwritten
+/// across concurrent turns), pinned the same way. The helper
+/// `resolve_turn_channel` has its own unit test, and that test passes even if
+/// both call sites go back to reading the global -- which is exactly why the
+/// call sites need pinning here. Two chats in one gateway overwrote the cell
+/// every turn, so a turn's progress went to the wrong thread and, worse, an
+/// operator was prompted to approve a tool requested by a turn they were not
+/// watching.
+#[test]
+fn turn_progress_and_permissions_resolve_per_session_not_from_the_global() {
+    let source = include_str!("../gateway_runner.rs");
+
+    // Both receivers must go through the per-session resolution.
+    let calls = source.matches("resolve_turn_channel(").count();
+    assert!(
+        calls >= 3,
+        "expected the definition plus one call in each receiver (events and \
+         permissions); found {calls}. A receiver that reads the global cell          directly routes a turn to whichever chat wrote that cell last"
+    );
+
+    // Neither receiver may read the global cell straight into its target.
+    // These are the two pre-fix shapes: the events receiver took the cell as
+    // its target, and the permission receiver did the same into `channel_info`.
+    let events_global = ["current_channel_for_events.lock().await.clone()"].concat();
+    let perm_global =
+        ["let channel_info = current_channel_for_perm.lock().await.clone();"].concat();
+    assert!(
+        !source.contains(perm_global.as_str()),
+        "the permission receiver must not take its target straight from the \
+         global cell -- a prompt for session A would land in chat B, and the \
+         operator would approve a tool they never saw requested"
+    );
+    // The events receiver still reads the cell, but only as the FALLBACK
+    // handed to the resolver, never as the target itself.
+    let as_target = [
+        "let (platform, channel_id, thread_id) =",
+        "current_channel_for_events.lock().await.as_ref()",
+    ]
+    .concat();
+    assert!(
+        !source.contains(as_target.as_str()),
+        "the progress receiver must not unpack the global cell directly as its \
+         target; that is the pre-fix shape that lost the session"
+    );
+    assert!(
+        source.contains(events_global.as_str()),
+        "the events receiver still needs the cell as the resolver's fallback \
+         for single-DM setups"
+    );
+}
+
 /// (RT-534) The gateway sets the cron origin on the SLOT's agent, not in a
 /// process global.
 ///
