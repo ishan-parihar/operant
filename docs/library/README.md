@@ -49,7 +49,8 @@ page from a design note.
 
 ### Surfaces
 
-- [tui.md](tui.md) — the terminal UI: renderer pipeline, model/view layering, composer, overlays, debug tooling
+- [tui.md](tui.md) — the terminal UI: module layering, the event loop, the composer, the overlay catalogue, the slash-command registry
+- [tui-rendering.md](tui-rendering.md) — the render pipeline end to end: state to DisplayMessage to cells, wrapping, markdown/mermaid, viewport, adapters
 - [gateway.md](gateway.md) — the channel gateway: 7 adapters, session store, dispatch breaker, admin commands, subscriptions
 - [sessions.md](sessions.md) — the session substrate: per-session conversation, branching, rewind, autocompact, session search/recap
 - [skills.md](skills.md) — skills: discovery, guard, usage, marketplace, bundles, SOPs
@@ -60,11 +61,13 @@ page from a design note.
 
 ### Foundations
 
-- [config.md](config.md) — the one config system: precedence, sections, one-home resolver, profiles
+- [config.md](config.md) — the config MECHANISM: precedence, sections, one-home resolver, profiles
+- [config-reference.md](config-reference.md) — every key the binary accepts: section, type, default, and what it changes
 - [security.md](security.md) — the security stack: approval, blast radius, justification, redaction, credential registry, path safety, SSRF
 - [persistence.md](persistence.md) — SQLite layer: state database, migrations, declarative reconciliation, trajectory, checkpoints
 - [observability.md](observability.md) — observer events, runtime metrics, logging, insights, dashboard
 - [operability.md](operability.md) — doctor, setup, integrations updater, service install, backup/import, MCP-serve
+- [cli-surface.md](cli-surface.md) — every `operant <command>`: what it does, its key flag, in-process or shell-out
 
 ## Maintenance law
 

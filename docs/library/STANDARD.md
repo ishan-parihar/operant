@@ -76,3 +76,20 @@ write a page that covers a previously-undocumented module, its E311 row
 disappears. If a module genuinely needs no page (a test fixture, a generated
 file), add it to `ops.coverage_exempt` in `genome.toml` **with the reason** — an
 exemption without a reason is a deferral with the paperwork missing.
+
+## Backticks are a claim about a symbol
+
+`scripts/verify-library.sh` reads every backticked snake_case name in a library
+page and checks it against the tool registry, the guardrail name lists, and the
+alias table. So:
+
+- **`file_read`** means the tool of that name. It had better exist.
+- A *topic* that happens to look like one — `accessibility_tree` meaning the
+  accessibility tree, `notification` meaning the notification subsystem,
+  `transcription` meaning the capability — must be written plainly:
+  *the accessibility tree*, *the notification subsystem*, *speech-to-text*.
+  Backticking a topic is not just imprecise, it fails the build, because the
+  check cannot tell a claim from a coincidence.
+
+Same rule for config keys: a backticked `snake_case` name in a Configuration
+section is a key that must exist in `crates/operant-core/src/config.rs`.

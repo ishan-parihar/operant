@@ -90,6 +90,7 @@ they describe. The front door is [docs/library/README.md](library/README.md); th
 |---|---|---|
 | `docs/library/tui.md` | the terminal UI: renderer pipeline, model/view layering, composer, overlays | TUI debugging tooling (`tui-debugging.md`) |
 | `docs/library/tui-debugging.md` | TUI debug + live-repro tooling: headless simulate, scenario corpus, tmux recipes | the TUI's architecture (`tui.md`) |
+| `docs/library/tui-rendering.md` | the render pipeline end to end: App state to DisplayMessage to cells, wrapping, markdown/mermaid, viewport, adapters, the two hub dialogs | the module layering and event loop (`tui.md`), the headless driver (`tui-debugging.md`) |
 | `docs/library/gateway.md` | the channel gateway: 7 adapters, session store, dispatch breaker, subscriptions | the dashboard (`observability.md`), platform org seats (`org.md`) |
 | `docs/library/sessions.md` | the session substrate: per-session conversation, branching, rewind, checkpoints, search/recap | persistence mechanics (`persistence.md`) |
 | `docs/library/session-server.md` | the process that owns the agentic runtime (registry, MCP children, AFT pool, database handles) and the client protocol that drives a session there | the channel adapters (`gateway.md`), the session transcript (`sessions.md`) |
@@ -104,10 +105,12 @@ they describe. The front door is [docs/library/README.md](library/README.md); th
 | File | Owns | Not for |
 |---|---|---|
 | `docs/library/config.md` | the one config system: precedence, one-home resolver, profiles | subsystem-specific keys (each library page's own sections) |
+| `docs/library/config-reference.md` | every key this binary accepts: section, type, default, and what it changes | the config MECHANISM (`config.md`), per-subsystem config stories (each page's own Configuration section) |
 | `docs/library/security.md` | the guard stack: approval, blast radius, justification, redaction, credentials, path safety, SSRF, staging | skill content scanning (`skills.md`) |
 | `docs/library/persistence.md` | the SQLite substrate: state DB, schema reconciliation, migrations, trajectory, RAM budget | session semantics (`sessions.md`), the memory store (`memory.md`) |
 | `docs/library/observability.md` | observer events, runtime metrics, logging, insights, the dashboard | the doctor (`operability.md`) |
 | `docs/library/operability.md` | doctor, setup, integrations updater, service install, backup/import, MCP-serve | the gateway daemon (`gateway.md`) |
+| `docs/library/cli-surface.md` | the operator's CLI: every `operant <command>`, what it does, its key flag, in-process vs shell-out | the mechanisms behind a command (each page owns its own), slash commands INSIDE a session (that page's last section) |
 
 ## The frozen reference shelf
 

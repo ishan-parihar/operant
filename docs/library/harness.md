@@ -5,6 +5,14 @@ composition-as-data.
 Not for: the persistent Python kernel ([kernel.md](kernel.md)), plugins
 ([plugins.md](plugins.md)).
 
+Source: `crates/operant-harness/src/` (`claim.rs`, `composition.rs`,
+`discovery.rs`, `effect.rs`, `harness.rs`, `host.rs`, `provider.rs`,
+`pool.rs`, `pool_provider.rs`, `report.rs`, `row.rs`, `swap.rs`,
+`wasm_provider.rs`), `crates/operant-core/src/harness_adapters.rs`,
+`harness_slots.rs`, `harness_seams_r3.rs`, `pool_adapter.rs`,
+`runtime_adapter.rs`, `crates/operant-cli/src/cmd_architecture.rs` (the
+operator surface).
+
 The operant harness is the **composable provider runtime** that lets the
 agent load, swap, and unload its own capabilities at runtime without a
 restart. It is **dark-mergeable**: the default config keeps it disabled,

@@ -6,6 +6,13 @@ corpus, and the tmux live-repro recipes.
 Not for: the TUI's architecture and renderer pipeline
 ([tui.md](tui.md)).
 
+Source: `crates/operant-cli/src/cmd_tui_debug.rs` (the CLI surface),
+`crates/operant-cli/src/tui/debug/` (`mod.rs`, `debug_hub.rs`, `event_bus.rs`,
+`overlay.rs`), `crates/operant-cli/src/tui/app/tests.rs` (the TestBackend
+harness), `crates/operant-cli/tests/tui_scenarios/` (`_run.py`,
+`command_sweep.py`, the `.scenario.json` corpus and its `baselines/`),
+`scripts/shift-enter-live.sh` (the live tmux recipe).
+
 Operant's TUI has a debugging layer that lets you drive the interface
 headlessly, observe its state and rendered output, and assert on both — the
 foundation for autonomous debug/refactor loops and CI regression tests.
