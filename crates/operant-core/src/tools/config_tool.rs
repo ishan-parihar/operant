@@ -258,9 +258,24 @@ fn set_config_value(key: &str, value: &str) -> Result<()> {
 use crate::config::redact_secrets;
 
 /// Resolve the effective config file path (mirrors `operant config path`).
+///
+/// (A8-cli-surface MEDIUM-2) `HERMES_CONFIG` names the YAML CLI config, not
+/// the TOML config the agent runs on. Reporting it here told the model that
+/// `config.yaml` was its config file, so a `config_manage` edit aimed at
+/// `agent.model` described a file the loader never reads. The loader's own
+/// candidate list is the authority; the env var is honoured only for a
+/// non-YAML file that actually exists.
 fn config_file_path() -> String {
     if let Ok(path) = std::env::var("HERMES_CONFIG") {
-        return path;
+        let candidate = std::path::PathBuf::from(&path);
+        let is_yaml = candidate
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
+            .unwrap_or(false);
+        if !is_yaml && candidate.exists() {
+            return path;
+        }
     }
     for path in crate::config::default_config_paths() {
         if path.exists() {

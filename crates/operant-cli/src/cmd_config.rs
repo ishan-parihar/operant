@@ -160,12 +160,10 @@ fn handle_set(key: String, value: String) -> Result<()> {
 /// Checks (in order) the `HERMES_CONFIG` env var and then the default search
 /// paths. Prints the first existing file found.
 fn handle_path() -> Result<()> {
-    if let Ok(path) = std::env::var("HERMES_CONFIG") {
-        let path = PathBuf::from(&path);
-        println!("{}", path.display());
-        return Ok(());
-    }
-
+    // (A8-cli-surface MEDIUM-2) Resolve the same way the loader does. This used
+    // to check `HERMES_CONFIG` FIRST and print it unconditionally, so
+    // `config path` and `config edit` could name different files: `path` named
+    // the YAML CLI config, `edit` fell back to the TOML candidates.
     for path in operant_core::config::default_config_paths() {
         if path.exists() {
             let display = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -341,13 +339,48 @@ fn handle_edit() -> Result<()> {
 }
 
 /// Resolve the config file path, creating a default file if none exists.
+///
+/// (A8-cli-surface MEDIUM-2) `HERMES_CONFIG` names the YAML CLI config
+/// (`CliConfig::load`, `config.yaml`), NOT this TOML one. Treating it as a TOML
+/// path made `config edit` on a fresh install WRITE a default TOML document
+/// over the operator's YAML CLI config -- silently replacing one config system
+/// with the other and losing every delegation setting in it.
+///
+/// The rule now: `HERMES_CONFIG` is honoured only when the file already exists
+/// and is not YAML. An existing file is the operator's, whatever it is, and is
+/// never overwritten by a default; a non-existent one falls through to the
+/// TOML loader's own candidate list, which is the authority on where a TOML
+/// config lives.
 pub(crate) fn resolve_or_create_config_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("HERMES_CONFIG") {
         let path = PathBuf::from(&path);
-        if !path.exists() {
-            write_default_config(&path)?;
+        if path.exists() {
+            // An existing file at HERMES_CONFIG may be the YAML CLI config.
+            // Refuse to treat it as TOML -- the caller would rewrite it.
+            let is_yaml = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
+                .unwrap_or(false);
+            if is_yaml {
+                anyhow::bail!(
+                    "HERMES_CONFIG points at '{}' which is a YAML file -- that is the \
+                     CLI config (config.yaml), not the TOML config this command edits. \
+                     Unset HERMES_CONFIG or point it at an operant.toml.",
+                    path.display()
+                );
+            }
+            return Ok(path);
         }
-        return Ok(path);
+        // A HERMES_CONFIG that does not exist yet is ambiguous: it could be a
+        // TOML the operator intends to create, or the YAML the CLI layer will
+        // create. Creating a TOML there risks clobbering the YAML contract, so
+        // defer to the loader's candidates and say so.
+        println!(
+            "HERMES_CONFIG='{}' does not exist; resolving the TOML config from the \
+             standard search path instead (that variable names the YAML CLI config).",
+            path.display()
+        );
     }
 
     let existing = operant_core::config::default_config_paths()
@@ -476,14 +509,14 @@ fn handle_backups(action: BackupAction) -> Result<()> {
 }
 
 fn handle_migrate(apply: bool) -> Result<()> {
-    let config_path = if let Ok(path) = std::env::var("HERMES_CONFIG") {
-        PathBuf::from(&path)
-    } else {
-        operant_core::config::default_config_paths()
-            .into_iter()
-            .find(|p| p.exists())
-            .unwrap_or_else(|| PathBuf::from("operant.toml"))
-    };
+    // (A8-cli-surface MEDIUM-2) `HERMES_CONFIG` names the YAML CLI config, not
+    // this TOML one. Migrating "the config" must mean the TOML config the
+    // loader reads, or `config migrate` would rewrite a different file than
+    // the one the agent loads.
+    let config_path = operant_core::config::default_config_paths()
+        .into_iter()
+        .find(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("operant.toml"));
 
     println!("Config migration check");
     println!("{}", "-".repeat(40));
@@ -844,4 +877,84 @@ fn truncate(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+/// (A8-cli-surface MEDIUM-2) `HERMES_CONFIG` names the YAML CLI config, so
+/// it must not be treated as the TOML path this command edits.
+///
+/// The old code, given a `HERMES_CONFIG` that did not exist, WROTE a
+/// default TOML document there. When that variable points at the YAML CLI
+/// config (its documented meaning, `operant.example.toml`), the first
+/// `config edit` on a fresh install replaced the operator's YAML with a
+/// TOML file -- losing every delegation setting silently.
+///
+/// SAFETY: these tests own `HERMES_CONFIG` for their duration. They are
+/// the only tests in this module that touch it.
+#[test]
+fn a_yaml_hermes_config_is_refused_rather_than_overwritten() {
+    let dir = std::env::temp_dir().join(format!(
+        "operant_cfg_yaml_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let yaml = dir.join("config.yaml");
+    std::fs::write(&yaml, "delegation:\\n  enabled: true\\n").expect("write yaml");
+
+    unsafe {
+        std::env::set_var("HERMES_CONFIG", &yaml);
+    }
+    let result = resolve_or_create_config_path();
+    unsafe {
+        std::env::remove_var("HERMES_CONFIG");
+    }
+
+    let err = result.expect_err("a YAML HERMES_CONFIG must be refused");
+    let text = format!("{err}");
+    assert!(
+        text.contains("YAML"),
+        "the refusal must name what the file is, got: {text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&yaml).expect("read yaml"),
+        "delegation:\\n  enabled: true\\n",
+        "the YAML config must be untouched -- overwriting it is the bug"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `HERMES_CONFIG` naming a file that does not exist must NOT get a TOML
+/// default written into it: the name is ambiguous (YAML or TOML) and
+/// guessing wrong destroys a config.
+#[test]
+fn a_missing_hermes_config_is_not_created_as_toml() {
+    let dir = std::env::temp_dir().join(format!(
+        "operant_cfg_missing_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let target = dir.join("config.yaml");
+    assert!(!target.exists(), "precondition: the file must not exist");
+
+    unsafe {
+        std::env::set_var("HERMES_CONFIG", &target);
+    }
+    let _ = resolve_or_create_config_path();
+    unsafe {
+        std::env::remove_var("HERMES_CONFIG");
+    }
+
+    assert!(
+        !target.exists(),
+        "a missing HERMES_CONFIG must not be created as a TOML file -- the \
+             variable names the YAML CLI config, and writing TOML there is how \
+             `config edit` clobbered it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
