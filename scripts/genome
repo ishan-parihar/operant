@@ -171,6 +171,7 @@ CONFIG_KEYS = {
             "max_bytes", "owner_exempt", "owner_globs", "py_paths", "secrets", "root_files", "dir_suffixes",
             "dir_requires", "dir_globs", "stale_terms", "stale_exempt", "external_ok",
             "dir_name_patterns", "dir_name_exempt", "coverage_surfaces", "coverage_units", "doc_claims",
+            "library_pages",
             "coverage_exempt", "coverage_label"},
     # `app` is the language-agnostic application/system-integrity declaration. A repo
     # writes what its toolchain IS (python, cargo, npm...) and genome runs the check
@@ -1641,6 +1642,7 @@ def lint_core(cfg: Cfg) -> list[str]:
                     out.append(f"W006 plans `{titles[i][0]}` and `{titles[j][0]}` answer the same question — keep one owner")
     out += lint_outward(cfg)
     out += lint_doc_claims(cfg)
+    out += lint_library_pages(cfg)
     return out
 
 
@@ -1668,6 +1670,44 @@ def lint_doc_claims(cfg: Cfg) -> list[str]:
         return [f"E019 ops.doc_claims names missing `{script}`"]
     r = sh(cfg.root, "bash", script)
     return [f"E019 {ln}" for ln in r.splitlines() if ln.startswith("DRIFT")]
+
+
+def lint_library_pages(cfg: Cfg) -> list[str]:
+    """E020: a library page breaks its own internal contract.
+
+    E303 catches a stale PATH, and E019 catches a wrong COUNT, but neither notices
+    that a page lost its `Source:` header, dropped its `Owns:` / `Not for:`
+    boundary, broke a sibling link, or put a tool name in a heading that no module
+    registers. Those four are the library's whole promise to a reader -- "this page
+    owns this question, and the symbols it names are real" -- and before this gate
+    they were checkable only by reading all 35 pages one at a time.
+
+    Like E019, this runs the script that already implements the checks rather than
+    reimplementing them, so the gate and the tool a human runs cannot disagree.
+    The script decides its own failure signal (a line starting `NO-` or
+    `UNKNOWN-` or `DEAD-`), so the contract between them is one line of output
+    rather than an exit code alone.
+    """
+    script = cfg.get("ops", "library_pages", "")
+    if not script:
+        return []
+    p = cfg.root / script
+    if not p.is_file():
+        return [f"E020 ops.library_pages names missing `{script}`"]
+    r = sh(cfg.root, "bash", script)
+    # Every failure signal the script can print. Listed rather than prefix-matched
+    # so a NEW check in the script fails loudly here instead of silently not
+    # gating (the same trap E019 documents).
+    bad = ("NO-SOURCE", "NO-OWNS", "NO-NOTFOR", "NO-INTENTION", "UNKNOWN-TOOL", "DEAD-LINK")
+    unknown = [ln for ln in r.splitlines() if ln[:2].isupper() and "  " in ln[:14]
+               and ln.split("  ")[0] not in ("library-check:", "INFO", "NOTE")]
+    out = [f"E020 {ln}" for ln in r.splitlines() if ln.startswith(bad)]
+    # A line the script prints that this list does not recognise is itself a defect
+    # in the gate: it would otherwise pass unnoticed.
+    for ln in unknown:
+        if not ln.startswith(bad) and "  " in ln and ln.split("  ")[0] not in ("library-check:",):
+            out.append(f"E020 unknown failure signal from {script}: {ln.strip()}")
+    return out
 
 
 def lint_outward(cfg: Cfg) -> list[str]:

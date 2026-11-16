@@ -24,6 +24,13 @@ If you are here to WRITE a page rather than read one, read
 names the two questions (how it works, how to use it) that separate a library
 page from a design note.
 
+Two checks hold the library to the code, and both are worth running after an
+edit: `scripts/verify-library.sh` (every path, sibling link, `Source:` header,
+`Owns:`/`Not for:` boundary and tool-name heading resolves) and
+`./scripts/genome lint` (E311 asks whether every source file is named by some
+page). A page that drifts from the code fails one of them rather than lying
+quietly.
+
 ## Contents
 
 ### The agentic core
@@ -33,8 +40,9 @@ page from a design note.
 - [memory.md](memory.md) — memory-wire: the one memory engine, retain/recall/sync_turn, hybrid retrieval, import, degradation contract
 - [context-injection.md](context-injection.md) — every modality that injects content into the model's turn: memory recall, skills, MoA, advisor, recap, ponytail, context_files, org context injection
 - [providers.md](providers.md) — the model path: OpenAI-compatible client, Anthropic, fallback chains, rate limiting, reasoning timeouts, model catalog
-- [tools.md](tools.md) — the tool system: registry, 60+ builtins, AFT, sourcehound, kernel tools, guardrails, approval, blast radius
-- [sub-agents.md](sub-agents.md) — delegation: sub_agent tool, swarm mode, async delegation
+- [tools.md](tools.md) — the tool system: registry, the 65 names in `builtin_tool_names()` (105 types implement `name()`), AFT, sourcehound, kernel tools, guardrails, approval, blast radius
+- [sub-agents.md](sub-agents.md) — delegation: the `delegate_task` tool, swarm mode, async delegation, the runner contract
+- [agents.md](agents.md) — what "agent" names: the definition record, the live roster, the worker, the pane report
 - [background-review.md](background-review.md) — the post-turn reviewer that learns skills and memories
 - [verification.md](verification.md) — the verification harness: recipe detection, phases, evidence ledger
 

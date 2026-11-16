@@ -80,8 +80,8 @@ exemption without a reason is a deferral with the paperwork missing.
 ## Backticks are a claim about a symbol
 
 `scripts/verify-library.sh` reads every backticked snake_case name in a library
-page and checks it against the tool registry, the guardrail name lists, and the
-alias table. So:
+page HEADING and checks it against the tool registry, the guardrail name lists,
+the alias table and the config-value table (all four derived from the code). So:
 
 - **`file_read`** means the tool of that name. It had better exist.
 - A *topic* that happens to look like one — `accessibility_tree` meaning the
@@ -93,3 +93,28 @@ alias table. So:
 
 Same rule for config keys: a backticked `snake_case` name in a Configuration
 section is a key that must exist in `crates/operant-core/src/config.rs`.
+
+## What the gate runs against your page
+
+Five codes, and the first four are what the genome runs on every lint:
+
+- **E303** — every `crates/...` and `scripts/...` path you cite must exist.
+- **E301** — the page must be listed in `docs/INDEX.md`.
+- **E311** — the modules your page names must be named by SOME library page; this
+  is the reverse-coverage gate (every source unit is owned by something).
+- **E020** — the page's own contract: its `Source:` header, its
+  `Owns:` / `Not for:` boundary, its sibling links, and every tool name that
+  appears in a heading (RG-023: a contract no gate runs is a contract nobody
+  has).
+- **E019** — a count you state must match the code (see above).
+
+The commands that reproduce all five locally:
+
+```
+./scripts/genome lint
+bash scripts/verify-library.sh
+bash scripts/check-doc-claims.sh
+```
+
+A page that passes all five is one a reader can trust: it says what it owns, the
+symbols it names resolve, and the numbers it states are true today.

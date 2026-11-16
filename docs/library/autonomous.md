@@ -16,6 +16,12 @@ Source: `crates/operant-cli/src/autonomous.rs` (the runner), launched by
 
 ## The loop
 
+Everything in this section lives in one module,
+`crates/operant-cli/src/autonomous.rs` (1,852 lines): the runner at
+`AutonomousRunner` (:266), the entry point `run_autonomous` (:256), the two
+executors at `RealAutonomousAgentExecutor` (:229) and
+`RealCommandExecutor` (:219), and the ledger type `TodoLedger` (:189).
+
 `run_autonomous(config, system_prompt)` takes the process CWD as the repo
 root, builds a `RealAutonomousAgentExecutor` (holding the `AppConfig` and
 the optional system prompt) and a `RealCommandExecutor`, and hands both to
@@ -63,6 +69,9 @@ One tick, in order:
 
 ## The ledger: TODO.md
 
+Parsed by `TodoLedger` (`autonomous.rs:189`); the `## Implemented` /
+`## Pending` / `## Review` section names are what the runner dispatches on.
+
 `parse_todo_ledger` walks the file line by line. `## Implemented` and
 `## Pending` (case-insensitive) open their sections; **any other `## `
 heading closes the current section**, so `## Review` items are parsed into
@@ -79,6 +88,10 @@ parses the real repo-root `TODO.md` and asserts every pending row is
 free of `/commit` — the Review rows must not leak into the work queue.
 
 ## The workspace snapshot and the two hashes
+
+Everything in this section is declared at the top of
+`crates/operant-cli/src/autonomous.rs`: `WorkspaceSnapshot` (:22),
+`AutonomousStatusReport` (:105) and `FailureRecord` (:53).
 
 ```mermaid
 flowchart LR

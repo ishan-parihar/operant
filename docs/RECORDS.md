@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=574f1492ac69 -->
+<!-- genome:zone records sha=aa5d7fec8e53 -->
 **Decisions** (44)
 
 | ID | Title | Status | Description |
@@ -18,8 +18,8 @@
 | AD-013 | A cleared delegation is abandoned, and the HUD follows the running one | Active | A delegation whose turn is cleared by /new or /rewind is marked abandoned, and the status bar shows a running delegation before a finished one |
 | AD-014 | A shell-out restores the terminal before its result is reported, and releases mouse capture for the child | Active | A shell-out restores the terminal before it reports the child's exit, reports a failed or signalled exit as such, and frees the mouse for the child |
 | AD-015 | The Ctrl+B fork tree is read off the event loop, and a database error is shown | Active | The branch browser's parent and fork rows are read on a blocking thread, and a failed read is reported in the transcript instead of opening an empty browser |
-| AD-016 | A TTS engine start that panics is a tool error, and the release profile unwinds | Superseded iter-2513 | The Kokoro engine started on its own task so an ONNX Runtime panic became a tool error. Kokoro was replaced by Phonon (ptts, pure Rust) in iter-2513 — ptts surfaces errors as Result, so there is no panic-on-load hazard to catch. |
-| AD-017 | ONNX Runtime is pinned to 1.24.4, and install refuses a library without API 24 | Superseded iter-2513 | ONNX Runtime was removed entirely in iter-2513 (Kokoro -> Phonon GGUF). No ORT_LIB_LOCATION, no libonnxruntime, no rpath. |
+| AD-016 | A TTS engine start that panics is a tool error, and the release profile unwinds | Active | The Kokoro engine starts on its own task, so an ONNX Runtime panic becomes a tool error, and the release profile unwinds instead of aborting |
+| AD-017 | ONNX Runtime is pinned to 1.24.4, and install refuses a library without API 24 | Active | The build and install scripts use ONNX Runtime 1.24.4, and install.sh refuses a runtime that does not serve API 24 |
 | AD-018 | The doctor reports tool availability from configuration, flags duplicate binaries, and loads the config once | Active | operant doctor marks a tool available only through its configuration or a present env var, reports TTS as unverified, flags a second operant on PATH, and loads the config once |
 | AD-019 | Gateway memory belongs to the named admins; other senders get their own bank | Active | A gateway turn is retained, and recalls the personal bank, only for a sender named in gateway.admins; any other unbound sender runs in a bank of its own |
 | AD-020 | Knowledge writes need the user's approval; an unattended review cannot write memory | Active | memory_store, skill_manage and learning_manage prompt for approval like file writes, and the background review refuses memory writes and runs its skill guard |
@@ -34,7 +34,7 @@
 | AD-029 | Context management stays on the synchronous summarize rung; agent-driven reduction is not built | Active | The magic-context review's agent-driven reduction and background historian are not built now; the synchronous summarize rung stays |
 | AD-030 | The Telegram token filter is covered for URL-embedded tokens; the historic log is not rewritten | Active | Telegram bot tokens in bot URLs are redacted by a tested rule; the old gateway.log lines are not rewritten, and token rotation stays the owner's call |
 | AD-031 | Dead TUI code is removed where it is ours; verbatim ports, the keybinding registry and vendored style modules stay allowlisted | Active | The clippy allowlist's dead-code entries drop from 52 to 47: unused TUI items with no caller are removed, and the verbatim jcode ports, the keybinding registry and the vendored style modules keep thei |
-| AD-032 | RT-18 clears with a zip-9 patch of ndarray-npy, not a TTS-engine rewrite | Superseded iter-2513 | ndarray-npy was a Kokoro vendor dependency, removed with Kokoro in iter-2513. The zip advisory no longer applies. |
+| AD-032 | RT-18 clears with a zip-9 patch of ndarray-npy, not a TTS-engine rewrite | Active | The three zip advisories are cleared by vendoring ndarray-npy 0.9.1 with zip 9; kokoro-micro was rejected because it still resolves zip 6 |
 | AD-033 | Advisory triage clears four by dependency moves; the YAML crate swap is reverted pending an owner decision | Active | Four advisories are cleared (atty, rustls-native-certs, chacha20, image defaults); serde_yaml stays at 0.9 because its only policy-compliant replacement changes manifest errors |
 | AD-034 | Warnings triage deletes dead TUI paths, wires the two real gaps, and records the rest as expected debt | Active | The production build of operant-cli is warning-free: 35 dead items are deleted, error annotations keep their error role, and every kept dead-code item carries a reason or an open BUGS row |
 | AD-035 | One libclang resolution for every build script, and a dangling link is not a libclang | Active | dev-env.sh, check.sh and provision-build-deps.sh each resolved libclang differently, and the one dev-env.sh used fell through to a directory that does not exist; a shared resolver now owns the choice, |
@@ -48,7 +48,7 @@
 | AD-043 | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written | Active | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written |
 | AD-044 | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it | Active | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it |
 
-**Regressions** (18)
+**Regressions** (20)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -70,6 +70,8 @@
 | RG-019 | an env-strip hardening copied from a statically-linked reference breaks a dynamically-linked binary | High | an env-strip hardening copied from a statically-linked reference breaks a dynamically-linked binary |
 | RG-020 | A line-range slice of a reference tree goes stale when the file grows, and the count in the heading is the number that gets quoted | High | A line-range slice of a reference tree goes stale when the file grows, and the count in the heading is the number that gets quoted |
 | RG-021 | a live repro that cannot reach its provider proves nothing about the feature | High | a live repro that cannot reach its provider proves nothing about the feature |
+| RG-022 | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) | High | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) |
+| RG-023 | a library contract no gate runs is a contract nobody has | High | a library contract no gate runs is a contract nobody has |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
