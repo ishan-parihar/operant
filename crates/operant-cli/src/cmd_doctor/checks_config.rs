@@ -175,6 +175,10 @@ pub fn run_config_checks(
     }
     if toml_path.exists() {
         check_ok(&format!("{}/operant.toml exists", dhh), "");
+        // The file exists; say whether it carries a live credential in the
+        // clear. Nothing else in doctor read the config's TEXT, so a key
+        // pasted here was invisible to every check (2026-11-16, live).
+        check_plaintext_credentials(&toml_path, &dhh);
     }
     if !yaml_path.exists() && !toml_path.exists() {
         check_warn(
@@ -615,6 +619,151 @@ pub async fn check_context_window(
 /// The LLM summarizer's route.
 ///
 /// Compaction claims to summarize the middle with an LLM. When
+/// Credential keys that can appear in a config file, as the dotted paths the
+/// operator would use to set them. Every one of these is written to disk in
+/// PLAINTEXT: nothing in this tree encrypts them at rest, and the loader
+/// never decrypts (RT-154).
+///
+/// This is the list the *config file* can carry. `.env` is a separate surface
+/// with its own check above; a name here is matched only as a TOML key, so an
+/// `.env`-only key is never double-reported.
+const SECRET_CONFIG_KEYS: &[&str] = &[
+    "client.api_key",
+    "vision.api_key",
+    "gateway.telegram_token",
+    "gateway.discord_token",
+    "gateway.slack_token",
+    "gateway.whatsapp_token",
+];
+
+/// Every `(dotted key, value)` pair a config file assigns to one of
+/// [`SECRET_CONFIG_KEYS`].
+///
+/// Deliberately a TEXT scan rather than a parse of `AppConfig`: the fields are
+/// `Option<String>` and a `None` is indistinguishable from an absent key, but
+/// the operator's question is "is a live secret sitting in this file", and a
+/// value that parses to `None` was never written. The scan also sees a key
+/// inside a section the running build ignores, which is exactly where a
+/// stale secret hides.
+///
+/// A value is reported by NAME only. The caller prints the dotted path and
+/// never the bytes, because doctor's output is routinely pasted into issues.
+fn plaintext_secrets_in(text: &str) -> Vec<String> {
+    let mut section = String::new();
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            section = trimmed
+                .trim_matches(|c| c == '[' || c == ']')
+                .trim()
+                .to_string();
+            continue;
+        }
+        let Some(eq) = trimmed.find('=') else {
+            continue;
+        };
+        let key = trimmed[..eq].trim().trim_matches('"');
+        let value = trimmed[eq + 1..]
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'');
+        if value.is_empty() {
+            continue;
+        }
+        // A table header can be quoted or dotted (`[gateway]`); compare on the
+        // joined path so `[client] api_key` and `client.api_key = …` both hit.
+        let dotted = if section.is_empty() {
+            key.to_string()
+        } else {
+            format!("{section}.{key}")
+        };
+        if SECRET_CONFIG_KEYS.contains(&dotted.as_str()) {
+            found.push(dotted);
+        }
+    }
+    found
+}
+
+/// Whether a file is readable by anyone other than its owner.
+///
+/// Only the OTHER and GROUP read bits matter here: a `0640` shared with a
+/// group is a deliberate choice on a single-user box, but a `0644` is the
+/// umask default and means every local account can read a credential.
+#[cfg(unix)]
+fn is_world_or_group_readable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.permissions().mode() & 0o044 != 0,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_world_or_group_readable(_path: &std::path::Path) -> bool {
+    false
+}
+
+/// Warn when a config file holds a plaintext credential.
+///
+/// THE GAP THIS CLOSES (found 2026-11-16, live on this host): `operant.toml`
+/// carried a real provider `api_key` in the clear, and NOTHING in `doctor`
+/// looked at it. The doctrine was all present — the writer creates the file
+/// `0600`, `write_secret_file` tightens a loose file, RT-154 removed the
+/// "encrypted at rest" claim from the template — but the doctrine was only
+/// ever about HOW a secret is written, never about TELLING the operator that
+/// one is there. An operator who pasted a key into the config had no way to
+/// learn that the file was the reason a `chmod 644` mattered.
+///
+/// This is an execution gap, not an architectural one: the mechanism
+/// (owner-only writes, the `~/.operant/.env` convention for credentials, the
+/// `write_secret_file` tightening path) exists and works. What was missing is
+/// the one check that surfaces the consequence.
+///
+/// Two independent findings, because they fail differently:
+/// - a plaintext secret at all → the operator should know where it lives;
+/// - a plaintext secret in a LOOSELY permissioned file → urgent, because
+///   every local account can read it right now.
+fn check_plaintext_credentials(config_path: &std::path::Path, dhh: &str) {
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return;
+    };
+    let secrets = plaintext_secrets_in(&text);
+    if secrets.is_empty() {
+        check_ok("No plaintext credentials in the config file", "");
+        return;
+    }
+    let loose = is_world_or_group_readable(config_path);
+    let shown: Vec<&str> = secrets.iter().map(String::as_str).collect();
+    if loose {
+        check_warn(
+            &format!(
+                "{} holds plaintext credentials and is group/world-readable",
+                dhh
+            ),
+            &format!(
+                "{} — run: chmod 600 {}",
+                shown.join(", "),
+                config_path.display()
+            ),
+        );
+    } else {
+        check_warn(
+            &format!("{} holds plaintext credentials", dhh),
+            &format!(
+                "{} (owner-only, but unencrypted — prefer ~/.operant/.env for keys)",
+                shown.join(", ")
+            ),
+        );
+    }
+}
+
+/// The LLM summarizer's route.
+///
+/// Compaction claims to summarize the middle with an LLM. When
 /// `[auxiliary_models.compression].model` is unset the config falls back to
 /// the hardcoded `gpt-4o-mini`, which only an OpenAI route serves — on any
 /// other route every summarization fails and the compressor silently degrades
@@ -1010,6 +1159,150 @@ mod tests {
         assert_eq!(
             compression_route_verdict(&config),
             CompressionRoute::FallsBackToOpenAIDefault
+        );
+    }
+
+    // ── Plaintext credential detection ──────────────────────────────────
+    //
+    // The live gap (2026-11-16): `~/.operant/operant.toml` carried a real
+    // provider `api_key` in the clear and no doctor check read the file's
+    // TEXT. These pin the scan that closes it.
+
+    #[test]
+    fn a_client_api_key_in_a_section_is_reported() {
+        let text = "[client]\nbase_url = \"https://x/v1\"\napi_key = \"sk-live-123\"\n";
+        assert_eq!(plaintext_secrets_in(text), vec!["client.api_key"]);
+    }
+
+    /// The dotted spelling (`client.api_key = …` at top level) is the other
+    /// form a hand-edit can take, and `persist_config_key` writes that way.
+    #[test]
+    fn a_dotted_top_level_secret_key_is_reported() {
+        assert_eq!(
+            plaintext_secrets_in("client.api_key = \"sk-live-123\"\n"),
+            vec!["client.api_key"]
+        );
+    }
+
+    #[test]
+    fn every_gateway_token_field_is_covered() {
+        let text = "\
+[gateway]
+telegram_token = \"111:aaa\"
+discord_token = \"bbb\"
+slack_token = \"ccc\"
+whatsapp_token = \"ddd\"
+";
+        let found = plaintext_secrets_in(text);
+        assert_eq!(found.len(), 4, "got: {found:?}");
+        assert!(found.contains(&"gateway.telegram_token".to_string()));
+        assert!(found.contains(&"gateway.whatsapp_token".to_string()));
+    }
+
+    /// An empty value is an unset field, not a leaked secret — the loader
+    /// reads it as `None`, and warning about it would be a false positive on
+    /// every template-derived config.
+    #[test]
+    fn an_empty_secret_value_is_not_reported() {
+        assert!(plaintext_secrets_in("[client]\napi_key = \"\"\n").is_empty());
+        assert!(plaintext_secrets_in("[client]\napi_key =\n").is_empty());
+    }
+
+    /// A config with no credentials must not warn — the check has to be quiet
+    /// on the common case or it trains the operator to ignore it.
+    #[test]
+    fn a_config_without_secrets_reports_nothing() {
+        let text = "[agent]\nmodel = \"large-stack\"\n\n[gateway]\ntelegram_enabled = false\n";
+        assert!(plaintext_secrets_in(text).is_empty());
+    }
+
+    /// A commented-out key is documentation, not a live credential.
+    #[test]
+    fn a_commented_out_secret_is_not_reported() {
+        assert!(plaintext_secrets_in("# api_key = \"sk-old\"\n[client]\n").is_empty());
+    }
+
+    /// `.env` names are a different surface. `TELEGRAM_BOT_TOKEN` inside a
+    /// config file is not one of the config's own fields, so it is not
+    /// reported here — the `.env` check above owns it.
+    #[test]
+    fn an_env_only_name_is_not_reported_as_a_config_secret() {
+        assert!(plaintext_secrets_in("TELEGRAM_BOT_TOKEN = \"111:aaa\"\n").is_empty());
+    }
+
+    /// THE OUTPUT CONTRACT: doctor's text is pasted into issues and bug
+    /// reports, so the scan returns KEY NAMES and the value never appears in
+    /// what is printed. If a future edit ever puts the value in the vector,
+    /// this fails.
+    #[test]
+    fn the_reported_names_never_include_the_value() {
+        let secret = "sk-SUPER-SECRET-VALUE-do-not-print";
+        let text = format!("[client]\napi_key = \"{secret}\"\n");
+        let found = plaintext_secrets_in(&text);
+        assert_eq!(found, vec!["client.api_key"]);
+        assert!(
+            found.iter().all(|name| !name.contains(secret)),
+            "the secret bytes must not reach doctor's output"
+        );
+    }
+
+    /// A real file at `0600` is NOT loose. This is the negative half: without
+    /// it, a check hardcoded to always report "loose" would pass the positive
+    /// test.
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_only_file_is_not_loose() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, "[client]\napi_key = \"sk-x\"\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod 600");
+        assert!(!is_world_or_group_readable(&path), "0600 is owner-only");
+    }
+
+    /// A umask-default `0644` file IS loose — the case the warning exists for.
+    #[cfg(unix)]
+    #[test]
+    fn a_world_readable_file_is_loose() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, "[client]\napi_key = \"sk-x\"\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+        assert!(is_world_or_group_readable(&path), "0644 is world-readable");
+    }
+
+    /// `0640` is group-readable but not world-readable; it still counts,
+    /// because "every local account" is not the only risk — a group is.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_readable_file_is_loose() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, "[client]\napi_key = \"sk-x\"\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod 640");
+        assert!(is_world_or_group_readable(&path), "0640 is group-readable");
+    }
+
+    /// The whole check against a real file: a secret in a 0600 file still
+    /// warns (it is plaintext), because owner-only is not encrypted.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_config_with_a_secret_produces_a_warning() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(
+            &path,
+            "[client]\nbase_url = \"https://aroute/v1\"\napi_key = \"eyJ0eXAi\"\n",
+        )
+        .expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod 600");
+        assert_eq!(
+            plaintext_secrets_in(&std::fs::read_to_string(&path).expect("read")),
+            vec!["client.api_key"],
+            "the live shape (a real key in a 0600 file) is detected"
         );
     }
 }
