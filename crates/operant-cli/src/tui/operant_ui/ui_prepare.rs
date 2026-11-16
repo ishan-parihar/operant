@@ -775,6 +775,20 @@ pub(crate) fn prepare_messages(
         is_processing: app.is_processing(),
         streaming_text_len: app.streaming_text().len(),
         streaming_text_hash: super::hash_text_for_cache(app.streaming_text()),
+        // A7 HIGH-1: the live thinking tail must move the key too, or a
+        // reasoning-only stream freezes on its first frame.
+        streaming_thinking_len: app.streaming_thinking().len(),
+        streaming_thinking_hash: super::hash_text_for_cache(app.streaming_thinking()),
+        // A7 HIGH-1, second half: a reserved tool row (mid-stream ToolStart)
+        // is a visible Streaming-section row, so the key must move when one
+        // arrives.
+        // `live_tool_rows` already applies the same reserved-row rule the
+        // renderer uses (`after_index > messages.len()`, `adapter.rs:285`), so
+        // the signature cannot disagree with what is actually drawn.
+        reserved_tool_rows_signature: {
+            let rows = app.live_tool_rows();
+            rows.len()
+        },
         batch_progress_hash: active_batch_progress_hash(app),
         // An unpinned transcript must not reuse a previously prepared frame
         // containing anchored images. With no images, both modes are visually

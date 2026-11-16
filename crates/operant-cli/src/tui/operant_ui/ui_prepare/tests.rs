@@ -365,6 +365,9 @@ fn the_frame_cache_key_carries_the_session_label() {
         is_processing: false,
         streaming_text_len: 0,
         streaming_text_hash: 0,
+        streaming_thinking_len: 0,
+        streaming_thinking_hash: 0,
+        reserved_tool_rows_signature: 0,
         batch_progress_hash: 0,
         inline_images_signature: (0, 0),
         inline_images_visible: false,
@@ -380,5 +383,73 @@ fn the_frame_cache_key_carries_the_session_label() {
     assert_ne!(
         base, renamed,
         "a rename must change the frame-cache key, or the header keeps the old title"
+    );
+}
+
+/// (2026-11-16 architecture audit, A7-tui HIGH-1) The frame-cache key must move
+/// when ONLY the live thinking tail changes.
+///
+/// `prepare_streaming_cached` renders `app.streaming_thinking()` into the
+/// Streaming section (ui_prepare.rs:2707) and the section opens on thinking
+/// alone (:959). Without these fields, a thinking-only stream has
+/// `(text_len=0, text_hash=0)` for its entire delta, so every `Thinking` event
+/// leaves the key unchanged and the exact-hit path serves the previous frame.
+///
+/// This is the same shape as `the_frame_cache_key_carries_the_session_label`
+/// above: a same-key mutation the cache cannot see.
+#[test]
+fn the_frame_cache_key_carries_the_live_thinking_tail() {
+    let base = FullPrepCacheKey {
+        width: 100,
+        height: 30,
+        diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode::Off,
+        messages_version: 0,
+        diagram_mode: crate::tui::operant_app::config_shim::DiagramDisplayMode::None,
+        centered: false,
+        expanded_tool_id: None,
+        mermaid_aspect_bucket: None,
+        is_processing: true,
+        streaming_text_len: 0,
+        streaming_text_hash: 0,
+        streaming_thinking_len: 0,
+        streaming_thinking_hash: 0,
+        reserved_tool_rows_signature: 0,
+        batch_progress_hash: 0,
+        inline_images_signature: (0, 0),
+        inline_images_visible: false,
+        expanded_images_version: 0,
+        swarm_members_signature: 0,
+        session_label: None,
+    };
+
+    // A thinking-only delta: the TEXT fields are identical (still empty), only
+    // the thinking fields move. If they were absent from the key this would be
+    // a no-op equality and the cache would serve the stale frame.
+    let after_thinking = FullPrepCacheKey {
+        streaming_thinking_len: 41,
+        streaming_thinking_hash: 0xABCD,
+        ..base.clone()
+    };
+    assert_eq!(
+        base.streaming_text_len, after_thinking.streaming_text_len,
+        "the premise: the text is empty in both, so only thinking differs"
+    );
+    assert_eq!(
+        base.streaming_text_hash, after_thinking.streaming_text_hash,
+        "the premise: the text hash is unchanged too"
+    );
+    assert_ne!(
+        base, after_thinking,
+        "a thinking-only stream must change the frame-cache key"
+    );
+
+    // Same for a reserved tool row arriving during a thinking-only stream.
+    let after_tool = FullPrepCacheKey {
+        reserved_tool_rows_signature: 1,
+        ..base.clone()
+    };
+    assert_ne!(
+        base, after_tool,
+        "a reserved tool row must change the frame-cache key"
     );
 }

@@ -799,6 +799,27 @@ struct FullPrepCacheKey {
     is_processing: bool,
     streaming_text_len: usize,
     streaming_text_hash: u64,
+    /// (2026-11-16 architecture audit, A7-tui HIGH-1) The Streaming section
+    /// renders THINKING as well as text: `prepare_streaming_cached` splices the
+    /// thinking lines in at the head of the section
+    /// (`ui_prepare.rs:2693`), and the section opens on thinking alone when the
+    /// text is empty (`ui_prepare.rs:945`).
+    ///
+    /// Without these two fields a thinking-only stream has `(text_len=0,
+    /// text_hash=0)` for its entire delta, so every `Thinking` event left the
+    /// key unchanged and the frame cache served the stale frame: the operator
+    /// saw a blank Streaming section for the whole reasoning phase, then the
+    /// trace and the answer snapped in together. Unbounded for any
+    /// extended-thinking turn, which is the common case.
+    streaming_thinking_len: usize,
+    streaming_thinking_hash: u64,
+    /// (A7 HIGH-1, second half) Reserved tool rows render in the Streaming
+    /// section (`adapter::live_tool_rows`) and are driven by `tool_use_blocks`
+    /// + `after_index`. A `ToolStart` that arrives during a thinking-only
+    /// stream is a same-key mutation without this: the row appears only once
+    /// the text starts moving. Count plus the highest `after_index` is enough
+    /// to change the key, and it is cheaper than hashing the rows.
+    reserved_tool_rows_signature: usize,
     batch_progress_hash: u64,
     inline_images_signature: (usize, u64),
     /// Whether inline images render expanded or as collapsed label stubs.

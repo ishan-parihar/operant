@@ -218,9 +218,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/transcript", "Open the current session transcript file"),
     RegisteredCommand::public("/review", "Open the git diff viewer (same as /diff)"),
     RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
-    RegisteredCommand::public("/effort", crate::tui::operant_app::keybind::EFFORT_HELP),
     // (plan 03) the real effort row + the internal setter the picker
     // funnels through.
     RegisteredCommand::public(
