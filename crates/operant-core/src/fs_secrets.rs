@@ -44,7 +44,7 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// byte is written. A create-then-chmod sequence cannot close that window:
 /// the bytes are already in the file when the chmod runs.
 #[cfg(unix)]
-fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .write(true)
@@ -56,7 +56,7 @@ fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
 
 /// Non-Unix has no POSIX mode bits; the platform default applies.
 #[cfg(not(unix))]
-fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn create_owner_only(path: &Path) -> io::Result<std::fs::File> {
     OpenOptions::new()
         .write(true)
         .create(true)

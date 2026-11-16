@@ -396,19 +396,19 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
     ));
 
     {
-        let mut file = std::fs::File::create(&tmp).map_err(|e| {
+        // OWNER-ONLY FROM THE OPEN. `File::create` applies the umask default
+        // (0644 on a stock system) and a `set_permissions(0o600)` that follows
+        // it leaves a window where the OAuth token file is world-readable - the
+        // R40-1 class AGENTS.md forbids. The mode rides the same `open(2)` that
+        // creates the file, so the secret is never readable by anyone else, not
+        // even for the instant before the first byte lands.
+        let mut file = crate::fs_secrets::create_owner_only(&tmp).map_err(|e| {
             Error::Agent(format!(
                 "Failed to create temp file {}: {}",
                 tmp.display(),
                 e
             ))
         })?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
 
         file.write_all(json.as_bytes())?;
         file.sync_all()?;
@@ -418,6 +418,18 @@ fn write_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
         Error::Agent(format!(
             "Failed to rename {} -> {}: {}",
             tmp.display(),
+            path.display(),
+            e
+        ))
+    })?;
+
+    // AFTER the rename, because `set_secret_perms` on a path that does not
+    // exist yet is NotFound. The temp file was created 0o600, so the rename
+    // carries that mode in; this is belt-and-braces for the case where an
+    // OLDER credential file already sat at `path` and the rename replaced it.
+    crate::fs_secrets::set_secret_perms(path).map_err(|e| {
+        Error::Agent(format!(
+            "Failed to set permissions on {}: {}",
             path.display(),
             e
         ))
@@ -1920,5 +1932,127 @@ mod tests {
         let err = OAuthError::NoToken;
         let converted: Error = err.into();
         assert!(converted.to_string().contains("No token"));
+    }
+
+    /// (2026-11-16 architecture audit, RT-Z43-D) THE permission test for the
+    /// OAuth store.
+    ///
+    /// `write_json` used to `File::create` the temp file - which applies the
+    /// process umask, 0644 on a stock system - and only THEN `set_permissions`
+    /// it to 0600. The token bytes were already on disk when the chmod ran, so
+    /// a reader that raced that window saw the access token world-readable.
+    /// That is the create-then-chmod shape AGENTS.md forbids.
+    ///
+    /// This asserts the FINAL mode plus the umask case, so a fix that merely
+    /// moved the chmod earlier still fails when the umask is permissive.
+    /// The helper the OAuth writer uses, tested under a PERMISSIVE umask.
+    ///
+    /// The final-mode assertion above cannot catch a create-then-chmod
+    /// regression: both shapes end at 0600 by the time `write_json` returns,
+    /// because the chmod runs before the file is inspected. What separates
+    /// them is the mode at the instant the file appears, and the only way to
+    /// observe that deterministically is to test the creator itself with the
+    /// umask wide open - `File::create` yields 0644 then, while
+    /// `create_owner_only` yields 0600.
+    #[cfg(unix)]
+    #[test]
+    fn create_owner_only_ignores_a_permissive_umask() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "operant_owner_only_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("secret.bin");
+
+        // umask 0 = every create gets the widest default (0644 for a file).
+        let previous = unsafe { libc_umask(0) };
+        let file =
+            crate::fs_secrets::create_owner_only(&target).expect("create the file owner-only");
+        drop(file);
+        unsafe { libc_umask(previous) };
+
+        let mode = std::fs::metadata(&target)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the mode must ride the open(2), not a chmod after it: got {mode:o}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Set the umask and return the previous value. Unsafe only because it is
+    /// process-global, which is why the caller holds the crate's env lock.
+    #[cfg(unix)]
+    unsafe fn libc_umask(mask: u32) -> u32 {
+        unsafe extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        // SAFETY: the OAuth permission test holds `test_env_lock_blocking`,
+        // and the value is restored before the test returns.
+        unsafe { umask(mask) }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_oauth_store_is_owner_only_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::platform::test_env_lock_blocking();
+        let home = std::env::temp_dir().join(format!(
+            "operant_oauth_perms_test_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&home).expect("home");
+
+        let path = home.join("nested").join("tokens.json");
+        write_json(&path, &serde_json::json!({ "access_token": "probe-token" }))
+            .expect("write the OAuth store");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the OAuth token store must be owner-only, got {mode:o}"
+        );
+
+        // A re-save over an EXISTING looser file must tighten it, not keep the
+        // loose mode (the rename replaces the node).
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("loosen for the re-save");
+        write_json(
+            &path,
+            &serde_json::json!({ "access_token": "probe-token-2" }),
+        )
+        .expect("re-save");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "a re-save over a loose file must tighten it, got {mode:o}"
+        );
+
+        // The parent directory is tightened too (RT-419 posture).
+        let dir_mode = std::fs::metadata(path.parent().expect("parent"))
+            .expect("dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700, "the OAuth directory must be 0700");
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
