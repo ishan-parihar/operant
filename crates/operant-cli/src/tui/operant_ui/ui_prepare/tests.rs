@@ -453,3 +453,71 @@ fn the_frame_cache_key_carries_the_live_thinking_tail() {
         "a reserved tool row must change the frame-cache key"
     );
 }
+
+/// (2026-11-16 architecture audit, A7-tui HIGH-2) The header signature must
+/// change when the acting seat changes.
+///
+/// The header paints the seat as a `· <seat>` suffix on the title line
+/// (`ui_header.rs:627,692`), but the signature never hashed it - and
+/// `apply_acting_seat` does not invalidate the transcript either, so nothing
+/// else forced a repaint. After `/agent <seat>` the operator's chosen seat was
+/// invisible in the header for up to the 30 s TTL.
+///
+/// Mutation: removing `app.acting_seat()` from `header_prep_signature` makes
+/// this fail, because the two signatures then differ only by the width.
+#[test]
+fn the_header_signature_changes_with_the_acting_seat() {
+    let mut app = crate::tui::app::tests::make_app();
+    let without_seat = header_prep_signature(&app, 100);
+
+    app.acting_seat = Some("premiere".to_string());
+    let with_seat = header_prep_signature(&app, 100);
+
+    assert_ne!(
+        without_seat, with_seat,
+        "switching the acting seat must change the header signature, or the \
+         title keeps the previous seat for the whole TTL"
+    );
+
+    // Same shape, same fix (A7-tui MEDIUM-1): the header's `skills:` line reads
+    // `available_skills()`, so `/reload-skills` must also repaint.
+    let mut reloaded = crate::tui::app::tests::make_app();
+    let before_reload = header_prep_signature(&reloaded, 100);
+    // A real change to the list the header reads. `available_skills()` is
+    // `skills_view.skills`, so pushing a skill is the mutation. Loaded through
+    // the same `SkillManager` the reload path uses, so the fixture is the real
+    // shape rather than a hand-built one.
+    let probe = std::env::temp_dir().join(format!(
+        "operant-header-skill-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(probe.join("probe-skill")).expect("skill dir");
+    std::fs::write(
+        probe.join("probe-skill").join("SKILL.md"),
+        "---\nname: probe-skill\ndescription: probe\n---\n\n# probe\n",
+    )
+    .expect("SKILL.md");
+    let mut mgr = operant_core::skills::SkillManager::new(probe.clone());
+    mgr.load_all().expect("load");
+    let loaded = mgr
+        .list_available()
+        .into_iter()
+        .next()
+        .map(|(name, _)| name)
+        .unwrap_or_default();
+    reloaded.skills_view.skills = mgr
+        .get(&loaded)
+        .cloned()
+        .map(|s| vec![s])
+        .unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&probe);
+    let after_reload = header_prep_signature(&reloaded, 100);
+    assert_ne!(
+        before_reload, after_reload,
+        "changing the available skills must change the header signature"
+    );
+}

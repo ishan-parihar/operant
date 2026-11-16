@@ -1196,6 +1196,20 @@ fn header_prep_signature(app: &dyn TuiState, width: u16) -> u64 {
     // the header on the very next frame instead of waiting out the TTL, which
     // is what lets the TTL itself be sized for slow background drift.
     crate::tui::operant_app::auth::auth_status_generation().hash(&mut hasher);
+    // (2026-11-16 architecture audit, A7-tui HIGH-2) The header PAINTS the
+    // acting seat as a `· <seat>` suffix on the title line
+    // (`ui_header.rs:627,692`), but the signature never hashed it. After
+    // `/agent <seat>` the title kept showing the PREVIOUS seat for up to the
+    // 30 s header TTL, and `apply_acting_seat` does not invalidate the
+    // transcript either, so nothing else forced a repaint. The seat's effect on
+    // the agent was immediate; only the header echo was stale.
+    app.acting_seat().hash(&mut hasher);
+    // (A7-tui MEDIUM-1) The header's `skills: /a /b /c` line reads
+    // `available_skills()` (`ui_header.rs:888`), so `/reload-skills` changed
+    // what the header SAYS while leaving the signature untouched - the line
+    // kept the old list until the next messages-driven invalidation. It is
+    // bounded to the first six names, so hashing the whole list is cheap.
+    app.available_skills().hash(&mut hasher);
     // The goal badge renders the focused side-panel page title when a goal
     // page is focused; keying on it keeps focus changes instant.
     if let Some(page) = app.side_panel().focused_page() {
