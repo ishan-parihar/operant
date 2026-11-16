@@ -14,8 +14,11 @@ GENERATED key table), `crates/operant-config/src/` (the shared section
 types `AppConfig` composes), `scripts/gen-config-registry.py` (the
 generator), `operant.example.toml` (the template).
 
-Counts on this page are as of commit `826a4568` and were derived from
-`crates/operant-core/src/config_registry.rs`.
+Counts on this page are as of commit `a80d65bc` and were derived from
+`crates/operant-core/src/config_registry.rs`. Every default quoted below was
+read out of the `Default` impl the registry names, not out of
+`operant.example.toml` — the example is a template and the struct is the
+contract.
 
 ## Contents
 
@@ -81,7 +84,7 @@ These sit directly on `AppConfig`, not in a section.
 
 | Key | Type | Default | What it changes |
 |---|---|---|---|
-| `terminal_backend` | string | `"local"` | Which terminal backend `terminal` uses: `local`, `docker`, `ssh`. |
+| `terminal_backend` | string | `"local"` | Which terminal backend `terminal` uses: `"local"`, `"docker"` or `"ssh"` are IMPLEMENTED; `"modal"`, `"daytona"`, `"vercel_sandbox"` and `"singularity"` parse and then the factory REFUSES to fall back to unsandboxed local execution, so the tool fails closed rather than running on the host (`crates/operant-core/src/tools/terminal_backend.rs::create_backend`). |
 | `database_path` | path | `<operant home>/database.db` | The SQLite file. It lives under the operant home so a PROFILE gets its own sessions, cron jobs, budgets and tool state. Not a config key an operator normally sets. |
 | `command_allowlist` | array of globs | `[]` | Tool names (exact or `*`/`?` globs) that skip the permission prompt in every session. Interactive "always allow" choices are appended to `~/.operant/approval_allowlist.json`, not here. |
 | `version` | int | `2` | Config format version. `None` means legacy v0. Rarely hand-set. |
@@ -254,10 +257,26 @@ Only read when `context_engine = "lcm"`.
 | `tools.http.timeout_secs` | int | `30` | `http_request` timeout. |
 | `tools.terminal.max_timeout_secs` | int | `300` | Hard ceiling on a `terminal` call. |
 | `tools.terminal.max_output_bytes` | int | `1_000_000` | Output cap; the cut is reported by the backend's own marker. |
+**Docker and SSH backends carry their own sub-tables, and the generator does
+not reach their leaves** — `tools.terminal.docker` and `tools.terminal.ssh`
+are in `KNOWN_KEYS` (so they load), but `…docker.image`,
+`…docker.volumes`, `…docker.env`, `…docker.cpu`, `…docker.memory_mb`,
+`…ssh.host`, `…ssh.user`, `…ssh.port` and `…ssh.key_path` are NOT in either
+list, so `operant config describe` cannot describe them. Their types and
+defaults below come from `DockerTerminalSettings` / `SshTerminalSettings`
+(`crates/operant-core/src/config.rs:2747` and `:2770`):
+
+| Sub-key | Type | Default | What it changes |
+|---|---|---|---|
 | `tools.terminal.docker.image` | string? | `"nikolaik/python-nodejs:python3.11-nodejs20"` | Docker backend image. |
-| `tools.terminal.docker.volumes` | array | `[]` | Bind mounts for the Docker backend. |
-| `tools.terminal.docker.cpu` / `memory_mb` | float / int | `1.0` / `5120` | Docker resource limits. |
-| `tools.terminal.ssh.host` / `user` / `port` / `key_path` | string / string / int / string | `None` / `None` / `22` / `None` | SSH backend connection. |
+| `tools.terminal.docker.volumes` | array | `[]` | Bind mounts for the container. |
+| `tools.terminal.docker.env` | map | `{}` | Extra environment variables for the container. |
+| `tools.terminal.docker.cpu` | float | `1.0` | Container CPU limit. |
+| `tools.terminal.docker.memory_mb` | int | `5120` | Container memory limit in MB. |
+| `tools.terminal.ssh.host` | string? | `None` | SSH backend host. |
+| `tools.terminal.ssh.user` | string? | `None` | SSH backend user. |
+| `tools.terminal.ssh.port` | int | `22` | SSH backend port. |
+| `tools.terminal.ssh.key_path` | string? | `None` | SSH private key. |
 | `tools.code_execution.default_timeout_secs` | int | `60` | Default wall-clock cap for `code_execution`. |
 | `tools.code_execution.max_timeout_secs` | int | `300` | Hard ceiling for it. |
 | `tools.stt.openai_model` | string | `"whisper-1"` | Transcription model for the OpenAI STT provider. |
@@ -306,11 +325,27 @@ Only read when `context_engine = "lcm"`.
 |---|---|---|---|
 | `memory.provider` | string | `"memory-wire"` | The one memory engine. Any other name warns at load and is ignored. |
 | `memory.enabled` | bool | `true` | Master switch for long-term memory. |
-| `memory.injection_budget_tokens` | int | `4_000` | Ceiling on the recalled-memory block. |
+| `memory.injection_budget_tokens` | int | `4_000` | Ceiling on the recalled-memory block. 0 = the built-in default. **In NEITHER registry list** — see the note below. |
 | `memory.agentmemory_url` / `_secret` / `_auto_spawn` / `_version` | various | `None` | **RETIRED** agentmemory keys: accepted, ignored, and warned about when set. |
 | `memory.audit_enabled` / `response_cache_enabled` | bool? | `None` | **RETIRED**, accepted and ignored. |
 | `browser.provider` | string | `"sourcehound"` | Accepted for compatibility and IGNORED: sourcehound is the only engine. A non-default value warns once at load. |
-| `vision.provider` / `model` / `base_url` / `api_key` | string? | `None` | The vision auxiliary-model slot. |
+| `vision.provider` / `model` / `base_url` / `api_key` | string? | `None` | The vision auxiliary-model slot. `vision.model` and `vision.api_key` are in `KNOWN_KEYS` but absent from `CONFIG_KEYS`. |
+
+**`memory.injection_budget_tokens` is in NEITHER list, and it still loads.**
+`deny_unknown_fields` rejects keys the STRUCT does not have; a field the struct
+has but the generator missed is simply invisible to the generated lists.
+`MemorySettings::injection_budget_tokens` is exactly that: a live field with
+`#[serde(default = "default_memory_injection_budget_tokens")]` (default
+`4_000`) that `crates/operant-core/src/config_registry.rs` never emits. So
+`[memory] injection_budget_tokens = 2000` takes effect, and
+`operant config describe` reports nothing about it. The describe surface knows
+only `agent.memory_injection_budget_tokens`, which defaults to the same
+`4_000`.
+
+**The `provider` keys are compatibility shims, not choices.** `[browser]`
+has exactly ONE key and it is ignored; `[memory] provider` accepts any string
+and warns unless it is `"memory-wire"` or empty. An operator who sets either
+to something else gets a warning, not the provider they asked for.
 
 ## `[skills]` (10 keys)
 
@@ -390,7 +425,12 @@ Only read when `context_engine = "lcm"`.
 and `[providers]` all speak the same auxiliary-model vocabulary, so they are
 documented once here.
 
-Each `AuxiliaryModelConfig` slot has four keys, all optional and all
+**Each `AuxiliaryModelConfig` slot is four keys, and the four keys are
+themselves dotted paths** — `advisor.model` AND `advisor.model.api_key`,
+`advisor.model.base_url`, `advisor.model.model`, `advisor.model.provider` are
+all separate entries in `KNOWN_KEYS`. That is why `advisor` is 11 keys (7 of
+its own plus 4 slot sub-keys) and `auxiliary_models` is exactly **45 = 9 slots
+x 5** (the slot row itself plus its four sub-keys). All optional, all
 defaulting to unset (fall back to the primary model / provider):
 
 | Sub-key | Type | Default | What it changes |
@@ -405,7 +445,7 @@ defaulting to unset (fall back to the primary model / provider):
 | `[advisor]` | `enabled`, `model` (plus its four slot sub-keys), `instructions`, `continue_severity`, `suppress_streak`, `max_notes_per_update`, `timeout_secs` | engine OFF | The always-on transcript watchdog: a side-channel reviewer that notes concerns after each completed turn WITHOUT joining the acting agent's context. `timeout_secs` = 120, `max_notes_per_update` = 4, `suppress_streak` = 3, `continue_severity` = `concern`. |
 | `[recap]` | `model` (plus its four slot sub-keys), `instructions` | idle window 240 s | The idle-recap engine: an ephemeral side call that renders a ~40-word "where the session stands" over a SNAPSHOT of the transcript. It has **no `enabled` key**: the on/off switch is `agent.recap_idle_seconds`, where `0` disables and the default `240` enables. |
 | `[moa]` | `references` (array of slots), `aggregator`, `max_tokens`, `temperature`, `timeout_secs` | `enabled = false` | Mixture-of-Agents: N reference models advise, one aggregator synthesises. `timeout_secs` = 60. Inert when `references` is empty. |
-| `[auxiliary_models]` | `vision`, `compression`, `web_extract` (INERT), `image_gen`, `embeddings`, `search`, `memory`, `code_execution`, `reasoning` | all `None` | Per-task model slots for the named subsystem. `web_extract` is inert because the IGS-backed extractor returns raw markdown with no LLM step. |
+| `[auxiliary_models]` | `vision`, `compression`, `web_extract`, `image_gen`, `embeddings`, `search`, `memory`, `code_execution`, `reasoning` | all `None` | Per-task model slots for the named subsystem. **Only `vision` and `compression` are LIVE.** The other six — `web_extract`, `image_gen`, `embeddings`, `search`, `code_execution`, `reasoning` — are ACCEPTED BUT UNREAD (audit iter-1349): `web_extract` has no LLM step to route to (the IGS-backed extractor returns raw markdown), `image_gen` reads `FAL_KEY`, `embeddings` is `agent.context_lcm_embedding_model`, `search` is sourcehound-only, and `code_execution` / `reasoning` have no consumer at all. A SET value reports once at load, one line per slot. |
 | `[credential_pool]` | `enabled`, `strategy`, `strategies` | `enabled = false` | Multi-key rotation. `strategy` is `fill_first` (default) / `round_robin` / `random` / `least_used`; `strategies` overrides per provider. |
 | `[providers]` | `models`, `model_routes`, `fallback`, `fallback_chain`, `embedding_routes` | all empty | Provider profiles and routing. `models` is the named profile map; `fallback_chain` is the ordered cross-provider chain (unknown profile keys are skipped with a warning); `fallback` is the profile used when no route matches. |
 
