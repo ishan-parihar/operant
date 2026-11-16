@@ -28,7 +28,10 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin" "$TMP/home"
 cat > "$TMP/bin/cargo" <<EOF
 #!/usr/bin/env bash
-# Record the args, then emit whatever JSON the scenario file holds.
+# Record the args AND the target dir the gate pointed us at. The target dir is
+# what the determinism fix (iter-2487) varies per pass, so the tests below
+# assert on it -- an argv record alone cannot show it.
+echo "CARGO_TARGET_DIR=\${CARGO_TARGET_DIR:-<unset>}" >> "$TMP/log"
 echo "\$*" >> "$TMP/log"
 if [ "\$1" = "clippy" ]; then
     cat "$TMP/scenario.jsonl"
@@ -152,5 +155,34 @@ out="$(run_gate || true)"
 echo "$out" | grep -q 'clippy-gate] pass' \
     || { echo "FAIL: a failing all-targets pass still aborted the gate"; echo "$out"; exit 1; }
 echo "PASS 6: a failing all-targets pass does not abort the run"
+
+# --- 7. the gate must not relocate its clippy output ------------------------
+# A guard against a REASONABLE-SOUNDING fix that does not work here.
+#
+# MEASURED 2026-11-16, coordinator's own attempt, kept as the reason this test
+# exists: the obvious way to make the gate deterministic is to give each of its
+# two clippy passes its own `CARGO_TARGET_DIR` (target/gate-lib, target/gate-all)
+# so neither can inherit the other's fingerprints. That BREAKS THE GATE on this
+# host. espeak-rs-sys copies phoneme filenames into fixed ~8-char buffers, so the
+# ABSOLUTE build path has a hard ceiling:
+#
+#   target/debug/...     -> longest phsource path  92 chars   COMPILES
+#   target/gate-lib/...  -> longest phsource path 105 chars   FAILS
+#                           ("Bad vowel file" / "Compiled phonemes: 31 errors")
+#
+# The gate then exits 1 on a BUILD failure instead of measuring anything -- the
+# one outcome worse than the nondeterminism it was meant to fix. So the gate must
+# keep its output in the DEFAULT target dir. A future change that needs
+# CARGO_TARGET_DIR must first re-measure that phoneme path length and record the
+# new number here.
+if grep -n 'CARGO_TARGET_DIR=' scripts/clippy-warning-gate.sh | grep -v '^[0-9]*:#' >/dev/null 2>&1; then
+    echo "FAIL: the gate sets CARGO_TARGET_DIR, which breaks the espeak phoneme build"
+    echo "      (a target/<newdir>/ pushes the absolute path past espeak's buffer)."
+    echo "      Re-measure the longest phsource path before doing this."
+    grep -n 'CARGO_TARGET_DIR=' scripts/clippy-warning-gate.sh
+    exit 1
+fi
+echo "PASS 7: the gate leaves CARGO_TARGET_DIR alone (espeak path-length guard)"
+
 
 echo "all clippy-gate tests passed"
