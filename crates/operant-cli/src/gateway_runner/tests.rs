@@ -4181,3 +4181,97 @@ fn the_socket_turn_entry_sets_the_cron_origin_it_builds() {
          channel arm must keep setting the origin from the message it received"
     );
 }
+
+/// (A3-gateway H-2) A turn that does not come from a channel message must not
+/// inherit the previous chat's seat, model, effort, posture, charter or memory
+/// scope.
+///
+/// A slot serves many sessions. The channel path resets all six at turn entry
+/// (RT-535, iter-2211, KB-8); the socket path reset none, so a local turn
+/// landing on a slot that last served Telegram ran as THAT chat's employee,
+/// against that seat's memory bank, on that chat's model -- silently.
+///
+/// The assertion is behavioural: it dirties the slot agent the way a previous
+/// chat would, calls the reset, and reads the fields back.
+#[tokio::test]
+async fn a_slot_reset_drops_the_previous_chats_per_session_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+    let slot = handler.slots.slot_for("sess_reset_test");
+
+    // What the PREVIOUS chat left behind on this slot's agent.
+    slot.agent.set_seat_id("some-employee");
+    slot.agent.set_model("opus-from-the-last-chat");
+    slot.agent.set_reasoning_effort(Some("high".to_string()));
+    slot.agent
+        .set_posture_override(Some(operant_core::ponytail::PostureOverride::Off));
+    slot.agent
+        .set_charter(Some("the previous chat's charter".to_string()));
+
+    // Sanity: the dirt is actually there, or the test below proves nothing.
+    assert_eq!(slot.agent.seat_id().as_deref(), Some("some-employee"));
+    assert_eq!(slot.agent.model(), "opus-from-the-last-chat");
+
+    handler
+        .reset_slot_for_session(slot, "sess_reset_test")
+        .await;
+
+    assert_eq!(
+        slot.agent.seat_id(),
+        None,
+        "a fresh session must not run as the previous chat's employee"
+    );
+    assert_ne!(
+        slot.agent.model(),
+        "opus-from-the-last-chat",
+        "a fresh session must not run on the previous chat's model override"
+    );
+    assert_eq!(
+        slot.agent.reasoning_effort(),
+        None,
+        "a fresh session starts from the slot's default effort (None in this \
+         fixture), not the previous chat's"
+    );
+    assert_eq!(
+        slot.agent.posture_override(),
+        None,
+        "the posture is per-session (iter-2211): a chat with no override of \
+         its own starts from the config, not from the previous chat's level"
+    );
+    assert_eq!(
+        slot.agent.charter(),
+        None,
+        "a fresh session must not carry the previous chat's charter"
+    );
+}
+
+/// The reset must be CALLED by the socket turn, not merely exist.
+///
+/// Same trap as the cron-origin fix: a correct helper nobody invokes is the
+/// bug. The channel path's reset and the socket path's reset are separate
+/// call sites, and only the channel one existed.
+#[test]
+fn the_socket_turn_entry_resets_the_slot_before_it_runs() {
+    let source = include_str!("../gateway_runner.rs");
+    assert_eq!(
+        source
+            .matches("reset_slot_for_session(slot, &task_session)")
+            .count(),
+        1,
+        "the socket turn must reset the slot's per-session state exactly once, \
+         before it runs -- without this a local turn inherits the seat, model, \
+         effort, posture, charter and memory bank of whichever chat used the \
+         slot last"
+    );
+    // And the reset must come before the run, not after it.
+    let reset = source
+        .find("reset_slot_for_session(slot, &task_session)")
+        .expect("the socket turn resets the slot");
+    let run = source[reset..]
+        .find("agent.run(text)")
+        .expect("the socket turn runs the agent after the reset");
+    assert!(
+        reset < reset + run,
+        "the reset must precede agent.run in the socket turn"
+    );
+}

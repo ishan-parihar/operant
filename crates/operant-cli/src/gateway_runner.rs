@@ -3210,6 +3210,9 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     handler
                         .bind_slot_to_session(slot, &task_session, "session-socket")
                         .await;
+                    // (A3-gateway H-2) Reset the per-session agent state before
+                    // this turn runs. See `reset_slot_for_session`.
+                    handler.reset_slot_for_session(slot, &task_session).await;
                     // (A3-gateway H-1) The socket turn must also carry a cron
                     // origin. Without one, `cron create` from
                     // `operant chat --attach` writes the row with NULL origin
@@ -3690,6 +3693,60 @@ struct GatewayMessageHandler {
 }
 
 impl GatewayMessageHandler {
+    /// Reset a slot agent's PER-SESSION state before a turn that did not come
+    /// from a channel message, then bind it to the session that owns it.
+    ///
+    /// (A3-gateway H-2) A slot serves many sessions. The channel path clears
+    /// the seat, the model override, the reasoning effort, the posture, the
+    /// charter and the memory scope on EVERY turn (RT-535, iter-2211, KB-8),
+    /// then re-reads that session's own overrides. The socket path did none of
+    /// that, so a local turn landing on a slot that last served Telegram ran as
+    /// THAT chat's employee, against that seat's memory bank, on that chat's
+    /// model -- and nothing in the turn said so.
+    ///
+    /// The order is the channel path's: clear everything, THEN apply what this
+    /// session actually has. A session's own employee binding wins over the
+    /// unbound scope.
+    ///
+    /// `default_effort` is the slot's own configured effort, not a per-session
+    /// one -- the channel path passes the same value for the same reason.
+    ///
+    /// Kept as one method rather than inlined at the call site because the
+    /// reset is the kind of rule that gets half-copied: the next entry point
+    /// to appear should call this, not re-derive which fields to clear.
+    async fn reset_slot_for_session(&self, slot: &AgentSlot, session_id: &str) {
+        slot.agent.clear_seat_id();
+        slot.agent.clear_model_override();
+        slot.agent.set_reasoning_effort(slot.default_effort.clone());
+        slot.agent.set_posture_override(None);
+        slot.agent.set_charter(None);
+        // KB-8: unbound until this session proves it has a seat.
+        //
+        // A socket client is the local operator -- it has no
+        // `platform`/`user_id` triple to derive a sender scope from, and
+        // treating it as a stranger would silently move every local turn into
+        // a throwaway per-sender bank. The unbound owner scope is `Personal`,
+        // which is what the channel path yields for an admin.
+        if let Some(p) = slot.agent.memory_provider() {
+            p.set_scope(&operant_core::memory_wire::MemoryScope::Personal);
+        }
+        // A session that carries its own employee binding still runs as that
+        // employee, with that seat's bank. `lookup_by_session_id` is the
+        // store's own seam -- a socket session is filed under the id the
+        // client named.
+        let gw_guard = self.gateway.lock().await;
+        if let Some(ref gw) = *gw_guard
+            && let Some(store) = gw.get_persistent_sessions()
+            && let Some(entry) = store.lookup_by_session_id(session_id)
+            && let Some(emp) = entry.employee_id.clone()
+        {
+            slot.agent.set_seat_id(emp.clone());
+            if let Some(p) = slot.agent.memory_provider() {
+                p.set_scope(&operant_core::memory_wire::MemoryScope::Seat { identity: emp });
+            }
+        }
+    }
+
     /// Point a SLOT at a session before a turn runs in it — the ONE rule
     /// every turn entry obeys.
     ///
