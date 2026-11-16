@@ -28,12 +28,10 @@
 //! columns of gutter and one blank row on each side of the text. A port that
 //! adds a box has missed the point.
 //!
-//! operant cannot read the terminal's actual background: `theme_detect.rs`
-//! gates the OSC 11 query behind a pending-dependency `#[cfg(any())]` and falls
-//! back to the theme's assumption of dark. So the blend runs over
-//! `crate::tui::theme_colors::panel_bg`, the surface colour the active theme
-//! already declares, rather than over a queried terminal background. The result
-//! is the same shape of lift, derived from data the process actually holds.
+//! The band's colour is [`Role::ComposerBg`], seeded from the same `panel_bg`
+//! field every theme declares (like the user bubble) and overridable with the
+//! other roles under `[tui.colors]`. The input area is therefore themeable
+//! rather than a hard-wired luminance guess.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -59,51 +57,13 @@ pub(crate) const GUTTER_COLS: u16 = 2;
 /// composer occupies exactly the height a typed one does.
 pub(crate) const PLACEHOLDER: &str = "Ask operant to do anything";
 
-/// Blend `top` toward `base` at `alpha` (0.0 = base, 1.0 = top), per channel.
-fn blend(top: (u8, u8, u8), base: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
-    let mix = |t: u8, b: u8| -> u8 {
-        let t = f32::from(t);
-        let b = f32::from(b);
-        (t * alpha + b * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8
-    };
-    (mix(top.0, base.0), mix(top.1, base.1), mix(top.2, base.2))
-}
-
-/// The lifted surface colour for the composer band.
+/// The composer band's fill: the active theme's `ComposerBg` role.
 ///
-/// codex uses `is_light(terminal_bg)` to pick the lift direction. operant has no
-/// queried background, so the theme's declared surface stands in for it: a
-/// surface whose luminance is above mid-range counts as light and gets the
-/// dark-direction lift, which is the same decision codex makes at the same
-/// threshold. Returns `None` when the palette's surface is not an RGB value
-/// (a quantized 256-colour palette), so the caller degrades to no fill — the
-/// same degrade codex itself takes when `default_bg()` answers `None`.
-fn composer_surface_rgb() -> Option<(u8, u8, u8)> {
-    let base = match theme_colors::panel_bg() {
-        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
-        _ => return None,
-    };
-    // Rec. 709 luma: the perceptual weighting, not a channel average, so a
-    // saturated dark blue is not misread as light.
-    let luminance =
-        0.2126 * f32::from(base.0) + 0.7152 * f32::from(base.1) + 0.0722 * f32::from(base.2);
-    Some(if luminance > 127.5 {
-        blend((0, 0, 0), base, 0.04)
-    } else {
-        blend((255, 255, 255), base, 0.12)
-    })
-}
-
-/// The composer band's fill: a barely-there surface lift, never a panel.
-///
-/// Returns an empty style when the active palette's surface is not an RGB value,
-/// so the band still renders — it just carries no fill, which is exactly how
-/// codex behaves on a terminal that will not answer the background probe.
+/// Never returns `None` — the role always resolves to an RGB — so the band
+/// paints unconditionally, like codex's. The luminance-lift helper that used to
+/// derive this colour from `panel_bg` went with the retraction.
 pub(crate) fn composer_fill_style() -> Style {
-    match composer_surface_rgb() {
-        Some((r, g, b)) => Style::default().bg(ratatui::style::Color::Rgb(r, g, b)),
-        None => Style::default(),
-    }
+    Style::default().bg(crate::tui::vendor::style::theme::composer_bg())
 }
 
 /// Paint the band's fill over `area`.
@@ -268,31 +228,6 @@ mod tests {
             assert_eq!(glyph.chars().count(), 2, "glyph {glyph:?} is not 2 wide");
         }
         assert_eq!(GUTTER_COLS, 2);
-    }
-
-    #[test]
-    fn blend_hits_both_endpoints() {
-        assert_eq!(blend((255, 255, 255), (0, 0, 0), 0.0), (0, 0, 0));
-        assert_eq!(blend((255, 255, 255), (0, 0, 0), 1.0), (255, 255, 255));
-        assert_eq!(blend((200, 100, 50), (100, 200, 50), 0.5), (150, 150, 50));
-    }
-
-    #[test]
-    fn blend_clamps_rather_than_wrapping() {
-        // A alpha above 1.0 or below 0.0 must saturate the channel, not wrap it
-        // around the u8 range — `as` casts on an out-of-range float are
-        // saturating in Rust, and this pins that so a future refactor cannot
-        // silently switch to a wrapping cast.
-        assert_eq!(blend((255, 255, 255), (0, 0, 0), 5.0), (255, 255, 255));
-        assert_eq!(blend((255, 255, 255), (0, 0, 0), -1.0), (0, 0, 0));
-    }
-
-    #[test]
-    fn dark_surfaces_lift_toward_white_and_light_surfaces_toward_black() {
-        // The two directions codex picks with `is_light`, exercised directly so
-        // a regression in the luminance threshold cannot silently invert both.
-        assert!(blend((255, 255, 255), (16, 16, 20), 0.12).0 > 16);
-        assert!(blend((0, 0, 0), (248, 248, 248), 0.04).0 < 248);
     }
 
     /// THE REGRESSION GUARD for the clipped placeholder.

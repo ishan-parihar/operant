@@ -876,6 +876,11 @@ impl SessionHubState {
         if self.subagent_scope.take().is_none() {
             return false;
         }
+        // The archive confirm is an INNER state, and Esc leaves the innermost
+        // state first. Dropping the scope while leaving it armed widened the
+        // list to every session with "Archive session abcd1234? (y/n)" still on
+        // screen, so `y` archived a row the operator could no longer see.
+        self.pending_archive = None;
         self.store_counts = None;
         self.selected = 0;
         self.note_preview_miss();
@@ -1436,10 +1441,7 @@ impl SessionHubState {
     }
 
     pub fn cycle_filter(&mut self) {
-        self.filter_mode = self.filter_mode.next();
-        self.selected = 0;
-        self.note_preview_miss();
-        self.rebuild_visible();
+        self.step_filter(HubFilterMode::next);
     }
 
     /// Step the filter BACK one rung — `S`, the reverse of `s`.
@@ -1449,7 +1451,17 @@ impl SessionHubState {
     /// walking the whole ladder round. Same reset and same re-derivation, so
     /// the two directions leave the hub in the same state for the same rung.
     pub fn cycle_filter_reverse(&mut self) {
-        self.filter_mode = self.filter_mode.prev();
+        self.step_filter(HubFilterMode::prev);
+    }
+
+    /// One step of the filter ladder in either direction.
+    ///
+    /// Both directions share a body so "the same reset and the same
+    /// re-derivation" is structural rather than a claim two copies have to keep
+    /// true: the cursor resets, the preview is invalidated, and the visible set
+    /// is re-derived, whichever way the ladder moved.
+    fn step_filter(&mut self, step: fn(HubFilterMode) -> HubFilterMode) {
+        self.filter_mode = step(self.filter_mode);
         self.selected = 0;
         self.note_preview_miss();
         self.rebuild_visible();
@@ -1761,7 +1773,12 @@ impl SessionHubState {
     }
 
     pub fn set_has_more(&mut self, has_more: bool) {
-        self.has_more = has_more;
+        // Forced false under a subagent scope. `has_more` is computed from the
+        // UNscoped page (`db_page >= HUB_PAGE`), and paging appends DB session
+        // rows at a global cursor while the scope's ids are delegation ids — so
+        // the row is a selectable no-op that costs a full 500-row page and can
+        // never produce a visible row.
+        self.has_more = has_more && self.subagent_scope.is_none();
     }
 
     /// Hand the store-wide counts to the counts cache. Called with the same
@@ -1771,7 +1788,16 @@ impl SessionHubState {
         &mut self,
         counts: Option<operant_core::database::SessionFilterCounts>,
     ) {
-        self.store_counts = counts;
+        // Ignored while a subagent scope is engaged. The counts come from
+        // `count_sessions_by_filter`, which has no scope argument, so accepting
+        // them would repopulate exactly what `open_subagent_scoped` drops: seven
+        // tabs promising 500 rows over a list of two. The rows are the honest
+        // answer under a scope, and `compute_filter_counts` falls back to them.
+        self.store_counts = if self.subagent_scope.is_some() {
+            None
+        } else {
+            counts
+        };
         self.rebuild_visible();
     }
 
@@ -1983,6 +2009,10 @@ pub const PREVIEW_MESSAGE_LIMIT: usize = 400;
 const RESULT_KEYS: &[&str] = &[
     "formatted",
     "stdout",
+    // `stderr` is the ONLY text a failed exec produces: 226 real rows have a
+    // non-empty `stderr` and an empty `stdout`, and without it the row read
+    // `exit 1 · 58ms · exit_code=1` — the code twice and no cause.
+    "stderr",
     "output",
     "body",
     "content",
@@ -2010,12 +2040,184 @@ const RESULT_KEYS: &[&str] = &[
 /// A payload that is not JSON is already human text and passes through
 /// untouched.
 fn summarize_tool_result(tool_name: Option<&str>, content: &str) -> String {
+    summarize_tool_result_at(tool_name, content, 0)
+}
+
+/// Parse `text` as JSON, unwrapping ONE level of double encoding.
+///
+/// Some adapters store the payload as a JSON STRING whose interior is the real
+/// object, so `content` is `"{"tasks": []}"` — the quotes and backslashes are
+/// part of the stored bytes. `as_object()` returns `None` for that, and the old
+/// code printed the escaped string verbatim: 256 real rows still showed raw JSON
+/// on screen, which is the exact defect this function exists to remove.
+///
+/// Only a string that parses to an object or array is unwrapped, so a plain-text
+/// result that happens to be quoted is left alone.
+fn parse_payload(text: &str) -> Option<serde_json::Value> {
+    if let Some(value) = parse_one_payload(text) {
+        return Some(value);
+    }
+    // A stored payload can carry a TRAILER the writer appended after the JSON —
+    // the operator's store has 3,629 rows shaped `{"symbol":"BTC",…}\n\n[receipt:
+    // zc-receipt-…]`. The document is the first non-empty line; the receipt is
+    // provenance, and printing the raw line prints both with the JSON escaped.
+    let first_line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if first_line.len() == text.trim().len() {
+        // One line and it did not parse: genuinely malformed, not a trailer.
+        return None;
+    }
+    parse_one_payload(first_line)
+}
+
+/// One parse attempt, plus the one level of double-encoded unwrapping.
+fn parse_one_payload(text: &str) -> Option<serde_json::Value> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if let serde_json::Value::String(inner) = &value
+        && let Ok(inner) = serde_json::from_str::<serde_json::Value>(inner)
+        && matches!(
+            inner,
+            serde_json::Value::Object(_) | serde_json::Value::Array(_)
+        )
+    {
+        return Some(inner);
+    }
+    Some(value)
+}
+
+/// The first readable string field of a JSON object that will not parse.
+///
+/// Only reached for a payload that was TRUNCATED at storage, where there is no
+/// object to walk: the bytes simply stop. A flat `"key":"value"` scan recovers
+/// the field that carries the text, which is what the operator opened the row to
+/// read, without pretending the rest of the document exists.
+fn salvage_json_field(text: &str) -> Option<String> {
+    for key in RESULT_KEYS {
+        let needle = format!("\"{}\"", key);
+        let Some(at) = text.find(&needle) else {
+            continue;
+        };
+        let rest = &text[at + needle.len()..];
+        let Some(rest) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        // The value ends at the first unescaped quote, or at the end of the
+        // stored bytes when the truncation took the closing quote with it.
+        let mut value = String::new();
+        let mut escaped = false;
+        for ch in rest.chars() {
+            if escaped {
+                value.push(match ch {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    other => other,
+                });
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                break;
+            } else {
+                value.push(ch);
+            }
+        }
+        let collapsed = collapse_whitespace(&value);
+        if !collapsed.is_empty() {
+            return Some(first_line(&collapsed));
+        }
+    }
+    // No known text key: a truncated object whose readable field is under some
+    // other name (`variables`, `entries`, `checkpoints` in the operator's store).
+    // The first `"key": "long enough string"` pair is the best available answer,
+    // and it is strictly better than printing the braces.
+    salvage_first_string_field(text)
+}
+
+/// The first `"key": "value"` pair in a truncated object, skipping short values.
+///
+/// Short values are skipped because a truncated document's first pair is as
+/// likely to be a flag or an id as it is to be the answer; the length floor is
+/// what makes "the first string" mean "the first sentence".
+fn salvage_first_string_field(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(rel) = text[at..].find('"') {
+        let key_start = at + rel + 1;
+        let Some(rel_end) = text[key_start..].find('"') else {
+            return None;
+        };
+        let key_end = key_start + rel_end;
+        let key = &text[key_start..key_end];
+        let after = text[key_end + 1..].trim_start();
+        let Some(after) = after.strip_prefix(':') else {
+            at = key_end + 1;
+            continue;
+        };
+        let Some(after) = after.trim_start().strip_prefix('"') else {
+            at = key_end + 1;
+            continue;
+        };
+        let mut value = String::new();
+        let mut escaped = false;
+        for ch in after.chars() {
+            if escaped {
+                value.push(match ch {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    other => other,
+                });
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                break;
+            } else {
+                value.push(ch);
+            }
+        }
+        let collapsed = collapse_whitespace(&value);
+        if collapsed.chars().count() >= 12 && !is_identifier_key(key) {
+            return Some(first_line(&collapsed));
+        }
+        at = key_end + 1;
+        if at >= bytes.len() {
+            return None;
+        }
+    }
+    None
+}
+
+/// Whether `text` is itself a JSON document rather than prose.
+///
+/// The body a tool returns is sometimes a JSON document — an API error body, a
+/// JSON-RPC reply — and printing it puts the wire format straight back on screen
+/// through the field the fix was supposed to clean.
+fn is_json_document(text: &str) -> bool {
+    let text = text.trim();
+    (text.starts_with('{') || text.starts_with('[')) && parse_payload(text).is_some()
+}
+
+fn summarize_tool_result_at(tool_name: Option<&str>, content: &str, depth: usize) -> String {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         // A result row with a name and no payload still says which tool ran.
         return tool_name.unwrap_or_default().to_string();
     }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+    let Some(value) = parse_payload(trimmed) else {
+        // It LOOKS like JSON and does not parse: the row was truncated at
+        // storage (the operator's store holds payloads up to 199 KB against a
+        // column that clips). Printing the first 200 characters of a half-written
+        // object is the raw JSON the pane is not supposed to show, so salvage the
+        // first readable field instead.
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            if let Some(salvaged) = salvage_json_field(trimmed) {
+                return salvaged;
+            }
+        }
         return first_line(trimmed);
     };
     let Some(object) = value.as_object() else {
@@ -2055,6 +2257,16 @@ fn summarize_tool_result(tool_name: Option<&str>, content: &str) -> String {
         body = text;
         break;
     }
+    // A body that IS a JSON document is summarized once more, so a `body` field
+    // holding an API error object reads as its message rather than as its
+    // braces. Bounded at one level: a document nested inside a document is the
+    // tool's own shape, not something a preview row can flatten.
+    if depth == 0 && is_json_document(&body) {
+        let nested = summarize_tool_result_at(None, &body, depth + 1);
+        if !nested.trim().is_empty() {
+            body = nested;
+        }
+    }
     // Nothing recognised: name the first scalar field that is not transport
     // detail, rather than dumping the object. A new tool then degrades to
     // `key=value` instead of to JSON.
@@ -2067,7 +2279,14 @@ fn summarize_tool_result(tool_name: Option<&str>, content: &str) -> String {
     }
 
     meta.push(body);
-    meta.join(" · ")
+    let line = meta.join(" · ");
+    // A row whose summary came out EMPTY is dropped by the caller, so the tool
+    // call vanishes from the transcript with no result row at all — 51 real rows
+    // (`{"servers":[]}`, `{"tools":[]}`) took that path. The name is the floor.
+    if line.trim().is_empty() {
+        return tool_name.unwrap_or_default().to_string();
+    }
+    line
 }
 
 /// Whether a payload key names an identifier or a measurement rather than the
@@ -2083,6 +2302,9 @@ fn is_identifier_key(key: &str) -> bool {
     const EXACT: &[&str] = &[
         "id",
         "pid",
+        // Already reported as `exit N` in the meta prefix, so falling back to it
+        // printed the same fact twice on one row.
+        "exit_code",
         "cwd",
         "nanoseconds",
         "timezone",
@@ -2133,11 +2355,17 @@ fn scalar_text(value: &serde_json::Value, limit: usize) -> String {
         serde_json::Value::Null => String::new(),
         serde_json::Value::Array(items) if items.is_empty() => String::new(),
         serde_json::Value::Array(items) => {
-            // An array of scalars reads as a list; anything else as a count.
+            // An array of scalars reads as a list — and a NUMBER or a BOOL is a
+            // scalar too, so `[1,2]` renders as "1, 2" rather than as a count
+            // of itself.
             if items.iter().all(is_scalar) {
                 let joined = items
                     .iter()
-                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(|v| match v {
+                        serde_json::Value::String(s) => Some(s.clone()),
+                        other => Some(scalar_text(other, limit)),
+                    })
+                    .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>()
                     .join(", ");
                 if joined.is_empty() {
@@ -2146,15 +2374,30 @@ fn scalar_text(value: &serde_json::Value, limit: usize) -> String {
                     joined
                 }
             } else {
-                format!("{} items", items.len())
+                // A `todos` array is the tool's whole answer. Its own doc says
+                // "the first entry's `content` is the useful line", but the value
+                // is an ARRAY, so the array arm — not the object arm — wins, and
+                // 11 real `todo` rows printed a bare "11 items". Descend one
+                // level rather than counting.
+                match items.first().map(|first| scalar_text(first, limit)) {
+                    Some(text) if !text.trim().is_empty() => text,
+                    _ => format!("{} items", items.len()),
+                }
             }
         }
         // `todo`'s payload is `{"todos": [...]}`, whose first entry's `content`
         // is the useful line; one level down is as deep as a preview row goes.
-        serde_json::Value::Object(map) => match map.get("content").or_else(|| map.get("name")) {
-            Some(inner) => scalar_text(inner, limit),
-            None => format!("{} fields", map.len()),
-        },
+        //
+        // An object with none of the text keys returns EMPTY rather than
+        // `"{n} fields"`: that string passed the caller's emptiness guard and
+        // became the row, so 115 real rows read "1 fields" where the previous
+        // build at least printed the JSON. Empty lets the caller fall back to the
+        // first informative scalar.
+        serde_json::Value::Object(map) => ["content", "name", "text", "message", "title"]
+            .iter()
+            .find_map(|key| map.get(*key))
+            .map(|inner| scalar_text(inner, limit))
+            .unwrap_or_default(),
     };
     let collapsed = collapse_whitespace(&text);
     if collapsed.chars().count() <= limit {

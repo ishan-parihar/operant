@@ -293,6 +293,16 @@ fn all_entries_returns_expected_settings() {
                 )
         })
         .count();
+    // (iter-2451) The drawn count, printed. `all_entries` is 6 hand-declared
+    // rows PLUS a walk over the registry, so the panel's size is a property of
+    // `config_registry`, not of `settings_screen/state.rs`. Counting the
+    // `SettingsEntry {` literals there (6) is the natural mistake and it is
+    // wrong by a factor of 45 — it produced a plan document claiming the panel
+    // exposes 6 of 307 settings. Measure, do not count.
+    eprintln!(
+        "SETTINGS PANEL: {} rows total, {drawable} drawable registry rows",
+        entries.len()
+    );
     assert!(
         entries.len() >= drawable,
         "the panel drew {} rows but the registry offers {} editable ones",
@@ -501,6 +511,12 @@ fn the_settings_screen_offers_no_unread_row() {
         "cursor_blink_enabled",
         "auto_commits",
         "output_format",
+        // (iter-2452) The panel's own `output_style` row. Hand-declared, so it
+        // never passed through the registry's `live` gate and this guard never
+        // saw it — which is how a phantom survives a guard built for phantoms.
+        // Nothing reads `App::output_style`; the command and the panel now say
+        // so instead of cycling three vocabularies between them.
+        "output_style",
     ];
     let entries = all_entries(&SettingsScreen::new());
     for key in DEAD {
@@ -510,10 +526,11 @@ fn the_settings_screen_offers_no_unread_row() {
              operator's edit is a promise nothing keeps"
         );
     }
-    // And the rows that DO something are still there.
+    // And the rows that DO something are still there. (iter-2452)
+    // `output_style` moved to the DEAD list above: nothing reads
+    // `App::output_style`, so the panel offering it was a promise nothing kept.
     for live in [
         "agent.context_window",
-        "output_style",
         "reduce_motion",
         "show_cwd",
         "show_git_branch",
@@ -580,10 +597,25 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
         AppConfig::default().agent.context_window,
         &AppConfig::default(),
     );
-    let total = all_entries(&screen).len();
+    // (plan 2026-11-16 S2) The rows are TABBED now, so the walk visits every tab
+    // and walks that tab's rows — `all_entries` is the whole panel, and only the
+    // selected tab is painted. Walking `all_entries` linearly would step off the
+    // end of the first tab and blame the window.
+    let panel = all_entries(&screen);
+    let total = panel.len();
 
     for step in 0..total {
-        screen.select_next(total);
+        // Put the panel index on screen: select the tab that owns it, then the
+        // row within that tab.
+        let target_tab = panel[step].tab;
+        screen.select_tab(target_tab);
+        let in_tab = screen.visible_entries();
+        let idx_in_tab = in_tab
+            .iter()
+            .position(|entry| entry.key == panel[step].key)
+            .expect("the row is on its own tab");
+        screen.selected_idx = idx_in_tab;
+
         terminal
             .draw(|frame| {
                 render_settings_screen(frame, &screen, frame.area());
@@ -596,12 +628,12 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
             .iter()
             .map(|cell| cell.symbol().to_string())
             .collect::<String>();
-        let selected = &all_entries(&screen)[screen.selected_idx];
+        let selected = in_tab[idx_in_tab].label;
         assert!(
-            rendered.contains(selected.label),
+            rendered.contains(selected),
             "step {step}: the selected row {:?} must be painted at 80x24 — the \
              window let the selection run off the end",
-            selected.label
+            selected
         );
         assert!(
             rendered.contains('►'),
@@ -848,156 +880,166 @@ fn a_settings_edit_survives_the_restart_it_promised() {
 // The bar-style row (plan 2026-11-15 U1)
 // ---------------------------------------------------------------------------
 
-/// Installs a separator style for one test, and serializes against every other
-/// test that touches the same process-global.
-///
-/// Restoring on drop is not enough on its own: two of these tests running
-/// concurrently each restore whatever they captured, so the second drop
-/// clobbers the first test's install and the row reads the wrong style. The
-/// crate-wide `test_env_lock` is the same serialisation `with_sandbox_home`
-/// uses for the identical reason, so the guard holds it for the whole test.
-struct BarStyleGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-    previous: Option<crate::tui::status_line::style::SeparatorStyle>,
-}
-
-impl Drop for BarStyleGuard {
-    fn drop(&mut self) {
-        crate::tui::status_line::style::set_style(self.previous);
-    }
-}
-
-fn with_bar_style(style: crate::tui::status_line::style::SeparatorStyle) -> BarStyleGuard {
-    let lock = crate::config::test_env_lock();
-    let previous = crate::tui::status_line::style::style();
-    crate::tui::status_line::style::set_style(Some(style));
-    BarStyleGuard {
-        _lock: lock,
-        previous: Some(previous),
-    }
-}
-
-/// The row must offer exactly the style vocabulary, in its order.
-///
-/// `SeparatorStyle::ALL` is the one list `key()` enumerates; a second literal
-/// list here is how `theme_screen.rs:85-95` produced a picker row that could
-/// only ever render the fallback palette. The row's value must be the style the
-/// status line is actually drawing, so the operator cannot be shown one thing
-/// and given another.
 #[test]
-fn the_bar_style_row_offers_every_style_and_shows_the_live_one() {
-    use crate::tui::status_line::style::SeparatorStyle;
-
-    let _guard = with_bar_style(SeparatorStyle::Pipe);
-    let screen = SettingsScreen::new();
-    let entry = all_entries(&screen)
-        .into_iter()
-        .find(|entry| entry.key == "tui.bar_style")
-        .expect("the settings screen offers a bar-style row");
-    let SettingKind::Enum { options } = entry.kind else {
-        panic!("the bar-style row must be an enum, not a free-text field");
-    };
-    let expected: Vec<&str> = SeparatorStyle::ALL.iter().map(|s| s.key()).collect();
-    assert_eq!(
-        options, expected,
-        "the row offers exactly the vocabulary, in ALL's order"
-    );
-    assert_eq!(
-        entry.value,
-        SeparatorStyle::Pipe.key(),
-        "the row shows the style in force, not a hardcoded default"
-    );
-}
-
-/// Choosing a style must change the bar WITHOUT a restart.
-///
-/// This is the whole point of U1: the key existed and was installed once at
-/// startup, so the operator could set it only by editing TOML and relaunching.
-/// The assertion is on the live cell the paint site reads, not on a config
-/// field — a change that writes the config but never reaches the bar is the
-/// defect this row exists to close.
-#[test]
-fn choosing_a_bar_style_changes_the_bar_without_a_restart() {
-    use crate::tui::status_line::style::SeparatorStyle;
-
-    let _guard = with_bar_style(SeparatorStyle::Dot);
-    let (mut config, mut settings) = (AppConfig::default(), Settings::default());
+fn a_registry_setting_driven_from_the_panel_actually_changes() {
+    // THE ACCEPTANCE TEST FOR THE PORT (plan 2026-11-16, red-team R7).
+    //
+    // The theming pass's headline finding was that every capability was shipped
+    // and none of it was reachable from the UI. This pane had the same shape: the
+    // registry carries hundreds of rows and the operator reached them only by
+    // hand-editing TOML. "The row renders" is not the bar — a row that renders
+    // and writes nothing is the iter-1899 phantom this panel has already shipped
+    // once.
+    //
+    // So: take a setting that lives in the registry (not one of the hand-declared
+    // visual rows), drive it from the panel, and require the CHANGE to be
+    // observable in the value the panel reads back.
+    let _lock = crate::config::test_env_lock();
     let mut screen = SettingsScreen::new();
+    let config = AppConfig::default();
     screen.open(config.agent.context_window, &config);
-    let index = all_entries(&screen)
+
+    // A bool row is the easiest to observe: exactly two states, and the row
+    // shows the one it currently holds.
+    let bool_row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Bool) && entry.store == SettingStore::Config
+        })
+        .expect("the registry offers at least one config bool");
+
+    screen.select_tab(bool_row.tab);
+    let before = bool_row.value.clone();
+
+    // Walk to it within its tab and toggle it through the same path Enter uses.
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
         .iter()
-        .position(|entry| entry.key == "tui.bar_style")
-        .expect("the bar-style row is offered");
-    screen.selected_idx = index;
+        .position(|entry| entry.key == bool_row.key)
+        .expect("the row is on its own tab");
+    let mut config = AppConfig::default();
+    super::keys::toggle_or_cycle_current(&mut screen, &mut config);
 
-    let before = crate::tui::status_line::style::style();
-    handle_settings_key(
-        &mut screen,
-        &mut config,
-        &mut settings,
-        crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        ),
-    );
-
-    let after = crate::tui::status_line::style::style();
-    assert_ne!(before, after, "Enter on the row must advance the style");
-    assert_eq!(
-        after.key(),
-        config.tui.bar_style,
-        "the live cell and the config key agree"
-    );
-    assert_eq!(
-        screen.bar_style,
-        after.key(),
-        "the row shows what the bar is drawing"
-    );
-    assert!(
-        screen.apply_error.is_none(),
-        "a known style reports no error: {:?}",
-        screen.apply_error
+    let after = all_entries(&screen)
+        .into_iter()
+        .find(|entry| entry.key == bool_row.key)
+        .map(|entry| entry.value)
+        .expect("the row is still listed");
+    assert_ne!(
+        before, after,
+        "toggling {} from the panel changed nothing — the row is a phantom",
+        bool_row.key
     );
 }
 
-/// An unknown style is reported, and changes nothing.
+/// A plain Enter, for the handlers that take a `KeyEvent`.
+fn KEY_ENTER() -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+}
+
+/// Enter on a NUMBER row must open the inline editor.
 ///
-/// `SeparatorStyle::parse` returns the fallback with a `known` flag precisely
-/// so a call site cannot swallow a typo: a row that silently drew `dot` would
-/// leave the operator believing they had chosen a style.
+/// (iter-2452, red-team blocker R3) The first version of the one-seam toggle
+/// collapsed Number and Text into an early `return`, which made Enter a silent
+/// no-op on 200+ rows and left `start_edit` with no caller anywhere in the
+/// crate. The clipboard had no guard on it: the R7 acceptance test picks a Bool
+/// row, so it passed while the editor was unreachable. This drives Enter on a
+/// Number row through the same key path the operator uses.
 #[test]
-fn an_unknown_bar_style_is_reported_and_changes_nothing() {
-    use crate::tui::status_line::style::SeparatorStyle;
-
-    let _guard = with_bar_style(SeparatorStyle::Dot);
-    let (mut config, mut settings) = (AppConfig::default(), Settings::default());
-    let before = config.tui.bar_style.clone();
-
+fn enter_on_a_number_row_opens_the_editor() {
     let mut screen = SettingsScreen::new();
-    screen
-        .pending_changes
-        .insert("tui.bar_style".to_string(), "powerline-ish".to_string());
-    screen.apply_and_save(&mut config, &mut settings);
+    let config = AppConfig::default();
+    screen.open(config.agent.context_window, &config);
 
-    let error = screen
-        .apply_error
-        .clone()
-        .expect("a rejected style says why");
-    assert!(
-        error.contains("powerline-ish") && error.contains("dot"),
-        "the error names the value and the expected vocabulary: {error:?}"
-    );
+    let row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Number) && entry.store == SettingStore::Config
+        })
+        .expect("the registry offers a config number");
+
+    screen.select_tab(row.tab);
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
+        .iter()
+        .position(|entry| entry.key == row.key)
+        .expect("the row is on its own tab");
+
+    let mut config = AppConfig::default();
+    let mut settings = Settings::default();
+    let handled = super::handle_settings_key(&mut screen, &mut config, &mut settings, KEY_ENTER());
+    assert!(handled, "Enter is a handled key");
     assert_eq!(
-        config.tui.bar_style, before,
-        "a rejected style must not touch the config"
+        screen.edit_field.as_deref(),
+        Some(row.key),
+        "Enter on a Number row must open the editor on that row"
     );
+}
+
+/// Enter on a `settings.json` row must reach the App's LIVE settings, not
+/// just the row's own copy.
+///
+/// (iter-2452, red-team blocker R1/R2) The one-seam toggle writes into
+/// `apply_and_save`, whose settings.json arms used to set only the `settings`
+/// argument and the screen's field. `save_sync()` persists
+/// `self.settings_snapshot` and the caller re-installs it, so those rows flipped
+/// on screen while the header kept the old value and a restart reverted them.
+/// The pre-existing `toggling_show_current_directory_in_settings_reaches_the_app_live`
+/// covers the App side; this pins the panel's own read-back.
+#[test]
+fn a_settings_json_row_survives_a_reopen() {
+    let mut screen = SettingsScreen::new();
+    let config = AppConfig::default();
+    screen.open(config.agent.context_window, &config);
+
+    let row = all_entries(&screen)
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind, SettingKind::Bool) && entry.store == SettingStore::SettingsJson
+        })
+        .expect("a settings.json bool row");
+
+    screen.select_tab(row.tab);
+    let visible = screen.visible_entries();
+    screen.selected_idx = visible
+        .iter()
+        .position(|entry| entry.key == row.key)
+        .expect("the row is on its own tab");
+    let before = row.value.clone();
+
+    let mut config = AppConfig::default();
+    super::keys::toggle_or_cycle_current(&mut screen, &mut config);
+
+    let after = all_entries(&screen)
+        .into_iter()
+        .find(|entry| entry.key == row.key)
+        .map(|entry| entry.value)
+        .expect("the row is still listed");
+    assert_ne!(
+        before, after,
+        "Enter on {} did not change the value the panel reads back",
+        row.key
+    );
+    // And the SNAPSHOT must hold it — that is the value a reopen reads and
+    // `save_sync()` persists, and it was the one left stale before iter-2452.
+    //
+    // The row is asserted by KEY, not by position: `.find()` over the
+    // settings.json bools returns `reduce_motion`, so asserting on
+    // `show_working_dir()` would fail for a correct implementation — which is
+    // exactly what the first version of this guard did.
+    let in_snapshot = match row.key {
+        "reduce_motion" => screen.settings_snapshot.reduce_motion.to_string(),
+        "show_cwd" => screen.settings_snapshot.show_working_dir().to_string(),
+        "show_git_branch" => screen.settings_snapshot.show_branch().to_string(),
+        other => panic!("this guard needs a mapping for the row it picked: {other}"),
+    };
     assert_eq!(
-        crate::tui::status_line::style::style(),
-        SeparatorStyle::Dot,
-        "and must not touch the live bar"
-    );
-    assert!(
-        screen.pending_changes.is_empty(),
-        "a failed apply is consumed, so it cannot be retried forever"
+        in_snapshot, after,
+        "the snapshot must hold the toggled value of {}: it is what a reopen and \
+         save_sync() persist, and it was the field the bug left behind",
+        row.key
     );
 }

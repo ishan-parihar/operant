@@ -232,12 +232,24 @@ impl OpenAIClient {
     }
 
     /// Create a client from an existing HTTP client handle.
-    pub(crate) fn from_shared_http_client(config: ClientConfig, http_client: Client) -> Self {
-        let rate_limiter = RateLimiter::new(
-            config.rate_limit.bucket_capacity,
-            config.rate_limit.bucket_refill_rate,
-        );
-
+    /// Build a client that shares ANOTHER client's rate limiter.
+    ///
+    /// (iter-2461, F9) The previous constructor, `from_shared_http_client`, shared
+    /// the HTTP client and NOT the token bucket: it constructed a fresh `RateLimiter` with its own
+    /// `remaining: capacity`. A delegated child gets one of these per worker, so N
+    /// workers enforced N INDEPENDENT copies of `[client.rate_limit]` — the
+    /// operator configured a global ceiling and got N times it, with every
+    /// individual slot correctly under its own share. Nothing in a single client's
+    /// behaviour reveals the multiplication; only the aggregate does.
+    ///
+    /// `RateLimiter` is already `Clone` over an `Arc<Mutex<HashMap<..>>>`, so
+    /// sharing it is exactly one clone of the handle and the buckets are genuinely
+    /// the same ones. The HTTP client is shared the same way it always was.
+    pub(crate) fn from_shared_http_client_and_limiter(
+        config: ClientConfig,
+        http_client: Client,
+        rate_limiter: RateLimiter,
+    ) -> Self {
         Self {
             stream_http_client: stream_http_client(&config),
             config,
@@ -246,6 +258,12 @@ impl OpenAIClient {
             api_key_override: Arc::new(RwLock::new(None)),
             base_url_override: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// This client's rate limiter, so children can be built against the SAME
+    /// buckets rather than a fresh set each.
+    pub(crate) fn rate_limiter(&self) -> &RateLimiter {
+        &self.rate_limiter
     }
 
     /// Swap the runtime API key (credential-pool rotation).

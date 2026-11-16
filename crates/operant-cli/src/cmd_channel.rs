@@ -613,7 +613,27 @@ fn collect_changes(
                 prefix.push_str(key);
                 match before.get(key) {
                     Some(previous) => collect_changes(previous, value, prefix, out),
-                    // A key the old config did not carry is still a change.
+                    // A key the old config did not carry is still a change —
+                    // but an EMPTY table is not. `new["gateway"]` on a config
+                    // with no `[gateway]` auto-creates `gateway = {}`, and a
+                    // table holding no leaves writes nothing. Pushing it would
+                    // emit a `gateway = {}` header into a config that never
+                    // had the section. Found by the test below failing on
+                    // exactly this shape (2026-11-16).
+                    None if value.is_table() && value.as_table().is_some_and(|t| t.is_empty()) => {}
+                    // A table the old config did not carry AT ALL is descended
+                    // into, not emitted whole: `[gateway] telegram_enabled`
+                    // has to reach the writer as the dotted leaf the surgical
+                    // writer can set, not as a `gateway` table blob that would
+                    // replace every other key in that section.
+                    None if value.is_table() => {
+                        collect_changes(
+                            &toml::Value::Table(toml::value::Table::new()),
+                            value,
+                            prefix,
+                            out,
+                        );
+                    }
                     None => out.push((prefix.clone(), value.clone())),
                 }
                 prefix.truncate(base);
@@ -812,15 +832,58 @@ mod tests {
     fn a_channel_change_writes_a_leaf_the_file_never_had() {
         let old: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("old");
         let mut new: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("new");
-        new["gateway"]
-            .as_table_mut()
-            .expect("table")
-            .insert("telegram_enabled".to_string(), toml::Value::Boolean(true));
+        // Indexing a MISSING key yields `Value::None` rather than creating a
+        // table, so the section is inserted explicitly — which is also the
+        // shape a real first-time channel enable produces.
+        let mut gateway = toml::value::Table::new();
+        gateway.insert("telegram_enabled".to_string(), toml::Value::Boolean(true));
+        new.as_table_mut()
+            .expect("root table")
+            .insert("gateway".to_string(), toml::Value::Table(gateway));
 
         let changes = changed_leaves(&old, &new);
 
         assert_eq!(changes.len(), 1, "one leaf changed: {changes:?}");
         assert_eq!(changes[0].0, "gateway.telegram_enabled");
+    }
+
+    /// A section the file never had at all must descend to its LEAVES.
+    ///
+    /// Emitting `gateway` as a table blob instead would make the surgical
+    /// writer set the whole `[gateway]` table, replacing every other key in
+    /// it — the exact class of destruction the diff was introduced to stop.
+    /// This is the live shape: `channel add telegram` on a config with no
+    /// `[gateway]` section. Found 2026-11-16 by the failing test that emitted
+    /// `gateway` where `gateway.telegram_enabled` was required.
+    #[test]
+    fn a_new_section_descends_to_its_leaves() {
+        let old: toml::Value = toml::from_str("[agent]\nmodel = \"a\"\n").expect("old");
+        let mut gateway = toml::value::Table::new();
+        gateway.insert("telegram_enabled".to_string(), toml::Value::Boolean(true));
+        gateway.insert(
+            "telegram_token".to_string(),
+            toml::Value::String("111:aaa".to_string()),
+        );
+        let mut new = toml::from_str::<toml::Value>("[agent]\nmodel = \"a\"\n").expect("new");
+        new.as_table_mut()
+            .expect("root")
+            .insert("gateway".to_string(), toml::Value::Table(gateway));
+
+        let changes = changed_leaves(&old, &new);
+
+        assert_eq!(
+            changes.len(),
+            2,
+            "each leaf is its own dotted write: {changes:?}"
+        );
+        assert!(changes.iter().any(|(k, _)| k == "gateway.telegram_enabled"));
+        assert!(changes.iter().any(|(k, _)| k == "gateway.telegram_token"));
+        assert!(
+            changes
+                .iter()
+                .all(|(k, _)| !k.chars().any(|c| c.is_whitespace())),
+            "no key may be a table blob: {changes:?}"
+        );
     }
 
     /// A boolean has to reach the writer as the TEXT `true`. Serializing the

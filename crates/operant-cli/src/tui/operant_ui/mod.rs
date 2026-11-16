@@ -3172,19 +3172,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     if let Some(capture) = &mut debug_capture {
         capture.render_order.push("draw_status".to_string());
     }
-    // (plan 2026-11-14 U7, audit fix) The bar's fill belongs to a status ROW.
-    // When the transcript is collapsed -- a terminal-style clear, or a
-    // full-screen side panel that replaces the messages area -- the status rect
-    // lands on a row the OVERLAY owns, and filling it paints a content row.
-    //
-    // This reuses the exact condition the layout branch above already keys on,
-    // rather than a proxy for it. Two proxies were tried and both were wrong:
-    // `area.y > 0` fixed the clear cases (rect at y == 0) but not the
-    // full-screen-panel ones (rect at y == 13, over an overlay row), and
-    // `chunks[0].height > 0` was wrong because the messages chunk keeps its
-    // height under a full-screen panel.
-    let status_row_is_real = !terminal_clear_collapsed && !side_panel_fullscreen;
-    input_ui::draw_status(frame, app, chunks[2], pending_count, status_row_is_real);
+    // The status row is transparent and only visible when it carries a tip or
+    // the composer affordance; the `/bar` retraction removed the fill and its
+    // gate with it.
+    input_ui::draw_status(frame, app, chunks[2], pending_count);
     if notification_height > 0 {
         input_ui::draw_notification(frame, app, chunks[3]);
     }

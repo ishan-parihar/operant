@@ -780,6 +780,18 @@ pub struct BehaviorSettings {
     /// cannot be set is not a kill switch, it is documentation.
     #[serde(default = "default_true")]
     pub show_turn_attribution: bool,
+    /// Whether core's cross-iteration repetition circuit breaker (an identical
+    /// tool-call streak, R35) and its warning nudge are active.
+    ///
+    /// Reachable from `operant.toml` as `[agent] loop_detection_enabled`.
+    /// (iter-2462) `AgentConfig::loop_detection_enabled` documented itself as
+    /// "threaded from settings" while `AgentConfig::from(&BehaviorSettings)`
+    /// filled it with a literal `true` — the identical defect iter-1631 fixed for
+    /// `show_turn_attribution` directly above, left in place next to the comment
+    /// describing that fix. A flag that cannot be set is not a kill switch, it is
+    /// documentation. Default ON, so an existing config behaves as before.
+    #[serde(default = "default_true")]
+    pub loop_detection_enabled: bool,
     pub tool_progress: ToolProgressMode,
     /// Accepted but NOT ENFORCED (RT-263): the reset policy no code path
     /// reads — nothing resets a conversation when the system prompt or the
@@ -1259,6 +1271,7 @@ impl Default for BehaviorSettings {
             show_reasoning: true,
             max_trajectories: 0,
             show_turn_attribution: true,
+            loop_detection_enabled: true,
             reasoning_effort: String::new(),
             reasoning_effort_param: ReasoningEffortParam::Auto,
             tool_progress: ToolProgressMode::Auto,
@@ -1509,25 +1522,6 @@ pub struct TuiSettings {
     /// look because the role palette already defaults to it.
     #[serde(default)]
     pub colors: std::collections::BTreeMap<String, String>,
-    /// Which glyph draws the boundary between two status-line segments
-    /// (plan 2026-11-15 U11). One of the `SeparatorStyle::key()` names:
-    /// `dot` (the default, and the historical look), `powerline`,
-    /// `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`.
-    ///
-    /// An unknown value warns at startup and falls back to `dot` rather than
-    /// to a style that renders nothing — see
-    /// `tui::status_line::style::SeparatorStyle::parse`, which returns the
-    /// style plus whether the key was recognised, for why that is NOT OMP's
-    /// `powerline-thin` fallback.
-    ///
-    /// The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1);
-    /// without one the terminal draws tofu. `ascii` exists for that case.
-    #[serde(default = "default_bar_style")]
-    pub bar_style: String,
-}
-
-fn default_bar_style() -> String {
-    "dot".to_string()
 }
 
 fn default_word_completion() -> String {
@@ -1567,7 +1561,6 @@ impl Default for TuiSettings {
             model_favorites: Vec::new(),
             model_default: None,
             colors: std::collections::BTreeMap::new(),
-            bar_style: default_bar_style(),
         }
     }
 }
@@ -4362,6 +4355,57 @@ mod rt418_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// iter-2462: the loop-detection kill switch is REACHABLE.
+    ///
+    /// The defect: `AgentConfig::from(&BehaviorSettings)` filled
+    /// `loop_detection_enabled` with a literal `true` while the field's own doc
+    /// claimed facades thread the operator's switch — the identical bug iter-1631
+    /// fixed for `show_turn_attribution`, one line above it, left sitting next to
+    /// the comment describing that fix. Every construction site set true, so no
+    /// operator could turn the breaker off.
+    ///
+    /// This asserts the property that matters: the value comes from the settings,
+    /// in BOTH directions, and defaults to ON so existing configs are unchanged.
+    #[test]
+    fn loop_detection_is_threaded_from_settings_not_hardcoded() {
+        // The default must stay ON: an operator who never set the key keeps the
+        // behaviour they had.
+        assert!(
+            BehaviorSettings::default().loop_detection_enabled,
+            "loop detection must default ON"
+        );
+
+        // OFF must reach the constructed config.
+        let off = BehaviorSettings {
+            loop_detection_enabled: false,
+            ..BehaviorSettings::default()
+        };
+        assert!(
+            !crate::agent::AgentConfig::from(&off).loop_detection_enabled,
+            "a false setting must reach AgentConfig, or the switch is decorative"
+        );
+
+        // ON must reach it too — the assertion above would also pass if the field
+        // were hardwired false.
+        let on = BehaviorSettings {
+            loop_detection_enabled: true,
+            ..BehaviorSettings::default()
+        };
+        assert!(
+            crate::agent::AgentConfig::from(&on).loop_detection_enabled,
+            "a true setting must reach AgentConfig"
+        );
+
+        // And it must survive a TOML round-trip, which is the path an operator's
+        // operant.toml actually takes.
+        let parsed: BehaviorSettings =
+            toml::from_str("loop_detection_enabled = false\n").expect("parses");
+        assert!(
+            !parsed.loop_detection_enabled,
+            "the key must be readable from operant.toml"
+        );
+    }
 
     /// The slot reader treats a blank model as absent, because the loader
     /// filters empty values and so must every reader of the same slot.

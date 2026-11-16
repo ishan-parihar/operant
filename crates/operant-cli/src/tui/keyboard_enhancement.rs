@@ -88,37 +88,72 @@ pub fn enable_keyboard_enhancement() -> bool {
         tracing::info!("keyboard enhancement push skipped: teardown already started");
         return false;
     }
-    let result = enable_to(&mut std::io::stdout()).is_ok();
-    if result {
-        // Set while still holding the lock: a concurrent teardown must not
-        // observe the write without the ownership flag.
-        KITTY_PUSH_ACTIVE.store(true, Ordering::Release);
-    }
-    result
+    enable_to(&mut std::io::stdout()).is_ok()
 }
 
 /// Writer-backed push, so the test suite can assert the exact escape bytes
 /// without writing to the developer's terminal.
-fn enable_to(writer: &mut impl Write) -> std::io::Result<()> {
+pub(crate) fn enable_to(writer: &mut impl Write) -> std::io::Result<()> {
     if inside_tmux() {
         // tmux's own modifyOtherKeys/extended-keys mode — jcode's exact
         // sequence. Harmless no-op when tmux ignores it.
         writer.write_all(b"\x1b[>4;2m")?;
     }
-    crossterm::execute!(writer, PushKeyboardEnhancementFlags(enhancement_flags()))
+    crossterm::execute!(writer, PushKeyboardEnhancementFlags(enhancement_flags()))?;
+    // Record ownership HERE, not in the wrapper: the flag means "a push this
+    // process must pop", and a writer-backed push creates exactly that
+    // obligation. Leaving the store in `enable_keyboard_enhancement` meant the
+    // flag and the bytes could disagree, which is what made the first version of
+    // the iter-2445 guard meaningless — it pushed, saw no flag, and passed.
+    //
+    // Set while the caller holds STATE_LOCK: a concurrent teardown must not
+    // observe the write without the ownership flag.
+    KITTY_PUSH_ACTIVE.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// Whether this process currently holds a pushed kitty entry.
+///
+/// Exists so a test can assert the OWNERSHIP TRANSFER around a suspend: the bug
+/// fixed at iter-2445 was a suspend that handed the terminal to a child without
+/// popping this, and the only observable difference is this flag — the escape
+/// bytes go to whatever writer the caller passed. Production has no reader: it
+/// always knows whether it pushed, because it just called the push.
+#[cfg(test)]
+pub(crate) fn keyboard_enhancement_pushed() -> bool {
+    let _guard = STATE_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    KITTY_PUSH_ACTIVE.load(Ordering::Acquire)
 }
 
 /// Pop the entry this process pushed, if it is still unbalanced. Returns
 /// whether a pop was performed. Must be idempotent: the panic hook, the
 /// graceful teardown, and a signal cleanup may all race to call this.
 pub fn disable_keyboard_enhancement() -> bool {
+    disable_to_writer(&mut std::io::stdout())
+}
+
+/// The same pop, written to a caller-supplied writer.
+///
+/// (iter-2445) The suspend path hands the terminal to a CHILD, and the sequence
+/// that undoes the kitty entry has to go to the same place as the rest of the
+/// handover. Writing it to a hard-coded stdout made `suspend_terminal_for_child`
+// half-pure: a test could assert the alt-screen bytes it was handed and still
+/// get the pop written to the real terminal — which is how the first version of
+/// the iter-2445 guard "passed" while leaking `ESC[<1u` into the test output.
+///
+/// Ownership-gated on the same flag, so a teardown that lost the race, a push
+/// that failed, and a second suspend all no-op rather than popping a stranger's
+/// entry.
+pub(crate) fn disable_to_writer(writer: &mut impl Write) -> bool {
     let _guard = STATE_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     if !KITTY_PUSH_ACTIVE.swap(false, Ordering::AcqRel) {
         return false;
     }
-    let _ = disable_to(&mut std::io::stdout());
+    let _ = disable_to(writer);
     true
 }
 

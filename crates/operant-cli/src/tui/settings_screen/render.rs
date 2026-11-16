@@ -41,6 +41,8 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     }
 
     // Split into header + search + spacer + content + description + footer
+    // The tab strip takes the row the search box used to leave empty. Seven
+    // rows instead of six; `layout[2]` was a spacer and is now the strip.
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -55,6 +57,7 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 
     let header_area = layout[0];
     let search_area = layout[1];
+    let tabs_area = layout[2];
     let content_area = layout[3];
     let description_area = layout[4];
     let footer_area = layout[5];
@@ -75,50 +78,33 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
         search_area,
     );
 
+    render_tab_strip(frame, screen, tabs_area);
+
     // Content
     render_settings_list(frame, screen, content_area);
 
-    // Description of selected entry
-    let all = all_entries(screen);
-    let filtered: Vec<_> = all
-        .iter()
-        .filter(|e| {
-            e.label
-                .to_lowercase()
-                .contains(&screen.search_query.to_lowercase())
-        })
-        .collect();
+    // Description of selected entry. The ONE filter (plan 2026-11-16 S2): tab,
+    // then query — the same list the painter draws and the keyboard counts.
+    let filtered = screen.visible_entries();
 
-    let desc_text = if let Some(entry) = filtered.get(screen.selected_idx) {
-        // For Output Style, show current selection and all available options with descriptions
-        if entry.key == "output_style" {
-            let mut lines = vec![entry.description.to_string(), String::new()];
-
-            let all_styles = builtin_styles();
-            let current_style_name = if screen.output_style.is_empty() {
-                "default"
-            } else {
-                &screen.output_style
-            };
-            if let Some(current_style) = find_style(&all_styles, current_style_name) {
-                lines.push(format!(
-                    "Current: {} — {}",
-                    current_style.label, current_style.description
-                ));
-                lines.push(String::new());
-            }
-
-            lines.push("Available:".to_string());
-            for style in builtin_styles() {
-                lines.push(format!("  {} — {}", style.name, style.description));
-            }
-            lines.join("\n")
-        } else {
-            entry.description.to_string()
-        }
+    // (iter-2452) The `output_style` branch that used to live here described a
+    // row that no longer exists, and pulled a module-level import in with it.
+    // It is deleted rather than left to read as live.
+    let desc_text = filtered
+        .get(screen.selected_idx)
+        .map(|entry| entry.description.to_string())
+        .unwrap_or_default();
+    // (plan 2026-11-16 S3) A risk note renders ABOVE the description, in warning
+    // styling, and only for a row that carries one. OMP reserves this for
+    // settings that can get the operator rate-limited or banned — not for merely
+    // advanced options (`settings-defs.ts:117-121`).
+    let desc_text = if let Some(warning) = filtered.get(screen.selected_idx).and_then(|e| e.warning)
+    {
+        format!("⚠ {warning}\n\n{desc_text}")
     } else {
-        String::new()
+        desc_text
     };
+
     let desc_para = Paragraph::new(desc_text)
         .style(Style::default().fg(theme::dim_color()))
         .alignment(Alignment::Left)
@@ -177,6 +163,13 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             ),
             Span::raw("toggle/edit  "),
             Span::styled(
+                " [ ] ",
+                Style::default()
+                    .fg(theme_colors::accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("tab  "),
+            Span::styled(
                 " Esc ",
                 Style::default()
                     .fg(theme_colors::warning())
@@ -195,31 +188,99 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     frame.render_widget(footer_para, footer_area);
 }
 
-fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
-    let all = all_entries(screen);
+/// The tab strip: every tab, the current one highlighted, the rest dimmed.
+///
+/// (plan 2026-11-16 S2) OMP renders a labelled icon per tab and keeps the order
+/// explicit (`SETTING_TABS`, `settings-defs.ts:22-32`).
+///
+/// There is deliberately NO per-tab match count. The first version of this comment
+/// claimed one ("type port and see Gateway 3") and no code computed it — a comment
+/// describing an affordance that does not exist is worse than no comment, because
+/// the next reader trusts it. The search is tab-scoped and the empty state says so.
+fn render_tab_strip(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    for (index, tab) in SettingsTab::ALL.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(theme::dim_color())));
+        }
+        let is_current = *tab == screen.selected_tab;
+        let style = if is_current {
+            Style::default()
+                .fg(theme_colors::accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme_colors::muted())
+        };
+        spans.push(Span::styled(tab.label(), style));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme_colors::panel_bg())),
+        area,
+    );
+}
 
-    // Filter entries by search query
-    let filtered: Vec<_> = all
-        .iter()
-        .filter(|e| {
-            e.label
-                .to_lowercase()
-                .contains(&screen.search_query.to_lowercase())
-        })
-        .collect();
+fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
+    // The ONE filter. The list, the description pane and both keyboard helpers
+    // all read this, so the marker, the count and the paint cannot disagree.
+    let filtered = screen.visible_entries();
 
     if filtered.is_empty() {
-        let para = Paragraph::new("No settings match your search.")
-            .style(Style::default().fg(theme::dim_color()));
+        // The filter is TAB-SCOPED, so the message must say so. A query typed on
+        // Appearance that matches a Gateway row is a zero-result search, and the
+        // honest sentence names the scope rather than blaming the query.
+        let empty = if screen.search_query.is_empty() {
+            "No settings on this tab."
+        } else {
+            "No settings on this tab match your search."
+        };
+        let para = Paragraph::new(empty).style(Style::default().fg(theme::dim_color()));
         frame.render_widget(para, area);
         return;
     }
 
-    // Build lines
+    // Build lines. `lines` and `visible_rows` are declared at the loop below,
+    // beside the heading logic that shares them.
+
+    // (plan 2026-11-16 S2) Heading rows. OMP orders groups explicitly
+    // (`TAB_GROUPS`, `settings-defs.ts:36-97`) and renders a heading between
+    // them; a heading occupies a LINE but is NOT a row, so it must not advance
+    // `selected_idx` — the keyboard counts rows, not lines. Emitting it here,
+    // in the same loop that builds the rows, is what keeps the two from
+    // drifting: a heading appended after the window would not scroll with its
+    // own group.
     let mut lines: Vec<Line> = Vec::new();
-    let visible_rows = area.height as usize;
+    // (iter-2452, red-team T1) Headings already EMITTED, by name. The grouping is
+    // derived from key content while the row order is the registry's, so one
+    // tab's groups interleave and a transition-only check printed the same
+    // heading several times — "Limits" six times down the Tools tab, which is
+    // noise the heading was added to remove, and six real lines spent by the
+    // scroll window on duplicate bands.
+    let mut emitted_groups: Vec<&str> = Vec::new();
+    // (plan 2026-11-16 S2) WHICH ROW EACH LINE BELONGS TO. A heading takes a
+    // line but is not a row, so the selection index counts rows and the window
+    // counts lines. Deriving the scroll from `selected_idx` alone — as this did
+    // before headings existed — walks the selection past the last painted line
+    // the moment any group heading is present, which is exactly iter-1917 with
+    // a new cause. One list, one space: the window is computed in LINE space.
+    let mut line_row: Vec<Option<usize>> = Vec::new();
+    let mut current_group: Option<&str> = None;
 
     for (i, entry) in filtered.iter().enumerate() {
+        if entry.group != current_group {
+            current_group = entry.group;
+            if let Some(group) = entry.group
+                && !emitted_groups.contains(&group)
+            {
+                emitted_groups.push(group);
+                lines.push(Line::from(Span::styled(
+                    format!("  {group}"),
+                    Style::default()
+                        .fg(theme_colors::muted())
+                        .add_modifier(Modifier::BOLD),
+                )));
+                line_row.push(None);
+            }
+        }
         let is_selected = i == screen.selected_idx;
         let marker = if is_selected { "►" } else { " " };
 
@@ -254,6 +315,7 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
             Span::styled(value_str, row_style),
         ]);
         lines.push(line);
+        line_row.push(Some(i));
     }
 
     // (iter-1917) THE RENDER OWNS THE WINDOW. The keyboard used to track it
@@ -265,11 +327,20 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
     // vanished, the row could not be seen, read or toggled, and the
     // description pane kept describing a row nobody could reach. Three of the
     // eight rows were unreachable that way. One window, measured here.
-    let window = visible_rows.max(1);
-    let scroll = if screen.selected_idx < window {
+    // Find the LINE the selection is on, not the row. Headings occupy lines
+    // without occupying row indices, so `selected_idx` is an index into a
+    // different space than `lines` — comparing them directly is what let the
+    // marker scroll off the bottom on the first tab that had a heading.
+    let window = area.height as usize;
+    let window = window.max(1);
+    let selected_line = line_row
+        .iter()
+        .position(|row| *row == Some(screen.selected_idx))
+        .unwrap_or(0);
+    let scroll = if selected_line < window {
         0
     } else {
-        screen.selected_idx + 1 - window
+        selected_line + 1 - window
     };
     let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(window).collect();
 

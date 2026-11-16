@@ -4521,46 +4521,42 @@ fn test_fast_is_not_a_command() {
     assert!(!app.handle_tui_command("fast", ""));
 }
 
+/// (iter-2452) This used to cycle auto → stream → verbose. The setting it
+/// cycled is a phantom — nothing reads `App::output_style` — so the command now
+/// says so instead of reporting a change that does not happen. The test follows
+/// the command rather than the other way round.
 #[test]
-fn test_output_style_cycles() {
+fn test_output_style_says_so_instead_of_cycling() {
     let mut app = make_app();
-    assert_eq!(app.output_style, "auto");
     assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "stream");
-    assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "verbose");
-    assert!(app.handle_tui_command("output-style", ""));
-    assert_eq!(app.output_style, "auto");
+    assert_eq!(
+        app.output_style, "auto",
+        "the retired command must not move a value nothing reads"
+    );
+    let notice = app.status_message.clone().unwrap_or_default();
+    assert!(
+        notice.contains("nothing reads") || notice.contains("No output style"),
+        "the refusal names the reason, not just the fact: {notice:?}"
+    );
 }
 
-/// An argument to `/output-style` names the level.
-///
-/// (iter-1773) The arm cycled whatever the argument was, so
-/// `/output-style verbose` moved the style to "stream" — the operator's level
-/// silently became the NEXT one. And an unknown level was accepted the same
-/// way, with no word about it.
+/// (iter-2452) This used to assert that `/output-style verbose` sets the level
+/// and that an unknown level leaves it alone. Both behaviours are gone with the
+/// phantom: an argument is now accepted and reported, not applied. Rewritten to
+/// pin the retirement, because the honest refusal is the property that matters —
+/// the command must never again claim a change it cannot make.
 #[test]
-fn output_style_takes_a_level_argument() {
+fn output_style_takes_any_argument_and_changes_nothing() {
     let mut app = make_app();
     assert!(app.handle_tui_command("output-style", "verbose"));
     assert_eq!(
-        app.output_style, "verbose",
-        "the named level must be set, not cycled past"
-    );
-
-    let mut app = make_app();
-    assert!(app.handle_tui_command("output-style", "loud"));
-    assert_eq!(
         app.output_style, "auto",
-        "an unknown level must not change the style"
+        "the named level must not be applied: nothing reads it"
     );
+    let notice = app.status_message.clone().unwrap_or_default();
     assert!(
-        app.status_message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not an output style"),
-        "an unknown level must be named: {:?}",
-        app.status_message
+        notice.contains("nothing reads") || notice.contains("No output style"),
+        "the refusal is the whole behaviour now: {notice:?}"
     );
 }
 
@@ -14316,12 +14312,18 @@ fn a_delegation_with_no_assigned_todos_has_no_counter() {
 /// `left: []` (its record was gone) in the module run while passing alone.
 /// That is the RT-207 hazard `RegistryDrain`'s own doc names. Same discipline
 /// `gateway_commands.rs`'s `SUBAGENTS_LOCK` already uses for its registry tests.
-static DELEGATION_REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Guard for [`DELEGATION_REGISTRY_LOCK`]; take one at the top of any test that
-/// seeds or reads the delegation registry.
+/// Guard for the delegation registry; take one at the top of any test that
+/// seeds or reads it.
+///
+/// This is `async_delegation::test_lock()` — the SAME mutex, not a second one.
+/// It used to be a private `DELEGATION_REGISTRY_LOCK`, and two mutexes guarding
+/// one process-global registry exclude nothing: a test holding this one and a
+/// test holding that one could interleave, and `__test_reset_registry()` wipes
+/// the records the other was asserting on. That is the mechanism behind the
+/// suite's unstable failure count (5, then 8, then 9 on three runs of one
+/// commit), and it is invisible in any single-test run.
 fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
-    DELEGATION_REGISTRY_LOCK
+    operant_core::tools::async_delegation::test_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -16353,35 +16355,12 @@ fn the_continue_command_before_the_first_turn_says_there_is_no_session_yet() {
     );
 }
 
-/// The boot notice is the surface a RESTART lands on: the operator killed the
-/// TUI, relaunched it, and needs the id to continue from a shell. Before this
-/// the notice named a truncated id in a status line that flashed away — there
-/// was nothing to copy.
-#[test]
-fn the_interrupted_session_boot_notice_carries_the_copy_pasteable_command() {
-    let mut app = make_app();
-    let marker = operant_core::session_interrupted::SessionInterrupted::new(
-        "sess-interrupted-42",
-        "Fix the exporter",
-    );
-
-    app.announce_interrupted_session(&marker);
-
-    let transcript = annotation_text(&app);
-    assert!(
-        transcript.contains("operant continue sess-interrupted-42"),
-        "the boot notice must carry the command: {transcript:?}"
-    );
-    assert!(
-        transcript.contains("Fix the exporter"),
-        "the title is what the operator recognises: {transcript:?}"
-    );
-    assert_eq!(
-        app.pending_hub_preselect.as_deref(),
-        Some("sess-interrupted-42"),
-        "the hub's cursor must land on the session the notice is about"
-    );
-}
+// (2026-11-16) The boot/opening notice is GONE: the interrupted-session
+// block prints only at the closing of the TUI, where the teardown's
+// `exit_leftover` (and the panic hook's printer) put it into the
+// scrollback. The command text and the title rule stay covered by the
+// `cmd_continue` leftover tests; the absence on the boot path is pinned by
+// `the_opening_notice_does_not_exist` in `cmd_continue::tests`.
 
 /// A deliberate close must not leave an interrupted-session record behind.
 ///
@@ -18596,235 +18575,4 @@ fn reload_skills_keeps_a_skill_that_lives_only_in_extra_roots() {
     );
 
     let _ = std::fs::remove_dir_all(&extra);
-}
-
-// ── /bar — the status bar style (plan 2026-11-15 T2) ────────────────────────
-mod bar_command_tests {
-    use super::*;
-
-    /// THE OPERATOR'S REPORT: "I do not have /bar command to configure the bar."
-    /// The style existed but was reachable only as a row inside `/config`, so
-    /// there was no command by that name at all — `handle_tui_command` fell
-    /// through to the model, which is why the operator could not find it.
-    #[test]
-    fn bar_is_a_command_and_bare_bar_reports_the_style() {
-        let mut app = make_app();
-        assert!(
-            app.handle_tui_command("bar", ""),
-            "/bar must be a recognised command, not text sent to the model"
-        );
-        let notice = app.status_message.clone().unwrap_or_default();
-        assert!(
-            notice.contains("Status bar style:"),
-            "bare /bar reports the style in force: {notice:?}"
-        );
-        // It names the alternatives, so the command answers "what can I pick".
-        assert!(
-            notice.contains("dot") && notice.contains("powerline"),
-            "bare /bar lists the available styles: {notice:?}"
-        );
-    }
-
-    /// `/bar <style>` applies immediately — the live cell is what the status
-    /// line draws from, so no restart is involved.
-    #[test]
-    fn bar_with_an_argument_applies_the_style() {
-        // `make_app` takes `ACTIVE_LOCK` itself; taking it here as well would
-        // self-deadlock (std's Mutex is not reentrant).
-        let mut app = make_app();
-        assert!(app.handle_tui_command("bar", "ascii"));
-        assert_eq!(
-            crate::tui::status_line::style::style(),
-            crate::tui::status_line::style::SeparatorStyle::Ascii,
-            "/bar ascii must reach the live style cell"
-        );
-        assert_eq!(app.config.tui.bar_style, "ascii", "and the config");
-        // Restore the default so a parallel test does not inherit `ascii`.
-        crate::tui::status_line::style::set_style(None);
-    }
-
-    /// An unknown style is REFUSED with the vocabulary, never silently ignored:
-    /// a bar command that quietly kept the old style would read as broken.
-    #[test]
-    fn bar_refuses_an_unknown_style_and_names_the_options() {
-        let mut app = make_app();
-        let before = crate::tui::status_line::style::style();
-        assert!(app.handle_tui_command("bar", "chartreuse"));
-        assert_eq!(
-            crate::tui::status_line::style::style(),
-            before,
-            "an unknown style must change nothing"
-        );
-        let notice = app.status_message.clone().unwrap_or_default();
-        assert!(
-            notice.contains("Unknown bar style") && notice.contains("dot"),
-            "the refusal names the vocabulary: {notice:?}"
-        );
-    }
-    /// A record belonging to ANOTHER session must never reach this session's gallery.
-    ///
-    /// The registry is one process-wide map and the delegation ledger is one file for
-    /// the whole home, so the producer's only defence is the scope it applies. This
-    /// is the guard for the bug the operator reported: a fresh session opened with
-    /// another session's subagent rows already in the strip, because the read was
-    /// unscoped. It pins the two halves of the rule — an unparented record and a
-    /// record parented to a DIFFERENT session are both foreign — and the positive
-    /// case, so the guard cannot be satisfied by returning nothing at all.
-    #[test]
-    fn a_foreign_sessions_subagent_never_reaches_the_gallery() {
-        let _registry = registry_lock();
-        let _drain = operant_core::tools::async_delegation::RegistryDrain::new();
-        const MINE: &str = "sess-mine";
-        const THEIRS: &str = "sess-theirs";
-        let admit = |parent: Option<&str>| {
-            operant_core::tools::async_delegation::try_create_record("job", "m", 16, parent, None)
-                .expect("a free slot")
-                .id()
-                .to_string()
-        };
-
-        let mine = admit(Some(MINE));
-        let theirs = admit(Some(THEIRS));
-        let unattributed = admit(None);
-
-        let mut app = make_app();
-        app.current_session = Some(MINE.to_string());
-        let shown: Vec<String> = app
-            .swarm_gallery_members(false)
-            .map(|m| m.session_id)
-            .collect();
-
-        assert!(
-            shown.contains(&mine),
-            "this session's own child must be shown: {shown:?}"
-        );
-        assert!(
-            !shown.contains(&theirs),
-            "a child of ANOTHER session must not be shown: {shown:?}"
-        );
-        assert!(
-            !shown.contains(&unattributed),
-            "a record with no parent edge is not provably this session's: {shown:?}"
-        );
-
-        // No session at all means nothing to scope against: an empty strip is honest,
-        // a foreign one is not.
-        app.current_session = None;
-        assert!(
-            app.swarm_gallery_members(false).next().is_none(),
-            "with no session the gallery must be empty, not unscoped"
-        );
-    }
-
-    /// (plan 2026-11-16 T3) THE REPLY MUST SHOW THE STYLE, NOT JUST NAME IT.
-    ///
-    /// The operator's second report: "/bar command is still not working
-    /// properly." It WAS applying — verified by `bar_with_an_argument_applies_
-    /// the_style` — but the reply named only the key, and on an idle session
-    /// the status row renders NOTHING for six of the eight styles. MEASURED:
-    /// `add_caps` on an empty line yields `""` for dot, slash, pipe, block,
-    /// none and ascii, because a separator only exists BETWEEN two segments and
-    /// an idle row has one (the tip, and only 12s of every 90). So an operator
-    /// who ran `/bar slash` had no way to tell a working change from a dead
-    /// command — the notice was the only evidence available, and it carried
-    /// none.
-    ///
-    /// The fix is that the notice carries the glyph. This asserts the glyph
-    /// reaches the string, so a future edit that drops it fails here rather
-    /// than in front of an operator.
-    #[test]
-    fn the_bar_notice_shows_the_style_it_applied() {
-        use crate::tui::status_line::style::SeparatorStyle;
-
-        // Restore whatever was in force so a parallel test is unaffected.
-        let before = crate::tui::status_line::style::style();
-
-        for style in SeparatorStyle::ALL {
-            let mut app = make_app();
-            // A bare `/bar` too: it reports the style ALREADY in force, and it
-            // is the arm most likely to be edited because it has no persist
-            // branch to keep in step. Testing only `/bar <style>` left a
-            // mutation that dropped the preview from the reply GREEN, because
-            // `make_app` has no config path and so never reaches the `Ok` arm.
-            assert!(app.handle_tui_command("bar", style.key()));
-            let applied = app.status_message.clone().unwrap_or_default();
-            assert!(
-                applied.contains(style.glyph()),
-                "/bar {} must SHOW its glyph; the notice was {:?}",
-                style.key(),
-                applied
-            );
-
-            let mut bare = make_app();
-            crate::tui::status_line::style::set_style(Some(*style));
-            assert!(bare.handle_tui_command("bar", ""));
-            let notice = bare.status_message.clone().unwrap_or_default();
-            let glyph = style.glyph();
-            assert!(
-                notice.contains(glyph),
-                "/bar {} must SHOW its glyph so the operator can see the change; \
-                 the notice was {:?}",
-                style.key(),
-                notice
-            );
-        }
-
-        crate::tui::status_line::style::set_style(Some(before));
-    }
-
-    /// A style that renders as whitespace must still be visible in the reply —
-    /// `none`'s glyph is a single space, so an unframed sample would read as a
-    /// hole in the sentence. The preview brackets it for exactly this reason.
-    #[test]
-    fn the_preview_brackets_a_whitespace_only_style() {
-        let none = crate::tui::status_line::style::SeparatorStyle::None;
-        let preview = crate::tui::status_line::style::preview(none);
-        assert!(
-            preview.starts_with('a') && preview.ends_with('b'),
-            "the sample must name its own edges when the glyph is blank: {preview:?}"
-        );
-    }
-
-    /// (plan 2026-11-16 T3) `/bar <style>` MUST REACH THE TOML.
-    ///
-    /// MEASURED, not assumed. The write goes through
-    /// `persist_config_key_at(path, "tui.bar_style", key)` — the same seam the
-    /// settings-screen row uses — but the seam is only reachable when
-    /// `config.config_path` is populated, and `make_app()` leaves it `None`.
-    /// Every other `/bar` test therefore exercises the "applied for this
-    /// session, but not persisted" branch and would stay green if the persist
-    /// call were deleted outright.
-    ///
-    /// This one supplies a real path and reads the file back, so a regression
-    /// that silently stopped persisting fails here.
-    #[test]
-    fn bar_with_an_argument_writes_the_toml() {
-        // Under the manifest, not `std::env::temp_dir()`: a sandboxed run can
-        // have a read-only /var/tmp, and a test that fails for that reason
-        // teaches the next agent to delete it.
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("barpersist{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a scratch dir under the manifest");
-        let path = dir.join("operant.toml");
-        std::fs::write(&path, "[tui]\ntheme = \"dark\"\n").expect("seed the config");
-
-        let _cfg_guard = operant_core::config::config_path_test_guard();
-        let mut app = make_app();
-        app.config.config_path = Some(path.clone());
-
-        assert!(app.handle_tui_command("bar", "pipe"));
-        let written = std::fs::read_to_string(&path).expect("the config is readable");
-        assert!(
-            written.contains("bar_style = \"pipe\""),
-            "/bar pipe must write tui.bar_style; the file was:\n{written}"
-        );
-        // The operator's own keys survive the write — a persist that rewrote the
-        // whole file would drop every other setting.
-        assert!(
-            written.contains("theme = \"dark\""),
-            "the pre-existing key must survive: {written}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

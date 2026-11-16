@@ -12,6 +12,10 @@ impl SettingsScreen {
             visible: false,
             search_query: String::new(),
             selected_idx: 0,
+            // The panel opens on the first tab in the strip's own order, not on
+            // `SettingsTab::default()` — there is no default, because a tab
+            // nobody chose is a tab nobody can find their way back to.
+            selected_tab: SettingsTab::ALL[0],
             edit_field: None,
             edit_value: String::new(),
             settings_snapshot: settings_snapshot.clone(),
@@ -19,17 +23,6 @@ impl SettingsScreen {
             apply_error: None,
             persist_warning: None,
             output_style: "default".to_string(),
-            // The live cell, not the config: `tui_app` installs `[tui]
-            // bar_style` before `App::new` builds this screen, so this reads
-            // back what the status line is actually drawing. Reading
-            // `runtime_config()` instead would read `AppConfig::default()` —
-            // nothing in the tree ever loads a real config into it — and the
-            // row would claim `dot` while the bar drew powerline.
-            bar_style: crate::tui::status_line::style::style().key().to_string(),
-            bar_style_options: crate::tui::status_line::style::SeparatorStyle::ALL
-                .iter()
-                .map(|s| s.key())
-                .collect(),
             config_values: std::collections::HashMap::new(),
             reduce_motion: false,
             show_cwd: true,
@@ -89,11 +82,6 @@ impl SettingsScreen {
 
         // Wire real settings from snapshot
         self.apply_settings_from_snapshot();
-        // The bar style is not a `settings.json` key — the TOML owns it and
-        // the status line is its only reader — so the row re-reads the live
-        // cell rather than a snapshot that never had it. That also picks up a
-        // style chosen earlier in this session.
-        self.bar_style = crate::tui::status_line::style::style().key().to_string();
         // Every CONFIG row reads its value from the live runtime config, taken
         // once at open. Reading the file per frame would put a syscall in the
         // render path, and reading it once per open is what makes the panel show
@@ -153,62 +141,15 @@ impl SettingsScreen {
         self.edit_value.clear();
     }
 
-    /// Apply one bar-style value to the live status line, the config and the
-    /// TOML. The ONE writer for this setting, so the cycle row and the edit
-    /// commit cannot disagree about what "applied" means.
-    ///
-    /// An unknown value changes nothing and is reported: a settings row that
-    /// silently fell back to `dot` would leave the operator believing they had
-    /// chosen a style. The live value is set BEFORE the persist is attempted
-    /// and the persist is reported rather than gated, matching
-    /// `context_window`'s reasoning — a config with no file on disk still gets
-    /// the style for this session.
-    pub(super) fn apply_bar_style(
-        &mut self,
-        config: &mut AppConfig,
-        value: &str,
-    ) -> Result<(), String> {
-        let (style, known) = crate::tui::status_line::style::SeparatorStyle::parse(value);
-        if !known {
-            return Err(format!(
-                "Status bar style \"{value}\" - expected one of: {}",
-                crate::tui::status_line::style::SeparatorStyle::ALL
-                    .iter()
-                    .map(|s| s.key())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        config.tui.bar_style = style.key().to_string();
-        self.bar_style = style.key().to_string();
-        crate::tui::status_line::style::set_style(Some(style));
-        let persisted = config.config_path.as_ref().map_or_else(
-            || {
-                Err(operant_core::error::Error::Config(
-                    "the loaded config has no recorded source path".to_string(),
-                ))
-            },
-            |path| operant_core::config::persist_config_key_at(path, "tui.bar_style", style.key()),
-        );
-        if let Err(e) = persisted {
-            self.persist_warning = Some(format!(
-                "Status bar style \"{}\" - applied for this session, but not persisted: {e}",
-                style.key()
-            ));
-        }
-        Ok(())
-    }
-
     /// Apply all pending changes to settings and persist them.
     pub fn apply_and_save(&mut self, config: &mut AppConfig, settings: &mut Settings) {
         // (iter-1948) A new apply supersedes the previous verdict.
         self.apply_error = None;
         self.persist_warning = None;
         let mut unread: Vec<String> = Vec::new();
-        // Cloned so the loop can call a `&mut self` writer (`apply_bar_style`)
-        // without fighting the borrow of `pending_changes`. Same shape as
-        // `theme_colors::apply_role_overrides`, which clones the override list
-        // for the identical reason.
+        // Cloned so the loop below can see its own values without fighting the
+        // borrow of `pending_changes`; the role-overrides writer uses the same
+        // shape.
         let pending: Vec<(String, String)> = self
             .pending_changes
             .iter()
@@ -266,17 +207,6 @@ impl SettingsScreen {
                         Some(value.clone())
                     };
                 }
-                // (plan 2026-11-15 U1) The bar style is a `[tui]` key, not a
-                // `settings.json` one, so it takes the same shape as
-                // `context_window` above: apply live, then report the persist
-                // rather than gate on it — an environment with no config file
-                // still gets the style the operator picked.
-                "tui.bar_style" => {
-                    if let Err(message) = self.apply_bar_style(config, &value) {
-                        unread.push(message);
-                        continue;
-                    }
-                }
                 "fileAutocompleteLimit" => {
                     if let Ok(n) = value.parse::<usize>() {
                         settings.config.file_autocomplete_limit = n;
@@ -288,21 +218,27 @@ impl SettingsScreen {
                 "fileAutocompleteShowHiddenFiles" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.config.file_autocomplete_show_hidden_files = on;
+                    self.settings_snapshot
+                        .config
+                        .file_autocomplete_show_hidden_files = on;
                     self.file_autocomplete_show_hidden_files = on;
                 }
                 "reduce_motion" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.reduce_motion = on;
+                    self.settings_snapshot.reduce_motion = on;
                     self.reduce_motion = on;
                 }
                 "show_cwd" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.show_cwd = Some(on);
+                    self.settings_snapshot.show_cwd = Some(on);
                     self.show_cwd = on;
                 }
                 "show_git_branch" => {
                     let on = matches!(value.as_str(), "true" | "on" | "1" | "yes");
                     settings.show_git_branch = Some(on);
+                    self.settings_snapshot.show_git_branch = Some(on);
                     self.show_git_branch = on;
                 }
                 // Every CONFIG key the panel draws goes through the one write
@@ -420,22 +356,23 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
     // `operant.toml`: they are per-profile UI state that must not leak into a
     // shared config file, so they are declared here rather than read from the
     // generated registry — which describes CONFIG keys only.
-    entries.push(SettingsEntry {
-        key: "output_style",
-        label: "Output style",
-        description: "Controls the verbosity and format of responses.",
-        kind: SettingKind::Enum {
-            options: vec!["default", "concise", "explanatory", "learning"],
-        },
-        value: screen.output_style.clone(),
-        store: SettingStore::SettingsJson,
-    });
+    //
+    // No `output_style` row (plan 2026-11-16 S4). `App::output_style` is
+    // written in three places and read by NOTHING in the workspace — the
+    // similarly named `operant_app/output_style.rs` is an emoji adapter on its
+    // own `EMOJI_ENABLED` atomic — and the panel offered four option labels for
+    // it while `/output-style` cycled three different ones. That is the phantom
+    // surface `live: false` exists to keep out of the panel, and it is the
+    // first entry in the `DEAD` list that now guards it.
     entries.push(SettingsEntry {
         key: "reduce_motion",
         label: "Reduce motion",
         description: "Disable UI animations.",
         kind: SettingKind::Bool,
         value: bool_text(screen.reduce_motion),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -444,6 +381,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Display the current working directory in the footer.",
         kind: SettingKind::Bool,
         value: bool_text(screen.show_cwd),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -452,6 +392,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Display the current git branch in the footer.",
         kind: SettingKind::Bool,
         value: bool_text(screen.show_git_branch),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -460,6 +403,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Max suggestions shown in @ autocomplete (type more to narrow results).",
         kind: SettingKind::Number,
         value: screen.file_autocomplete_limit.clone(),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
     entries.push(SettingsEntry {
@@ -468,24 +414,11 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Include hidden files (.) in @ autocomplete.",
         kind: SettingKind::Bool,
         value: bool_text(screen.file_autocomplete_show_hidden_files),
+        tab: SettingsTab::Appearance,
+        group: Some("Display"),
+        warning: None,
         store: SettingStore::SettingsJson,
     });
-    // (plan 2026-11-15 U1) The options come from `SeparatorStyle::ALL` through
-    // `key()`, never a second literal list.
-    entries.push(SettingsEntry {
-        // The DOTTED key, because the row writes `operant.toml` and the arm
-        // below matches on it; a bare `bar_style` would fall to the generic
-        // arm and be refused as an unknown key.
-        key: "tui.bar_style",
-        label: "Status line style",
-        description: "Separator style the status line draws between cells.",
-        kind: SettingKind::Enum {
-            options: screen.bar_style_options.clone(),
-        },
-        value: screen.bar_style.clone(),
-        store: SettingStore::Config,
-    });
-
     // `context_window` is a CONFIG key with a bespoke live path: the screen
     // carries it as a field because the apply arm validates it against
     // `validate_context_window` and reports a persist warning the generic path
@@ -496,6 +429,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         description: "Total prompt and response capacity in tokens.",
         kind: SettingKind::Number,
         value: screen.context_window.to_string(),
+        tab: SettingsTab::Model,
+        group: Some("Context Window"),
+        warning: None,
         store: SettingStore::Config,
     });
 
@@ -519,6 +455,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
                 description: env_shadow_note(row.key),
                 kind: SettingKind::Unread,
                 value: screen.config_value(row.key),
+                tab: crate::tui::settings_screen::tab_for(row.key),
+                group: crate::tui::settings_screen::group_for(row.key),
+                warning: None,
                 store: SettingStore::Config,
             });
             continue;
@@ -543,6 +482,9 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: description_for(row.key),
             kind,
             value: screen.config_value(row.key),
+            tab: crate::tui::settings_screen::tab_for(row.key),
+            group: crate::tui::settings_screen::group_for(row.key),
+            warning: None,
             store: SettingStore::Config,
         });
     }

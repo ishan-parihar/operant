@@ -623,35 +623,82 @@ def _struct_fields(src: str, struct: str) -> set[str]:
     return set(re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:", body))
 
 
+def _section_structs(src: str) -> dict[str, str]:
+    """`{section field: owning struct}` for every `pub <section>: <Type>,`."""
+    return dict(
+        re.findall(
+            r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*"
+            r"([A-Z][A-Za-z0-9_]*)\s*,",
+            src,
+        )
+    )
+
+
+def _fields_by_struct(src: str) -> dict[str, set[str]]:
+    """`{struct name: its field names}` for every struct declared in `src`."""
+    return {
+        name: _struct_fields(src, name)
+        for name in set(
+            re.findall(r"\bpub\s+struct\s+([A-Z][A-Za-z0-9_]*)", src)
+        )
+    }
+
+
+def _origin_main_declares(src: str, dotted: str) -> bool:
+    """Whether `origin/main` already declares this key's FIELD.
+
+    Used as a FILTER, not as the identity of "added". It answers "did the
+    release line already have this field, whatever its registry says" — which
+    is the one thing a registry diff cannot see, because a peer may add a field
+    and never run the generator (iter-2260; observed on merging `origin/main`
+    with `agent.loop_detection_enabled`).
+
+    A section whose struct cannot be resolved returns False: unknown means
+    "treat it as new", the strict reading.
+    """
+    sections = dict(
+        re.findall(
+            r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*"
+            r"([A-Z][A-Za-z0-9_]*)\s*,",
+            src,
+        )
+    )
+    section, _, leaf = dotted.rpartition(".")
+    struct = sections.get(section)
+    if struct is None:
+        return False
+    return leaf in _struct_fields(src, struct)
+
+
 def added_keys() -> set[str]:
-    """The keys this CHANGE adds, versus `origin/main`.
+    """The keys this CHANGE adds, versus the revision it branched from.
 
     A gate that fails on any key it does not recognize punishes every branch
     for a defect it inherited: a peer lands `skills.extra_roots` with no heal
     row, and every later config change fails on it forever.
 
-    THE COMPARISON IS BY DOTTED PATH, and that is the whole fix. It used to
-    compare LEAF NAMES against the set of field names declared on `origin/main`:
+    TWO SIGNALS, BECAUSE EITHER ALONE IS WRONG.
 
-        {dotted for dotted in here if dotted.rsplit(".", 1)[-1] not in base_fields}
+    IDENTITY is a DOTTED-PATH diff against the merge base. Comparing LEAF NAMES
+    globally (the first implementation) was blind to the keys most likely to be
+    added — 13 leaves are shared, `enabled` by 22 keys, `model` by 15 — so a
+    new `skills.enabled` read as pre-existing, and on the branch that added
+    `[background_review]` the function returned the EMPTY SET.
 
-    which is blind to exactly the keys most likely to be added. 13 leaf names
-    are shared by more than one key — `enabled` by 22, `model` by 15,
-    `provider`/`api_key`/`base_url` by 13 each — so any new key called
-    `skills.enabled` or `memory.enabled` read as PRE-EXISTING, could miss all
-    four surfaces, and still exited 0. Measured on the branch that added
-    `[background_review]`: `added_keys()` returned the empty set, so the gate
-    could not see either of that change's own two keys. A gate that cannot name
-    the change it guards is not a gate.
+    The baseline is the MERGE BASE, not `origin/main`'s tip: "what this change
+    adds" is a question about this branch, and a peer who adds and then removes
+    a key upstream would otherwise make it read as new here (`tui.bar_style`,
+    added iter-2370 and later dropped on `main`, did exactly that). The tip is
+    still the authority for what the release line CONTAINS — it is the wrong
+    baseline for a branch's DELTA.
 
-    The leaf-name heuristic existed to catch a field a peer added without
-    regenerating the registry (iter-2260). That case needs nothing here: a key
-    absent from the registry is absent from `here`, so it is not a finding —
-    `gen-config-registry.py --check` is what catches a stale registry.
+    FILTER is whether `origin/main` already declares the field
+    ([`_origin_main_declares`]). Without it, merging a main whose peer added a
+    field without regenerating the registry reports that peer's key as this
+    change's.
 
-    `origin/main` is the authority (AGENTS.md: local history is stale the
-    moment a peer pushes). A missing or unreadable ref degrades to "every key
-    counts as added", the strict reading, which never hides a gap.
+    Unreadable base degrades to "every key counts as added": the strict
+    reading, which never hides a gap.
     """
     if not REGISTRY.exists():
         return set()
@@ -659,7 +706,16 @@ def added_keys() -> set[str]:
     base = base_registry_keys()
     if base is None:
         return here
-    return here - base
+
+    rel = CONFIG_RS.relative_to(ROOT).as_posix()
+    origin_main_src = "\n".join(
+        [_base_file(rel)] + [_base_file(f) for f in _SECTION_SOURCES]
+    )
+    return {
+        dotted
+        for dotted in (here - base)
+        if not _origin_main_declares(origin_main_src, dotted)
+    }
 
 
 def missing_surfaces(dotted: str, note: str, heal: set[str], template: set[str], doctor: set[str]) -> list[str]:

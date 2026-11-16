@@ -90,12 +90,15 @@ pub enum Role {
     Border,
     /// Selected row background.
     SelectionBg,
-    /// Status-line bar fill (plan 2026-11-14 U7).
+    /// The composer (input area) surface fill.
     ///
-    /// OMP's `statusLineBg` is the one key its whole bar is built on: the fill
-    /// behind every segment, and the ink the powerline caps reuse. Operant's
-    /// status row had no fill at all.
-    StatusLineBg,
+    /// OMP's band/field composer styles fill the prompt with the theme's
+    /// `userMessageBg` through `EditorTheme::surfaceColor`. Operant's composer
+    /// paints the same role's job — the lifted panel behind the prompt rows — but
+    /// through this dedicated role instead, so `/theme` and `[tui.colors]` can
+    /// aim at the input area directly instead of the user-message bubble it is
+    /// not.
+    ComposerBg,
     // ---- Text layer (plan 2026-11-14 U3) ----------------------------------
     // These carry the colours the MARKDOWN and SYNTAX renderers used to
     // hard-code, so `/theme` can reach assistant output at all. Their defaults
@@ -188,7 +191,7 @@ pub const ALL_ROLES: &[Role] = &[
     Role::Info,
     Role::Border,
     Role::SelectionBg,
-    Role::StatusLineBg,
+    Role::ComposerBg,
     Role::MdHeading,
     Role::MdLink,
     Role::MdLinkUrl,
@@ -240,7 +243,7 @@ impl Role {
             Role::Info => "info",
             Role::Border => "border",
             Role::SelectionBg => "selection_bg",
-            Role::StatusLineBg => "status_line_bg",
+            Role::ComposerBg => "composer_bg",
             Role::MdHeading => "md_heading",
             Role::MdLink => "md_link",
             Role::MdLinkUrl => "md_link_url",
@@ -301,7 +304,7 @@ impl Role {
             Role::Info => (140, 180, 255),
             Role::Border => (100, 100, 110),
             Role::SelectionBg => (60, 60, 80),
-            Role::StatusLineBg => (22, 26, 33),
+            Role::ComposerBg => (44, 50, 62),
             // Text layer. Every default here is UNIQUE across `ALL_ROLES`:
             // `configured_native_color` attributes a cell to the FIRST role
             // whose default matches, so two roles sharing a default make the
@@ -919,8 +922,7 @@ mod default_palette_is_frozen {
         (Role::Info, (140, 180, 255)),
         (Role::Border, (100, 100, 110)),
         (Role::SelectionBg, (60, 60, 80)),
-        // Bar fill (plan 2026-11-14 U7).
-        (Role::StatusLineBg, (22, 26, 33)),
+        (Role::ComposerBg, (44, 50, 62)),
         // Text layer (plan 2026-11-14 U3).
         (Role::MdHeading, (200, 155, 75)),
         (Role::MdLink, (120, 180, 240)),

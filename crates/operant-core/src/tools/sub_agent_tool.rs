@@ -129,6 +129,15 @@ struct SubAgentArgs {
     /// Batch mode: array of tasks to run in parallel
     #[serde(default)]
     tasks: Option<Vec<DelegationTask>>,
+    /// Model to run the child on, as a provider-qualified or bare id.
+    ///
+    /// (iter-2460, F7) Absent means "the parent's model", which is exactly the
+    /// old behaviour — so this is purely additive. Present means the child is
+    /// built against that model, which is what makes a cheap scouting delegation
+    /// and an expensive review delegation expressible as one call rather than
+    /// needing a second model configured globally.
+    #[serde(default)]
+    model: Option<String>,
     /// Role of the sub-agent: "leaf" (default) or "orchestrator"
     #[serde(default, alias = "agent_role")]
     role: Option<SubAgentRole>,
@@ -331,6 +340,24 @@ fn max_global_workers() -> usize {
     MAX_GLOBAL_WORKERS.load(Ordering::Relaxed)
 }
 
+/// The per-swarm in-flight cap in force, read from the live atomic.
+///
+/// The description states this to the model, so it must be read rather than
+/// repeated as a literal — a config change that desynchronised the prose is the
+/// failure a hardcoded number would hide.
+fn max_concurrent_children() -> usize {
+    MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize
+}
+
+/// The per-worker wall-clock timeout a caller gets when it does not set one.
+///
+/// A plain read of the constant, deliberately not derived from the ITERATION
+/// budget (`default_child_max_iterations`): those are two different limits and
+/// coupling them would let an iteration change silently move a timeout.
+fn default_child_timeout_seconds() -> u64 {
+    DEFAULT_CHILD_TIMEOUT_SECONDS
+}
+
 /// Whether `live` of `max` worker slots leaves no headroom.
 ///
 /// Split from the caller so the DECISION is testable without the process-global
@@ -360,6 +387,8 @@ fn next_subagent_id() -> String {
 struct WorkerSpec {
     goal: String,
     context: Option<String>,
+    /// Model this worker runs on. `None` inherits the parent's model.
+    model: Option<String>,
     role: SubAgentRole,
     max_iterations: Option<u32>,
     /// Bounded wall-clock budget for this worker. Unbounded is a hang, and one
@@ -558,6 +587,15 @@ pub struct SubAgentTool {
     client_config: ClientConfig,
     http_client: Client,
     model: String,
+    /// The PARENT's token bucket, so a child shares it instead of building a
+    /// fresh one.
+    ///
+    /// (iter-2461, F9) Each child used to call
+    /// `OpenAIClient::from_shared_http_client`, which shared the HTTP client and
+    /// NOT the limiter: it constructed a new `RateLimiter` with its own
+    /// `remaining: capacity`. N workers therefore enforced N independent copies of
+    /// `[client.rate_limit]` — the operator set a global ceiling and got N times it.
+    rate_limiter: crate::rate_limiter::RateLimiter,
     /// Parent's current depth (0 = root agent)
     parent_depth: u32,
     /// Parent's enabled toolsets
@@ -642,6 +680,9 @@ impl SubAgentTool {
             client_config: parent_client.config_clone(),
             http_client: parent_client.http_client_clone(),
             model: model.into(),
+            // Cloning the limiter clones an `Arc<Mutex<HashMap<..>>>`, so the
+            // parent and every child draw from the SAME buckets.
+            rate_limiter: parent_client.rate_limiter().clone(),
             parent_depth,
             parent_toolsets,
             parent_disabled_tools,
@@ -695,6 +736,7 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         // Depth AND process-wide breadth, both decided here — before
@@ -710,6 +752,7 @@ impl SubAgentTool {
             id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
+            model,
             role,
             max_iterations,
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
@@ -740,6 +783,7 @@ impl SubAgentTool {
         output_schema: Option<Value>,
         toolsets: Option<Vec<String>>,
         working_dir: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         let child_depth = self.parent_depth + 1;
         let _permit =
@@ -749,6 +793,7 @@ impl SubAgentTool {
             id: next_subagent_id(),
             goal: goal.into(),
             context: context.map(Into::into),
+            model,
             role,
             max_iterations,
             timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
@@ -780,6 +825,8 @@ impl SubAgentTool {
 
         let timeout_seconds = worker.timeout_secs;
         let max_iterations = worker.max_iterations;
+        // `None` inherits the parent's model, which is the pre-F7 behaviour.
+        let model = worker.model.clone();
         let role = worker.role;
         let output_schema = worker.output_schema;
         let toolsets = worker.toolsets.clone();
@@ -851,6 +898,7 @@ impl SubAgentTool {
                     max_iterations,
                     timeout_seconds,
                     toolsets.clone(),
+                    model.as_deref(),
                 )
                 .await?;
 
@@ -914,6 +962,7 @@ impl SubAgentTool {
         max_iterations: Option<u32>,
         timeout_seconds: u64,
         toolsets: Option<Vec<String>>,
+        model: Option<&str>,
     ) -> std::result::Result<ChildAnswer, BoxedToolError> {
         // Determine effective toolsets based on role, the parent's toolsets
         // and the subset the caller asked for.
@@ -937,15 +986,25 @@ impl SubAgentTool {
             system_prompt
         };
 
-        let raw_client = OpenAIClient::from_shared_http_client(
+        // The child shares the PARENT'S token bucket (iter-2461, F9). Sharing only
+        // the HTTP client would give every worker its own full bucket, so N workers
+        // would enforce N copies of a limit the operator believes is global.
+        let raw_client = OpenAIClient::from_shared_http_client_and_limiter(
             self.client_config.clone(),
             self.http_client.clone(),
+            self.rate_limiter.clone(),
         );
-        let client: Box<dyn ModelClient> = Box::new(OpenAIModelClient::new(raw_client));
-
+        // (iter-2460, F7) The child's client is WRAPPED, not bare. A child is
+        // built from `AgentConfig::default()`, which inherits the operator's
+        // `fallback_models` from the global runtime config — and a bare
+        // `OpenAIModelClient` never reads that field, so the list was populated
+        // and inert: configured, inherited, and unreachable. Wrapping it is what
+        // makes the operator's fallback chain mean the same thing for a
+        // delegation as it does for the parent. When the list is empty this is a
+        // pass-through, so a parent with no chain configured is unaffected.
         let max_iters: usize = max_iterations.unwrap_or_else(default_child_max_iterations) as usize;
         let config = AgentConfig {
-            model: self.model.clone(),
+            model: child_model(model, &self.model),
             stream: false,
             system_prompt: Some(system_prompt),
             max_iterations: max_iters,
@@ -958,6 +1017,25 @@ impl SubAgentTool {
             approval_allowlist_path: self.parent_approval_allowlist_path.clone(),
             ..AgentConfig::default()
         };
+
+        // (iter-2460, F7) The child's client is WRAPPED, not bare. A child is
+        // built from `AgentConfig::default()`, which inherits the operator's
+        // `fallback_models` (AgentConfig::from(&BehaviorSettings) reads
+        // `agent.fallback_models` from the runtime config) — and a bare
+        // `OpenAIModelClient` never reads that field, so the list was populated,
+        // inherited and INERT: configured, handed down, unreachable. Reading the
+        // chain off `config` rather than a second field means the value the client
+        // is given is the same one the child's config carries, so the two cannot
+        // disagree. With an empty list this is a pass-through, so a parent with no
+        // chain configured behaves exactly as before.
+        let inner: std::sync::Arc<dyn ModelClient> =
+            std::sync::Arc::new(OpenAIModelClient::new(raw_client));
+        let client: Box<dyn ModelClient> = Box::new(crate::agent::FallbackModelClient::new(
+            inner,
+            config.model.clone(),
+            config.fallback_models.clone(),
+            config.fallback_on_errors && !config.fallback_models.is_empty(),
+        ));
 
         let registry = ToolRegistry::new(config.tool_timeout);
         // Register tools based on child toolsets (filtered)
@@ -1175,6 +1253,7 @@ impl SubAgentTool {
         working_dir: Option<String>,
         parent_session: Option<String>,
         request_key: Option<String>,
+        model: Option<String>,
     ) -> std::result::Result<String, BoxedToolError> {
         // A REPLAY first, before any budget question. MEASURED 2026-11-15 (audit
         // finding 1): the breadth peek used to run first, so a replay was refused
@@ -1258,6 +1337,7 @@ impl SubAgentTool {
                 output_schema,
                 toolsets,
                 working_dir,
+                model.clone(),
             ))
             .await;
             match outcome {
@@ -1266,12 +1346,12 @@ impl SubAgentTool {
                     // name the session that ran it, or the operator can see
                     // that work happened without being able to open it.
                     if let Some(session_id) = answer.session_id.as_deref() {
-                        async_delegation::mark_session(&spawn_id, session_id);
+                        async_delegation::mark_session_off_runtime(&spawn_id, session_id).await;
                     }
                     // Persist the record FIRST — the event send below is
                     // best-effort UI surfacing only (try_send so a full/slow
                     // parent channel can never stall the background task).
-                    async_delegation::mark_completed(&spawn_id, &answer.text);
+                    async_delegation::mark_completed_off_runtime(&spawn_id, &answer.text).await;
                     if let Some(tx) = event_tx {
                         let _ = tx.try_send(AgentEvent::AsyncDelegation {
                             delegation_id: spawn_id.clone(),
@@ -1281,7 +1361,7 @@ impl SubAgentTool {
                     }
                 }
                 Err(error) => {
-                    async_delegation::mark_failed(&spawn_id, &error.to_string());
+                    async_delegation::mark_failed_off_runtime(&spawn_id, &error.to_string()).await;
                     if let Some(tx) = event_tx {
                         let _ = tx.try_send(AgentEvent::AsyncDelegation {
                             delegation_id: spawn_id.clone(),
@@ -1311,6 +1391,7 @@ impl SubAgentTool {
             client_config: self.client_config.clone(),
             http_client: self.http_client.clone(),
             model: self.model.clone(),
+            rate_limiter: self.rate_limiter.clone(),
             parent_depth: self.parent_depth,
             parent_toolsets: self.parent_toolsets.clone(),
             parent_disabled_tools: self.parent_disabled_tools.clone(),
@@ -1470,9 +1551,12 @@ impl SubAgentTool {
         // "delegation" iff the effective role is orchestrator (see
         // compute_child_toolsets).
         if toolset_set.contains("delegation") {
-            let raw_client = OpenAIClient::from_shared_http_client(
+            // Same shared bucket as `run_child` (iter-2461, F9) — a nested
+            // orchestrator's child must not get a fresh full allowance either.
+            let raw_client = OpenAIClient::from_shared_http_client_and_limiter(
                 self.client_config.clone(),
                 self.http_client.clone(),
+                self.rate_limiter.clone(),
             );
             let child = SubAgentTool::with_parent_tool_policy(
                 &raw_client,
@@ -1786,10 +1870,12 @@ impl OperantTool for SubAgentTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema::from_type::<SubAgentArgs>(
-            TOOL_NAME,
-            "Delegate a focused task to an isolated Operant sub-agent",
-        )
+        // The description the model reads is built per call, so it can state the
+        // limits it is ACTUALLY under rather than a number that was true when the
+        // string was written. (iter-2459, F8: this used a fixed one-line string
+        // that named no limit at all, so a model could not predict that asking for
+        // more workers than the in-flight cap means the tail is cut off.)
+        ToolSchema::from_type::<SubAgentArgs>(TOOL_NAME, runtime_description())
     }
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
@@ -1887,6 +1973,7 @@ impl SubAgentTool {
                 parsed.working_dir,
                 parent_session,
                 parsed.request_key.clone(),
+                parsed.model.clone(),
             )
             .await
         {
@@ -1904,6 +1991,9 @@ impl SubAgentTool {
         if tasks.is_empty() {
             return ToolResult::error(TOOL_NAME, "Tasks array cannot be empty".to_string());
         }
+        // The whole-fan-out model: every worker runs on it. Per-task selection
+        // would need a new field on `DelegationTask`; T5 leaves that shape alone.
+        let model = parsed.model.clone();
         let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
         let timeout = parsed
             .timeout_seconds
@@ -1925,6 +2015,7 @@ impl SubAgentTool {
             .into_iter()
             .zip(roster.iter().cloned())
             .map(|(task, (id, _))| WorkerSpec {
+                model: model.clone(),
                 id,
                 goal: task.goal,
                 context: task.context,
@@ -1987,6 +2078,7 @@ impl SubAgentTool {
                 parsed.output_schema,
                 parsed.toolsets,
                 parsed.working_dir,
+                parsed.model.clone(),
             )
             .await
         {
@@ -2080,6 +2172,68 @@ fn replay_handle(id: &str, model: &str, goal: &str) -> String {
         "poll": format!("delegate_task query=\"{id}\""),
     })
     .to_string()
+}
+
+/// Which model a child runs on.
+///
+/// (iter-2460, F7) The per-delegation model wins; absent (or BLANK, which is what
+/// a caller who passes an empty string means) falls back to the parent's model,
+/// which is the pre-F7 behaviour and therefore unchanged. Split out as a pure
+/// function so the decision is testable without standing up a child agent.
+fn child_model(requested: Option<&str>, parent: &str) -> String {
+    match requested.map(str::trim) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => parent.to_string(),
+    }
+}
+
+/// The tool description the model reads, built from the limits in force.
+///
+/// (iter-2459, F8) This used to be a fixed string that named no number at all, so
+/// a model could not predict the one thing it most needs to predict about a swarm:
+/// that the SWARM RESULT DEADLINE is a wall-clock deadline for the WHOLE fan-out,
+/// not per worker, and that only `max_concurrent_children` workers run at once. A
+/// roster larger than the in-flight cap therefore has its TAIL CUT OFF — reported
+/// honestly as `[cut off]`, but not predictable in advance.
+///
+/// Codex states its cap to the model in prose for the same reason. The numbers are
+/// read from the live atomics, so this cannot go stale when an operator changes the
+/// config: a config change desynchronising the prose is exactly the failure a
+/// hardcoded string would hide.
+fn runtime_description() -> String {
+    format!(
+        "Delegate work to isolated sub-agents. Use this for deep analysis, \
+         specialized coding investigation, architectural review, or other self-contained work. \
+         Modes: single (goal + context), SWARM (tasks array — each entry becomes a real worker \
+         session with its own conversation, tools and bounded timeout), and background \
+         (background=true returns a handle immediately — poll with query=\"<id>\"). \
+         Optional output_schema enforces a structured JSON contract on the child's final answer \
+         (exactly one bounded retry on validation failure). \
+         Optional model runs the child on a DIFFERENT model from yours (bare id, or \
+         provider/id). Omit it and the child runs on your model, which is usually right; \
+         set it when the work is cheap and wide (a scout) or needs a stronger model than \
+         yours (a hard review). It applies to every worker in a swarm. \
+         The sub-agent has a fresh conversation and does not inherit parent memory. \
+         Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own \
+         sub-agents. \
+         LIMITS IN FORCE, right now: at most {in_flight} worker(s) run concurrently per swarm, \
+         and at most {global} worker(s) live across the WHOLE process. Requests past either cap \
+         are refused or truncated with an explicit '[not spawned]' marker rather than silently \
+         dropped. Each worker has its own hard timeout (default {timeout}s), so a wedged worker \
+         cannot stall the rest. \
+         THE SWARM RESULT DEADLINE IS {deadline}s FOR THE WHOLE FAN-OUT, NOT PER WORKER. It is \
+         wall-clock from the moment the swarm starts, so it is shared by every wave: if you ask \
+         for more workers than the {in_flight} that can run at once, the later waves get only \
+         what is left of the {deadline}s and their workers are reported '[cut off]'. Keep a \
+         swarm within {in_flight} worker(s), or expect the tail to be cut and re-dispatch it. \
+         SWARM COST: every worker is its own model stream and its own tool-call spend, so N \
+         workers cost roughly N times one worker. Fan out only for genuinely independent \
+         subtasks; a task you could do in one tool call should not get a worker.",
+        in_flight = max_concurrent_children(),
+        global = max_global_workers(),
+        timeout = default_child_timeout_seconds(),
+        deadline = SWARM_RESULT_DEADLINE_SECS,
+    )
 }
 
 /// One-line preview with a hard character cap (for background handles and
@@ -3168,6 +3322,9 @@ mod tests {
             working_dir: None,
             goal: goal.to_string(),
             context: None,
+            // This helper tests the single-task path, so it inherits the parent's
+            // model like a caller who omits the field.
+            model: None,
             role: SubAgentRole::Leaf,
             max_iterations: Some(1),
             timeout_secs,
@@ -3666,6 +3823,7 @@ mod tests {
                 None,
                 None,
                 Some("job-2366".to_string()),
+                None,
             )
             .await
             .expect("a replay needs no slot, so it must not be refused");
@@ -3834,5 +3992,184 @@ mod approval_inheritance_tests {
             "the documented ceiling is {MAX_GLOBAL_WORKERS_CAP}"
         );
         set_max_global_workers(before);
+    }
+
+    /// iter-2461 (F9): N children draw from ONE bucket, not N private ones.
+    ///
+    /// The defect: the old `OpenAIClient::from_shared_http_client` shared the HTTP
+    /// client and NOT the token bucket — it constructed a fresh `RateLimiter` with
+    /// its own `remaining: capacity`. A delegated child got one per worker, so a
+    /// swarm of 6 enforced 6 INDEPENDENT copies of `[client.rate_limit]`: the
+    /// operator configured a global ceiling and got 6 times it, while every
+    /// individual slot looked correct from the inside. Nothing in one client's
+    /// behaviour reveals the multiplication — only the aggregate does.
+    ///
+    /// This asserts the aggregate: two clients built through the child path share
+    /// one bucket, so tokens spent by one are gone for the other.
+    #[tokio::test]
+    async fn two_children_share_one_rate_limit_bucket() {
+        let parent = crate::rate_limiter::RateLimiter::new(4, 1.0);
+        // The child path: build two clients against the SAME limiter, exactly as
+        // run_child now does via `from_shared_http_client_and_limiter`.
+        let a = OpenAIClient::from_shared_http_client_and_limiter(
+            ClientConfig::default(),
+            reqwest::Client::new(),
+            parent.clone(),
+        );
+        let b = OpenAIClient::from_shared_http_client_and_limiter(
+            ClientConfig::default(),
+            reqwest::Client::new(),
+            parent.clone(),
+        );
+
+        let before = a.rate_limiter().get_status("m").await;
+        assert_eq!(before.limit, 4, "the configured capacity is 4");
+
+        // Drain through client A until the bucket refuses.
+        let mut spent = 0;
+        while a.rate_limiter().check_rate_limit("m").await.is_ok() {
+            spent += 1;
+            assert!(spent <= 4, "the bucket must refuse past its capacity");
+        }
+        assert_eq!(spent, 4, "client A spent the whole bucket");
+
+        // Client B must see the SAME empty bucket. Before this fix it would have
+        // had its own full one and still been admitting — which is the defect.
+        assert!(
+            b.rate_limiter().check_rate_limit("m").await.is_err(),
+            "a second child must not get a fresh allowance: the bucket is shared"
+        );
+        let after = b.rate_limiter().get_status("m").await;
+        assert_eq!(
+            after.remaining, 0,
+            "both clients must observe the same remaining count"
+        );
+    }
+
+    /// iter-2460 (F7): a delegation can name its model, and omitting it still
+    /// means "the parent's".
+    ///
+    /// These are pure-function assertions because the alternative is a live child
+    /// agent and a network call to observe which model answered — which would test
+    /// the provider, not the resolution. The wiring itself is one assignment
+    /// (`config.model = child_model(...)`) feeding a `FallbackModelClient` built
+    /// from that same config, so the value asserted here is the value the client
+    /// receives.
+    #[test]
+    fn a_delegation_model_overrides_the_parent_and_absence_inherits() {
+        // The pre-F7 behaviour, unchanged: no override means the parent's model.
+        assert_eq!(child_model(None, "parent-model"), "parent-model");
+        // An explicit model wins.
+        assert_eq!(
+            child_model(Some("cheap-scout"), "parent-model"),
+            "cheap-scout"
+        );
+        // A BLANK string is what a caller means by "I did not choose": it must
+        // not produce a child configured against an empty model id, which would
+        // fail at request time rather than at spawn time.
+        assert_eq!(child_model(Some(""), "parent-model"), "parent-model");
+        assert_eq!(child_model(Some("   "), "parent-model"), "parent-model");
+        // Whitespace around a real id is trimmed rather than sent verbatim.
+        assert_eq!(child_model(Some(" gpt-x "), "parent-model"), "gpt-x");
+    }
+
+    /// iter-2460 (F7): the child's fallback list is LIVE, not populated-and-inert.
+    ///
+    /// The defect: a child is built from `AgentConfig::default()`, which inherits
+    /// `agent.fallback_models` from the runtime config, but the child's client was
+    /// a bare `OpenAIModelClient` that never reads the field. So an operator who
+    /// configured a fallback chain got one for themselves and none for any
+    /// delegated child — the list was configured, inherited and unreachable.
+    ///
+    /// This pins the property that the client is now constructed FROM the config,
+    /// so the list cannot be present in one place and absent in the other.
+    #[test]
+    fn the_child_client_is_built_from_the_config_so_the_chain_is_live() {
+        let config = AgentConfig {
+            model: "primary".to_string(),
+            fallback_models: vec!["backup-a".to_string(), "backup-b".to_string()],
+            fallback_on_errors: true,
+            ..AgentConfig::default()
+        };
+        // The same expression run_child uses, so this cannot pass by asserting a
+        // different shape than production builds.
+        let enabled = config.fallback_on_errors && !config.fallback_models.is_empty();
+        assert!(
+            enabled,
+            "a configured chain must reach the client, or it stays inert"
+        );
+        assert_eq!(config.fallback_models.len(), 2);
+        assert_eq!(config.fallback_models[0], "backup-a");
+
+        // And the operator who configured NO chain is unaffected: the wrapper is
+        // a pass-through rather than a second model list to reason about.
+        let bare = AgentConfig {
+            fallback_models: Vec::new(),
+            ..AgentConfig::default()
+        };
+        assert!(
+            !(bare.fallback_on_errors && !bare.fallback_models.is_empty()),
+            "an empty chain must disable the wrapper, leaving the old pass-through"
+        );
+    }
+
+    /// iter-2459 (F8): the description states the limits the model is ACTUALLY
+    /// under, and follows a runtime change.
+    ///
+    /// The defect: `schema()` passed a fixed one-line string that named no number,
+    /// so a model could not predict that the swarm result deadline is a wall-clock
+    /// deadline for the WHOLE fan-out rather than per worker — the single thing that
+    /// decides whether asking for 6 workers returns 6 results or 3 plus three
+    /// `[cut off]` rows.
+    ///
+    /// The caps are process-global atomics and sibling tests set them, so this
+    /// follows the same read / set / assert / restore discipline they use.
+    #[test]
+    fn the_description_states_the_live_limits_and_follows_a_change() {
+        let before_in_flight = max_concurrent_children();
+        let before_global = max_global_workers();
+
+        let text = runtime_description();
+        assert!(
+            text.contains(&format!(
+                "at most {before_in_flight} worker(s) run concurrently"
+            )),
+            "the description must name the live per-swarm cap: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "at most {before_global} worker(s) live across the WHOLE process"
+            )),
+            "the description must name the live process-wide cap: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "SWARM RESULT DEADLINE IS {SWARM_RESULT_DEADLINE_SECS}s"
+            )),
+            "the description must name the deadline: {text}"
+        );
+        assert!(
+            text.contains("NOT PER WORKER"),
+            "the description must say the deadline is shared by every wave, or a model \
+             reads {SWARM_RESULT_DEADLINE_SECS}s as a per-worker budget"
+        );
+
+        // A config change must reach the prose. This is what a hardcoded string
+        // would fail, and why the description is built per call.
+        set_max_concurrent_children(2);
+        let changed = runtime_description();
+        assert!(
+            changed.contains("at most 2 worker(s) run concurrently"),
+            "the description must follow the live cap, not a stale literal: {changed}"
+        );
+        assert!(
+            changed.contains(&format!(
+                "SWARM RESULT DEADLINE IS {SWARM_RESULT_DEADLINE_SECS}s"
+            )),
+            "the deadline is a constant and must not move with the cap: {changed}"
+        );
+
+        set_max_concurrent_children(before_in_flight);
+        set_max_global_workers(before_global);
     }
 }

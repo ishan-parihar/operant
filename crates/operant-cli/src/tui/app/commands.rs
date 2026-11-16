@@ -541,90 +541,6 @@ impl App {
                     .open(self.config.agent.context_window, &self.config);
                 true
             }
-            // (plan 2026-11-15 T2) `/bar` — show or set the status bar style.
-            //
-            // The operator's report: "I do not have /bar command to configure
-            // the bar." The style existed (iter-2410) but only as a row inside
-            // `/config`, so the one setting an operator reaches for by name was
-            // behind a screen of everything else. Bare `/bar` reports the style
-            // in force and names the alternatives; `/bar <style>` applies one.
-            //
-            // This writes through the same two cells `apply_bar_style` does —
-            // the live style cell (what the status line draws from, so it takes
-            // effect with no restart) and `config.tui.bar_style` (what the next
-            // launch reads) — and persists through the same key. It does not
-            // call `apply_bar_style` itself: that is `pub(super)` to the settings
-            // screen and reaching into it from here would make the settings
-            // screen's writer private-debt rather than a seam.
-            "bar" => {
-                use crate::tui::status_line::style::{self as bar_style_cell, SeparatorStyle};
-                // The style rendered as a sample, so the reply is the evidence
-                // the change took — see `bar_style_cell::preview`.
-                let bar_preview = |style: SeparatorStyle| bar_style_cell::preview(style);
-                let requested = args.trim();
-                if requested.is_empty() {
-                    let style = crate::tui::status_line::style::style();
-                    let known = SeparatorStyle::ALL
-                        .iter()
-                        .map(|s| s.key())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.set_status_notice(format!(
-                        "Status bar style: {} [{}] — /bar <{known}>",
-                        style.key(),
-                        bar_preview(style),
-                    ));
-                    return true;
-                }
-                let (style, known) = SeparatorStyle::parse(requested);
-                if !known {
-                    let known = SeparatorStyle::ALL
-                        .iter()
-                        .map(|s| s.key())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.set_status_notice(format!(
-                        "Unknown bar style \"{requested}\" — expected one of: {known}"
-                    ));
-                    return true;
-                }
-                crate::tui::status_line::style::set_style(Some(style));
-                self.config.tui.bar_style = style.key().to_string();
-                match self.config.config_path.as_ref().map_or_else(
-                    || {
-                        Err(operant_core::error::Error::Config(
-                            "the loaded config has no recorded source path".to_string(),
-                        ))
-                    },
-                    |path| {
-                        operant_core::config::persist_config_key_at(
-                            path,
-                            "tui.bar_style",
-                            style.key(),
-                        )
-                    },
-                ) {
-                    Ok(_) => {
-                        self.set_status_notice(format!(
-                            "Status bar style: {} [{}]",
-                            style.key(),
-                            bar_preview(style),
-                        ));
-                    }
-                    // Applied for this session, not persisted — said out loud,
-                    // because a setting that silently reverts on restart reads as
-                    // a broken command rather than an unwritable config.
-                    Err(e) => {
-                        self.set_status_notice(format!(
-                            "Status bar style: {} [{}] — applied for this session, but \
-                             not persisted: {e}",
-                            style.key(),
-                            bar_preview(style),
-                        ));
-                    }
-                }
-                true
-            }
             "theme" | "skin" => {
                 let current = match &self.settings.theme {
                     Theme::Dark => "dark",
@@ -1466,32 +1382,31 @@ impl App {
                 true
             }
             "output-style" | "verbose" => {
-                let requested = args.trim();
-                if requested.is_empty() {
-                    self.output_style = match self.output_style.as_str() {
-                        "auto" => "stream".to_string(),
-                        "stream" => "verbose".to_string(),
-                        _ => "auto".to_string(),
-                    };
-                    self.set_status_notice(format!("Output style: {}.", self.output_style));
-                    return true;
-                }
-                // (iter-1773) An argument names the level. The old arm cycled
-                // anyway, so "/output-style verbose" moved the style to
-                // "stream" — the operator's level silently became the NEXT
-                // one, the same class of silent-arg-substitution the count
-                // commands had (iter-1772).
-                match requested {
-                    "auto" | "stream" | "verbose" => {
-                        self.output_style = requested.to_string();
-                        self.set_status_notice(format!("Output style: {}.", self.output_style));
-                    }
-                    _ => {
-                        self.set_status_notice(format!(
-                            "\"{requested}\" is not an output style — use auto | stream | verbose."
-                        ));
-                    }
-                }
+                // (iter-2452) RETIRED AS A PHANTOM, not re-pointed.
+                //
+                // `App::output_style` is written in three places (this arm,
+                // `import_config`, and the settings panel) and read by NOTHING:
+                // a grep across `crates/` finds no branch on its value, and the
+                // `operant_app/output_style.rs` module that sounds like its
+                // consumer is an emoji adapter reading a separate
+                // `EMOJI_ENABLED` atomic. So this arm accepted a value, reported
+                // "Output style: stream.", persisted it, and changed nothing —
+                // the exact defect the settings panel's own guard exists to
+                // prevent (iter-1899, and `DEAD` in settings_screen/tests.rs).
+                //
+                // It also made the problem three vocabularies wide: this arm
+                // cycled auto|stream|verbose, the panel offered
+                // default|concise|explanatory|learning, and `cmd_tui_debug`
+                // accepted the first set again. Unifying them was the plan's
+                // S7; with no reader to unify BEHIND, unifying would have picked
+                // a winner for a contest with no prize. `/verbose` also shadows
+                // the registry's own `verbose` (tool-progress display), so the
+                // name is refused for both rather than half-honoured.
+                let _ = args.trim();
+                self.set_status_notice(
+                    "No output style in this build — nothing reads the setting, so /output-style cannot change what you see."
+                        .to_string(),
+                );
                 true
             }
             "effort" => {

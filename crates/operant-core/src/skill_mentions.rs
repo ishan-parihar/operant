@@ -254,6 +254,22 @@ pub fn loadable_skills(
 /// yet; a surface that HAS a [`crate::skills::SkillRoots`] calls this so it
 /// cannot disagree with the manager.
 pub fn loadable_skills_in(roots: &crate::skills::SkillRoots) -> Vec<(String, String)> {
+    loadable_skills_ranked_in(roots)
+        .into_iter()
+        .map(|(name, description, _rank)| (name, description))
+        .collect()
+}
+
+/// [`loadable_skills_in`] plus each skill's root precedence index.
+///
+/// Search needs the rank to break a match-quality tie: two skills that match a
+/// query equally well must resolve by ROOT PRECEDENCE (operator pool > extra
+/// roots > vendor), not by the alphabet, because the result is truncated and
+/// an alphabetical tiebreak can drop the operator's own skill in favour of an
+/// integration's (iter-2469). The rank is 0 for the pool and rises from there.
+pub fn loadable_skills_ranked_in(
+    roots: &crate::skills::SkillRoots,
+) -> Vec<(String, String, usize)> {
     let mut manager = crate::skills::SkillManager::from_roots(roots);
     if manager.load_all().is_err() {
         return Vec::new();
@@ -262,6 +278,10 @@ pub fn loadable_skills_in(roots: &crate::skills::SkillRoots) -> Vec<(String, Str
         .list()
         .into_iter()
         .filter(|(name, _)| manager.get(name).is_some_and(|s| manager.is_available(s)))
+        .map(|(name, description)| {
+            let rank = manager.root_rank_of(&name).unwrap_or(usize::MAX);
+            (name, description, rank)
+        })
         .collect()
 }
 
@@ -289,8 +309,8 @@ pub fn search_skills_in(
     if needle.is_empty() {
         return Vec::new();
     }
-    let mut matched: Vec<(u8, String, String)> = Vec::new();
-    for (name, description) in loadable_skills_in(roots) {
+    let mut matched: Vec<(u8, usize, String, String)> = Vec::new();
+    for (name, description, root_rank) in loadable_skills_ranked_in(roots) {
         // The SAME tiers `rank_skill_entries` applies to the popup's snapshot.
         // Searching by what a skill DOES was silently impossible before this
         // tier existed -- `jsonpath` returned nothing for a skill whose whole
@@ -299,13 +319,24 @@ pub fn search_skills_in(
         let Some(tier) = skill_match_tier(&name, &description, &needle) else {
             continue;
         };
-        matched.push((tier, name, description));
+        matched.push((tier, root_rank, name, description));
     }
-    matched.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // THREE keys, in order: match quality, then ROOT PRECEDENCE, then name.
+    //
+    // The third key is new (iter-2469). With only (tier, name), a pool skill
+    // and a vendor skill of equal match quality were separated by the ALPHABET,
+    // so `zzz-vendor` sorted ahead of `aaa-pool` and `take(limit)` dropped the
+    // operator's own skill. Root precedence is the order every other surface
+    // already resolves by; search was the one that ignored it.
+    matched.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
     matched
         .into_iter()
         .take(limit)
-        .map(|(_, name, description)| (name, description))
+        .map(|(_, _, name, description)| (name, description))
         .collect()
 }
 

@@ -291,7 +291,10 @@ impl From<&BehaviorSettings> for AgentConfig {
             show_turn_attribution: settings.show_turn_attribution,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
-            loop_detection_enabled: true,
+            // (iter-2462) THREADED, not a literal. This was `true` while the doc
+            // above claimed facades thread the operator's switch — the same defect
+            // iter-1631 fixed for `show_turn_attribution`, one line above.
+            loop_detection_enabled: settings.loop_detection_enabled,
             approval_mode: "smart".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,

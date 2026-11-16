@@ -105,24 +105,6 @@ impl TuiApp {
         // role colours are live on the FIRST frame rather than after a theme
         // switch. Without this the config section would have no reader at all.
         let role_colors = app_config.tui.colors.clone();
-        // (plan 2026-11-15 U11) `[tui] bar_style`, hoisted and installed for the
-        // same reason as the role colours above: the separator is read per frame
-        // at the paint site, so the operator's choice is live on the FIRST frame.
-        // An unknown key warns and falls back to `dot`, which is the look that
-        // shipped before this key existed.
-        let bar_style = app_config.tui.bar_style.clone();
-        let (bar_style, known) = crate::tui::status_line::style::SeparatorStyle::parse(&bar_style);
-        crate::tui::status_line::style::set_style(Some(bar_style));
-        if !known {
-            tracing::warn!(
-                bar_style = app_config.tui.bar_style,
-                known = ?crate::tui::status_line::style::SeparatorStyle::ALL
-                    .iter()
-                    .map(|style| style.key())
-                    .collect::<Vec<_>>(),
-                "unknown [tui] bar_style; falling back to 'dot'"
-            );
-        }
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
         app.double_escape_action = double_escape_action;
@@ -893,6 +875,7 @@ impl TuiApp {
                             &mut terminal,
                             &argv,
                             self.app.mouse_capture_active,
+                            self.app.keyboard_enhanced,
                         ) {
                             Ok(status) => self.app.set_status_notice(shell_return_message(&status)),
                             Err(e) => {
@@ -924,6 +907,7 @@ impl TuiApp {
                                     &mut terminal,
                                     &argv,
                                     self.app.mouse_capture_active,
+                                    self.app.keyboard_enhanced,
                                 ) {
                                     Ok(status) => {
                                         self.app.status_message =
@@ -2422,9 +2406,9 @@ fn run_suspended_shell_command(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     argv: &[String],
     mouse_capture: bool,
+    keyboard_enhanced: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    use crossterm::execute;
-    use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
+    use crossterm::terminal::disable_raw_mode;
     use std::io::Write;
 
     if argv.is_empty() {
@@ -2434,20 +2418,23 @@ fn run_suspended_shell_command(
     // 1. Leave alt screen + disable raw mode. Mouse capture goes too (TUI-10),
     //    so the child gets the terminal's own mouse handling, not escape codes.
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    if mouse_capture {
-        let _ = execute!(
-            terminal.backend_mut(),
-            crossterm::event::DisableMouseCapture
-        );
-    }
-    // The child gets the terminal's own paste handling too: a shell inheriting
-    // paste-bracketing mode would show `ESC[200~` around what the operator
-    // pastes into it.
-    let _ = execute!(
-        terminal.backend_mut(),
-        crossterm::event::DisableBracketedPaste
-    );
+    // (iter-2445) HAND THE CHILD A TERMINAL IT CAN READ.
+    //
+    // The TUI pushes the kitty keyboard protocol at startup and keeps it pushed
+    // for the whole session. Every child that inherits this terminal therefore
+    // receives ARROW KEYS AS CSI-u SEQUENCES — and the setup wizard reads
+    // legacy escapes (`dialoguer` → `console`, which parses `ESC [ A` itself).
+    // The result is a wizard whose navigation does nothing: the highlight never
+    // moves, the operator concludes the TUI has hung, and on some terminals the
+    // unparseable sequence takes the process down. The TEARDOWN path has always
+    // popped this before handing the terminal back to the shell; the SUSPEND path
+    // did not, so `/setup` — the one command that hands the terminal to a child —
+    // was the one command that broke.
+    //
+    // Ownership-gated, so it is a no-op when the push failed or the panic hook
+    // already popped it, and NOT `begin_termination_cleanup`: this process is
+    // coming back.
+    suspend_terminal_for_child(terminal.backend_mut(), mouse_capture, keyboard_enhanced)?;
     // Flush so the user sees the wizard's first prompt immediately.
     let _ = std::io::stdout().flush();
 
@@ -2462,13 +2449,52 @@ fn run_suspended_shell_command(
                 .stderr(std::process::Stdio::inherit());
             cmd.spawn().and_then(|mut child| child.wait())
         },
-        || restore_tui_terminal(terminal, mouse_capture),
+        || restore_tui_terminal(terminal, mouse_capture, keyboard_enhanced),
     )
 }
 
 /// Runs `child` between a suspend and `restore`. `restore` runs whether or not
 /// the child could be spawned, so a missing binary (or one replaced mid-session)
 /// never leaves the terminal in cooked mode on the main screen (TUI-6).
+/// Hand the terminal to a child process: undo every mode the TUI owns.
+///
+/// (iter-2445) THE ORDER IS THE POINT. The TUI pushes the kitty keyboard protocol
+/// at startup and keeps it pushed for the whole session, so a child that inherits
+/// this terminal receives ARROW KEYS AS CSI-u SEQUENCES. The setup wizard reads
+/// legacy escapes (dialoguer to console, which parses ESC [ A itself), so its
+/// navigation did nothing at all: the highlight never moved, the operator
+/// concluded the TUI had hung, and on some terminals the unparseable sequence took
+/// the process down. The TEARDOWN path had always popped this before returning the
+/// terminal to the shell; the SUSPEND path did not, so /setup, the one command
+/// that hands the terminal to a child, was the one command that broke.
+///
+/// keyboard_enhanced is the caller's record of whether the push SUCCEEDED. It is
+/// also ownership-gated inside disable_keyboard_enhancement, so a false here and a
+/// push that already went away both no-op rather than popping a stranger's entry.
+/// This is deliberately NOT begin_termination_cleanup: this process is coming back,
+/// and that gate would refuse the re-push forever.
+fn suspend_terminal_for_child(
+    writer: &mut impl std::io::Write,
+    mouse_capture: bool,
+    keyboard_enhanced: bool,
+) -> std::io::Result<()> {
+    use crossterm::execute;
+    use crossterm::terminal::LeaveAlternateScreen;
+
+    if keyboard_enhanced {
+        // Writer-backed, like every other byte in this handover: the caller's
+        // writer is the terminal in production and a Vec in the guard.
+        let _ = crate::tui::keyboard_enhancement::disable_to_writer(writer);
+    }
+    execute!(writer, crossterm::event::DisableFocusChange)?;
+    execute!(writer, LeaveAlternateScreen)?;
+    if mouse_capture {
+        let _ = execute!(writer, crossterm::event::DisableMouseCapture);
+    }
+    let _ = execute!(writer, crossterm::event::DisableBracketedPaste);
+    Ok(())
+}
+
 fn run_child_then_restore<T>(
     child: impl FnOnce() -> std::io::Result<T>,
     restore: impl FnOnce() -> anyhow::Result<()>,
@@ -2484,11 +2510,18 @@ fn run_child_then_restore<T>(
 fn restore_tui_terminal(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     mouse_capture: bool,
+    keyboard_enhanced: bool,
 ) -> anyhow::Result<()> {
     use crossterm::execute;
     use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 
     enable_raw_mode()?;
+    // Re-push what the suspend popped. Without this the TUI comes back with
+    // legacy keys: Ctrl+Enter stops being distinguishable and `/keys` advertises
+    // a chord the terminal can no longer send.
+    if keyboard_enhanced {
+        let _ = crate::tui::keyboard_enhancement::enable_keyboard_enhancement();
+    }
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     if mouse_capture {
         let _ = execute!(terminal.backend_mut(), crossterm::event::EnableMouseCapture);
@@ -2965,6 +2998,78 @@ pub(crate) fn register_tui_command_handlers(
 #[cfg(test)]
 mod shell_out_tests {
     use super::*;
+
+    /// (iter-2445) A suspend must hand the child a terminal the child can READ.
+    ///
+    /// The TUI pushes the kitty keyboard protocol at startup and holds it for the
+    /// whole session. A child that inherits it receives ARROW KEYS AS CSI-u
+    /// SEQUENCES, and the setup wizard reads legacy escapes (`dialoguer` →
+    /// `console`, which parses `ESC [ A` itself) — so navigating the wizard did
+    /// nothing at all. The operator experiences a dead menu and, on some
+    /// terminals, a process that goes down; the report was "/setup crashes the
+    /// TUI". The TEARDOWN path had always popped this before returning the
+    /// terminal to the shell. The SUSPEND path did not, so the one command that
+    /// hands the terminal to a child was the one command that broke.
+    ///
+    /// This asserts the OWNERSHIP TRANSFER, not the bytes: the observable
+    /// difference is whether the process still holds the pushed entry when the
+    /// child starts.
+    #[test]
+    fn a_suspend_pops_the_kitty_keyboard_protocol_a_child_cannot_read() {
+        // KITTY_PUSH_ACTIVE is a process-global, and these two tests drive it in
+        // opposite directions, so they must not interleave: the crate-wide test
+        // lock is the same serialisation the settings and theme tests use.
+        let _serial = crate::config::test_env_lock();
+        // Push through the writer-backed path so the escape bytes land in a Vec
+        // rather than on the developer's terminal.
+        let mut pushed = Vec::new();
+        crate::tui::keyboard_enhancement::enable_to(&mut pushed)
+            .expect("the push sequence is writable");
+        assert!(
+            crate::tui::keyboard_enhancement::keyboard_enhancement_pushed(),
+            "the push must be recorded as active for this test to mean anything"
+        );
+
+        let mut handed_over = Vec::new();
+        suspend_terminal_for_child(&mut handed_over, false, true)
+            .expect("the handover sequence is writable");
+
+        assert!(
+            !crate::tui::keyboard_enhancement::keyboard_enhancement_pushed(),
+            "the suspend must pop the kitty entry BEFORE the child runs, or the              child reads CSI-u arrow keys it cannot parse"
+        );
+        // The rest of what the child needs: the alt screen and focus reporting.
+        let bytes = String::from_utf8_lossy(&handed_over).to_string();
+        assert!(
+            bytes.contains("\x1b[?1049l"),
+            "the suspend must leave the alternate screen: {bytes:?}"
+        );
+        assert!(
+            bytes.contains("\x1b[?1004l"),
+            "the suspend must disable focus reporting: {bytes:?}"
+        );
+    }
+
+    /// The flag is the caller's record of whether the PUSH SUCCEEDED, so a
+    /// session that never got enhanced keys must not have an entry popped on its
+    /// behalf — that would pop a mode some earlier process left behind.
+    #[test]
+    fn a_suspend_without_enhancement_touches_no_kitty_entry() {
+        let _serial = crate::config::test_env_lock();
+        // Ensure the flag is clear, then hand over with keyboard_enhanced = false.
+        let mut drained = Vec::new();
+        let _ = crate::tui::keyboard_enhancement::disable_to_writer(&mut drained);
+        assert!(!crate::tui::keyboard_enhancement::keyboard_enhancement_pushed());
+
+        let mut handed_over = Vec::new();
+        suspend_terminal_for_child(&mut handed_over, false, false)
+            .expect("the handover sequence is writable");
+
+        assert!(
+            !crate::tui::keyboard_enhancement::keyboard_enhancement_pushed(),
+            "a session that never pushed must stay unpushed"
+        );
+    }
 
     #[test]
     fn the_terminal_is_restored_even_when_the_child_cannot_spawn() {

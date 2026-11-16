@@ -211,6 +211,12 @@ impl App {
         // One scope, two fields, from one source: the id set is what the hub
         // filters on AND what the open guard counted, so the picker can never
         // open empty or refuse a full one.
+        // A `Show more` page still in flight leaves `session_load_more` true,
+        // and the drain reads it to decide APPEND vs REPLACE. Carrying it into a
+        // scoped open would append the scoped page to the previous session's
+        // rows at a global cursor — and skip `records_snapshot()` entirely, so
+        // no delegation row would ever arrive.
+        self.session_load_more = false;
         self.session_hub
             .open_subagent_scoped(Some(std::time::Instant::now()), SubagentScope { root, ids });
         self.session_list_pending = true;

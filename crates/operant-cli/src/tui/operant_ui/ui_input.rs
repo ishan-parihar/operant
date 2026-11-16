@@ -20,6 +20,27 @@ use crate::tui::operant_app::tui_fns::detect_kv_cache_problem;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+/// The boundary drawn between two status-line segments.
+///
+/// (plan 2026-11-16, /bar retraction) One definition again: the literal both
+/// functions used, restored. The `bar_style` half-port — a `StatusLineBg` grey
+/// row above the composer — was reverting to this.
+const SEGMENT_SEPARATOR: &str = " · ";
+
+/// Push the boundary span, unless this is the first segment of the line.
+///
+/// The first segment carries no leading separator, so emptiness of `spans` is
+/// the discriminator. The boundary is painted in the dim ink every boundary
+/// uses, on the same line as `separator_span` was.
+fn push_separator(spans: &mut Vec<Span<'static>>) {
+    if !spans.is_empty() {
+        spans.push(Span::styled(
+            SEGMENT_SEPARATOR,
+            Style::default().fg(dim_color()),
+        ));
+    }
+}
+
 fn shell_mode_color() -> Color {
     rgb(110, 214, 151)
 }
@@ -867,11 +888,7 @@ fn transport_context_labels(app: &dyn TuiState) -> Vec<String> {
 
 fn append_transport_context(status_text: &mut String, app: &dyn TuiState) {
     for label in transport_context_labels(app) {
-        status_text.push_str(&format!(
-            "{}{}",
-            crate::tui::status_line::separator::separator(),
-            label
-        ));
+        status_text.push_str(&format!("{}{}", SEGMENT_SEPARATOR, label));
     }
 }
 
@@ -917,63 +934,27 @@ fn append_batch_progress_spans(
 
     if total > 0 {
         spans.push(Span::styled(
-            format!(
-                "{}{}/{} done",
-                crate::tui::status_line::separator::separator(),
-                completed,
-                total
-            ),
+            format!("{}{}/{} done", SEGMENT_SEPARATOR, completed, total),
             Style::default().fg(anim_color).bold(),
         ));
     }
 
     if let Some(running) = running_summary {
         spans.push(Span::styled(
-            format!(
-                "{}running: {}",
-                crate::tui::status_line::separator::separator(),
-                running
-            ),
+            format!("{}running: {}", SEGMENT_SEPARATOR, running),
             Style::default().fg(dim_color()),
         ));
     }
 
     if let Some(tool_name) = last_completed.filter(|_| completed < total) {
         spans.push(Span::styled(
-            format!(
-                "{}last done: {}",
-                crate::tui::status_line::separator::separator(),
-                tool_name
-            ),
+            format!("{}last done: {}", SEGMENT_SEPARATOR, tool_name),
             Style::default().fg(dim_color()),
         ));
     }
 }
 
-/// Whether the status row gets the bar fill.
-///
-/// (plan 2026-11-15 B2) Three things must hold: the row is a real status row
-/// (the caller knows whether the transcript collapsed), it has height, and it
-/// carries TEXT. The last one is the fix — the idle arm resolves to an empty
-/// line, and filling an empty line paints a solid bar of `status_line_bg` with
-/// nothing in it (measured at 80x24: `rgb:161A21` across all 80 columns on the
-/// row above the composer).
-///
-/// Extracted as a pure function because the defective arm cannot be driven from
-/// a test where it sits: `draw_status` reads the process-global build-progress
-/// file and the configured tip, so a render-level guard hangs or passes for
-/// reasons unrelated to the rule. The caller passes the three inputs.
-fn status_row_fills(status_row_is_real: bool, height: u16, line_width: usize) -> bool {
-    status_row_is_real && height > 0 && line_width > 0
-}
-
-pub(super) fn draw_status(
-    frame: &mut Frame,
-    app: &dyn TuiState,
-    area: Rect,
-    pending_count: usize,
-    status_row_is_real: bool,
-) {
+pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pending_count: usize) {
     let elapsed = app.elapsed().map(|d| d.as_secs_f32()).unwrap_or(0.0);
     let stale_secs = app.time_since_activity().map(|d| d.as_secs_f32());
     let (cache_read, cache_creation) = app.streaming_cache_tokens();
@@ -1036,7 +1017,7 @@ pub(super) fn draw_status(
                     if queued_suffix.is_empty() {
                         ""
                     } else {
-                        crate::tui::status_line::separator::separator()
+                        SEGMENT_SEPARATOR
                     },
                     queued_suffix
                 ),
@@ -1203,11 +1184,7 @@ pub(super) fn draw_status(
 
                 if let Some(notice) = experimental_notice {
                     spans.push(Span::styled(
-                        format!(
-                            "{}⚠ {}",
-                            crate::tui::status_line::separator::separator(),
-                            notice
-                        ),
+                        format!("{}⚠ {}", SEGMENT_SEPARATOR, notice),
                         Style::default().fg(rgb(255, 193, 7)).bold(),
                     ));
                 }
@@ -1220,20 +1197,12 @@ pub(super) fn draw_status(
                 }
                 for label in transport_context_labels(app) {
                     spans.push(Span::styled(
-                        format!(
-                            "{}{}",
-                            crate::tui::status_line::separator::separator(),
-                            label
-                        ),
+                        format!("{}{}", SEGMENT_SEPARATOR, label),
                         Style::default().fg(dim_color()),
                     ));
                 }
                 spans.push(Span::styled(
-                    format!(
-                        "{}{}",
-                        crate::tui::status_line::separator::separator(),
-                        format_elapsed(elapsed)
-                    ),
+                    format!("{}{}", SEGMENT_SEPARATOR, format_elapsed(elapsed)),
                     Style::default().fg(dim_color()),
                 ));
 
@@ -1247,11 +1216,7 @@ pub(super) fn draw_status(
                         "kv".to_string()
                     };
                     spans.push(Span::styled(
-                        format!(
-                            "{}⚠ {} cache miss",
-                            crate::tui::status_line::separator::separator(),
-                            miss_str
-                        ),
+                        format!("{}⚠ {} cache miss", SEGMENT_SEPARATOR, miss_str),
                         Style::default().fg(rgb(255, 193, 7)),
                     ));
                 }
@@ -1320,76 +1285,18 @@ pub(super) fn draw_status(
     // the input area, like tool-tips for using CTRL+ENTER").
     if let Some(hint) = composer_hint(app) {
         line.spans.push(Span::styled(
-            format!("{}{hint}", crate::tui::status_line::separator::separator()),
+            format!("{}{hint}", SEGMENT_SEPARATOR),
             Style::default().fg(dim_color()),
         ));
     }
 
     crate::tui::operant_app::memory::check_staleness();
 
-    // (plan 2026-11-14 U7) The bar's fill. OMP paints one `statusLineBg` behind
-    // the whole row and every segment sits on it; operant had no fill at all, so
-    // there was nothing for a separator to be drawn against. The style is
-    // applied to the ROW, not to each span, so a span that carries its own
-    // background (a warning chip, say) still wins.
-    //
-    // ONLY when this really is a status row. `draw_status` runs
-    // unconditionally, so when the transcript above it has collapsed -- after
-    // Ctrl+L or /cls, or under a full-screen overlay -- `area` lands at y == 0
-    // and the fill paints the terminal's FIRST row instead. MEASURED: that is
-    // what drifted terminal-clear, terminal-scroll-cls, skills-view.80x24,
-    // journey-view.80x24 and edit-row-diff-expands, each at (row 0, col 0).
-    // A status row is never the top row of the screen, so this is the whole
-    // discriminator.
-    // (plan 2026-11-14 U7, audit fix) The fill belongs to a status ROW. When
-    // the content above has collapsed, this rect sits where the overlay's
-    // content was drawn, and filling it paints a content row instead of a bar.
-    //
-    // The CALLER decides, not this function: geometry cannot tell the two apart.
-    // A first attempt keyed on `area.y > 0`, which fixed the terminal-clear
-    // cases (rect at y == 0) but not the full-screen-panel ones (rect at y == 13,
-    // over an overlay row). The caller knows whether the messages chunk
-    // collapsed, so it says so.
-    // (plan 2026-11-15 U14) The powerline caps. OMP draws one at each end of the
-    // bar; a cap is the fill colour used as its own ink, so it reads as the bar's
-    // edge rather than as content.
-    //
-    // The LEFT cap is just a leading span. The RIGHT cap has to reach the bar's
-    // last column, and the text inside it is short, so the gap is filled with
-    // spaces in the fill colour — which is what makes the fill run to the edge and
-    // gives the cap something to sit against. Without the spacer the cap would sit
-    // immediately after the text and read as a stray glyph mid-row.
-    //
-    // Only the two powerline styles have caps (see `SeparatorStyle::right_cap`);
-    // for every other style this is a no-op and the row is untouched.
-    if status_row_is_real && area.height > 0 {
-        line = add_caps(line, area.width, crate::tui::status_line::style::style());
-    }
-
-    // (plan 2026-11-15 B2) An EMPTY status line must not be filled.
-    //
-    // The idle arm resolves to `Line::from("")`, and the caller used to fill any
-    // real row with height — so an idle session painted a solid bar of
-    // `status_line_bg` with no text in it. MEASURED on the real binary at 80x24:
-    // the row between the last message and the composer was `rgb:161A21` across
-    // all 80 columns carrying nothing, which reads as "an extra grey line above
-    // the input bar". It is not extra chrome; it is the status row with nothing
-    // to say.
-    //
-    // Keyed on the LINE, not on `is_processing`: a processing session whose
-    // status is `Idle` produces the same empty line and the same phantom bar.
-    // The row itself stays reserved (`Constraint::Length(1)`) — the reservation
-    // is the composer's breathing space and other arms paint into it; only the
-    // fill is conditional.
-    // Measured BEFORE the move into `Paragraph::new` below — that call takes the
-    // line by value.
-    let line_width = line.width();
+    // (plan 2026-11-16) The grey status-row fill and its powerline caps are
+    // gone: the row is transparent and shows only what it has to say. The
+    // historical behaviour is back. The reservation stays — this row is the
+    // breathing space above the composer and the tips dock.
     let paragraph = Paragraph::new(line);
-    let paragraph = if status_row_fills(status_row_is_real, area.height, line_width) {
-        paragraph.style(crate::tui::status_line::bar::fill_style())
-    } else {
-        paragraph
-    };
 
     if app.centered_mode() {
         frame.render_widget(paragraph.alignment(Alignment::Center), area);
@@ -1413,11 +1320,7 @@ fn running_tool_header_spans(
     ];
     if let Some(detail) = detail {
         spans.push(Span::styled(
-            format!(
-                "{}{}",
-                crate::tui::status_line::separator::separator(),
-                detail
-            ),
+            format!("{}{}", SEGMENT_SEPARATOR, detail),
             Style::default().fg(anim_color).bold(),
         ));
     }
@@ -1433,58 +1336,12 @@ fn running_tool_header_spans(
 /// separator is pushed here, at the boundary, by the one helper that owns it.
 fn push_queued_suffix(spans: &mut Vec<Span<'static>>, queued_suffix: &str) {
     if !queued_suffix.is_empty() {
-        crate::tui::status_line::separator::push_separator(spans);
+        push_separator(spans);
         spans.push(Span::styled(
             queued_suffix.to_string(),
             Style::default().fg(queued_color()),
         ));
     }
-}
-
-/// Wrap `line` in the configured style's end caps, padded to `width` columns.
-///
-/// Returns the line untouched for every style without caps — which is six of the
-/// eight, and the default — so this is a no-op until an operator picks a powerline
-/// style.
-///
-/// The padding is the point: the bar's text is short and the fill runs to the
-/// rect's last column, so without a spacer the right cap would sit immediately
-/// after the text and read as a stray glyph mid-row rather than as the bar's edge.
-fn add_caps(
-    line: Line<'static>,
-    width: u16,
-    style: crate::tui::status_line::style::SeparatorStyle,
-) -> Line<'static> {
-    let Some((left, right)) = style.left_cap().zip(style.right_cap()) else {
-        return line;
-    };
-
-    let used = line.width();
-    let caps = left.width() + right.width();
-
-    // No room for both caps means no caps at all. `saturating_sub` alone would
-    // clamp the GAP to zero and still append two glyphs, making the line two cells
-    // wider than the rect — MEASURED on an 80-column bar carrying a 105-character
-    // streaming status ("streaming… 12.3s · 45.6 tps · ↑128k ↓4.2k · using
-    // websocket · via OpenRouter · 12.3s · ⚠ 128k cache miss"), which overflows by
-    // 27 and pushes the right cap off-screen entirely. Dropping both caps degrades
-    // to the un-capped bar, which is the six other styles' behaviour and is always
-    // correct; drawing one cap without the other is not a shape OMP defines.
-    if used + caps > width as usize {
-        return line;
-    }
-
-    let gap = width as usize - (used + caps);
-    let cap_style = crate::tui::status_line::bar::cap_style();
-
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
-    spans.push(Span::styled(left, cap_style));
-    spans.extend(line.spans);
-    if gap > 0 {
-        spans.push(Span::styled(" ".repeat(gap), cap_style));
-    }
-    spans.push(Span::styled(right, cap_style));
-    Line::from(spans)
 }
 
 fn streaming_status_spans(
@@ -1510,133 +1367,6 @@ fn streaming_status_spans(
 
 #[cfg(test)]
 mod tests {
-    /// The fill decision is the caller's, so what is testable here is the part
-    /// this function still owns: a zero-height rect never gets a fill. Whether
-    /// the ROW is real is decided at the call site (`chunks[0].height > 0`) and
-    /// pinned by the corpus goldens for terminal-clear, terminal-scroll-cls,
-    /// skills-view and journey-view -- which is where both wrong answers
-    /// actually showed up.
-    /// The caps are DRAWN, not merely defined: a `cap_style` with no caller is the
-    /// dead seam U8 left behind.
-    ///
-    /// Takes the style as a parameter rather than setting the process-global cell:
-    /// the cell is shared and these tests run in parallel, so a test that wrote it
-    /// raced every other status-line test in the binary. `add_caps` is pure for
-    /// exactly this reason, and the live read is covered by the call-site assertion
-    /// below.
-    #[test]
-    fn powerline_caps_are_drawn_at_both_ends_of_the_bar() {
-        use crate::tui::status_line::style::SeparatorStyle;
-
-        let line = add_caps(
-            Line::from(vec![Span::raw(" hi ")]),
-            20,
-            SeparatorStyle::Powerline,
-        );
-        let cap = crate::tui::status_line::bar::cap_style();
-
-        // First span is the left cap, last is the right cap, and both carry the
-        // fill as their ink — the translation that makes a cap visible at all.
-        let first = line.spans.first().expect("a left cap");
-        let last = line.spans.last().expect("a right cap");
-        assert_eq!(first.content.as_ref(), "\u{e0b2}");
-        assert_eq!(last.content.as_ref(), "\u{e0b0}");
-        assert_eq!(first.style, cap, "the cap ink must be the fill colour");
-        assert_eq!(last.style, cap);
-
-        // The text is between them, and the padding reaches the right edge: the
-        // caps plus the gap must account for every column.
-        let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
-        assert_eq!(total, 20, "the caps must span the full bar width");
-        let gap = line
-            .spans
-            .iter()
-            .find(|s| s.content.chars().all(|c| c == ' ') && s.style == cap)
-            .expect("a spacer in the fill colour");
-        assert_eq!(gap.content.width(), 20 - " hi ".len() - 2);
-    }
-
-    /// THE BOUNDARY: a bar whose text is as wide as the rect gets no caps.
-    ///
-    /// The first version of `add_caps` clamped the gap with `saturating_sub` and
-    /// appended the caps anyway, so the line came out two cells wider than the rect
-    /// and the right cap was clipped off-screen. Every other cap test used width 20
-    /// with 4 characters of text, so nothing exercised this. MEASURED reachable: the
-    /// streaming status branch concatenates six parts and reaches 105 characters,
-    /// which overflows an 80-column bar by 27.
-    #[test]
-    fn a_bar_too_narrow_for_its_caps_gets_none() {
-        use crate::tui::status_line::style::SeparatorStyle;
-
-        for text_len in [18usize, 19, 20, 25, 105] {
-            let text = "x".repeat(text_len);
-            let line = add_caps(
-                Line::from(vec![Span::raw(text.clone())]),
-                20,
-                SeparatorStyle::Powerline,
-            );
-            let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
-
-            if text_len + 2 <= 20 {
-                // Both caps fit: the row is padded to exactly the rect width, with a
-                // cap at each end.
-                assert_eq!(total, 20, "{text_len} chars must pad to the full 20");
-                assert_eq!(line.spans[0].content.as_ref(), "\u{e0b2}");
-                assert_eq!(line.spans.last().unwrap().content.as_ref(), "\u{e0b0}");
-            } else {
-                // No room for both: add NOTHING, so the caller's own clipping is
-                // unchanged and the bar degrades to the un-capped shape.
-                //
-                // The contract is what `add_caps` ADDS, not what the row measures:
-                // a 25-character string in a 20-column rect already overflows by
-                // itself, ratatui clips that, and that predates caps.
-                assert_eq!(
-                    line.spans.len(),
-                    1,
-                    "{text_len} chars + 2 caps cannot fit in 20, so no span may be added"
-                );
-                assert_eq!(line.spans[0].content.as_ref(), text);
-            }
-        }
-    }
-
-    /// Every style without caps returns the line UNTOUCHED — same span count, same
-    /// content. Six of the eight are in that class, including the default, so this
-    /// is what proves the caps are opt-in rather than a change to every bar.
-    #[test]
-    fn a_style_without_caps_leaves_the_bar_untouched() {
-        use crate::tui::status_line::style::SeparatorStyle;
-
-        for style in SeparatorStyle::ALL {
-            if style.left_cap().is_some() {
-                continue;
-            }
-            let line = add_caps(Line::from(vec![Span::raw(" hi ")]), 20, *style);
-            assert_eq!(line.spans.len(), 1, "{style:?} must not add spans");
-            assert_eq!(line.spans[0].content.as_ref(), " hi ");
-        }
-    }
-
-    /// The call site really passes the configured style, so the caps are reachable
-    /// from the live path and not only from a test that supplies one. This is the
-    /// assertion that would fail if `add_caps` were called with a hardcoded style.
-    #[test]
-    fn the_cap_call_site_reads_the_configured_style() {
-        let source = include_str!("ui_input.rs");
-        assert!(
-            source.contains("add_caps(line, area.width, crate::tui::status_line::style::style())"),
-            "the cap call site must pass the live configured style"
-        );
-    }
-
-    #[test]
-    fn the_fill_needs_a_real_row_with_height() {
-        let fills = |status_row_is_real: bool, height: u16| status_row_is_real && height > 0;
-        assert!(!fills(true, 0), "a zero-height row has nothing to fill");
-        assert!(fills(true, 1), "a real one-row status row is filled");
-        assert!(!fills(false, 1), "a collapsed layout is not filled");
-    }
-
     use super::*;
     use ratatui::style::Modifier;
 
@@ -2172,7 +1902,7 @@ pub(super) fn build_notification_spans(app: &dyn TuiState) -> Vec<Span<'static>>
     // closure was a second copy of `push_separator`, which is how a style key
     // would have reached one bar and missed the other.
     let push_sep = |spans: &mut Vec<Span<'static>>| {
-        crate::tui::status_line::separator::push_separator(spans);
+        push_separator(spans);
     };
 
     if let Some(selection) = app.copy_selection_status() {
@@ -3744,7 +3474,7 @@ mod composer_hint_tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_status(frame, app, frame.area(), 0, true);
+                draw_status(frame, app, frame.area(), 0);
             })
             .expect("draw");
         crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer()).join("\n")
@@ -3752,38 +3482,6 @@ mod composer_hint_tests {
 
     /// (plan 2026-11-15 B2) An EMPTY status line is not filled.
     ///
-    /// The idle arm resolves to `Line::from("")`, and filling an empty line
-    /// paints a solid bar of `status_line_bg` with nothing in it — measured on
-    /// the real binary at 80x24: the row between the last message and the
-    /// composer was `rgb:161A21` across all 80 columns carrying no text. That is
-    /// the operator's "extra grey line above the input bar".
-    ///
-    /// The rule is pinned through [`status_row_fills`], the pure decision the
-    /// fill site calls, rather than by re-stating the condition here — a copy
-    /// would pass with the live site unfixed.
-    #[test]
-    fn an_empty_status_line_is_not_filled() {
-        // The live site's inputs, driven through the live decision.
-        assert!(
-            !status_row_fills(true, 1, 0),
-            "an empty line on a real row must not be filled — that is the \
-             phantom grey bar above the composer"
-        );
-        assert!(
-            status_row_fills(true, 1, 5),
-            "a status line with content is still filled"
-        );
-        // The arms the earlier test pinned must not move.
-        assert!(
-            !status_row_fills(true, 0, 5),
-            "a zero-height row has nothing to fill"
-        );
-        assert!(
-            !status_row_fills(false, 1, 5),
-            "a collapsed layout is not filled"
-        );
-    }
-
     /// THE INPUT AREA CARRIES ONLY THE OPERATOR'S TEXT.
     ///
     /// The queue tooltip used to be painted as the FIRST ROW of the

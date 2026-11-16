@@ -178,6 +178,10 @@ max_trajectories = 0
 # which means "no attribution attempted" — a different fact from a span left
 # `Unmeasured`. Set it false if you do not want the per-turn timing recorded.
 show_turn_attribution = true
+# Core's cross-iteration repetition circuit breaker (an identical tool-call
+# streak) and its warning nudge. Default ON; set false to disable the breaker
+# when a workflow legitimately repeats the same call.
+loop_detection_enabled = true
 # Largest share of `context_window` that ONE tool result may occupy before its
 # bulk is withheld behind an explicit marker (iter-357). The kept head, the
 # token count, the per-token price and the number of tokens removed are all
@@ -479,7 +483,8 @@ theme = "default"
 # theme, so a key here wins over that theme's own value for the role. The key is
 # a role name (the `Role::key()` set in
 # crates/operant-cli/src/tui/vendor/style/palette.rs — accent, ai_text, border,
-# dim, error, success, user_bg, …); the value is "#rrggbb" or "#rgb".
+# dim, error, success, user_bg, composer_bg, …); the value is "#rrggbb" or
+# "#rgb". `composer_bg` paints the composer band — the input area itself.
 # An unknown role or a malformed colour is logged and SKIPPED, so one typo does
 # not cost you the rest of the palette. Empty (the default) is byte-identical to
 # the theme's own look, and these survive a /theme switch: the theme seeds the
@@ -488,18 +493,7 @@ theme = "default"
 # accent = "#febc38"
 # ai_text = "#e5e5e7"
 # border = "#3d424a"
-# Which glyph draws the boundary between two status-line segments
-# (plan 2026-11-15). One of:
-#   dot            " · "  -- the DEFAULT, and the historical look
-#   powerline      U+E0B0  -- needs a patched (Nerd) font
-#   powerline-thin U+E0B1  -- needs a patched (Nerd) font
-#   slash          " / "
-#   pipe           " │ "   -- U+2502, box-drawing (not ASCII)
-#   block          "█"
-#   none           " "     -- segments touch, no visible rule
-#   ascii          "|"     -- for a terminal with no powerline glyphs
-# An unknown value warns at startup and falls back to `dot`.
-#bar_style = "dot"
+# composer_bg = "#1e242e"
 rich_output = true
 show_tool_calls = true
 # `show_iterations`, `landing_title`, `prompt_placeholder`, `compact_width`,

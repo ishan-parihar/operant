@@ -57,13 +57,10 @@ pub struct Task {
     pub completed_at: Option<i64>,
     pub workspace_kind: String,
     pub workspace_path: Option<String>,
-    pub claim_lock: Option<String>,
-    pub claim_expires: Option<i64>,
     pub tenant: Option<String>,
     pub result: Option<String>,
     pub idempotency_key: Option<String>,
     pub consecutive_failures: i32,
-    pub worker_pid: Option<i32>,
     pub last_failure_error: Option<String>,
     pub max_runtime_seconds: Option<i32>,
     pub last_heartbeat_at: Option<i64>,
@@ -81,11 +78,7 @@ pub struct Run {
     pub profile: Option<String>,
     pub step_key: Option<String>,
     pub status: String,
-    pub claim_lock: Option<String>,
-    pub claim_expires: Option<i64>,
-    pub worker_pid: Option<i32>,
     pub max_runtime_seconds: Option<i32>,
-    pub last_heartbeat_at: Option<i64>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub outcome: Option<String>,
@@ -170,7 +163,8 @@ impl KanbanDb {
 
     /// Plan 004 — append-only migrations. v1 freezes the current
     /// schema verbatim; future changes append a new entry.
-    const MIGRATIONS: &[&str] = &[r#"
+    const MIGRATIONS: &[&str] = &[
+        r#"
             CREATE TABLE IF NOT EXISTS tasks (
                 id                   TEXT PRIMARY KEY,
                 title                TEXT NOT NULL,
@@ -278,7 +272,61 @@ impl KanbanDb {
                 PRIMARY KEY (task_id, assignee),
                 FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
-    "#];
+    "#,
+        // v2 — (iter-2453, F1 + F2) claim atomicity and an honest schema.
+        //
+        // F1: `claim_task` was check-then-act with no transaction and no unique
+        // constraint, so two concurrent dispatchers (routine here — the board is a
+        // machine-wide file and 20+ worktrees are live) both claimed one task and
+        // both ran it. The partial unique index below is the database-level guard.
+        //
+        // PARTIAL is load-bearing: `fail_run` resets the TASK to `todo` and leaves
+        // the old `task_runs` row `failed`, so a legitimate retry inserts a SECOND
+        // row for the same `task_id`. A full unique index would break every retry.
+        //
+        // The dedupe runs FIRST because `CREATE UNIQUE INDEX` fails outright on a
+        // database that already carries the corruption — verified against a real v1
+        // schema seeded with two `running` rows for one task. Without this step the
+        // migration would abort on exactly the operator F1 already hurt, and
+        // `init()` failing takes every `operant kanban` command down with it.
+        //
+        // F2: the schema advertised a lease nothing kept. `claim_expires`,
+        // `claim_lock` and `worker_pid` were written by no code path (the lone
+        // `claim_lock` INSERT stored a worker label nothing ever read), and
+        // `task_runs.last_heartbeat_at` was never written at all. Dropped rather
+        // than implemented: a half-built lease is worse than none, and the columns
+        // reading as an enforced boundary is what made this defect invisible.
+        // `tasks.last_heartbeat_at` STAYS — it is written by `heartbeat()`
+        // (:562), and `max_runtime_seconds` stays on both tables (operator intent
+        // with no enforcement yet; a separate finding, not this one).
+        r#"
+            UPDATE task_runs
+               SET status = 'failed',
+                   ended_at = COALESCE(ended_at, started_at),
+                   error = 'closed by the v2 kanban migration: this task held '
+                        || 'more than one running run, which claim_task could '
+                        || 'produce before it was made atomic. Superseded by run '
+                        || (SELECT MAX(r2.id) FROM task_runs r2
+                             WHERE r2.task_id = task_runs.task_id
+                               AND r2.status = 'running')
+               WHERE status = 'running'
+                 AND id <> (SELECT MAX(r3.id) FROM task_runs r3
+                             WHERE r3.task_id = task_runs.task_id
+                               AND r3.status = 'running');
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_one_running
+                ON task_runs(task_id) WHERE status = 'running';
+
+            ALTER TABLE tasks DROP COLUMN claim_lock;
+            ALTER TABLE tasks DROP COLUMN claim_expires;
+            ALTER TABLE tasks DROP COLUMN worker_pid;
+
+            ALTER TABLE task_runs DROP COLUMN claim_lock;
+            ALTER TABLE task_runs DROP COLUMN claim_expires;
+            ALTER TABLE task_runs DROP COLUMN worker_pid;
+            ALTER TABLE task_runs DROP COLUMN last_heartbeat_at;
+    "#,
+    ];
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -317,13 +365,10 @@ impl KanbanDb {
                     completed_at: row.get("completed_at")?,
                     workspace_kind: row.get("workspace_kind")?,
                     workspace_path: row.get("workspace_path")?,
-                    claim_lock: row.get("claim_lock")?,
-                    claim_expires: row.get("claim_expires")?,
                     tenant: row.get("tenant")?,
                     result: row.get("result")?,
                     idempotency_key: row.get("idempotency_key")?,
                     consecutive_failures: row.get("consecutive_failures")?,
-                    worker_pid: row.get("worker_pid")?,
                     last_failure_error: row.get("last_failure_error")?,
                     max_runtime_seconds: row.get("max_runtime_seconds")?,
                     last_heartbeat_at: row.get("last_heartbeat_at")?,
@@ -364,13 +409,10 @@ impl KanbanDb {
                     completed_at: row.get("completed_at")?,
                     workspace_kind: row.get("workspace_kind")?,
                     workspace_path: row.get("workspace_path")?,
-                    claim_lock: row.get("claim_lock")?,
-                    claim_expires: row.get("claim_expires")?,
                     tenant: row.get("tenant")?,
                     result: row.get("result")?,
                     idempotency_key: row.get("idempotency_key")?,
                     consecutive_failures: row.get("consecutive_failures")?,
-                    worker_pid: row.get("worker_pid")?,
                     last_failure_error: row.get("last_failure_error")?,
                     max_runtime_seconds: row.get("max_runtime_seconds")?,
                     last_heartbeat_at: row.get("last_heartbeat_at")?,
@@ -736,11 +778,7 @@ impl KanbanDb {
                     profile: row.get("profile")?,
                     step_key: row.get("step_key")?,
                     status: row.get("status")?,
-                    claim_lock: row.get("claim_lock")?,
-                    claim_expires: row.get("claim_expires")?,
-                    worker_pid: row.get("worker_pid")?,
                     max_runtime_seconds: row.get("max_runtime_seconds")?,
-                    last_heartbeat_at: row.get("last_heartbeat_at")?,
                     started_at: row.get("started_at")?,
                     ended_at: row.get("ended_at")?,
                     outcome: row.get("outcome")?,

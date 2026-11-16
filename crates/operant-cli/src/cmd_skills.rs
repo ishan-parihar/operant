@@ -490,23 +490,44 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
     // Every root the resolver produces — the vendor roots (installed content
-    // integrations and plugin-contributed dirs) AND `[skills] extra_roots` —
-    // so the CLI lists exactly what the agent can run. Without the extra
-    // roots this listing was a subset of the agent's, which is the whole
-    // complaint the plan was written for.
-    for root in crate::skill_roots::vendor_skill_roots(config)
-        .into_iter()
-        .chain(config.skills.extra_roots.iter().cloned())
-    {
-        manager.add_extra_root(Some(root));
-    }
+    // integrations and plugin-contributed dirs), `[skills] extra_roots` AND the
+    // project root — so the CLI lists exactly what the agent can run. The old
+    // hand-built `vendor_skill_roots + extra_roots` chain omitted the project
+    // root the resolver adds, so the CLI's `list` under-reported the pool the
+    // agent actually sees. `skill_roots` is the ONE list, in precedence order.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
 
     let skills = manager.list();
+
+    // The refusal report rides the surface the operator actually runs, not only
+    // `operant doctor`. A dead symlink under a configured root, or a walk that
+    // hit SKILL_ROOT_WALK_LIMIT, was invisible here: the listing named the
+    // skills it FOUND and said nothing about the ones it silently dropped, so
+    // "is this skill installed?" could be answered "no" while a dead symlink
+    // was the reason. JSON keeps the machine-readable form; the text listing
+    // carries a compact notice because a human running `skills list` needs the
+    // reason, not just the count.
+    let refusals = manager.issues();
+    if !json && (!refusals.is_empty() || manager.is_truncated()) {
+        if manager.is_truncated() {
+            println!(
+                "{} walk stopped at {} entries — the list below is INCOMPLETE",
+                style("!").yellow(),
+                operant_core::skills::SKILL_ROOT_WALK_LIMIT
+            );
+        }
+        for issue in refusals {
+            println!(
+                "{} skill root refused: {}",
+                style("!").yellow(),
+                issue.describe()
+            );
+        }
+    }
 
     if json {
         let items: Vec<serde_json::Value> = skills
@@ -616,7 +637,10 @@ fn inspect_skill(config: &AppConfig, id: &str) -> Result<()> {
         anyhow::bail!("Skill '{}' not found.", id);
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list, not the pool alone: a skill that lives
+    // only in [skills] extra_roots or the project root is inspectable by the
+    // same name the CLI advertises it under.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
@@ -1001,8 +1025,9 @@ fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
 }
 
 fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
-    let skills_dir = &config.skills.root_dir;
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list: a skill living only in an extra root
+    // must remain readable before and after the disk reload.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let old_skill = manager
@@ -1036,7 +1061,9 @@ fn browse_skills(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list, so `list` and `search` report the same
+    // set the agent can run.
+    let mut manager = crate::skill_roots::skill_manager(config);
     let installed = manager.load_all().context("Failed to load skills")?;
 
     let entries = match std::fs::read_dir(skills_dir) {
@@ -1094,7 +1121,9 @@ fn browse_skills(config: &AppConfig) -> Result<()> {
 }
 
 fn check_skill(config: &AppConfig, name: &str) -> Result<()> {
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    // The resolver's whole root list: the version check must see the same
+    // skill the CLI `list` does, extra_roots included.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let skill = manager
@@ -1920,5 +1949,55 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(pool);
         let _ = std::fs::remove_dir_all(target);
+    }
+
+    /// **The refusal report is observable on the everyday surface.**
+    ///
+    /// `operant doctor` already prints a refused root, but `skills list` did
+    /// not — so the operator's day-to-day question ("is my skill installed?")
+    /// could be answered "no" while a dead symlink under a configured root was
+    /// the real reason, with nothing anywhere saying so. This asserts the
+    /// manager the CLI builds actually carries the refusal through, which is
+    /// the property `list_skills`' notice prints.
+    ///
+    /// MUTATION-PROOF: reverting `skill_manager` to `SkillManager::new(pool)`
+    /// drops the dead symlink's refusal and fails the first assertion.
+    #[test]
+    fn a_dead_symlink_under_extra_roots_is_reported_not_swallowed() {
+        let pool = temp_dir("pool");
+        let extra = temp_dir("extra");
+        // A real skill so the pool is not empty.
+        write_skill(
+            &pool.join("audit-website"),
+            "audit-website",
+            "run a website audit",
+        );
+        // A dead symlink INSIDE a root that does resolve: the WALK reports it,
+        // which is the channel `list_skills` reads via `manager.issues()`.
+        std::os::unix::fs::symlink(extra.join("does-not-exist"), extra.join("dead-skill"));
+
+        let config = config_with_roots(&pool, &[extra.clone()]);
+        let mut manager = crate::skill_roots::skill_manager(&config);
+        let _ = manager.load_all();
+
+        // The refusal must be carried on the manager the CLI actually builds.
+        assert!(
+            !manager.issues().is_empty(),
+            "a dead symlink inside a configured root must be reported, not swallowed"
+        );
+        // And the live skill must still list: the notice is a WARNING, not a
+        // replacement for the listing.
+        assert!(
+            manager
+                .list()
+                .iter()
+                .any(|(name, _)| name == "audit-website"),
+            "the pool still lists the live skill alongside the refusal: {:?}",
+            manager
+                .list()
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 }

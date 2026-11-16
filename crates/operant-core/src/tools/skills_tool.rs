@@ -389,6 +389,70 @@ fn validate_content_size(content: &str, label: &str) -> Option<String> {
     }
 }
 
+/// A description this call WRITES must fit the advertised index (iter-2475).
+///
+/// The advertised block in the frozen prefix carries one line per skill at
+/// `ADVERTISED_SKILL_DESCRIPTION_CHARS`, clipped. Without this check the clip
+/// is the only bound, so a caller writes a description it believes is complete
+/// and the model silently sees a truncated one -- and the truncation is the
+/// ONLY thing keeping the block's token ceiling honest.
+///
+/// The rule is hermes's exactly (`skill_manager_tool.py:174`, which its
+/// docstring states as "An unchanged legacy over-limit description stays
+/// editable"): the reject fires only when the call CHANGES the description
+/// from the one in `before`. That half is load-bearing, not politeness --
+/// without it a body typo fix on an old skill becomes impossible because the
+/// frontmatter it never touched is over the limit.
+///
+/// `before` is `None` for a create, which always counts as a change.
+fn validate_description_budget(content: &str, before: Option<&str>) -> Option<String> {
+    let limit = crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS;
+    let after = description_of(content)?;
+    let unchanged = before
+        .and_then(description_of)
+        .is_some_and(|prior| prior == after);
+    if after.chars().count() <= limit || unchanged {
+        return None;
+    }
+    Some(format!(
+        "Description is {} characters; the advertised skill index shows {} per row. \
+         Shorten it to one sentence that triggers on the right task (the reason it is \
+         over is detail that belongs in the skill body), or keep the existing \
+         description by not changing it.",
+        after.chars().count(),
+        limit
+    ))
+}
+
+/// True when `path` is a SKILL.md, i.e. the file the frontmatter validators
+/// apply to. A patch to `references/notes.md` has no description to police.
+fn is_skill_md(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n == "SKILL.md")
+}
+
+/// The `description:` value in a SKILL.md's frontmatter, whitespace-collapsed.
+///
+/// Collapsed because a YAML folded scalar (`description: >`) is legal and
+/// common, and a multi-line value's length is meaningless for a one-line
+/// index. `None` when there is no frontmatter or no description field, which
+/// is a different validation's job to reject.
+fn description_of(content: &str) -> Option<String> {
+    let trimmed = content.trim_start_matches('\u{feff}');
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let parts: Vec<&str> = trimmed.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let frontmatter: serde_json::Value = serde_yaml::from_str(parts[1].trim()).ok()?;
+    frontmatter.get("description")?.as_str().map(|desc| {
+        // Same normalisation the render applies, so the length measured here
+        // is the length the index will actually see.
+        desc.split_whitespace().collect::<Vec<_>>().join(" ")
+    })
+}
+
 // ── Skill discovery helpers ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -1924,6 +1988,9 @@ impl SkillManageTool {
         if let Some(err) = validate_content_size(content, "SKILL.md") {
             return ToolResult::error("skill_manage", err);
         }
+        if let Some(err) = validate_description_budget(content, None) {
+            return ToolResult::error("skill_manage", err);
+        }
         let skill_dir = if let Some(cat) = &parsed.category {
             self.root_dir.join(cat).join(&parsed.name)
         } else {
@@ -2004,6 +2071,13 @@ impl SkillManageTool {
         let skill_md = skill_dir.join("SKILL.md");
         // Backup original for rollback
         let original = fs::read_to_string(&skill_md).ok();
+        // The description contract, with the ORIGINAL content as `before`: an
+        // edit that changes an over-limit description is refused, and one that
+        // leaves it untouched (a body fix on a legacy skill) still lands
+        // (iter-2475).
+        if let Some(err) = validate_description_budget(content, original.as_deref()) {
+            return ToolResult::error("skill_manage", err);
+        }
         if let Err(msg) = write_screened(&skill_dir, &skill_md, content) {
             return ToolResult::error("skill_manage", msg);
         }
@@ -2084,6 +2158,15 @@ impl SkillManageTool {
             if let Some(err) = validate_content_size(&updated, "SKILL.md") {
                 return ToolResult::error("skill_manage", err);
             }
+            // The description contract applies to PATCHES too, with the file's
+            // prior text as `before` (iter-2475). A patch that rewrites a
+            // description past the limit is refused; one that touches only the
+            // body of an already-over-limit skill still lands.
+            if is_skill_md(&target)
+                && let Some(err) = validate_description_budget(&updated, Some(&content))
+            {
+                return ToolResult::error("skill_manage", err);
+            }
             // If patching SKILL.md, validate frontmatter still intact
             if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false)
                 && let Some(err) = validate_frontmatter(&updated)
@@ -2129,6 +2212,11 @@ impl SkillManageTool {
         }
         let updated = content.replacen(old_string.as_str(), new_string, 1);
         if let Some(err) = validate_content_size(&updated, "SKILL.md") {
+            return ToolResult::error("skill_manage", err);
+        }
+        if is_skill_md(&target)
+            && let Some(err) = validate_description_budget(&updated, Some(&content))
+        {
             return ToolResult::error("skill_manage", err);
         }
         if target.file_name().map(|n| n == "SKILL.md").unwrap_or(false)
@@ -2871,6 +2959,66 @@ mod tests {
     fn test_validate_content_size_too_large() {
         let big = "x".repeat(MAX_SKILL_CONTENT_CHARS + 1);
         assert!(validate_content_size(&big, "test").is_some());
+    }
+
+    /// A description longer than the advertised row is REFUSED on create
+    /// (iter-2475).
+    ///
+    /// The clip at render time is not a substitute: without a write-time bound
+    /// the caller believes it wrote a complete description while the model is
+    /// shown a truncated one.
+    #[test]
+    fn a_create_with_an_overlong_description_is_refused() {
+        let long = "x".repeat(crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS + 10);
+        let content = format!("---\nname: thing\ndescription: {long}\n---\n\nBody\n");
+        let err = validate_description_budget(&content, None)
+            .expect("an overlong description on create must be refused");
+        assert!(
+            err.contains("advertised skill index"),
+            "the refusal must say what the limit is for, got: {err}"
+        );
+    }
+
+    /// The other half, and the one that makes the rule safe to ship: a BODY
+    /// edit on a skill whose description is ALREADY over the limit still lands
+    /// (iter-2475).
+    ///
+    /// Hermes's docstring names this explicitly ("An unchanged legacy
+    /// over-limit description stays editable"). Without it, every pre-existing
+    /// over-limit skill becomes un-editable -- a typo fix in the body would be
+    /// refused because of frontmatter the call never touched, which is a
+    /// self-inflicted outage on the operator's own library.
+    ///
+    /// MUTATION-PROOF: dropping the `unchanged` clause fails this test.
+    #[test]
+    fn a_body_edit_that_leaves_an_overlong_description_alone_is_allowed() {
+        let long = "x".repeat(crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS + 10);
+        let before = format!("---\nname: thing\ndescription: {long}\n---\n\nOld body\n");
+        let after = format!("---\nname: thing\ndescription: {long}\n---\n\nNew body\n");
+        assert!(
+            validate_description_budget(&after, Some(&before)).is_none(),
+            "a body-only edit must not be blocked by an over-limit description"
+        );
+
+        // But CHANGING the description of the same skill IS refused, so the
+        // allowance is about what changed, not a blanket exemption.
+        let changed = format!("---\nname: thing\ndescription: {long} more\n---\n\nNew body\n");
+        assert!(
+            validate_description_budget(&changed, Some(&before)).is_some(),
+            "changing an already-over-limit description must still be refused"
+        );
+    }
+
+    /// A description exactly AT the limit is fine: the bound is inclusive, so
+    /// the clip never fires on it and there is nothing to warn about.
+    #[test]
+    fn a_description_exactly_at_the_limit_is_accepted() {
+        let exact = "y".repeat(crate::context_management::ADVERTISED_SKILL_DESCRIPTION_CHARS);
+        let content = format!("---\nname: thing\ndescription: {exact}\n---\n\nBody\n");
+        assert!(
+            validate_description_budget(&content, None).is_none(),
+            "the limit is a maximum, not a maximum-minus-one"
+        );
     }
 
     #[test]

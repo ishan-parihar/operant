@@ -227,7 +227,7 @@ pub use skill_usage::{LifecycleState, SkillUsageTracker, UsageRecord, UsageTelem
 pub use skills::{Skill, SkillManager};
 pub use skills_guard::{
     GuardScanner, ScanResult, ScanVerdict, SecurityFinding, Severity, TrustLevel, Verdict,
-    content_hash, format_scan_report, scan_skill, should_allow_install,
+    content_hash, format_scan_report, scan_skill, scan_skill_cached, should_allow_install,
 };
 pub use tools::{
     OperantTool, ToolRegistry, ToolResult, register_builtin_tools,

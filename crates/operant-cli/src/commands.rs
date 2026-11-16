@@ -298,12 +298,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("busy", "Control what Enter does while Operant is working")
         .cli_only()
         .with_args("[queue|steer|interrupt|status]"),
-    // (plan 2026-11-15 T2) The operator asked for `/bar` to configure the bar:
-    // "I do not have /bar command to configure the bar." The bar STYLE was
-    // reachable only as a row inside `/config` — a visual-settings screen where
-    // one setting sits in a list of everything else.
-    CommandDef::new("bar", "Show or set the status bar style")
-        .with_args("[dot|powerline|powerline-thin|slash|pipe|block|none|ascii]"),
     // ── Tools & Skills ──────────────────────────────────────────────────────
     CommandDef::new(
         "tools",
@@ -624,7 +618,7 @@ pub fn tui_category(name: &str) -> TuiCategory {
         | "time" | "debug" | "credits" | "billing" | "insights" | "heapdump" | "mem" | "pet" => {
             TuiCategory::Diagnostics
         }
-        "config" | "theme" | "skin" | "bar" | "output-style" | "verbose" | "mcp" | "reload"
+        "config" | "theme" | "skin" | "output-style" | "verbose" | "mcp" | "reload"
         | "reload-mcp" | "reload-skills" | "hooks" | "import-config" | "setup" | "init"
         | "redraw" | "quit" | "exit" | "keybindings" | "indicator" | "busy" => {
             TuiCategory::Workspace

@@ -406,4 +406,184 @@ mod tests {
         assert!(mgr.create_board("has.dot").is_err());
         assert!(mgr.create_board("").is_err());
     }
+
+    fn new_board_with_task(title: &str) -> (KanbanDb, String, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = KanbanDb::init(dir.path().join("kanban.db")).unwrap();
+        let task_id = db
+            .create_task(CreateTaskParams {
+                title,
+                body: None,
+                assignee: None,
+                created_by: None,
+                workspace_kind: "personal",
+                workspace_path: None,
+                tenant: None,
+                priority: 0,
+                parents: &[],
+                triage: false,
+                idempotency_key: None,
+                max_runtime_seconds: None,
+                skills: None,
+                max_retries: None,
+            })
+            .unwrap();
+        (db, task_id, dir)
+    }
+
+    /// Same, but the caller owns the tempdir so a SECOND handle can be opened on
+    /// the same file — which is the only way to exercise the database-level guard
+    /// rather than two views of one connection.
+    fn new_board_with_task_at(path: std::path::PathBuf) -> (KanbanDb, String) {
+        let db = KanbanDb::init(path).unwrap();
+        let task_id = db
+            .create_task(CreateTaskParams {
+                title: "claimed once",
+                body: None,
+                assignee: None,
+                created_by: None,
+                workspace_kind: "personal",
+                workspace_path: None,
+                tenant: None,
+                priority: 0,
+                parents: &[],
+                triage: false,
+                idempotency_key: None,
+                max_runtime_seconds: None,
+                skills: None,
+                max_retries: None,
+            })
+            .unwrap();
+        (db, task_id)
+    }
+
+    fn count_running_runs(db: &KanbanDb, task_id: &str) -> i64 {
+        db.conn()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM task_runs WHERE task_id = ?1 AND status = 'running'",
+                rusqlite::params![task_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// iter-2453 (F1): two dispatchers claiming one task must not both win.
+    ///
+    /// `claim_task` used to be three autocommit statements, so two callers that
+    /// both read `todo` both inserted a `running` run and both updated the task.
+    /// Two SEPARATE `Arc<Mutex<Connection>>` handles are used on purpose: one
+    /// shared handle would serialise on the same mutex and pass without proving
+    /// anything about the database-level guard.
+    ///
+    /// MUTATION-CHECKED: with the v2 migration's unique index downgraded to a
+    /// plain index, this test fails with `left: 2, right: 1` — two running runs,
+    /// the F1 corruption. So the assertion is load-bearing and the INDEX is what
+    /// the assertion actually guards. The `BEGIN IMMEDIATE` in `claim_task` is
+    /// the in-process discipline; the index is the backstop that holds across
+    /// processes, which is the case the fleet actually hits (the board is a
+    /// machine-wide file and 20+ worktrees are live).
+    #[test]
+    fn a_second_concurrent_claim_of_one_task_cannot_win() {
+        let _dir = tempfile::tempdir().unwrap();
+        let path = _dir.path().join("kanban.db");
+        let (db_a, task_id) = new_board_with_task_at(path.clone());
+        let db_b = KanbanDb::init(path).unwrap();
+
+        let a = Dispatcher::new(db_a.conn().clone());
+        let b = Dispatcher::new(db_b.conn().clone());
+
+        let run_a = a
+            .claim_task(&task_id, "worker-a")
+            .expect("the first claim wins");
+        let second = b.claim_task(&task_id, "worker-b");
+
+        assert_eq!(count_running_runs(&db_a, &task_id), 1);
+        assert_eq!(count_running_runs(&db_b, &task_id), 1);
+        // The loser must be told, not silently ignored — either the database
+        // refuses it (the partial unique index) or the claim reports a failure.
+        assert!(
+            second.is_err(),
+            "a second claim of one task must not succeed, got run {:?}",
+            second.ok()
+        );
+        let task = db_a.get_task(&task_id).unwrap().unwrap();
+        assert_eq!(
+            task.current_run_id,
+            Some(run_a),
+            "the task must still point at the winning run"
+        );
+    }
+
+    /// iter-2453 (F1): the unique index is PARTIAL, so a retry is still allowed.
+    ///
+    /// `fail_run` resets the TASK to `todo` and leaves the old run `failed`. A
+    /// full unique index on `task_runs(task_id)` would make every retry fail
+    /// forever, which is why the index is `WHERE status = 'running'`.
+    #[test]
+    fn a_failed_task_can_be_claimed_again() {
+        let (db, task_id, _keep) = new_board_with_task("retried");
+        let dispatcher = Dispatcher::new(db.conn().clone());
+
+        let first = dispatcher.claim_task(&task_id, "worker-1").unwrap();
+        dispatcher.fail_run(&task_id, first, "transient").unwrap();
+
+        let task = db.get_task(&task_id).unwrap().unwrap();
+        assert_eq!(task.status, TaskStatus::Todo, "failure re-queues the task");
+
+        let second = dispatcher
+            .claim_task(&task_id, "worker-2")
+            .expect("a retry must be claimable — the index is partial");
+        assert_ne!(first, second, "the retry opens a NEW run");
+        assert_eq!(count_running_runs(&db, &task_id), 1);
+    }
+
+    /// iter-2453 (F2): the retired lease columns are gone from a fresh schema.
+    ///
+    /// The v2 migration drops them, so a NEWLY created database must not carry
+    /// them either. Asserting on `PRAGMA table_info` is what proves the schema
+    /// stopped advertising a boundary nothing enforces.
+    #[test]
+    fn a_fresh_schema_carries_no_retired_lease_columns() {
+        let (db, _task_id, _keep) = new_board_with_task("schema");
+        let conn = db.conn().lock().unwrap();
+
+        let cols = |table: &str| -> Vec<String> {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+
+        for table in ["tasks", "task_runs"] {
+            let names = cols(table);
+            for retired in ["claim_lock", "claim_expires", "worker_pid"] {
+                assert!(
+                    !names.iter().any(|c| c == retired),
+                    "{table} still declares the retired column {retired}"
+                );
+            }
+        }
+        // `task_runs.last_heartbeat_at` was never written by any code path.
+        assert!(
+            !cols("task_runs").iter().any(|c| c == "last_heartbeat_at"),
+            "task_runs still declares the never-written last_heartbeat_at"
+        );
+        // These two MUST survive: `tasks.last_heartbeat_at` is written by
+        // `heartbeat()`, and `max_runtime_seconds` is operator intent without
+        // enforcement (a separate finding, not this one).
+        let task_cols = cols("tasks");
+        assert!(
+            task_cols.iter().any(|c| c == "last_heartbeat_at"),
+            "tasks.last_heartbeat_at is live and must not be dropped"
+        );
+        assert!(
+            cols("task_runs").iter().any(|c| c == "max_runtime_seconds"),
+            "max_runtime_seconds is deliberately retained"
+        );
+    }
 }
