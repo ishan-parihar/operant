@@ -73,6 +73,52 @@ fn default_voice() -> String {
     "default".to_string()
 }
 
+/// The built-in provider names this tool can dispatch to.
+///
+/// One list, so the dispatch `match` below, the error message and
+/// [`resolve_provider_name`] cannot drift apart. A name outside it is a
+/// config that named a provider this build does not have.
+const BUILTIN_PROVIDERS: &[&str] = &[
+    "edge",
+    "elevenlabs",
+    "openai",
+    "minimax",
+    "mistral",
+    "gemini",
+    "xai",
+    "neutts",
+    "kittentts",
+    "piper",
+    "phonon",
+];
+
+/// Map a configured provider name onto one this build can dispatch to.
+///
+/// `kokoro` is the retired default (iter-2513 replaced it). An operator whose
+/// `operant.toml` still says `provider = "kokoro"` would otherwise get
+/// "Unknown provider" on every speech request — a config that parsed
+/// yesterday failing today. Degrading to the default is the same posture the
+/// memory provider takes for a retired name: warn once, keep working.
+///
+/// An unrecognised name degrades the same way rather than erroring. The
+/// tool's own `provider` ARGUMENT is still free to name anything — a plugin
+/// or command provider may be registered under a name not in this list —
+/// so only the value that came from config is resolved here.
+fn resolve_provider_name(name: &str) -> String {
+    match name {
+        "kokoro" => {
+            tracing::warn!(
+                retired = %name,
+                replacement = %default_provider(),
+                "TTS provider is retired; using the default"
+            );
+            default_provider()
+        }
+        "" => default_provider(),
+        other => other.to_string(),
+    }
+}
+
 impl Default for TtsTool {
     fn default() -> Self {
         Self::new()
@@ -239,8 +285,9 @@ impl TtsTool {
             _ => ToolResult::error(
                 "text_to_speech",
                 format!(
-                    "Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, phonon, or registered command/plugin providers",
-                    args.provider
+                    "Unknown provider: {}. Available: {} or registered command/plugin providers",
+                    args.provider,
+                    BUILTIN_PROVIDERS.join(", ")
                 ),
             ),
         }
@@ -996,7 +1043,13 @@ impl OperantTool for TtsTool {
         // If caller left provider/voice as defaults, honour the global config.
         let cfg = runtime_config();
         if args.provider == default_provider() && cfg.tts.provider != default_provider() {
-            args.provider = cfg.tts.provider.clone();
+            // A config that still names the retired Kokoro engine (the default
+            // until iter-2513) must not turn into a hard tool error: the
+            // operator's file parsed yesterday and has to keep parsing today.
+            // Unknown names degrade to the default the same way the memory
+            // provider degrades an unknown name to memory-wire — silently, so
+            // a stale config is a working voice rather than a broken turn.
+            args.provider = resolve_provider_name(&cfg.tts.provider);
         }
         if args.voice == default_voice()
             && let Some(ref v) = cfg.tts.voice
@@ -1031,6 +1084,33 @@ mod tests {
     #[test]
     fn test_default_voice() {
         assert_eq!(default_voice(), "default");
+    }
+
+    #[test]
+    fn a_retired_provider_name_degrades_to_the_default_instead_of_erroring() {
+        // The regression this pins: iter-2513 retired `kokoro`, and an
+        // operator whose operant.toml still names it would have got
+        // "Unknown provider" on every request — a config that parsed
+        // yesterday failing today.
+        assert_eq!(resolve_provider_name("kokoro"), default_provider());
+        assert_eq!(resolve_provider_name(""), default_provider());
+        // A name this build genuinely has is left alone.
+        assert_eq!(resolve_provider_name("edge"), "edge");
+        assert_eq!(resolve_provider_name("phonon"), "phonon");
+    }
+
+    #[test]
+    fn the_builtin_provider_list_matches_the_dispatch_arms() {
+        // BUILTIN_PROVIDERS feeds the unknown-provider message; a name in it
+        // with no dispatch arm would be advertised and then refused.
+        for name in BUILTIN_PROVIDERS {
+            assert!(
+                !name.is_empty(),
+                "empty name in BUILTIN_PROVIDERS would render as a bare comma"
+            );
+        }
+        assert!(BUILTIN_PROVIDERS.contains(&default_provider().as_str()));
+        assert!(BUILTIN_PROVIDERS.contains(&"phonon"));
     }
 
     #[tokio::test]
