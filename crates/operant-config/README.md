@@ -4,11 +4,13 @@ Configuration schema, secrets, and related types for Operant.
 
 ## Purpose
 
-Holds the config schema (`src/schema/`, with the full `Config` type), secret storage helpers (`src/secrets.rs`), security policy and autonomy types (`src/policy.rs`, `src/autonomy.rs`), the `[providers]` section types (`src/providers.rs`), and the derive-support traits. `Cargo.toml` pulls in `chacha20poly1305` and `sha2`; read `src/secrets.rs` for how they are used.
+Holds the config schema (`src/schema/`), security policy (`src/policy.rs`), the `[providers]` section types (`src/providers.rs`) and the runtime config loaders. Plain config structs plus one proxy helper.
+
+CORRECTED 2026-11-16 (iter-2510): this paragraph used to claim a `src/secrets.rs` with "secret storage helpers" and said `Cargo.toml` pulls in `chacha20poly1305` and `sha2` for it. Neither was true - `src/secrets.rs` does not exist, and both crates had ZERO references in `src/` (verified by grep before removal). They were among 17 dependencies this crate declared and never read, now deleted. A README that names a file and a dependency that do not exist is worse than no README: it sends the next reader looking for a module that was never written.
 
 ## Configuration
 
-- Cargo features: `default = ["schema-export"]`, which enables `schemars`. `voice-wake` is an empty feature flag.
+- Cargo features: `default = ["schema-export"]`, which enables `schemars`. (`voice-wake` was an empty flag that gated nothing; removed with the dead-feature sweep.)
 - `DEFAULT_AGENTMEMORY_VERSION` (`src/lib.rs`) is the pinned `@agentmemory` package version. It is overridable with `[memory] agentmemory_version` or the `AGENTMEMORY_VERSION` environment variable.
 
 ## Extension points
