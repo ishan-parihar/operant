@@ -1425,6 +1425,109 @@ pub(crate) fn tool_result_cap(name: &str) -> usize {
     }
 }
 
+/// Collect every string leaf under `value`, addressed by JSON Pointer.
+///
+/// `path` is the pointer to `value` itself; each recursion appends one segment.
+/// Keys are escaped per RFC 6901 (`~` then `/`) so an arbitrary tool key cannot
+/// produce a pointer that resolves to a different node than intended.
+fn collect_string_leaves(
+    value: &serde_json::Value,
+    path: &mut Vec<String>,
+    out: &mut Vec<(String, usize)>,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            let pointer = encode_pointer(path);
+            out.push((pointer, s.len()));
+        }
+        serde_json::Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                path.push(i.to_string());
+                collect_string_leaves(item, path, out);
+                path.pop();
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter() {
+                path.push(escape_pointer_segment(k));
+                collect_string_leaves(v, path, out);
+                path.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `/a/0/b` for the segments `["a", "0", "b"]`.
+fn encode_pointer(segments: &[String]) -> String {
+    let mut out = String::new();
+    for seg in segments {
+        out.push('/');
+        out.push_str(seg);
+    }
+    out
+}
+
+/// Navigate a [`serde_json::Map`] by a JSON Pointer produced by
+/// [`encode_pointer`].
+///
+/// `Map` has no `pointer`/`pointer_mut` (those live on `Value`), and wrapping
+/// the map in a `Value` per lookup would clone the whole result once per field
+/// trimmed — on a 16 KB `memory_search` that is the cost this function exists
+/// to avoid.
+fn map_at<'a>(
+    map: &'a serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut current: &serde_json::Value = map.get(
+        path.split('/')
+            .nth(1)
+            .map(decode_pointer_segment)
+            .as_deref()
+            .unwrap_or(""),
+    )?;
+    for raw in path.split('/').skip(2) {
+        current = match current {
+            serde_json::Value::Object(m) => m.get(&decode_pointer_segment(raw))?,
+            serde_json::Value::Array(items) => items.get(raw.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+/// The mutable half of [`map_at`].
+fn map_at_mut<'a>(
+    map: &'a mut serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Option<&'a mut serde_json::Value> {
+    let first = decode_pointer_segment(path.split('/').nth(1).unwrap_or(""));
+    let rest: Vec<String> = path
+        .split('/')
+        .skip(2)
+        .map(decode_pointer_segment)
+        .collect();
+    let mut current: &mut serde_json::Value = map.get_mut(&first)?;
+    for raw in rest {
+        current = match current {
+            serde_json::Value::Object(m) => m.get_mut(&raw)?,
+            serde_json::Value::Array(items) => items.get_mut(raw.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+/// RFC 6901: `~1` becomes `/` and `~0` becomes `~`, in that order.
+fn decode_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
+}
+
+/// RFC 6901: `~` becomes `~0` and `/` becomes `~1`, in that order.
+fn escape_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
 /// Truncate a tool result to `cap` bytes, with the budget named by the caller.
 ///
 /// Every caller states its budget through [`tool_result_cap`], so the one tool
@@ -1470,27 +1573,68 @@ pub(crate) fn truncate_tool_result_capped(content: &str, cap: usize) -> String {
             .iter()
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.len())))
             .collect();
+        // The payload of the review's most common read is NOT a top-level
+        // string: `memory_search` returns `{"query":…, "results":[{"content":…}],
+        // "count":N}`, so every byte that matters sits inside a nested ARRAY.
+        // Collecting only `v.as_str()` made `query` the sole candidate — a
+        // one-word key whose `other_len` is the whole result — so the query was
+        // dropped and the hard truncate then head-cut the array mid-string,
+        // leaving unparseable JSON. Walk into the arrays too, addressing each
+        // leaf by JSON Pointer so the update path is unambiguous.
+        for (key, value) in obj.iter() {
+            collect_string_leaves(value, &mut vec![key.clone()], &mut string_fields);
+        }
         string_fields.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
-        for (key, _len) in string_fields {
+        for (path, _len) in string_fields {
             if serialized.len() <= cap {
                 break;
             }
-            let Some(current) = obj.get(&key).and_then(|v| v.as_str()) else {
+            // `path` is a JSON Pointer: "/results/0/content".
+            let Some(value) = map_at(obj, &path) else {
+                continue;
+            };
+            let Some(current) = value.as_str().map(str::to_string) else {
                 continue;
             };
             // Budget for this field = the whole serialized JSON minus the
-            // other fields, minus room for the truncation marker.
-            let other_len = serialized.len() - current.len();
+            // OTHER fields, minus room for the truncation marker.
+            //
+            // `serialized.len() - current.len()` was WRONG: `serialized` holds
+            // this field JSON-ESCAPED while `current` is the raw text, and
+            // escaping only ever expands. A body of 4100 newlines inflated
+            // `other_len` past `cap` on its own, so `budget` collapsed to 0 and
+            // the `budget <= 48` branch DROPPED the field — the model read an
+            // empty skill with nothing saying content had been withheld.
+            // Subtracting the field's own ENCODED length is exact, needs no
+            // clone of a 16 KB result, and holds at any nesting depth.
+            let encoded = serde_json::to_string(value).unwrap_or_default();
+            let other_len = serialized.len().saturating_sub(encoded.len());
             let budget = cap.saturating_sub(other_len);
-            if budget <= 48 {
-                // Can't even fit a stub — drop the field entirely.
-                obj.remove(&key);
+            let replacement = if budget <= 48 {
+                // A marker, not a removal: a missing key reads as "this field is
+                // empty" while a stub reads as "it was too large to carry", and
+                // the model cannot tell those apart otherwise.
+                "[field withheld]".to_string()
             } else {
-                let kept = safe_truncate_str(current, budget - 32);
-                obj.insert(
-                    key.clone(),
-                    serde_json::json!(format!("{}... [truncated]", kept)),
-                );
+                // `budget` is in SERIALIZED bytes, but the cut is in raw chars,
+                // and JSON escaping expands: a body of newlines costs 2 bytes
+                // each (`\n`), so a raw cut at the byte budget re-escapes to
+                // TWICE the budget and the whole result still overflows — which
+                // used to fall through to the hard head-truncate and hand the
+                // model unparseable JSON. Shrink until the ENCODED form fits.
+                let room = budget.saturating_sub(TRUNCATION_MARKER_LEN);
+                let mut take = current.len();
+                let mut kept = safe_truncate_str(&current, take);
+                while take > 0 && serde_json::to_string(kept).unwrap_or_default().len() > room {
+                    // Geometric, so a 2x expansion converges in a few steps
+                    // rather than one byte at a time.
+                    take = take * 3 / 4;
+                    kept = safe_truncate_str(&current, take);
+                }
+                format!("{kept}... [truncated]")
+            };
+            if let Some(slot) = map_at_mut(obj, &path) {
+                *slot = serde_json::json!(replacement);
             }
             serialized = serde_json::to_string(&*obj).unwrap_or_default();
         }
@@ -1515,6 +1659,10 @@ pub(crate) fn truncate_tool_result_capped(content: &str, cap: usize) -> String {
         safe_truncate_str(content, cap)
     )
 }
+
+/// Bytes the `... [truncated]` suffix occupies, so the room left for the body
+/// is measured against the real output rather than a guess.
+const TRUNCATION_MARKER_LEN: usize = 15;
 
 /// Truncate a string to at most `max_bytes` bytes, ending at a UTF-8 char
 /// boundary. Without this, `&s[..N]` panics if N falls in the middle of a
@@ -5990,5 +6138,82 @@ mod untrusted_text_tests {
         assert!(!out.contains("<memory_context>"));
         assert!(out.contains("&lt;/memory_context>"));
         assert!(out.contains("<b>"));
+    }
+    /// A field whose body is mostly NEWLINES used to be DROPPED WHOLE.
+    ///
+    /// `other_len = serialized.len() - current.len()` compared an ESCAPED
+    /// serialisation against the RAW text, so 4100 newlines added 4100 phantom
+    /// bytes to "the other fields" and the budget collapsed to zero — and the
+    /// `budget <= 48` branch removed the key. The model then read a skill with
+    /// no body and no indication anything had been withheld.
+    #[test]
+    fn a_newline_heavy_field_is_truncated_not_deleted() {
+        let body = "\n".repeat(4100);
+        let content = serde_json::json!({
+            "name": "my-skill",
+            "description": "d",
+            "content": body,
+            "tags": ["a"],
+        })
+        .to_string();
+        let capped = truncate_tool_result_capped(&content, 4096);
+
+        let parsed: serde_json::Value = serde_json::from_str(&capped)
+            .unwrap_or_else(|e| panic!("invalid JSON ({e}): {capped}"));
+        let content_field = parsed["content"].as_str().unwrap_or_else(|| {
+            panic!("the content field was removed rather than truncated: {capped}")
+        });
+        assert!(
+            content_field.contains("[truncated]") || content_field.contains("[field withheld]"),
+            "the field must say it was cut, not look empty: {capped}"
+        );
+        // The metadata the model navigates by still survives.
+        assert_eq!(parsed["name"], "my-skill");
+        assert_eq!(parsed["tags"][0], "a");
+    }
+
+    /// `memory_search` keeps its payload in a nested ARRAY, so a trim that only
+    /// looks at top-level strings drops the query and then head-cuts mid-string.
+    #[test]
+    fn a_nested_array_payload_is_trimmed_and_stays_parseable() {
+        let results: Vec<serde_json::Value> = (0..50)
+            .map(|i| serde_json::json!({"content": format!("row {i} {}", "x".repeat(300)), "relevance": 0.9}))
+            .collect();
+        let content = serde_json::json!({
+            "query": "what did the operator decide about the retry budget",
+            "results": results,
+            "count": 50,
+        })
+        .to_string();
+        assert!(content.len() > 4096, "specimen must exceed the cap");
+
+        let capped = truncate_tool_result_capped(&content, 4096);
+        let parsed: serde_json::Value = serde_json::from_str(&capped)
+            .unwrap_or_else(|e| panic!("invalid JSON ({e}): {capped}"));
+
+        // The query survives: it is the one field that says WHAT was searched.
+        assert_eq!(
+            parsed["query"], "what did the operator decide about the retry budget",
+            "the query was dropped instead of the payload: {capped}"
+        );
+        // The array is still an array, and some rows remain readable.
+        assert!(parsed["results"].is_array(), "{capped}");
+        assert_eq!(parsed["count"], 50);
+    }
+
+    /// A top-level string is still trimmed when it is the biggest thing present.
+    #[test]
+    fn a_large_top_level_field_still_truncates_with_a_marker() {
+        let content = serde_json::json!({
+            "name": "s",
+            "content": "y".repeat(9000),
+        })
+        .to_string();
+        let capped = truncate_tool_result_capped(&content, 4096);
+        let parsed: serde_json::Value = serde_json::from_str(&capped).expect("valid JSON");
+        let body = parsed["content"].as_str().expect("content is a string");
+        assert!(body.contains("[truncated]"), "{capped}");
+        assert_eq!(parsed["name"], "s");
+        assert!(capped.len() <= 4096 + 128);
     }
 }

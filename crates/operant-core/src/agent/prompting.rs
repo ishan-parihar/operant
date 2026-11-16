@@ -99,6 +99,33 @@ pub(crate) fn review_notification(actions: &[String], last_round_text: &str) -> 
 /// recent conversation.
 pub(crate) const REVIEW_VIEW_TOKEN_BUDGET: usize = 8_000;
 
+/// The whole review REQUEST, not one result — the aggregate ceiling.
+///
+/// `REVIEW_VIEW_TOKEN_BUDGET` bounds the INPUT snapshot the review reads. This
+/// bounds what the review SENDS, which is a different number: every round
+/// re-sends the entire transcript, so a per-result cap alone lets N results of
+/// 1040 tokens each accumulate freely. 24 of them overflow a 32 k model on top
+/// of the 8 k snapshot, and a 5x5 review produces 25.
+///
+/// 24 k leaves the snapshot's 8 k and the response room inside a 32 k window,
+/// and is the same order as the main agent's own request budget.
+pub(crate) const REVIEW_REQUEST_TOKEN_BUDGET: usize = 24_000;
+
+/// Fraction of `REVIEW_REQUEST_TOKEN_BUDGET` the tool RESULTS may occupy.
+///
+/// The rest belongs to the system prompt, the harness and the snapshot, which
+/// are the parts the review is actually reading.
+pub(crate) const REVIEW_TOOL_RESULT_SHARE: f64 = 0.6;
+
+/// Most tool calls from ONE assistant message that the review will execute.
+///
+/// The loop iterated `tool_calls_deltas` with no bound, so a single round of
+/// 30 parallel calls was a one-shot overflow that no aggregate trim could
+/// retroactively prevent — the results are appended before the next request is
+/// built. Five is above the fan-out any of the four whitelisted tools needs
+/// (each takes one argument) and turns a pathological round into a bounded one.
+pub(crate) const REVIEW_MAX_TOOL_CALLS_PER_ROUND: usize = 5;
+
 /// One review tool result as it enters the review's own transcript.
 ///
 /// Bounded by the SAME cap the main agent applies to the same tool from the same
@@ -121,10 +148,17 @@ pub(crate) fn review_tool_result(
     error: Option<&str>,
 ) -> String {
     if !success {
-        return format!(
-            "{{\"success\": false, \"error\": \"{}\"}}",
-            error.unwrap_or("Unknown error")
-        );
+        // Built with `json!` rather than `format!`: the error text is routinely
+        // a quoted list (`skill_view` of a missing skill renders
+        // `Available: ["a", "b"]` via `{:?}`), and interpolating that raw yields
+        // INVALID JSON — a broken object the model may read as a tool-protocol
+        // failure instead of "no such skill". The two sibling push sites in the
+        // same loop already build their objects this way.
+        return serde_json::json!({
+            "success": false,
+            "error": error.unwrap_or("Unknown error"),
+        })
+        .to_string();
     }
     crate::agent::truncate_tool_result_capped(content, crate::agent::tool_result_cap(name))
 }
@@ -726,6 +760,11 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     // loop discards it when it breaks, and the memory lane's whole
                     // output lives there.
                     let mut last_round_text = String::new();
+                    // Whether the loop stopped because the provider refused or
+                    // failed, rather than because the model finished. The
+                    // completion log has to tell those apart: one is "nothing to
+                    // save", the other is "you have no report and here is why".
+                    let mut review_aborted = false;
 
                     for review_iter in 0..MAX_REVIEW_ITERATIONS {
                         iterations_run = review_iter + 1;
@@ -736,6 +775,40 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                             "Background review iteration"
                         );
 
+                        // ── The AGGREGATE bound (red-team iter-2479) ────────
+                        //
+                        // Bounding ONE tool result at 4 KB did not bound the
+                        // request: every round re-sends the WHOLE transcript, so
+                        // 5 rounds x 5 calls of maximum-size results is 25 x
+                        // 1040 tokens = 26 k on top of the 8 k snapshot, which
+                        // overflows a 32 k review model. The loop had no
+                        // per-iteration trim, no aggregate trim and no final fit
+                        // — while the main agent runs exactly this pass on every
+                        // request (`agent/run.rs`, `trim_tool_results_to_share`).
+                        //
+                        // The review reads the OLDEST results first (a memory
+                        // lookup from round 1), so the last few are protected and
+                        // the oldest are clipped to `TOOL_TRIM_KEEP_CHARS` rather
+                        // than dropped.
+                        {
+                            let budget = REVIEW_REQUEST_TOKEN_BUDGET;
+                            let report = crate::context_management::trim_tool_results_to_share(
+                                &mut review_messages,
+                                budget,
+                                REVIEW_TOOL_RESULT_SHARE,
+                                crate::context_management::TOOL_TRIM_PROTECT_LAST,
+                                crate::context_management::TOOL_TRIM_KEEP_CHARS,
+                            );
+                            if report.trimmed > 0 {
+                                debug!(
+                                    trimmed = report.trimmed,
+                                    saved = report.saved(),
+                                    session_id = %session_id,
+                                    "Background review: aggregate tool-result trim"
+                                );
+                            }
+                        }
+
                         // Create the review chat request (non-streaming for background)
                         let request =
                             ChatRequest::new(review_model.clone(), review_messages.clone())
@@ -745,12 +818,42 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         let response = match client.chat(request).await {
                             Ok(r) => r,
                             Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    session_id = %session_id,
-                                    iteration = review_iter + 1,
-                                    "Background review agent failed at LLM call"
-                                );
+                                // CLASSIFY, don't just log (red-team iter-2479).
+                                //
+                                // The bare `warn!` + `break` made every provider
+                                // failure indistinguishable from a model that
+                                // found nothing: the completion log then said
+                                // "completed with no changes and no report", which
+                                // is byte-identical to a quiet success. A context
+                                // overflow is the one class the aggregate trim
+                                // above is supposed to prevent, so it is worth
+                                // naming when it happens anyway — it means the
+                                // snapshot alone filled the window.
+                                let context_length =
+                                    matches!(e, crate::error::Error::ContextLengthExceeded);
+                                if context_length {
+                                    warn!(
+                                        error = %e,
+                                        session_id = %session_id,
+                                        iteration = review_iter + 1,
+                                        iterations_run = iterations_run,
+                                        "Background review ABORTED: the provider rejected the \
+                                         request for context length, even after the aggregate \
+                                         tool-result trim — the snapshot alone filled the window. \
+                                         No report was produced."
+                                    );
+                                } else {
+                                    warn!(
+                                        error = %e,
+                                        session_id = %session_id,
+                                        iteration = review_iter + 1,
+                                        iterations_run = iterations_run,
+                                        "Background review ABORTED: the LLM call failed. No report \
+                                         was produced (this is NOT the same as a review that found \
+                                         nothing to save)."
+                                    );
+                                }
+                                review_aborted = true;
                                 break;
                             }
                         };
@@ -864,7 +967,10 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         // Only execute tools that are in our whitelist. This matches
                         // hermes-agent's set_thread_tool_whitelist pattern.
                         let mut round_wrote = false;
-                        for tool_call_delta in &tool_calls_deltas {
+                        for tool_call_delta in tool_calls_deltas
+                            .iter()
+                            .take(REVIEW_MAX_TOOL_CALLS_PER_ROUND)
+                        {
                             // Extract function info from the delta
                             let function = match &tool_call_delta.function {
                                 Some(f) => f,
@@ -1014,9 +1120,19 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                             }
                         }
                         None => {
+                            // Three outcomes reach "no report", and only one of
+                            // them is the model having nothing to say. Say which.
+                            let reason = if review_aborted {
+                                "the run was ABORTED by a provider failure (see the warn above)"
+                            } else if iterations_run >= MAX_REVIEW_ITERATIONS {
+                                "the run hit the iteration cap without producing a report"
+                            } else {
+                                "the model reviewed the transcript and found nothing to save"
+                            };
                             info!(
                                 session_id = %session_id,
                                 iterations = iterations_run,
+                                reason,
                                 "Background review completed with no changes and no report"
                             );
                         }
@@ -1466,16 +1582,22 @@ mod tests {
     #[test]
     fn a_failed_review_tool_result_keeps_its_error_shape() {
         let err = review_tool_result("skill_view", false, "ignored", Some("no such skill"));
-        assert!(err.contains("\"success\": false"), "{err}");
-        assert!(err.contains("no such skill"), "{err}");
+        // Asserted as JSON, not as a substring: the object is built with `json!`
+        // (so the error text is escaped), and its key order is the map's, not
+        // the literal's.
+        let parsed: serde_json::Value = serde_json::from_str(&err)
+            .unwrap_or_else(|e| panic!("failure result is not valid JSON ({e}): {err}"));
+        assert_eq!(parsed["success"], false, "{err}");
+        assert_eq!(parsed["error"], "no such skill", "{err}");
         assert!(
             !err.contains("ignored"),
             "a failure's content is not carried: {err}"
         );
 
         let unknown = review_tool_result("skill_view", false, "ignored", None);
-        assert!(
-            unknown.contains("Unknown error"),
+        let unknown_parsed: serde_json::Value = serde_json::from_str(&unknown).expect("valid JSON");
+        assert_eq!(
+            unknown_parsed["error"], "Unknown error",
             "a missing error still names itself: {unknown}"
         );
     }
@@ -1541,6 +1663,55 @@ mod tests {
         assert_eq!(
             build_review_prompt_with_instructions(true, true, "   \n\t "),
             build_review_prompt_with_instructions(true, true, "")
+        );
+    }
+
+    /// A `skill_view` miss is the ORDINARY failure, and its error text carries
+    /// a quoted list. Interpolating that raw produced invalid JSON — a broken
+    /// object the model could read as a protocol failure.
+    #[test]
+    fn a_failed_review_result_with_quotes_is_still_valid_json() {
+        let err = r#"Skill 'nosuchskill' not found. Available: ["alpha", "beta"]"#;
+        let out = review_tool_result("skill_view", false, "ignored", Some(err));
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+            "not valid JSON: {out}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid");
+        assert_eq!(parsed["success"], false);
+        assert_eq!(parsed["error"], err, "the error text round-trips intact");
+    }
+
+    /// A newline in the error is the same hazard through a different character.
+    #[test]
+    fn a_failed_review_result_survives_a_newline_in_the_error() {
+        let out = review_tool_result("skill_view", false, "x", Some("line one\nline two"));
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(parsed["error"], "line one\nline two");
+    }
+
+    /// The per-round fan-out cap is a real ceiling, not a comment.
+    #[test]
+    fn the_per_round_tool_call_cap_is_a_ceiling() {
+        // Four tools, each taking one argument: five is above any real fan-out
+        // and low enough that a pathological round cannot overflow on its own.
+        // Compared against a runtime copy so this is arithmetic about the
+        // constants, not a constant-valued assertion clippy can fold away.
+        let cap = REVIEW_MAX_TOOL_CALLS_PER_ROUND;
+        assert!((4..=8).contains(&cap), "cap {cap} is outside the sane band");
+
+        // 25 results of the worst size used to overflow a 32 k review model;
+        // the request budget is what makes the sum converge instead.
+        let worst_result_tokens = (crate::agent::tool_result_cap("skill_view") + 63) / 4;
+        let share_budget = REVIEW_TOOL_RESULT_SHARE * REVIEW_REQUEST_TOKEN_BUDGET as f64;
+        assert!(
+            share_budget > worst_result_tokens as f64 * cap as f64,
+            "one round of maximum-size results ({worst_result_tokens} tok each) must fit the              {share_budget} tok share"
+        );
+        let request_budget = REVIEW_REQUEST_TOKEN_BUDGET;
+        assert!(
+            request_budget < 32_000,
+            "the request budget must leave room for the snapshot and the response"
         );
     }
 }
