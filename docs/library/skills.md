@@ -11,6 +11,8 @@ Source: `crates/operant-core/src/skills.rs` (SkillManager),
 `crates/operant-core/src/skill_usage.rs`,
 `crates/operant-core/src/skill_marketplace.rs`,
 `crates/operant-core/src/agent/skill_bundle.rs`,
+`crates/operant-core/src/skill_mentions.rs` (the inline `$skill`
+mention form),
 `crates/operant-core/src/sops.rs`,
 `crates/operant-core/src/tools/skills_tool.rs`,
 `crates/operant-cli/src/cmd_skills.rs`.

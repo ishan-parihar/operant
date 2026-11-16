@@ -62,7 +62,12 @@ Two layers:
 - The account side: `[oauth]` (authorization-code + PKCE, device-code,
   single-flight refresh; `mcp_oauth.rs` is the separate MCP-server OAuth
   path), `oauth_refresh.rs` (background refresh for provider-account
-  tokens — Anthropic, Codex, xAI, Nous). API keys live in
+  tokens — Anthropic, Codex, xAI, Nous). Two files under `oauth/` hold
+  the mechanics that paragraph names: `pkce.rs` mints the RFC 7636
+  `code_verifier` / `code_challenge` pair and the RFC 6749 §10.12 `state`
+  parameter, and `singleflight.rs` (`RefreshCoordinator`) collapses N
+  concurrent callers that discover the same expiry into ONE
+  rotating-refresh-token spend per account. API keys live in
   `~/.operant/.env` (0600), never in the config file.
 
 ## Rate limiting (`rate_limiter.rs`)
