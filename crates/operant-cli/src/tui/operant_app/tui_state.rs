@@ -110,6 +110,23 @@ pub(crate) fn hash_rendered_image_signature_fields(
 pub trait TuiState {
     // ---- Transcript ----
     fn display_messages(&self) -> &[DisplayMessage];
+    /// RT-Z23-B: the `App::messages` index behind each entry in
+    /// [`Self::display_messages`], parallel to it, or an empty slice when the
+    /// mapping is unknown.
+    ///
+    /// The two vectors are NOT the same length in general: a tool row, a
+    /// reasoning trace, a system annotation and a background card each occupy a
+    /// display row without being an app message. A hit test that resolves a
+    /// DISPLAY index and then indexes `App::messages` with it names the wrong
+    /// message -- which is exactly what the context menu did. Handlers must
+    /// resolve through this map.
+    ///
+    /// The default is empty so an implementor that cannot supply the mapping
+    /// degrades to "no row is an app message" rather than to "assume equal",
+    /// which is the assumption that caused the bug.
+    fn display_message_app_index(&self) -> &[Option<usize>] {
+        &[]
+    }
     /// RT-146: the tool call whose full body the operator expanded, if any.
     /// `None` means no row is expanded. One-at-a-time is the contract, so a
     /// single `Option` is the whole surface.

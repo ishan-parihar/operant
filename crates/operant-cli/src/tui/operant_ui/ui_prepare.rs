@@ -508,6 +508,7 @@ fn empty_prepared_messages() -> PreparedMessages {
         tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
+        message_app_index: Vec::new(),
         mermaid_pending_epoch: None,
     }
 }
@@ -1048,6 +1049,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
             tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
+            message_app_index: Vec::new(),
             mermaid_pending_epoch: None,
         });
         let frame = PreparedChatFrame::from_single(prepared);
@@ -1087,6 +1089,7 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
             tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
+            message_app_index: Vec::new(),
             mermaid_pending_epoch: None,
         })
     } else {
@@ -1331,6 +1334,11 @@ pub(super) fn build_body_from_base(
     prev_prompt_offset: usize,
     msg_count: usize,
 ) -> (Arc<PreparedMessages>, &'static str) {
+    // (RT-Z23-B) `messages` here is the DISPLAY slice; the app-message map
+    // behind it is taken by whichever builder actually renders
+    // (`prepare_body_incremental` / `prepare_body_prepended` / `prepare_body`),
+    // each of which reads it from the same cached build. Taking it here as well
+    // would be a second handle nobody uses.
     let messages = app.display_messages();
     // A stale deferred-mermaid base (its background render finished after the
     // base was built) must not be reused verbatim: cut it at the message that
@@ -1440,6 +1448,12 @@ struct BodyRenderCtx<'a> {
     anchored_images: Arc<super::inline_image_ui::AnchoredInlineImages>,
     inline_images_visible: bool,
     messages: &'a [DisplayMessage],
+    /// RT-Z23-B: `app_index[i]` is the `App::messages` index behind
+    /// `messages[i]`, or `None` when that display row is not an app message
+    /// (a tool row, a reasoning trace, a system annotation, a background card).
+    /// Parallel to `messages` and built by the same call that built it, so the
+    /// two cannot disagree about which row is which.
+    app_index: &'a [Option<usize>],
     swarm_members: Vec<crate::tui::operant_app::protocol::SwarmMemberStatus>,
 }
 
@@ -1467,7 +1481,13 @@ struct BodyAcc {
     /// wrapped body at a boundary cleanly drops the message together with its
     /// leading blank. `raw_len_after` is the contiguous raw count, used to
     /// truncate the raw array in lockstep.
-    segments: Vec<(u64, usize, usize, usize)>,
+    /// RT-Z23-B: the 5th element is the `App::messages` index the display
+    /// message at this boundary came from, or `usize::MAX` for a display-only
+    /// row (tool, reasoning, annotation, background card) that names no app
+    /// message. The prepared body is built from `display_messages()`, so the
+    /// BOUNDARY ordinal is a display index; this is the only thing that maps it
+    /// back. See `PreparedMessages::message_app_index`.
+    segments: Vec<(u64, usize, usize, usize, Option<usize>)>,
     /// Next 1-based prompt number to assign. Seeded from the reused base in the
     /// incremental path so numbering continues without rescanning the prefix.
     prompt_num: usize,
@@ -1624,6 +1644,7 @@ fn render_message_into(
                 acc.lines.len(),
                 acc.raw_plain_lines.len(),
                 acc.user_prompt_texts.len(),
+                ctx.app_index.get(msg_global_idx).copied().flatten(),
             ));
             return;
         }
@@ -1636,6 +1657,7 @@ fn render_message_into(
             acc.lines.len(),
             acc.raw_plain_lines.len(),
             acc.user_prompt_texts.len(),
+            ctx.app_index.get(msg_global_idx).copied().flatten(),
         ));
         return;
     }
@@ -2026,6 +2048,11 @@ fn render_message_into(
         acc.lines.len(),
         acc.raw_plain_lines.len(),
         acc.user_prompt_texts.len(),
+        // RT-Z23-B: the app-message index, or None when this row is
+        // display-only. `msg_global_idx` is a DISPLAY index, so without this
+        // the boundary ordinal a hit test resolves is one a `messages[..]`
+        // lookup cannot use.
+        ctx.app_index.get(msg_global_idx).copied().flatten(),
     ));
 }
 
@@ -2035,7 +2062,11 @@ pub(super) fn prepare_body_incremental(
     mut prev: Arc<PreparedMessages>,
     prev_msg_count: usize,
 ) -> Arc<PreparedMessages> {
+    // (RT-Z23-B) The rows and their app-message map come from the SAME cached
+    // build behind `TuiState::display_messages`, so a hit test that resolves a
+    // display index can be mapped back without a second source of truth.
     let messages = app.display_messages();
+    let app_index = app.display_message_app_index();
     let new_messages = &messages[prev_msg_count..];
     if new_messages.is_empty() {
         return prev;
@@ -2083,6 +2114,7 @@ pub(super) fn prepare_body_incremental(
         anchored_images,
         inline_images_visible: app.inline_images_visible(),
         messages,
+        app_index,
         swarm_members: app.swarm_members_for_transcript(),
     };
 
@@ -2387,7 +2419,11 @@ pub(super) fn prepare_body_prepended(
     drop_msgs: usize,
     head_count: usize,
 ) -> Result<Arc<PreparedMessages>, Arc<PreparedMessages>> {
+    // (RT-Z23-B) The rows and their app-message map come from the SAME cached
+    // build behind `TuiState::display_messages`, so a hit test that resolves a
+    // display index can be mapped back without a second source of truth.
     let messages = app.display_messages();
+    let app_index = app.display_message_app_index();
     if drop_msgs == 0
         || drop_msgs >= prev.message_boundaries.len()
         || head_count == 0
@@ -2434,6 +2470,7 @@ pub(super) fn prepare_body_prepended(
         anchored_images: super::inline_image_ui::resolve_anchored_items_cached(app),
         inline_images_visible: app.inline_images_visible(),
         messages,
+        app_index,
         swarm_members: app.swarm_members_for_transcript(),
     };
 
@@ -2629,6 +2666,16 @@ pub(super) fn prepare_body_prepended(
         prepared.message_boundaries = boundaries;
     }
 
+    // RT-Z23-B: the app index must be stitched with EXACTLY the same head/tail
+    // split as the boundaries above, or the map would describe a different
+    // transcript than the one being painted. The head carries its own new map;
+    // the reused suffix carries the base's, re-indexed by the same `drop_msgs`.
+    {
+        let mut app_index = head.message_app_index;
+        app_index.extend(prepared.message_app_index.iter().copied().skip(drop_msgs));
+        prepared.message_app_index = app_index;
+    }
+
     prepared.mermaid_pending_epoch = match (prepared.mermaid_pending_epoch, head_pending_epoch) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
@@ -2722,6 +2769,12 @@ fn prepare_streaming_cached(
     // here: the adapter keeps them out of the Body while the tails are live.
     let live_tools = app.live_tool_rows();
     if !live_tools.is_empty() {
+        // RT-Z23-B: every row here is a live tool row, which names no
+        // `App::messages` entry at all -- the streaming rows are rendered
+        // outside the settled Body on purpose (iter-781). The map is therefore
+        // uniformly `None`, and a hit test over this block resolves nothing,
+        // which is correct: there is no settled message under the pointer.
+        let no_app_index: Vec<Option<usize>> = vec![None; live_tools.len()];
         let ctx = BodyRenderCtx {
             app,
             width,
@@ -2733,6 +2786,7 @@ fn prepare_streaming_cached(
             anchored_images: super::inline_image_ui::resolve_anchored_items_cached(app),
             inline_images_visible: app.inline_images_visible(),
             messages: &live_tools,
+            app_index: &no_app_index,
             swarm_members: app.swarm_members_for_transcript(),
         };
         let mut acc = BodyAcc {
@@ -2772,7 +2826,11 @@ pub(super) fn prepare_body(
     markdown::set_center_code_blocks(centered);
     let display_width = width.saturating_sub(4) as usize;
 
+    // (RT-Z23-B) The rows and their app-message map come from the SAME cached
+    // build behind `TuiState::display_messages`, so a hit test that resolves a
+    // display index can be mapped back without a second source of truth.
     let messages = app.display_messages();
+    let app_index = app.display_message_app_index();
     let ctx = BodyRenderCtx {
         app,
         width,
@@ -2786,6 +2844,7 @@ pub(super) fn prepare_body(
         anchored_images: super::inline_image_ui::resolve_anchored_items_cached(app),
         inline_images_visible: app.inline_images_visible(),
         messages,
+        app_index,
         swarm_members: app.swarm_members_for_transcript(),
     };
 
@@ -2936,6 +2995,7 @@ fn wrap_lines(
         tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
+        message_app_index: Vec::new(),
         mermaid_pending_epoch: None,
     }
 }
@@ -2959,7 +3019,7 @@ fn wrap_lines_with_map(
     // the row the user actually saw.
     tool_row_line_ranges: &[(String, usize, usize)],
     copy_ranges: &[RawCopyTarget],
-    segments: &[(u64, usize, usize, usize)],
+    segments: &[(u64, usize, usize, usize, Option<usize>)],
 ) -> PreparedMessages {
     let full_width = width.saturating_sub(1) as usize;
     let user_width = width.saturating_sub(2) as usize;
@@ -3112,17 +3172,31 @@ fn wrap_lines_with_map(
     let message_boundaries: Vec<MessageBoundary> = segments
         .iter()
         .map(
-            |&(msg_hash, lines_len_after, raw_len_after, user_prompt_len_after)| MessageBoundary {
-                msg_hash,
-                wrapped_len: raw_to_wrapped
-                    .get(lines_len_after)
-                    .copied()
-                    .unwrap_or(wrapped_lines.len()),
-                raw_len: raw_len_after,
-                user_prompt_len: user_prompt_len_after,
+            |&(msg_hash, lines_len_after, raw_len_after, user_prompt_len_after, _)| {
+                MessageBoundary {
+                    msg_hash,
+                    wrapped_len: raw_to_wrapped
+                        .get(lines_len_after)
+                        .copied()
+                        .unwrap_or(wrapped_lines.len()),
+                    raw_len: raw_len_after,
+                    user_prompt_len: user_prompt_len_after,
+                }
             },
         )
         .collect();
+
+    // RT-Z23-B: parallel to `message_boundaries` and the SAME LENGTH, one
+    // `App::messages` index per boundary (`None` for a segment that is a
+    // display-only row). Built from the SAME segments tuple in the same pass,
+    // so the two cannot fall out of step.
+    //
+    // The entry is `.copied().flatten()`ed, NOT `filter_map`ed: `filter_map`
+    // would DROP the display-only segments and silently re-number every
+    // boundary after them, which is the exact off-by-N this map exists to
+    // prevent. A `None` has to stay in place as a `None`.
+    let message_app_index: Vec<Option<usize>> =
+        segments.iter().map(|&(_, _, _, _, app)| app).collect();
 
     PreparedMessages {
         wrapped_lines,
@@ -3139,6 +3213,7 @@ fn wrap_lines_with_map(
         tool_row_ranges,
         copy_targets,
         message_boundaries,
+        message_app_index,
         mermaid_pending_epoch: None,
     }
 }

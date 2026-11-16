@@ -4823,6 +4823,137 @@ fn right_click_over_a_transcript_row_opens_a_message_context_menu() {
     );
 }
 
+/// Z23-B: a right-click names the message the operator POINTED AT, in a
+/// transcript where a tool row sits between the messages.
+///
+/// This is the case the first Z23 fix got wrong. It resolved against the frame
+/// (correct) but returned a `display_messages()` index and handed it to a
+/// consumer that reads `App::messages` -- two different index spaces. A tool
+/// row occupies a display row without being an app message, so every such row
+/// between the target and the head of the transcript shifted the index by one:
+/// the menu named the WRONG message, and once the index ran past
+/// `messages.len()` it named none at all.
+///
+/// The fixture is deliberately the ORDINARY agent shape -- user, assistant,
+/// tool row, assistant -- not the plain two-message shape the earlier test
+/// used (where the two spaces coincide and the bug is invisible).
+///
+/// Mutation-proof: reverting `message_index_at_screen_row` to return the raw
+/// display index fails the third assertion (it names index 3 instead of 2)
+/// and the fourth (no menu at all).
+#[test]
+fn right_click_names_the_pointed_at_message_when_a_tool_row_intervenes() {
+    use crate::tui::app::enums::{ToolStatus, ToolUseBlock};
+
+    let mut app = make_app();
+    app.add_message(Role::User, "AAA one".to_string());
+    app.add_message(Role::Assistant, "BBB two".to_string());
+    // A settled tool row, anchored AFTER message index 1 (0-based), i.e.
+    // rendering between the second and the third message. This is one display
+    // row that is NOT an app message.
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "read_file".to_string(),
+        after_index: 2,
+        status: ToolStatus::Done,
+        output_preview: None,
+        input_json: "{}".to_string(),
+        intent: None,
+    });
+    app.add_message(Role::Assistant, "CCC three".to_string());
+    app.add_message(Role::User, "DDD four".to_string());
+
+    // The premise: the display vector is LONGER than the app vector, so the
+    // two index spaces genuinely differ and this test can tell them apart.
+    let display_len = app.display_messages().len();
+    assert_eq!(
+        display_len,
+        app.messages.len() + 1,
+        "the fixture must contain exactly one display-only row, so the two          index spaces differ by one: display={display_len} app={}",
+        app.messages.len()
+    );
+
+    let rows = screen_rows(&app);
+    let flat = rows.join("\n");
+    let frame = crate::tui::operant_ui::last_chat_frame()
+        .unwrap_or_else(|| panic!("the frame must be published: {flat}"));
+    let body = frame
+        .sections
+        .iter()
+        .find(|section| {
+            matches!(
+                section.kind,
+                crate::tui::operant_model::PreparedSectionKind::Body
+            )
+        })
+        .expect("a Body section");
+    let body_row = |needle: &str| {
+        (0..body.prepared.wrapped_lines.len())
+            .find(|&line| {
+                let raw = body
+                    .prepared
+                    .wrapped_line_map
+                    .get(line)
+                    .map(|map| map.raw_line)
+                    .unwrap_or(line);
+                body.prepared.wrapped_plain_lines[raw].contains(needle)
+            })
+            .unwrap_or_else(|| panic!("the body must render {needle:?}: {flat}"))
+    };
+    let screen_row = |line: usize| (body.line_start + line) as u16;
+    let content = crate::tui::operant_ui::chat_content_area();
+    assert!(
+        content.width > 0 && content.height > 0,
+        "the frame must publish the transcript rect"
+    );
+
+    let click_row = |app: &mut App, needle: &str| {
+        app.context_menu_state = None;
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: content.x,
+            row: screen_row(body_row(needle)),
+            modifiers: KeyModifiers::empty(),
+        });
+        app.context_menu_state
+            .as_ref()
+            .map(|state| state.kind)
+            .clone()
+    };
+
+    // Message 0 sits ABOVE the tool row, so its display index and app index
+    // are both 0. This one passes either way and is the control.
+    assert!(
+        matches!(
+            click_row(&mut app, "AAA one"),
+            Some(ContextMenuKind::Message { message_index: 0 })
+        ),
+        "the first message is above every display-only row, so it must name 0"
+    );
+
+    // Message 2 sits BELOW the tool row: display index 3, app index 2. The old
+    // code returned 3 here -- a different message.
+    let got = click_row(&mut app, "CCC three");
+    assert!(
+        matches!(got, Some(ContextMenuKind::Message { message_index: 2 })),
+        "a right-click on the third APP message must name app index 2, not its \
+         display index 3 (which is `messages[3]`, a different message); \
+         display_len={display_len} app_len={} got={got:?}",
+        app.messages.len()
+    );
+
+    // The last message: display index 4, app index 3. The old code returned 4,
+    // which is >= messages.len() = 4, so the bounds check dismissed the menu
+    // entirely -- no menu at all on the last row.
+    assert!(
+        matches!(
+            click_row(&mut app, "DDD four"),
+            Some(ContextMenuKind::Message { message_index: 3 })
+        ),
+        "the LAST message must still get a menu: its display index is out of          bounds for `App::messages`, which is exactly the no-menu case"
+    );
+}
+
 /// Z23: the keyboard path (Ctrl+Shift+M) resolves the SAME way the pointer
 /// does, so it can open a MESSAGE menu too.
 ///
@@ -12361,6 +12492,7 @@ mod prompt_jump_tests {
             tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
+            message_app_index: Vec::new(),
             mermaid_pending_epoch: None,
         });
         crate::tui::operant_ui::set_last_chat_frame(Arc::new(PreparedChatFrame::from_single(

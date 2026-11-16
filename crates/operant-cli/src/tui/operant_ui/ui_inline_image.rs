@@ -751,6 +751,7 @@ pub(crate) fn build_section(
         tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
+        message_app_index: Vec::new(),
         mermaid_pending_epoch: None,
     }
 }
@@ -772,6 +773,7 @@ fn empty() -> PreparedMessages {
         tool_row_ranges: Vec::new(), // RT-146
         copy_targets: Vec::new(),
         message_boundaries: Vec::new(),
+        message_app_index: Vec::new(),
         mermaid_pending_epoch: None,
     }
 }

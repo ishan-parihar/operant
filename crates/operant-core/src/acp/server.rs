@@ -51,6 +51,15 @@ pub async fn run_socket_server(handler: Arc<dyn AcpHandler>, path: &std::path::P
     // and clears only a path nobody answers on, so restarting after a killed
     // server still works.
     let listener = crate::session_server::bind_unless_live(path).await?;
+    // (2026-11-16, audit RT-Z30-A) THIS SOCKET HAD NEITHER GATE. It binds
+    // through the same `bind_unless_live` as the session socket and carries
+    // STRICTLY MORE authority -- `command` reaches an arbitrary command string
+    // through the whole agent runtime and `stop` sets `should_shutdown` -- yet
+    // `accept()` discarded the peer and served it, and the default umask left
+    // the path at 0755. Both gates are the session socket's, shared through
+    // `crate::socket_auth` so the two cannot drift again.
+    #[cfg(unix)]
+    crate::socket_auth::tighten_socket_permissions(path).await?;
     tracing::info!(socket = %path.display(), "ACP socket server listening");
 
     let sessions = std::sync::Arc::new(crate::acp::SessionRegistry::new());
@@ -62,6 +71,20 @@ pub async fn run_socket_server(handler: Arc<dyn AcpHandler>, path: &std::path::P
                 continue;
             }
         };
+        // Same gate as the session socket, same reason: the credential read
+        // runs on an already-connected fd, no lock is held across it, and a
+        // refused peer is dropped WITHOUT being read so it never reaches the
+        // dispatcher. Gated here rather than inside the helper because
+        // `authorize_peer` is an intentional no-op off Linux (RT-Z30-B).
+        #[cfg(all(unix, target_os = "linux"))]
+        if let Err(refused) = crate::socket_auth::authorize_peer(&stream) {
+            tracing::warn!(
+                error = %refused,
+                "an ACP client was refused: its uid is not this process's uid"
+            );
+            drop(stream);
+            continue;
+        }
         let handler = handler.clone();
         let sessions = sessions.clone();
         tokio::spawn(async move {
@@ -204,5 +227,74 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["result"], "pong");
         assert_eq!(parsed["id"], 1);
+    }
+
+    /// (2026-11-16, audit RT-Z30-A) the gate this socket was missing.
+    ///
+    /// RT-Z30-A found `run_socket_server` with NEITHER the 0600 mode nor the
+    /// peer-uid check, while `session_server` -- which binds through the same
+    /// `bind_unless_live` and carries LESS authority -- had both. The gate is
+    /// now `crate::socket_auth`'s and this socket calls it.
+    ///
+    /// What this test pins is the half that matters HERE: the socket is 0600
+    /// after startup. A rebuild that drops the `tighten_socket_permissions`
+    /// call leaves the path at the umask default, which this fails on. The
+    /// per-connection peer check itself is driven (same-uid, real
+    /// `SO_PEERCRED`) in `crate::socket_auth`'s end-to-end test, because the
+    /// syscall is the same syscall for both sockets -- what differs per socket
+    /// is only whether the call is made, and that is what this guards.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_acp_socket_is_0600_after_startup() {
+        use crate::acp::AgentState;
+
+        struct NoopHandler;
+
+        #[async_trait::async_trait]
+        impl AcpHandler for NoopHandler {
+            async fn agent_state(&self) -> AgentState {
+                AgentState::default()
+            }
+            async fn execute_command(
+                &self,
+                _command: &str,
+                _session_id: Option<&str>,
+            ) -> Result<String, String> {
+                Ok(String::new())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("acp.sock");
+        // The path is CLONED into the task: `run_socket_server` borrows its
+        // argument, and a spawned task needs `'static`, so the caller keeps
+        // `path` and the server gets an owned copy.
+        let server_path = path.clone();
+        let server =
+            tokio::spawn(
+                async move { run_socket_server(Arc::new(NoopHandler), &server_path).await },
+            );
+        // Bounded wait: the bind and the chmod both happen before the accept
+        // loop starts, so the mode is settled by the time the path exists.
+        for _ in 0..200 {
+            if path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path)
+            .expect("the socket must exist")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the ACP socket carries `command` and `stop`: it must be owner-only, \
+             which is the gate RT-Z30-A found missing"
+        );
+
+        server.abort();
     }
 }

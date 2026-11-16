@@ -41,7 +41,16 @@ pub(crate) mod tool_display;
 pub(crate) mod vendor_types;
 mod wrapped_line_map;
 
-pub use adapter::{TOOL_PENDING_PREVIEW, display_messages, live_tool_rows};
+/// (RT-Z23-B) `display_messages` is the rows WITHOUT their app-message map, and
+/// production now always wants the map. It stays exported because tests
+/// deliberately assert on the display rows alone -- that is the surface whose
+/// length differs from `App::messages`, so a test proving the difference needs
+/// the bare vector. Production callers use
+/// [`display_messages_with_app_index`], so the map cannot be skipped by
+/// accident.
+#[cfg(test)]
+pub use adapter::display_messages;
+pub use adapter::{TOOL_PENDING_PREVIEW, display_messages_with_app_index, live_tool_rows};
 #[cfg(test)]
 pub use anchor::Anchor;
 pub use anchor::{ContentPos, content_pos_at_row, resolve_content_pos};

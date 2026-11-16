@@ -1766,19 +1766,32 @@ fn wrapped_line_at_screen_row(screen_row: u16, content_top: u16, scroll: usize) 
 /// boundaries are in the SAME frame-coordinate space as `tool_row_ranges`, so
 /// the two hit tests resolve against one geometry instead of two.
 ///
-/// The returned index is into `App::display_messages()`, which is the vector
-/// the Body section was built from — so it names the row the operator is
-/// actually pointing at. A caller that wants an `App::messages` index has to
-/// map across, and the two are NOT interchangeable: a tool row, a reasoning
-/// trace and a background card each occupy a display row without being an app
-/// message.
+/// The returned `Option<usize>` is an `App::messages` index, NOT a
+/// `display_messages()` index -- and that is the whole point.
+///
+/// (2026-11-16, audit RT-Z23-B) The previous revision returned the DISPLAY
+/// index and documented the difference, but both callers handed it straight to
+/// `self.messages.get(..)`. A tool row, a reasoning trace, a system annotation
+/// and a background card each occupy a display row without being an app
+/// message, so every such row above the target shifted the index by one: the
+/// menu named a *different* message, or nothing at all once the index ran past
+/// `messages.len()`. The two spaces are bridged by the frame's own
+/// `message_app_index` (built in the same pass as the boundaries), so the
+/// mapping is resolved HERE rather than at each call site.
+///
+/// `None` means "this row is not an app message" (or the body carries no
+/// mapping, as a synthetic test frame does). A caller must resolve nothing in
+/// that case, which is the honest answer: there is no message under the
+/// pointer.
 pub(crate) fn message_index_at_screen_row(
     screen_row: u16,
     content_top: u16,
     scroll: usize,
 ) -> Option<usize> {
     let abs_line = wrapped_line_at_screen_row(screen_row, content_top, scroll)?;
-    super::last_chat_frame()?.message_index_at_line(abs_line)
+    super::last_chat_frame()?
+        .message_index_at_line_mapped(abs_line)
+        .and_then(|(_, app)| app)
 }
 
 fn compute_prompt_preview_line_count(

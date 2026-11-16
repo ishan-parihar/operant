@@ -142,6 +142,7 @@ mod tests {
                 tool_row_ranges: Vec::new(), // RT-146
                 copy_targets: Vec::new(),
                 message_boundaries: boundaries,
+                message_app_index: Vec::new(),
                 mermaid_pending_epoch: None,
             }),
         )])
@@ -369,6 +370,7 @@ mod section_pos_tests {
             tool_row_ranges: Vec::new(), // RT-146
             copy_targets: Vec::new(),
             message_boundaries: Vec::new(),
+            message_app_index: Vec::new(),
             mermaid_pending_epoch: None,
         })
     }

@@ -408,7 +408,8 @@ impl App {
             // Replaced by TuiApp::enter with the shared registry so the
             // footer reflects the live agent's counters.
             retry_metrics: std::sync::Arc::new(operant_core::runtime_metrics::RuntimeMetrics::new()),
-            thinking_expanded: std::collections::HashSet::new(),
+            // (2026-11-16, audit RT-Z23-E) `thinking_expanded` initialised here
+            // is gone with the field; see the note in `app/mod.rs`.
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
             last_input_area: Cell::new(ratatui::layout::Rect::default()),

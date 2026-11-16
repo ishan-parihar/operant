@@ -61,6 +61,10 @@ struct DisplayMessageCache {
     /// The `App::transcript_version` the rows below were built from.
     version: u64,
     rows: Vec<DisplayMessage>,
+    /// RT-Z23-B: parallel to `rows` -- the `App::messages` index each display
+    /// row came from, `None` for a row that is not an app message. Built from
+    /// the SAME adapter call as `rows`, so the two can never disagree.
+    app_index: Vec<Option<usize>>,
 }
 
 fn display_message_cache() -> &'static mut DisplayMessageCache {
@@ -82,6 +86,7 @@ fn display_message_cache() -> &'static mut DisplayMessageCache {
             // frame always builds rather than serving an empty cache.
             version: u64::MAX,
             rows: Vec::new(),
+            app_index: Vec::new(),
         }));
         slot.set(fresh);
         // SAFETY: `fresh` was just created here and is not aliased yet.
@@ -104,13 +109,34 @@ impl App {
         let cache = display_message_cache();
         let version = self.transcript_version.get();
         if cache.version != version {
-            cache.rows.clear();
-            cache
-                .rows
-                .extend(crate::tui::operant_model::display_messages(self));
+            // ONE adapter call yields both the rows and their app-message map,
+            // so the map cannot describe a different transcript than the rows
+            // painted beside it (RT-Z23-B). Rebuilding them separately is how
+            // the two would silently drift.
+            let (rows, app_index) =
+                crate::tui::operant_model::display_messages_with_app_index(self);
+            cache.rows = rows;
+            cache.app_index = app_index;
             cache.version = version;
         }
         &cache.rows
+    }
+
+    /// RT-Z23-B: the app-message index behind [`Self::display_messages_slice`],
+    /// from the same cached build.
+    ///
+    /// # Invariant
+    /// Same lifetime contract as `display_messages_slice`: the slice lives in
+    /// the leaked cache allocation and is invalidated by the next mutation.
+    fn display_message_app_index_slice(&self) -> &[Option<usize>] {
+        let cache = display_message_cache();
+        let version = self.transcript_version.get();
+        if cache.version != version {
+            // Delegate to the rows builder so the two are always built
+            // together, then serve the map it produced.
+            let _ = self.display_messages_slice();
+        }
+        &cache.app_index
     }
 
     /// Elapsed wall time since `anchor`, as the trait's `Duration`.
@@ -142,6 +168,11 @@ impl TuiState for App {
 
     fn display_messages(&self) -> &[DisplayMessage] {
         self.display_messages_slice()
+    }
+
+    /// RT-Z23-B: see [`Self::display_message_app_index_slice`].
+    fn display_message_app_index(&self) -> &[Option<usize>] {
+        self.display_message_app_index_slice()
     }
 
     fn expanded_tool_id(&self) -> Option<&str> {

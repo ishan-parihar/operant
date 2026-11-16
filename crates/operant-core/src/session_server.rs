@@ -107,18 +107,24 @@ pub(crate) async fn bind_unless_live(socket: &std::path::Path) -> Result<tokio::
 ///    bound `/tmp/session.sock` got a world-reachable handle to their agent
 ///    and one line of advice in a log nobody reads. The failure now returns
 ///    `Err` before the accept loop; what the caller does with it is spelled
-///    out on [`tighten_socket_permissions`];
+///    out on [`crate::socket_auth::tighten_socket_permissions`];
 /// 2. the PEER's uid must equal ours, checked per connection from
-///    `SO_PEERCRED` ([`peer_uid`]). Filesystem permissions are not the whole
+///    `SO_PEERCRED` (see [`crate::socket_auth::authorize_peer`]). Filesystem
+///    permissions are not the whole
 ///    story: a same-uid process is inside the boundary the socket mode draws,
 ///    and on a multi-agent host "same uid" is not a trust boundary — a build
 ///    script or another agent's tool runs as the operator and can otherwise
 ///    send `WireMessage::Prompt`.
+///
+/// (RT-Z30-A) Both gates live in `crate::socket_auth`, not here: the ACP socket
+/// server binds through the same [`bind_unless_live`] with strictly MORE
+/// authority and had neither, so the two are one module now and cannot drift.
 pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf) -> Result<()> {
     let socket = path.as_path();
     let listener = bind_unless_live(socket).await?;
+    // (RT-Z30-A) the shared gate; see `crate::socket_auth`.
     #[cfg(unix)]
-    tighten_socket_permissions(socket).await?;
+    crate::socket_auth::tighten_socket_permissions(socket).await?;
     tracing::info!(socket = %path.display(), "the session socket is listening");
 
     loop {
@@ -132,8 +138,13 @@ pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf)
         // The blocking `getsockopt` runs on an already-connected fd: it does
         // not touch the runtime, and no lock is held across it. A refused peer
         // is dropped without being read, so it never reaches the handler.
-        #[cfg(unix)]
-        if let Err(refused) = authorize_peer(&stream) {
+        // GATED HERE RATHER THAN IN THE HELPER: on non-Linux unix
+        // `authorize_peer` is an intentional no-op (RT-Z30-B), and an empty
+        // `if let Err(..)` around it would be dead code. Keeping the cfg at
+        // the socket makes "this platform has no peer gate" visible where the
+        // socket is served, not hidden inside a helper.
+        #[cfg(all(unix, target_os = "linux"))]
+        if let Err(refused) = crate::socket_auth::authorize_peer(&stream) {
             tracing::warn!(
                 error = %refused,
                 "a session client was refused: its uid is not this process's uid"
@@ -151,124 +162,15 @@ pub async fn run_session_socket(handler: Arc<dyn SessionHandler>, path: PathBuf)
     }
 }
 
-/// Make the socket 0600 or refuse to serve.
-///
-/// The socket carries full control of the agent and its tools, so a mode that
-/// lets another account connect is not a degraded mode — it is the hole. The
-/// default umask gives a bound socket 0755, which is only safe because the
-/// operant home happens to be 0700; an operator who binds
-/// `/tmp/session.sock` gets none of that. The old code logged a warning and
-/// served anyway, which is worse than useless: the socket works, the hole is
-/// open, and the one line that would have said so is in a log nobody reads.
-///
-/// So this returns `Err` and the accept loop is never entered. What that means
-/// at the call site is worth stating rather than glossing:
-/// `gateway_runner` spawns this on a task and `tracing::error!`s a returned
-/// error, so today the failure surfaces as a loud error line and NO socket
-/// (clients get "connection refused" instead of an agent), not as a gateway
-/// shutdown. Making it fatal to the PROCESS would need a change in
-/// `gateway_runner.rs`, which is outside this lane.
-#[cfg(unix)]
-async fn tighten_socket_permissions(socket: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(0o600);
-    // The chmod is a single syscall on a path this process just bound, so it
-    // stays on the blocking pool rather than parking a runtime worker.
-    let path = socket.to_path_buf();
-    tokio::task::spawn_blocking(move || std::fs::set_permissions(&path, perms))
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "the session socket {} could not be restricted to 0600: \
-                 the join failed ({e}). Refusing to serve: this socket carries \
-                 full control of the agent and its tools.",
-                socket.display()
-            )
-        })?
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "the session socket {} could not be restricted to 0600: {e}. \
-                 Refusing to serve: this socket carries full control of the \
-                 agent and its tools, and a socket another account can reach \
-                 is not a safe one to serve.",
-                socket.display()
-            )
-        })
-}
-
-/// The uid this process runs as.
-#[cfg(unix)]
-fn own_uid() -> u32 {
-    // `getuid` cannot fail: it reads the process credentials and has no
-    // error path in the C API. SAFETY: no arguments, no return pointer.
-    unsafe { libc::getuid() as u32 }
-}
-
-/// The uid on the other end of a connected UNIX socket.
-///
-/// Linux: `SO_PEERCRED` returns the credentials of the process that called
-/// `connect()`, which is fixed at connect time and cannot be changed by the
-/// peer afterwards. macOS/BSD: `getpeereid` (not yet wired — see
-/// [`authorize_peer`]).
-#[cfg(target_os = "linux")]
-fn peer_uid(stream: &tokio::net::UnixStream) -> std::io::Result<u32> {
-    use std::os::unix::io::AsRawFd;
-    let mut cred = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: `cred` is a valid, fully-initialised `ucred` and `len` describes
-    // exactly its size. `SO_PEERCRED` is correct for an AF_UNIX SOCK_STREAM
-    // socket on Linux, and reading it does not disturb the connection.
-    let rc = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
-            &mut len,
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(cred.uid)
-}
-
-/// Refuse a connection whose peer uid is not ours (Z30).
-///
-/// The DECISION is separate from the credential read so it is unit-testable
-/// without a second process: [`authorize_uid`] takes the uid, and the tests
-/// drive every branch of it. What cannot be tested in-process is the syscall
-/// itself (see the module tests).
-#[cfg(unix)]
-fn authorize_peer(stream: &tokio::net::UnixStream) -> std::io::Result<()> {
-    authorize_uid(peer_uid(stream)?)
-}
-
-/// The uid comparison [`authorize_peer`] makes, over a uid the caller read.
-#[cfg(unix)]
-fn authorize_uid(uid: u32) -> std::io::Result<()> {
-    if uid == own_uid() {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("session peer uid {uid} does not match this process's uid"),
-        ))
-    }
-}
-
-/// Non-unix: there is no peer credential to read and no socket mode to
-/// tighten, so nothing is lost that this platform ever offered. The socket is
-/// still bound by `bind_unless_live`, and a Windows named pipe's ACL is
-/// outside this module's scope.
-#[cfg(not(unix))]
-async fn tighten_socket_permissions(_socket: &std::path::Path) -> Result<()> {
-    Ok(())
-}
+// (2026-11-16, audit RT-Z30-A) the gate that stood here -- a private
+// `tighten_socket_permissions`, `own_uid`, `peer_uid`, `authorize_peer` and
+// `authorize_uid` -- MOVED to `crate::socket_auth`, together with its tests.
+// It moved because there was ONE gate and TWO sockets: `acp::server` binds
+// through the same `bind_unless_live`, carries STRICTLY MORE authority (an
+// arbitrary `command` reaching the whole agent runtime, plus `stop`), and had
+// no mode tightening and no peer check at all. Two copies of a credential
+// check is how the two drift, so both servers call the one module. The
+// behaviour of THIS socket is unchanged.
 
 /// Serve ONE client: read its lines, answer them.
 async fn serve_client<R, W>(
@@ -408,85 +310,12 @@ mod tests {
     use super::*;
     use crate::session_protocol::WireMessage;
 
-    /// (Z30) The peer-uid decision: this process's own uid is accepted, and
-    /// any other uid is refused with `PermissionDenied` naming the uid.
-    ///
-    /// What this does NOT cover, stated plainly: it drives the COMPARISON,
-    /// not the credential read. Reading `SO_PEERCRED` needs a second process
-    /// running as a DIFFERENT user on the other end of the socket, which a
-    /// unit test in this process cannot arrange (it would need a setuid
-    /// helper binary or a container). The syscall path itself is therefore
-    /// unexercised by tests and rests on the code + the kernel contract.
-    #[cfg(unix)]
-    #[test]
-    fn a_peer_with_another_uid_is_refused_and_our_own_is_accepted() {
-        assert!(
-            authorize_uid(own_uid()).is_ok(),
-            "the operator's own uid must be accepted"
-        );
-        // A uid that cannot be this process's: pick one that is neither 0
-        // nor ours (a test running as root would otherwise accept 0).
-        let foreign = if own_uid() == 0 { 1 } else { 0 };
-        let err = authorize_uid(foreign).expect_err("a foreign uid must be refused");
-        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
-        assert!(
-            err.to_string().contains(&format!("peer uid {foreign}")),
-            "the refusal must name the offending uid, got: {err}"
-        );
-    }
-
-    /// (Z30) A client that connects to a real socket is authorized through
-    /// the credential read: `peer_uid` reports this process, so the
-    /// connection is served rather than dropped.
-    ///
-    /// This is the end-to-end half that CAN run in-process — a real
-    /// `connect()` on a real bound socket, same uid on both ends. The
-    /// negative end-to-end case (a foreign uid) is the one that cannot be
-    /// built here.
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn a_real_same_uid_client_is_authorized_and_served() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let socket = dir.path().join("session.sock");
-        let listener = bind_unless_live(&socket).await.expect("the bind must work");
-        tighten_socket_permissions(&socket).await.expect("0600");
-
-        let client = tokio::net::UnixStream::connect(&socket)
-            .await
-            .expect("the client must connect");
-        let (server, _peer) = listener.accept().await.expect("accept");
-        // The real syscall, on a real connection.
-        assert_eq!(
-            peer_uid(&server).expect("SO_PEERCRED must read the peer"),
-            own_uid(),
-            "a same-process client's uid is ours"
-        );
-        authorize_peer(&server).expect("a same-uid peer must be authorized");
-
-        // And the socket is actually 0600, which the tightened path promises.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&socket)
-                .expect("the socket metadata")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(mode, 0o600, "the socket must be owner-only");
-        }
-
-        // The authorized connection still carries bytes both ways.
-        let mut client = client;
-        client.write_all(b"ping\n").await.expect("write");
-        let (mut read_half, mut write_half) = tokio::io::split(server);
-        let mut buf = [0u8; 5];
-        read_half.read_exact(&mut buf).await.expect("read");
-        assert_eq!(&buf, b"ping\n");
-        write_half.write_all(b"pong\n").await.expect("write");
-        drop(write_half);
-    }
+    // (2026-11-16, audit RT-Z30-A) the gate's own tests moved WITH the gate to
+    // `crate::socket_auth`, so the module that owns the decision owns its
+    // tests. What stays here is the property that matters at THIS call site:
+    // the accept loop actually consults the gate -- covered by
+    // `the_session_socket_is_0600_after_startup` below and by the gate's
+    // end-to-end test in `socket_auth`.
 
     /// (Z30) The socket is owner-only after startup. This is the mode gate
     /// from the old warning path: it used to log and continue, so a socket

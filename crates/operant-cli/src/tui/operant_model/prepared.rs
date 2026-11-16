@@ -132,6 +132,26 @@ pub struct PreparedMessages {
     /// synthetic/test prepared bodies); prefix reuse simply degrades to a full
     /// rebuild in that case.
     pub message_boundaries: Vec<MessageBoundary>,
+    /// RT-Z23-B: the `App::messages` index behind each entry in
+    /// `message_boundaries`, in the same order and the same length.
+    ///
+    /// The prepared body is built from `App::display_messages()`, which
+    /// additionally contains display-only rows (tool rows, reasoning traces,
+    /// system annotations, background cards), so a position in that vector is
+    /// NOT a position in `App::messages`. Worse, ONE app message can expand to
+    /// SEVERAL display rows (its text row plus one per thinking trace), so the
+    /// boundary ORDINAL is not even the display index of that message's first
+    /// row. This is the map that keeps all three straight: entry `i` answers
+    /// "which `App::messages` item owns `message_boundaries[i]`", and `None`
+    /// means that segment is display-only and names no app message.
+    ///
+    /// It exists because two context-menu consumers took a boundary ordinal and
+    /// read `App::messages` with it, so every tool row between the operator's
+    /// target and the head of the transcript made the menu name a different
+    /// message -- or no message at all. Empty (with non-empty boundaries) means
+    /// "unknown", which callers must treat as "resolve nothing" rather than
+    /// "assume the ordinal is the index".
+    pub message_app_index: Vec<Option<usize>>,
     /// Deferred-mermaid staleness stamp: `Some(epoch)` when `wrapped_lines`
     /// bakes in at least one "rendering mermaid diagram..." placeholder for a
     /// diagram still rendering in the background, where `epoch` is the
@@ -422,6 +442,20 @@ impl PreparedChatFrame {
     /// Boundaries record the cumulative wrapped length after each message, so
     /// the owning message is the first boundary strictly beyond the line.
     pub fn message_index_at_line(&self, abs_line: usize) -> Option<usize> {
+        self.message_index_at_line_mapped(abs_line)
+            .map(|(display, _)| display)
+    }
+
+    /// [`Self::message_index_at_line`], plus the `App::messages` index behind
+    /// the display row it resolved (RT-Z23-B).
+    ///
+    /// Callers that want to reach into `App::messages` MUST use this, not
+    /// `message_index_at_line`: the two indices are different spaces and only
+    /// this one carries the mapping. A body built without boundary tracking
+    /// yields `(display, None)` -- the caller resolves nothing rather than
+    /// guessing that the display index doubles as an app index, which is the
+    /// assumption that produced the bug.
+    pub fn message_index_at_line_mapped(&self, abs_line: usize) -> Option<(usize, Option<usize>)> {
         let (section, local) = self.line_section(abs_line)?;
         if section.kind != PreparedSectionKind::Body {
             return None;
@@ -431,7 +465,19 @@ impl PreparedChatFrame {
             return None;
         }
         let idx = boundaries.partition_point(|boundary| boundary.wrapped_len <= local);
-        (idx < boundaries.len()).then_some(idx)
+        if idx >= boundaries.len() {
+            return None;
+        }
+        // `.get` rather than indexing: a synthetic or legacy body can carry
+        // boundaries with no map, and the answer there is "unknown" (None),
+        // never "assume the ordinal doubles as the app index".
+        let app = section
+            .prepared
+            .message_app_index
+            .get(idx)
+            .copied()
+            .flatten();
+        Some((idx, app))
     }
 
     pub fn materialize_line_slice(&self, start: usize, end: usize) -> Vec<Line<'static>> {

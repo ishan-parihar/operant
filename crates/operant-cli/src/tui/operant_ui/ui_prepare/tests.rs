@@ -221,6 +221,10 @@ fn matching_suffix_len_detects_prepended_history() {
                 user_prompt_len: 0,
             })
             .collect(),
+        // RT-Z23-B: a synthetic fixture has no app-message mapping, and the
+        // resolver must degrade to "unknown" rather than to the display
+        // index. That is what an empty map expresses.
+        message_app_index: Vec::new(),
         mermaid_pending_epoch: None,
     };
 

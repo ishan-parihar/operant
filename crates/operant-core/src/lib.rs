@@ -144,6 +144,9 @@ pub mod skill_mentions;
 pub mod skill_usage;
 pub mod skills;
 pub mod skills_guard;
+/// The peer-authentication gate shared by every operant UNIX socket server
+/// (2026-11-16, audit RT-Z30-A: there was one gate and two sockets).
+pub mod socket_auth;
 pub mod sops;
 pub mod sourcehound_cdp;
 pub mod tool_guardrails;

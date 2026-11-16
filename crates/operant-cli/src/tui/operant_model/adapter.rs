@@ -71,6 +71,26 @@ use crate::tui::app::{App, SystemAnnotation, SystemMessageStyle, ToolUseBlock};
 
 /// Flatten operant's transcript state into the jcode message model.
 pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
+    display_messages_with_app_index(app).0
+}
+
+/// [`display_messages`] plus the map from each display row back to the
+/// `App::messages` index it came from.
+///
+/// (2026-11-16, audit RT-Z23-B) The two index spaces are NOT interchangeable
+/// and used to be confused by the context-menu handlers, which took a
+/// `display_messages()` index and handed it to a consumer that reads
+/// `App::messages`. A tool row, a reasoning trace, a system annotation and a
+/// background card each occupy a display row WITHOUT being an app message, so
+/// every such row between the target and the head of the transcript shifted the
+/// index by one -- the menu named the wrong message, or nothing when the index
+/// ran past the end. The map is built HERE, in the same pass that emits the
+/// rows, because that is the only place both facts are known and a second
+/// implementation is exactly how the two would drift again.
+///
+/// `None` means the row is a display-only row (tool, reasoning, annotation,
+/// background card, or a collapsed tool-run summary) and names no app message.
+pub fn display_messages_with_app_index(app: &App) -> (Vec<DisplayMessage>, Vec<Option<usize>>) {
     let last_index = app.messages.len().saturating_sub(1);
     let mut tool_rows_after: HashMap<usize, Vec<DisplayMessage>> = HashMap::new();
     let mut tool_rows_before: Vec<DisplayMessage> = Vec::new();
@@ -133,10 +153,19 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     let mut out = Vec::with_capacity(
         app.messages.len() + app.tool_use_blocks.len() + app.system_annotations.len(),
     );
+    // (RT-Z23-B) Parallel to `out`: one entry per row, `Some(app_messages_idx)`
+    // for a row that IS an app message, `None` for a display-only row. It is
+    // built in lockstep with `out` below -- every `extend` is mirrored here --
+    // because a map built in a second pass is how the two would drift.
+    let mut app_index: Vec<Option<usize>> = Vec::with_capacity(out.capacity());
     if let Some(annotations) = annotations_after.remove(&0) {
+        let n = annotations.len();
         out.extend(annotations.into_iter().map(system_annotation_row));
+        app_index.extend(std::iter::repeat_n(None, n));
     }
+    let n = tool_rows_before.len();
     out.extend(tool_rows_before);
+    app_index.extend(std::iter::repeat_n(None, n));
     // Reasoning visibility (jcode ReasoningDisplayMode): Full shows every
     // committed trace; Current keeps the current turn's traces anchored where
     // they streamed and drops them once the next user prompt lands (jcode
@@ -161,23 +190,37 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
         // the current turn's own blocks still render whole.
         let collapse_past_thinking =
             mode == ReasoningDisplayMode::Current && last_user.is_some_and(|user| index < user);
-        out.extend(expand_message_with_mode(
-            message,
-            show_thinking,
-            collapse_past_thinking,
-        ));
+        // (RT-Z23-B) ONE app message expands to MANY display rows (its text
+        // row, one row per thinking trace, one per tool result), so every row
+        // this arm emits carries the SAME `index`. That fan-out is precisely
+        // why a display index is not an app index.
+        let expanded = expand_message_with_mode(message, show_thinking, collapse_past_thinking);
+        app_index.extend(std::iter::repeat_n(Some(index), expanded.len()));
+        out.extend(expanded);
         if let Some(rows) = tool_rows_after.remove(&index) {
+            let n = rows.len();
             out.extend(rows);
+            app_index.extend(std::iter::repeat_n(None, n));
         }
         if let Some(annotations) = annotations_after.remove(&(index + 1)) {
+            let n = annotations.len();
             out.extend(annotations.into_iter().map(system_annotation_row));
+            app_index.extend(std::iter::repeat_n(None, n));
         }
     }
     // (iter-781) Live thinking/text never appear here: this vec feeds the
     // settled Body section. They render once, in the mutable Streaming
     // section (prepare_streaming_cached), followed by `live_tool_rows`.
+    let n = trailing_tool_rows.len();
     out.extend(trailing_tool_rows);
-    out
+    app_index.extend(std::iter::repeat_n(None, n));
+
+    debug_assert_eq!(
+        out.len(),
+        app_index.len(),
+        "the display rows and their app-message index map must stay in lockstep"
+    );
+    (out, app_index)
 }
 
 /// Tool rows whose ToolStart reserved a slot for the still-live tails

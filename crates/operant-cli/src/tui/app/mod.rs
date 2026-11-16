@@ -982,8 +982,14 @@ pub struct App {
     /// None when no goal is active. Updated by the REPL after each turn.
 
     // ---- Thinking block expansion state ----------------------------------
-    /// Set of thinking block content hashes that are expanded.
-    pub thinking_expanded: std::collections::HashSet<u64>,
+    // (2026-11-16, audit RT-Z23-E) `App::thinking_expanded` is DELETED. It was a
+    // `HashSet<u64>` of thinking-block hashes "that are expanded", and its only
+    // writer was the dead click-to-collapse branch Z23 removed -- so it was
+    // provably always empty and provably never read. The collapse behaviour it
+    // was for is now honestly provided by `ReasoningDisplayMode::Current` plus
+    // `/thinking-display`, and a field that can never be non-empty is the same
+    // class of defect Z23 was about, one layer down.
+
     /// The message pane area from the last render frame (used for mouse hit testing).
     pub last_msg_area: Cell<ratatui::layout::Rect>,
     /// The frame region that supports text selection.
@@ -999,7 +1005,8 @@ pub struct App {
     // always dismissed the menu, Ctrl+Shift+M always produced a selection-only
     // menu, and click-to-collapse-thinking was unreachable (which also meant
     // `thinking_expanded` could never be non-empty, since its only writer was
-    // that dead branch). Hit testing now resolves against the prepared frame's own
+    // that dead branch -- it is deleted with the branch, see RT-Z23-E). Hit
+    // testing now resolves against the prepared frame's own
     // message boundaries via `operant_ui::message_index_at_screen_row`, so the
     // pointer and the painting share one geometry instead of two.
     /// Scroll offset from the last render frame (used for selection validation).
