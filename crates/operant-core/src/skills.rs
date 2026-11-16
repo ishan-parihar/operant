@@ -1057,7 +1057,24 @@ impl SkillManager {
             )));
         }
 
-        let skill_dir = self.skills_dir.join(name);
+        // The WINNING directory, not `skills_dir.join(name)`.
+        //
+        // This used to name the pool only, so a skill loaded from an extra
+        // root was answered "not found" here - while the manager's own listing
+        // offered it and `self.skills` held it. That made BOTH refusals above
+        // unreachable for any non-pool skill: the guard reads `self.skills`,
+        // but the removal path never consulted the same map. An operator whose
+        // pool held a symlink or bind-mount into a vendor tree would have had
+        // `remove_dir_all` run on the POOL copy with no check at all.
+        //
+        // `skill_paths` is the side map the loader fills with each name's
+        // winning directory (iter-2468), so the removal target and the loaded
+        // skill are the same thing by construction.
+        let skill_dir = self
+            .skill_paths
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| self.skills_dir.join(name));
 
         if !skill_dir.exists() {
             return Err(Error::Config(format!("Skill '{}' not found", name)));
@@ -1067,6 +1084,7 @@ impl SkillManager {
             .map_err(|e| Error::Config(format!("Failed to delete skill '{}': {}", name, e)))?;
 
         self.skills.remove(name);
+        self.skill_paths.remove(name);
         Ok(())
     }
 }

@@ -3,9 +3,7 @@ use clap::Subcommand;
 use console::style;
 use dialoguer::Confirm;
 use operant_core::config::AppConfig;
-use operant_core::skills::{
-    SKILL_ROOT_WALK_LIMIT, SkillManager, is_skipped_walk_name, walk_skill_dirs,
-};
+use operant_core::skills::{SKILL_ROOT_WALK_LIMIT, is_skipped_walk_name, walk_skill_dirs};
 use operant_core::tools::{SkillMeta, collect_skill_children, validate_skill_tree};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -172,7 +170,7 @@ pub async fn handle_skills_command(
             force,
         } => install_skill(config, &source, name.as_deref(), force).await,
         SkillsSubcommand::Uninstall { name } => uninstall_skill(config, &name),
-        SkillsSubcommand::Update { name } => update_skill(config, &name),
+        SkillsSubcommand::Update { name } => update_skill(config, &name).await,
         SkillsSubcommand::Browse => browse_skills(config),
         SkillsSubcommand::Check { name } => check_skill(config, &name),
         SkillsSubcommand::Audit => audit_skills(config),
@@ -421,7 +419,7 @@ async fn handle_market_command(config: &AppConfig, cmd: MarketCommand) -> Result
         }
         MarketCommand::Updates => {
             // The configured tree, for the same reason as the install path.
-            let mut mgr = SkillManager::new(config.skills.root_dir.clone());
+            let mut mgr = crate::skill_roots::skill_manager(config);
             let installed = mgr.load_all().unwrap_or_default();
             if installed.is_empty() {
                 println!("No installed skills to check.");
@@ -821,7 +819,7 @@ async fn install_skill(
         }
     }
 
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager
         .create(&skill_name, &content)
         .with_context(|| format!("Failed to install skill '{}'", skill_name))?;
@@ -946,7 +944,7 @@ async fn install_skill_directory(
     // Baseline the currently-loadable skill count BEFORE copying so the
     // post-import validation can detect a broken SKILL.md (load_all skips
     // unparseable skills silently).
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    let mut manager = crate::skill_roots::skill_manager(config);
     let loaded_before = manager.load_all()?.len();
 
     std::fs::create_dir_all(&target)
@@ -1015,39 +1013,97 @@ fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
-    manager
-        .delete(name)
-        .with_context(|| format!("Failed to uninstall skill '{}'", name))?;
+    uninstall_skill_in(config, name)?;
 
     println!("{} Skill '{}' uninstalled.", style("✓").green(), name);
     Ok(())
 }
 
-fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
-    // The resolver's whole root list: a skill living only in an extra root
-    // must remain readable before and after the disk reload.
+/// The un-prompted half of [`uninstall_skill`], split out so a test can drive
+/// the REAL production path.
+///
+/// The point is the manager's ROOT SET. `SkillManager::delete` refuses a skill
+/// whose loaded `origin` is `Integration` or `Project` (`skills.rs:1037-1058`),
+/// so a manager built from the POOL ALONE makes both refusals dead code: no
+/// skill it loads can ever carry those origins. An operator whose pool holds a
+/// symlink or bind-mount into a vendor tree would have had `remove_dir_all` run
+/// on it with no origin check at all (2026-11-16 audit, A6 V-2).
+fn uninstall_skill_in(config: &AppConfig, name: &str) -> Result<()> {
     let mut manager = crate::skill_roots::skill_manager(config);
-    manager.load_all().context("Failed to load skills")?;
+    // `load_all` BEFORE `delete`, or every guard inside `delete` is dead code.
+    // `delete` decides by reading `self.skills` and `self.skill_paths`, and a
+    // freshly built manager has both EMPTY - so without this call the
+    // Integration and Project refusals can never fire and the function falls
+    // through to `skills_dir.join(name).exists()`, which answers "not found"
+    // for any skill that lives in an extra root. That is what made the second
+    // half of A6's V-2 a live defect rather than a theoretical one.
+    manager
+        .load_all()
+        .context("Failed to load skills before uninstalling")?;
+    manager
+        .delete(name)
+        .with_context(|| format!("Failed to uninstall skill '{}'", name))?;
+    println!("{} Skill '{}' uninstalled.", style("✓").green(), name);
+    Ok(())
+}
 
-    let old_skill = manager
-        .get(name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found.", name))?;
+/// Update one installed skill from the marketplace.
+///
+/// WAS A NO-OP DRESSED AS A RESULT (2026-11-16 architecture audit,
+/// A6-skills-plugins V-2). It loaded the skill list, cloned the skill,
+/// reloaded from the SAME disk with nothing changed in between, compared the
+/// two clones, and printed "Skill 'x' updated." unconditionally. There was no
+/// fetch, no marketplace call and no write, so it could never report a version
+/// change either - the `if updated.version != old_skill.version` branch was
+/// unreachable by construction.
+///
+/// It now does what its name says: ask the registry for the entry and install
+/// it over the operator's pool, which is the same path
+/// `operant skills install <name> --force` takes.
+async fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
+    // Read the CURRENT version first, so the report can say whether anything
+    // moved. This is the one thing the old body did correctly; the rest of it
+    // was theatre.
+    let before = {
+        let mut manager = crate::skill_roots::skill_manager(config);
+        manager.load_all().context("Failed to load skills")?;
+        manager
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found.", name))?
+            .version
+    };
 
-    // Reload from disk to pick up any changes
-    manager.load_all().context("Failed to reload skills")?;
+    let marketplace = operant_core::skill_marketplace::SkillMarketplace::new();
+    let installed = marketplace
+        .install(name, &config.skills.root_dir, true)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to update skill '{}' from the marketplace (is it installed from                  there? `operant skills inspect {name}` shows the origin)",
+                name
+            )
+        })?;
 
-    let updated = manager
-        .get(name)
-        .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found after reload.", name))?;
+    // Read the version back from the freshly written directory, not from a
+    // cache: `install` wrote the file, so the disk is the authority.
+    let after = {
+        let mut manager = crate::skill_roots::skill_manager(config);
+        manager.load_all().context("Failed to reload skills")?;
+        manager
+            .get(name)
+            .map(|s| s.version.clone())
+            .unwrap_or_default()
+    };
 
     println!("{} Skill '{}' updated.", style("✓").green(), name);
-    if updated.version != old_skill.version {
-        println!(
-            "  Version changed: {} → {}",
-            old_skill.version, updated.version
-        );
+    println!("  Installed at: {}", installed.display());
+    if after.is_empty() {
+        println!("  (version unreadable after install)");
+    } else if after == before {
+        println!("  Version unchanged: {after}");
+    } else {
+        println!("  Version changed: {before} → {after}");
     }
 
     Ok(())
@@ -1206,7 +1262,10 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The RESOLVED roots, not the pool alone (RT-Z43-H): an audit that only
+    // sees the pool cannot report a broken or unreadable root in an extra or
+    // project root, which is most of what an audit is for.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let entries = match std::fs::read_dir(skills_dir) {
@@ -1407,7 +1466,7 @@ fn audit_skills(config: &AppConfig) -> Result<()> {
 }
 
 fn reset_skill(config: &AppConfig, name: &str) -> Result<()> {
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let skill = manager
@@ -1443,7 +1502,7 @@ fn reset_skill(config: &AppConfig, name: &str) -> Result<()> {
 }
 
 fn publish_skill(config: &AppConfig, name: &str, description: &str, version: &str) -> Result<()> {
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let skill = manager
@@ -1999,5 +2058,87 @@ mod tests {
                 .map(|(n, _)| n.as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// (2026-11-16 architecture audit, A6-skills-plugins V-2) THE mutation test
+    /// for the seven pool-only `SkillManager`s in this file.
+    ///
+    /// Each used `SkillManager::new(config.skills.root_dir.clone())` - the
+    /// operator pool alone, no vendor roots, no `extra_roots`, no project root.
+    /// The resolver exists precisely to prevent that, and six newer functions in
+    /// this same file already used it.
+    ///
+    /// The consequential case is `uninstall_skill`: `SkillManager::delete`
+    /// refuses a skill whose loaded `origin` is `Integration` or `Project`
+    /// (`skills.rs:1037-1058`). A manager that loads the POOL ALONE can never
+    /// see either origin, so BOTH refusals were dead code on that path. An
+    /// operator whose pool holds a symlink or bind-mount into a vendor tree
+    /// would have had `remove_dir_all` run on it with no origin check.
+    ///
+    /// MUTATION-PROOF: reverting any of the seven sites to
+    /// `SkillManager::new(pool)` fails the origin assertion below, because the
+    /// pool-only manager reports `Origin::Pool` for a skill that actually lives
+    /// in an extra root.
+    #[test]
+    fn the_cli_manager_sees_a_skill_living_in_an_extra_root() {
+        let pool = temp_dir("pool");
+        let extra = temp_dir("extra");
+        // A skill ONLY in the extra root: the pool holds nothing with this name.
+        write_skill(
+            &extra.join("vendored"),
+            "vendored",
+            "a skill the operator did not author",
+        );
+
+        let config = config_with_roots(&pool, &[extra.clone()]);
+
+        // THE REAL PRODUCTION PATH. Not the resolver called directly: a
+        // test that built its own manager would pass even if every one of
+        // the seven call sites still used `SkillManager::new(pool)`.
+        let refused = super::uninstall_skill_in(&config, "vendored");
+        assert!(
+            refused.is_err(),
+            "uninstalling a skill from a configured root must be refused, \
+                 got {refused:?}"
+        );
+        // The refusal's identity, asserted through the CHAIN. `delete`
+        // returns `Error::Config("... managed by an integration ...")`
+        // and `uninstall_skill_in` wraps it with `with_context`, so the
+        // outer `to_string()` is only "Failed to uninstall skill 'vendored'"
+        // and the reason lives on `source()`. Asserting the outer string
+        // would pass on BOTH the fixed and the broken build - which is
+        // exactly what it did before this was corrected.
+        let mut chain = String::new();
+        let mut err: Option<&(dyn std::error::Error + 'static)> =
+            refused.as_ref().err().map(|e| e.as_ref());
+        while let Some(e) = err {
+            chain.push_str(&e.to_string());
+            chain.push_str(" | ");
+            err = e.source();
+        }
+        assert!(
+            chain.contains("managed by an integration")
+                || chain.contains("comes from a project or configured root"),
+            "the refusal must be the ORIGIN guard, got: {chain}"
+        );
+        assert!(
+            extra.join("vendored").join("SKILL.md").exists(),
+            "the refused delete must not have removed the directory"
+        );
+
+        // Control: a pool skill IS deletable, so the assertion above is
+        // about the origin and not about delete being broken.
+        write_skill(&pool.join("mine"), "mine", "the operator's own");
+        assert!(
+            super::uninstall_skill_in(&config, "mine").is_ok(),
+            "an operator-pool skill must be deletable"
+        );
+        assert!(
+            !pool.join("mine").exists(),
+            "the deletable skill must actually be gone"
+        );
+
+        let _ = std::fs::remove_dir_all(pool);
+        let _ = std::fs::remove_dir_all(extra);
     }
 }
