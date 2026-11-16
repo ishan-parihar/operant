@@ -10,10 +10,14 @@ surface ([cli-surface.md](cli-surface.md)).
 
 Source: `crates/operant-core/src/tools.rs` (registry + `OperantTool`
 trait), `crates/operant-core/src/tools/` (the families),
-`crates/operant-core/src/tool_guardrails.rs`, `crates/operant-core/src/tools/tool_state.rs`,
+`crates/operant-core/src/tools/clarify_tool.rs` (the `clarify` tool),
+`crates/operant-core/src/tool_guardrails.rs`,
+`crates/operant-core/src/tools/tool_state.rs`,
 `crates/operant-core/src/tools/tool_search.rs` +
 `tools/tool_search/name_recovery.rs`, `crates/operant-core/src/aft_bridge.rs` +
 `crates/operant-core/src/tools/aft_tools.rs`,
+`crates/operant-core/src/rtk_bridge.rs` (the rtk command-rewrite bridge),
+`crates/operant-core/src/terminal_hints.rs` (terminal-failure hints),
 `crates/operant-core/src/binary_updater.rs`,
 `crates/operant-core/src/schema.rs` (JSON Schema generation),
 `crates/operant-cli/src/main.rs` (the conditional registrations the CLI

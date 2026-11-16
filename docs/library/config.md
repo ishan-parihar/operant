@@ -6,9 +6,12 @@ Not for: any specific subsystem's config keys (each library page names
 its own), setup wizard flows ([operability.md](operability.md)).
 
 Source: `crates/operant-core/src/config.rs` (AppConfig — THE live
-config), `crates/operant-core/src/platform.rs` (operant_home),
+config), `crates/operant-core/src/config_backup.rs` (the point-in-time
+snapshots a bad write can be undone from),
+`crates/operant-core/src/platform.rs` (operant_home),
 `crates/operant-core/src/profile.rs`,
-`crates/operant-config/src/` (the shared type crate),
+`crates/operant-config/src/` (the shared type crate —
+`schema/platform_cfg.rs` is the `platform` table),
 `crates/operant-cli/src/config.rs` (CLI layer),
 `crates/operant-cli/src/env_store.rs`,
 `crates/operant-core/src/env_passthrough.rs`,

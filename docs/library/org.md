@@ -59,6 +59,15 @@ native Holon tools generated from ONE definition
 (`vendor/holon-tools.json` — Holon's own `holon.mcp.tools()` walk; the
 vendor file is the contract so the two sides cannot drift).
 
+Two files under `operant-os/src/` are the residency contract the
+boundary paragraph above names: `organs.rs` is the resident-organs loop
+(the supervisor and the 2-minute `holon tick` clock, living in the
+gateway process rather than a CLI one-shot), and `run_env.rs` is the
+run-environment contract (the `holon_employee` / `holon_run_dir` /
+`is_holon_run` predicates plus the department-resolved `holon_skills_dir`,
+re-exported from `operant_core::platform` where the single definition
+sits because the agent loop and the cron tool read it there).
+
 All Holon-backed surfaces are OFF by default (`[holon] enabled =
 false`): personal mode is byte-identical to mainline.
 
@@ -73,7 +82,8 @@ false`): personal mode is byte-identical to mainline.
   is the accepted bookkeeping stub (RT-135 — do not "fix" unasked).
 - **Curator** (`curator/`) — skill lifecycle: states, pinning, usage
   tracking, backup/rollback snapshots, LLM consolidation of overlapping
-  skills. Fed by the background review.
+  skills. Fed by the background review. The archive/prune/restore
+  mechanics are `curator/archiver.rs`.
 - **Suggestions** (`cronjobs/suggestions.rs` + `cmd_suggestions.rs`) —
   ready-to-run cron specs surfaced to the user; accepting one creates
   the real job.

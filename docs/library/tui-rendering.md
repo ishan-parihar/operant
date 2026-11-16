@@ -82,8 +82,8 @@ adaptation. The types a reader needs:
 - `cache.rs` — `get_cached_message_lines()`, the per-message memo: a
   `MessageCacheContext` carries `diagram_mode`, `centered`, the mermaid
   epoch, the aspect bucket and the agentgrep flag, and a changed context
-  is a miss. `ui_messages_cache.rs` is the operant-side wrapper that
-  builds that context from the shim config.
+  is a miss. `operant_ui/ui_messages_cache.rs` is the operant-side wrapper
+  that builds that context from the shim config.
 - `anchor.rs`, `wrapped_line_map.rs`, `transcription.rs`,
   `tool_display.rs` (`canonical_tool_name`, `tool_output_looks_failed`,
   the failure summary), `vendor_types.rs` (the vendored value types),
@@ -108,20 +108,20 @@ already built and wrapped, so the paint path never parses markdown.
 
 **The caches, in order of cost.**
 
-1. **The full-frame cache** (`operant_ui/mod.rs:784`, `FULL_PREP_CACHE_MAX_ENTRIES`
-   = 4 regular + 2 oversized, 24 MiB). `FullPrepCacheKey` carries
-   `width`, `height`, `diff_mode`, `messages_version` (multiplied by 2
-   and OR'd with `pin_todos`, so pinning invalidates), `diagram_mode`,
-   `centered`, `expanded_tool_id`, the mermaid aspect bucket,
-   `is_processing`, `streaming_text_len` and `streaming_text_hash`, the
-   batch-progress hash, the inline-image signature,
-   `inline_images_visible`, `expanded_images_version` and
+1. **The full-frame cache** (`operant_ui/ui_prepare.rs:784`,
+   `FULL_PREP_CACHE_MAX_ENTRIES` = 4 regular + 2 oversized, 24 MiB).
+   `FullPrepCacheKey` carries `width`, `height`, `diff_mode`,
+   `messages_version` (multiplied by 2 and OR'd with `pin_todos`, so
+   pinning invalidates), `diagram_mode`, `centered`, `expanded_tool_id`,
+   the mermaid aspect bucket, `is_processing`, `streaming_text_len` and
+   `streaming_text_hash`, the batch-progress hash, the inline-image
+   signature, `inline_images_visible`, `expanded_images_version` and
    `swarm_members_signature`. An exact hit returns early — unless the
-   entry carries a `mermaid_pending_epoch` that no longer matches
-   `deferred_render_epoch()`, in which case it falls through to a rebuild
-   that truncates the base at the pending message.
-2. **The body cache** (`mod.rs:520`, `BODY_CACHE_MAX_ENTRIES` = 8 regular
-   + 2 oversized, `BODY_CACHE_MAX_BYTES` = 32 MiB).
+   entry's `mermaid_pending_epoch` no longer equals
+   `deferred_render_epoch()` (`ui_prepare.rs:809`), in which case it falls
+   through to a rebuild that truncates the base at the pending message.
+2. **The body cache** (`ui_prepare.rs:520`, `BODY_CACHE_MAX_ENTRIES` =
+   8 regular + 2 oversized, `BODY_CACHE_MAX_BYTES` = 32 MiB).
    `prepare_body_cached` (`ui_prepare.rs:1222`) keys on
    `BodyCacheKey` (width, diff mode, messages version, diagram mode,
    centered, expanded tool id, mermaid aspect bucket, pin_images,
@@ -135,7 +135,9 @@ already built and wrapped, so the paint path never parses markdown.
    rebuild. The body cache also carries a `prompt_offset` per entry, so a
    rebuild that stitches older history above a cached suffix can verify
    prompt-numbering continuity against the offset the base was built
-   with.
+   with. The same deferred-mermaid staleness check guards the body cache
+   (`ui_prepare.rs:1280`), which is why the epoch is stamped on
+   `PreparedMessages` itself (`prepared.rs:143`).
 3. **The message cache.** `get_cached_message_lines` (stage 1) memoises a
    single rendered message keyed on width, diff mode, expansion, and the
    context values.
@@ -213,10 +215,14 @@ never splits a grapheme that `unicode-width` reports as one column.
    height.
 3. Computes `max_scroll` from the total wrapped lines minus the viewport
    height, published to `set_last_max_scroll`.
-4. Resolves the scroll offset, in this order: a pending history anchor
-   (`lines_from_bottom`, invariant under a top-side prepend), a resize
-   anchor (content coordinates, `resolve_content_pos`), an explicit
-   `scroll_offset`, and the tail when `auto_scroll`.
+4. Resolves the scroll offset, in this order: a resize anchor (content
+   coordinates, `resolve_content_pos`, and only while
+   `auto_scroll_paused()`), a pending history anchor
+   (`lines_from_bottom`, invariant under a top-side prepend), an explicit
+   `scroll_offset`, and the tail when `auto_scroll`. In terminal-scroll
+   mode a final `.max(...)` lifts the offset to the native-scrollback
+   watermark floor, so a row already emitted into the terminal's own
+   history is never repainted in the viewport.
 5. Walks the visible rows and dispatches each to its renderer in
    `ui_messages.rs`: `render_assistant_message`, `render_reasoning_message`,
    `render_system_message`, `render_tool_message`,
@@ -263,7 +269,10 @@ go through `operant_render_core::math` (`render_inline_latex`,
 `render_display_latex`), which is a small terminal renderer, not a TeX
 engine: it recognises the constructs models use most (fractions, roots,
 scripts, matrices) and preserves unknown commands instead of dropping
-content.
+content. Display math is deliberately text: operant has no
+mdwright-latex dependency, so `latex_image_lines` returns `None`
+unconditionally (`mod.rs:1066`) and both callers already fall back to
+`math_display_lines` — a port state, not a regression.
 
 **Code blocks** are highlighted with syntect (`HighlightLines`, the
 `base16-ocean.dark` theme is one of the bundled defaults), cached by
@@ -275,8 +284,9 @@ The engine is a port of codex-rs's `mermaid` crate @ `588a277b`
 (MIT). It is terminal-only: no I/O, no Mermaid implementation, no
 partial results. The entry is `render_spans(source, max_width) ->
 Result<Vec<Vec<Span>>, RenderError>` (`operant_mermaid/mod.rs:81`), and
-`Span` is `{text, role}` where `Role` is `Node | Edge | Text` — the
-styling seam the caller resolves against its own theme.
+`Span` is `{text, role}` (`output.rs:13`) where `Role` is
+`Node | Edge | Text` (`output.rs:5`) — the styling seam the caller
+resolves against its own theme.
 
 The limits are load-bearing and not softened: `MAX_SOURCE` 16 KiB,
 `MAX_NODES` 16, `MAX_EDGES` 24, `MAX_LABEL` 40, `MAX_CELLS` 64k, and
@@ -284,16 +294,19 @@ The limits are load-bearing and not softened: `MAX_SOURCE` 16 KiB,
 `TooWide`).
 
 `operant_markdown/markdown_mermaid_fallback.rs` is the caller:
-`render_native` calls the engine, and on `Err` it returns
+`render_native` (`:119`) calls the engine, and on `Ok` maps the engine
+`Span`s to `DiagramSpan`s and returns `RenderResult::Diagram { lines,
+source, refused_width }` — `refused_width` is `Some(width - 1)` when a
+one-column-narrower render would have been `TooWide`, so the caller can
+say *why* a diagram is exactly this wide. On `Err` it returns
 `RenderResult::Error(format!("{reason}\n{source}"))` — the ORIGINAL source
 plus the named reason, never a blank box and never the reason alone,
-because the source is the only thing the operator can edit. On success it
-also probes `width - 1` to record a `refused_width`, so the caller can
-say *why* a diagram is exactly this wide. `native_image_protocol_available()`
-returns `true` in this build; `deferred_render_epoch()` returns a constant
-`0`, because the fallback never defers.
+because the source is the only thing the operator can edit.
+`native_image_protocol_available()` returns `true` in this build;
+`deferred_render_epoch()` returns a constant `0`, because the fallback
+never defers.
 
-`operant_mermaid/fixtures/` holds the six grammar fixtures (`LR.txt`,
+`operant_mermaid/fixtures/` holds the seven grammar fixtures (`LR.txt`,
 `sequence.txt`, `state.txt`, `class.txt`, `er.txt`, `branches.txt`,
 `stadiums.txt`) the engine's own tests parse.
 
@@ -327,6 +340,48 @@ command-suggestion overlay.
 (`ui_frame_metrics.rs`): `reset_frame_perf_stats` at the top,
 `begin_frame_resource_sample`, then `note_*` calls at each phase, then
 `finalize_frame_metrics` before each early return and at the end.
+
+### The `operant_ui/` leaves, named
+
+`operant_ui/` holds the frame assembler, and most of its files are the
+widgets and passes the seven stages above call. Each is a leaf a reader
+reaches from the stage that uses it; the stem list is here so the family has
+ONE owner:
+
+- **Frame and paint**: `ui_animations.rs` (the idle-animation driver),
+  `ui_box.rs` (box drawing), `ui/display_width.rs` (display-width
+  measurement), `ui_overlays.rs` (the overlay paint ladder's own pass).
+- **Chrome**: `ui_header.rs` (the header band), `ui_status.rs` (the status
+  band), `ui_changelog.rs` (the changelog overlay's entry type and render).
+- **Body sections**: `ui_inline.rs` (the inline transcript section),
+  `ui_inline_image.rs` (inline images), `ui_inline_interactive.rs` (the
+  inline interactive picker), `ui_diff.rs` (diff rendering),
+  `ui_diagram_pane.rs` (the diagram pane), `ui_memory.rs` and
+  `ui_memory_estimates.rs` (the memory band and its estimates),
+  `ui_todo_changes.rs` (the "what changed" delta under a `todo` tool row),
+  `ui_tools.rs` (the tool rows), `ui_input.rs` (the composer band).
+- **The pinned diagram family**: `ui_pinned.rs`, `ui_pinned_layout.rs`,
+  `ui_pinned_selection.rs`, `ui_pinned_table.rs`, `ui_pinned_utils.rs`,
+  `ui_pinned_mermaid_debug.rs` and `ui_pinned_tests.rs` — one feature
+  (the pinned diagram) split by concern, reached together.
+- **The image preview**: `ui_panel_image_preview.rs` (click targets rebuilt
+  from the live image-widget rectangles each frame).
+
+### The `operant_markdown/` and `operant_mermaid/` leaves
+
+Stage 5 above names the markdown entry points; the remaining files in
+`tui/operant_markdown/` are `markdown_render_support.rs` (the shared
+render-support helpers), `markdown_types.rs` (the vendored document types),
+and the four test-case files under `markdown_tests/cases/` that the suite
+drives — `copy_target_contract.rs` (copy-target detection),
+`latex_streaming.rs` (math while streaming), `placeholders.rs`
+(image/diagram placeholder preservation) and `wrapping_currency.rs`
+(currency wrapping). Stage 6 names the mermaid stages;
+`tui/operant_mermaid/syntax.rs` is the shared lexical-boundary layer the
+family parsers call (statement splitting with family-specific quote and
+member rules, source limits enforced before scanning, undecoded entities
+failing intact). `tui/operant_render/memory_tiles.rs` is the memory-tile
+renderer the render stage draws.
 
 ## Stage 8 — the frame entry and the post-passes (`render/mod.rs`)
 
@@ -414,10 +469,14 @@ shapes `adapter.rs` maps FROM), `helpers.rs`, `constants.rs`,
 **`stats_dialog/`** (4 files) and **`session_hub/`** (4 files) are the
 two hub surfaces. `stats_dialog/state.rs` holds `StatsDialogState`
 (visible, tab, range_days, data, scroll, model breakdown, streak);
-`render.rs` paints the four tabs (`render_stats_dialog`). `session_hub/`
-holds `SessionHubState` (rows, filters, `PaneFocus`, preview, scroll),
-`render.rs` (`render_session_hub`, with the 45/55 split and the
-derived tab-bar ladder), and `row_style.rs`.
+`render.rs` paints the four tabs (`render_stats_dialog`, `:14`).
+`session_hub/` holds `SessionHubState` (rows, `visible_idx`, `selected`,
+`filter_mode`, `group_mode`, `sort_mode`, `search_query` /
+`search_active`, `loading`, `preview_scroll`, `preview_follow_bottom`,
+`focus: PaneFocus`, `preview_max_scroll`, the per-session preview) —
+`mod.rs:453` — and `render.rs` (`render_session_hub`, `:442`, with the
+measured 45/55 left/right split at `render.rs:37` and the derived
+tab-bar ladder); `row_style.rs` styles a row per state.
 
 ## Configuration that changes rendering
 
@@ -474,8 +533,8 @@ never reads the terminal, only `(source, max_width)`.
 
 The invariant worth carrying forward: a row is prepared once, painted
 once, and measured in the same units it was wrapped in. Every performance
-rule in this tree — the caches, the hysteresis, the lazy render, the
-incremental renderer — exists to avoid re-doing work whose inputs did not
+rule in this tree — the caches, the scrollbar hysteresis, the deferred
+mermaid fallback — exists to avoid re-doing work whose inputs did not
 change, and every correctness rule — the line maps, the drawn-frame
-selection, the oracle — exists because the coordinate system changed
+selection, the prep oracle — exists because the coordinate system changed
 underneath the paint.

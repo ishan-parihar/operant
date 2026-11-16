@@ -64,12 +64,16 @@ they describe. The front door is [docs/library/README.md](library/README.md); th
 | `docs/library/README.md` | the library's front door and maintenance law | any single mechanism |
 | `docs/library/STANDARD.md` | the contract a library page is held to: the two questions, the required sections, the derivation rules | any mechanism (that is the page it describes) |
 | `docs/library/agent-loop.md` | the ReAct loop: turn structure, streaming, retries, fallback, iteration budget, turn-end seam | context eviction (`context-management.md`) |
+| `docs/library/model-roles.md` | the model catalogue and the `@role[:level]` selector: live endpoint, models.dev, configured, and the effort axis | the provider clients and credential rotation (`providers.md`) |
+| `docs/library/turn-attribution.md` | where a turn's wall clock went: the four exclusive spans (inference, tools, user_wait, overhead), the capture behind them, the `TurnEnd` seam that delivers them, and the truncation/tool-batch heuristics | turn context (`context-injection.md`) |
 | `docs/library/context-management.md` | tiered eviction, decay curve, the 4-rung compaction ladder, the frozen-prefix law | injection of NEW content into a turn (`context-injection.md`) |
 | `docs/library/memory.md` | the memory-wire engine: lifecycle, retrieval, the consolidated tool pair, import, degradation contract | the session transcript (`sessions.md`), session search (`sessions.md`) |
 | `docs/library/context-injection.md` | every modality that injects content into the model's turn (memory recall, skills, MoA, advisor, recap, ponytail, context_files, org) | eviction/compaction (`context-management.md`) |
 | `docs/library/providers.md` | the model path: OpenAI-compatible client, Anthropic, fallback, rate limits, model catalog | which models cost what (`docs/library/observability.md` §insights) |
 | `docs/library/tools.md` | the tool system: registry, builtins, guardrails, dedup | any single integration's own page |
+| `docs/library/process-registry.md` | the process registry: sessions, backends (local/Docker/SSH), the rtk rewrite path, reaping, and the `process`/`terminal` tools | the code sandbox, the registry itself (`tools.md`), approval (`security.md`) |
 | `docs/library/sub-agents.md` | delegation: sub_agent tool, swarm mode, async delegation | the org layer's seats (`org.md`) |
+| `docs/library/agents.md` | what "agent" names: the definition record, the live roster, the worker, the pane report | delegation mechanics (`sub-agents.md`) |
 | `docs/library/background-review.md` | the post-turn reviewer that learns skills and memories | foreground verification (`verification.md`) |
 | `docs/library/verification.md` | the verification harness: recipe detection, phases, evidence ledger, ESTOP | the post-turn review (`background-review.md`) |
 

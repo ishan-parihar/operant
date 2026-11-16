@@ -36,10 +36,13 @@ quietly.
 ### The agentic core
 
 - [agent-loop.md](agent-loop.md) — the ReAct loop: turn structure, streaming, retries, fallback, iteration budget, turn-end seam
+- [turn-attribution.md](turn-attribution.md) — where a turn's wall clock went: the four exclusive spans, the capture behind them, the `TurnEnd` seam, and the truncation/tool-batch heuristics
 - [context-management.md](context-management.md) — tiered eviction, decay curve, the compaction ladder (decay → micro-compact → semantic → LLM summarize), prompt-cache frozen prefix
 - [memory.md](memory.md) — memory-wire: the one memory engine, retain/recall/sync_turn, hybrid retrieval, import, degradation contract
 - [context-injection.md](context-injection.md) — every modality that injects content into the model's turn: memory recall, skills, MoA, advisor, recap, ponytail, context_files, org context injection
 - [providers.md](providers.md) — the model path: OpenAI-compatible client, Anthropic, fallback chains, rate limiting, reasoning timeouts, model catalog
+- [model-roles.md](model-roles.md) — the model catalogue and the `@role[:level]` selector grammar: live endpoint, models.dev, configured, and the effort axis
+- [process-registry.md](process-registry.md) — the process registry: sessions, backends (local/Docker/SSH), the rtk rewrite path, reaping, and the `process`/`terminal` tools
 - [tools.md](tools.md) — the tool system: registry, the 65 names in `builtin_tool_names()` (105 types implement `name()`), AFT, sourcehound, kernel tools, guardrails, approval, blast radius
 - [sub-agents.md](sub-agents.md) — delegation: the `delegate_task` tool, swarm mode, async delegation, the runner contract
 - [agents.md](agents.md) — what "agent" names: the definition record, the live roster, the worker, the pane report

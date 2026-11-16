@@ -10,7 +10,7 @@ Source: `crates/operant-core/src/tools/sub_agent_tool.rs`,
 `crates/operant-core/src/tools/async_delegation.rs`,
 `crates/operant-core/src/daemon_pool.rs`.
 
-## `sub_agent` — one code path, three modes
+## `delegate_task` — one code path, three modes
 
 A parent agent delegates focused analysis to isolated child agents
 without changing its own ReAct loop:

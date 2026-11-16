@@ -182,6 +182,21 @@ minimum instead of giving ineffective `/compact` advice.
 | Repeated identical tool calls | guardrail ladder | `tool_guardrails.rs` |
 | Reasoning model slow-start | timeout floors | `reasoning_timeouts.rs` |
 
+## The agent-directory leaves
+
+`crates/operant-core/src/agent/` holds the loop, and four files in it are
+each one narrow concern the loop calls rather than a stage of the turn.
+`auto_poke.rs` is the bounded synthetic continuation — the "poke" that asks
+the model to finish when it stopped short (`is_auto_poke_message` /
+`is_non_retryable_auto_poke_error`, re-exported from `agent/mod.rs`).
+`learn_prompt.rs` builds the standards-guided prompt behind `/learn`, which
+turns whatever the operator described into a reusable skill. The two files
+under `agent/clients/` are the prompt-cache pair the Anthropic adapter uses:
+`prompt_caching.rs` owns the `cache_control` breakpoint strategy and its
+`CacheTtl`, and `cache_monitor.rs` detects observed cache hits and misses so
+a misconfigured TTL is visible instead of silent (`server_cache_monitor().report(...)`
+from `clients/anthropic.rs`).
+
 ## Intention
 
 The loop is hermes-agent's Python loop rebuilt in Rust with the same

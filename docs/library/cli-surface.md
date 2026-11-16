@@ -17,7 +17,8 @@ Source: `crates/operant-cli/src/main.rs` (the `Commands` enum + dispatch),
 `crates/operant-cli/src/gateway_runner/enrichment.rs`,
 `crates/operant-cli/src/skill_roots.rs`, `prompt_helpers.rs`,
 `hardening.rs`, `post_setup.rs`, `memory_provider_tools.rs`,
-`crates/operant-cli/src/integrations/`.
+`crates/operant-cli/src/integrations/`,
+`crates/operant-core/src/shell_hooks.rs` (the `operant hooks` runtime).
 
 ## The shape of the surface
 

@@ -11,8 +11,7 @@ frames (`[agent-loop.md](agent-loop.md)`), session storage and rewind
 (`[sessions.md](sessions.md)`), how a row of text becomes cells
 (`[tui-rendering.md](tui-rendering.md)`).
 
-Source: `crates/operant-cli/src/tui/mod.rs` (the module map — 342 files,
-177,708 lines as of commit `a6e6d5f9`), `crates/operant-cli/src/tui/app/`
+Source: `crates/operant-cli/src/tui/mod.rs` (the module map — 351 files, 177,708 Rust lines at commit `a80d65bc`), `crates/operant-cli/src/tui/app/`
 (event loop and `App` state), `crates/operant-cli/src/tui/operant_model/`
 (the transcript data model and the one flatten adapter),
 `crates/operant-cli/src/tui/operant_ui/` (frame assembly, 34 top-level
@@ -74,11 +73,11 @@ Three structural facts about the code precede any detail:
 |---|---|---|---|
 | **App** | `tui/app/` | 29 | the event loop, `App` state, drains, key/mouse routing, slash dispatch, scroll state |
 | **Model** | `tui/operant_model/` | 11 | `DisplayMessage`, `PreparedChatFrame`, and `adapter.rs` — operant transcript → jcode message model |
-| **UI assembly** | `tui/operant_ui/` | 34 + 5 in subdirs | ONE frame assembler: `ui_prepare.rs` builds, `ui_viewport.rs` paints, `draw()` in `mod.rs` owns the frame |
-| **Render core** | `tui/operant_render_core/`, `tui/operant_render/`, `tui/operant_markdown/`, `tui/operant_mermaid/`, `tui/operant_anim/`, `tui/vendor/style/` | 8 + 5 + 18 + 9 + 1 + 7 | backend-neutral document model, chrome, markdown, mermaid engine, idle-animation kernels, theme palettes |
-| **App-core leaf** | `tui/operant_app/` | 79 | the renderer-facing slice of jcode's app core (config shim, perf policy, info widgets, side panel, logging) |
+| **UI assembly** | `tui/operant_ui/` | 38 + 12 in subdirs | ONE frame assembler: `ui_prepare.rs` builds, `ui_viewport.rs` paints, `draw()` in `mod.rs` owns the frame |
+| **Render core** | `tui/operant_render_core/`, `tui/operant_render/`, `tui/operant_markdown/`, `tui/operant_mermaid/`, `tui/operant_anim/`, `tui/vendor/style/` | 8 + 5 + 11 + 10 + 1 + 7 | backend-neutral document model, chrome, markdown, mermaid engine, idle-animation kernels, theme palettes |
+| **App-core leaf** | `tui/operant_app/` | 54 | the renderer-facing slice of jcode's app core (config shim, perf policy, info widgets, side panel, logging) |
 | **Surfaces** | `tui/overlays/`, `tui/dialogs/`, `tui/stats_dialog/`, `tui/session_hub/`, `tui/settings_screen/`, `tui/diff_viewer/`, `tui/agents_view.rs`, `tui/mcp_view.rs`, … | 6 + 3 + 4 + 4 + 4 + 4 + 1 each | every panel a slash command opens |
-| **Composer** | `tui/prompt_input/` | 20 | the prompt editor: word classes, `@` grammar, ghost text, vim |
+| **Composer** | `tui/prompt_input/` | 16 (15 modules + `prediction/`) | the prompt editor: word classes, `@` grammar, ghost text, vim |
 
 `crates/operant-cli/src/tui/mod.rs` is the map: it declares every one of
 these modules and carries the `#[expect(dead_code)]` gates that keep the
@@ -87,7 +86,7 @@ porting state honest. Read it before adding a module.
 ## The central invariant: one flatten, one assembly, one section
 
 Four claims in `AGENTS.md` describe this, and each is verifiable in the
-code. Verified against commit `a6e6d5f9`:
+code. Verified against commit `a80d65bc`:
 
 1. **One flatten layer.** `display_messages(app: &App) -> Vec<DisplayMessage>`
    (`tui/operant_model/adapter.rs:73`) is the only function that converts
@@ -131,11 +130,12 @@ at two wrap widths — the "shredded fragments" family (iters 784/789 in
 `identical-tool-rows` and `tool-split-stream`.
 
 **The runtime half.** `App::display_messages()` is a cache, not a
-re-flatten per frame: `tui/app/tui_state_impl.rs:103` keeps a leaked
-buffer keyed on `transcript_version`. Every mutation that changes the
-transcript must bump that cell; `invalidate_transcript()` is the one
-entry point. A renderer that reads the slice across a mutation is a bug
-the code comments call out explicitly.
+re-flatten per frame: `tui/app/tui_state_impl.rs:103`
+(`display_messages_slice`) keeps a leaked buffer keyed on
+`transcript_version`. Every mutation that changes the transcript must bump
+that cell; `invalidate_transcript()` is the one entry point. A renderer
+that reads the slice across a mutation is a bug the code comments call out
+explicitly.
 
 ## Event flow
 
@@ -257,6 +257,131 @@ The surfaces a command opens, grouped by what they are for:
 other surface builds on. Everything else named above lives in its own
 top-level file or directory.
 
+### The dialog leaves, named
+
+Every dialog the inventory above names is its own top-level file, and a
+reader arrives at each one from the surface that opens it. They are listed
+here by stem so the family has ONE owner: `bypass_permissions_dialog.rs`
+(the `--dangerously-skip-permissions` startup confirmation),
+`custom_provider_dialog.rs` (a base URL plus an API key for a custom
+OpenAI-compatible upstream), `free_mode_dialog.rs` (the composite "Free"
+provider's caveats, collecting keys for any subset of Cohere / OpenRouter /
+OpenCode Zen / Z.AI / Zhipu), `key_input_dialog.rs` (the masked
+API-key text overlay), `dialog_select.rs` (the reusable fuzzy-search
+selection widget the `/connect` picker uses), `permissions_picker.rs`
+(the `/permissions` mode picker) and `memory_file_selector.rs` (the
+MEMORY.md / USER.md picker).
+
+### The top-level leaf modules
+
+The files directly under `tui/` that are not a plane of their own are each
+one narrow concern; the layering table above says which plane owns them, and
+this is the stem list a reader needs to find one:
+
+- **Chrome and icons**: `figures.rs` (the icon constants),
+  `rustle.rs` (the welcome box's ambient blink lines). Its header names a
+  caller in the render layer that does not exist anywhere in the tree — no
+  non-test call site remains, so read it as an unreferenced ported leaf.
+  The App fields and `tick_rustle_pose()` were deleted in iter-144 (the
+  pose argument is ignored); the `/pet` trigger went with them.
+- **Model choice**: `model_selector.rs` (one grammar for "which model, in
+  which role, at what effort") and `model_effort.rs` (the
+  low/normal/high/max ladder and its one wire spelling).
+- **Terminal capability**: `keyboard_enhancement.rs` (the Kitty
+  keyboard-protocol enablement that makes Shift+Enter arrive),
+  `terminal_setup.rs` (the `/terminal-setup` help that tells the operator
+  how), `image_render.rs` (Kitty / Sixel / iTerm2 inline images) and
+  `image_paste.rs` (clipboard image detection and text paste via
+  platform CLI tools, no native bindings).
+- **Input and search**: `fold_search.rs` (case-insensitive search that
+  cannot panic on fold-length drift — BUGS.md R48-3) and
+  `slash_usage.rs` (recent-usage tracking that orders `/` suggestions).
+- **Live rows and marks**: `background_tasks.rs` (persistent rows for
+  work that must outlive the turn), `rewind_marks.rs` (the rewind
+  selector's live mark source) and `session_switch.rs` (the hub's
+  Enter → session-switch handle).
+
+`tui/messages/markdown_enhanced.rs` is a 7-line comment-only stub: its
+doc header describes the table renderer it once held, and the module now
+contains no items at all — tables are rendered by
+`render_table_aligned` in `operant_markdown/markdown_render_support.rs:223`.
+Read the header as history, not as a call target. `tui/substitution_cost.rs`
+is a `#[cfg(test)]`, `#[ignore]`d characterisation of the per-frame
+colour-substitution pass (deliverable 1.10 of `docs/PLAN-TUI-OVERHAUL.md`)
+and costs nothing in a release build.
+
+### The `app/` leaves
+
+`tui/app/` is the event loop, and the files below are the ones that are not
+the loop itself. `herdr_lifecycle.rs` is the Herdr editor-pane lifecycle
+bridge; `session_display.rs` is the ONE converter from a core conversation
+to the TUI's display state (both rebuild paths call it rather than each
+carrying its own lossy copy). The rest are the split-out contract tests —
+one file per contract, split out of the former monolith `tests.rs` so each
+has its own home: `advisor_card_tests.rs` (the advisor card the operator
+reads), `debug_log_tests.rs` (the debug log sees the surfaces that own the
+keyboard), `notice_ttl_tests.rs` (transient notices must LEAVE),
+`session_counter_tests.rs` (per-session counters and the context overlay's
+live window occupancy), `session_display_tests.rs` (a restored transcript
+keeps the turn's ACTIVITY) and `steer_queue_tests.rs` (the steer queue the
+operator can see).
+
+### The `operant_app/` leaves
+
+`tui/operant_app/` is the vendored jcode app-core slice (54 files). The
+files below are each one narrow concern that a reader reaches through this
+page's family description:
+
+- **Ambient and build**: `ambient.rs` (ambient runner/queue, partial port),
+  `build_meta.rs` (build version and channel metadata),
+  `color_support.rs` (terminal color-depth detection),
+  `theme_detect.rs` (terminal theme detection, degraded arm).
+- **Session and layout**: `layout_utils.rs` (section-height helpers),
+  `session_facts.rs` (centralized session facts formatting),
+  `side_panel.rs` (side panel types).
+- **Rendering helpers**: `tui_fns.rs` (the `TuiState` trait surface the
+  ported chrome reads), `mermaid_inline.rs` (inline mermaid rendering),
+  `process_memory.rs` (process-memory history types).
+- **Scheduler and catalog**: `catalog_scheduler.rs` (provider catalog
+  scheduling), `fuzzy_engine.rs` (the fuzzy-match engine),
+  `graph_topology.rs` (memory-graph topology helpers),
+  `helpers/model_names.rs` (human-friendly model names).
+- **Info widgets** (`tui/operant_app/info_widget/`): `info_widget_frame.rs`
+  (border chrome), `info_widget_layout.rs` and
+  `info_widget_layout_tests.rs` (widget placement), `info_widget_overview.rs`
+  (overview widget with model + context% + git branch),
+  `info_widget_commits.rs` (recent commits widget),
+  `info_widget_git.rs` (git status detail layer),
+  `info_widget_model.rs` (model identity detail layer),
+  `info_widget_memory_render.rs` and `info_widget_memory_utils.rs`
+  (memory-count rendering and utilities),
+  `info_widget_todos.rs` (todo pips widget),
+  `info_widget_usage.rs` (usage-limits widget),
+  `info_widget_diagram.rs` (mermaid diagram widget),
+  `info_widget_graph.rs` (memory-graph re-export),
+  `info_widget_settle.rs` and `info_widget_settle_tests.rs` (negative-space
+  settlement tracking), `info_widget_stability.rs` and
+  `info_widget_stability_tests.rs` (movement quantification),
+  `info_widget_swarm_background.rs` and `info_widget_swarm_gallery.rs`
+  (swarm status widgets), `info_widget_tips.rs` (tips widget),
+  `info_widget_text.rs` (text utilities), `info_widget_timeline.rs` (ported
+  but not declared in `mod.rs`), `info_widget_tests.rs` (the test module).
+- **Overnight and visual debug**: `overnight.rs` (overnight-task types,
+  partial port), `visual_debug.rs` (frame-capture types and builder).
+
+### The `vendor/style/` leaves
+
+`tui/vendor/style/palette_literals.rs` is the literal color-role list
+upstream's `Role` enum maps into.
+
+### The composer leaves
+
+`tui/prompt_input/prediction/dictionary.rs` is the seed dictionary — the
+predictor's cold-start vocabulary. The learned n-gram (plan 2026-10-24 M5)
+only knows the words the operator has submitted; this is the fallback that
+makes word-completion work before any history exists.
+
+
 ## The composer
 
 `tui/prompt_input/` was decomposed from a 5,305-line monolith into
@@ -335,7 +460,7 @@ ignored (`crates/operant-core/src/config.rs:33`).
 **The slash-command registry** is the table
 `REGISTERED_COMMANDS` in `tui/operant_app/app.rs` — 113 rows: 105 public,
 6 hidden, 2 remote-only (one public row, `/effort`, is duplicated behind
-`#[cfg(any())]`, so 111 unique live names as of `a6e6d5f9`). Each row is
+`#[cfg(any())]`, so 111 unique live names as of `a80d65bc`). Each row is
 `name`, `help`, `hidden`, `remote_only`. Every consumer reads this one
 table: the typeahead and command palette
 (`locally_suggested_command_rows`, remote-only excluded so the popup
@@ -472,7 +597,7 @@ Accepted but **unread** (RT-136): `show_iterations`, `landing_title`,
 them. `[keybindings]` is likewise parsed and ignored (RT-3).
 
 **`[agent] show_reasoning`** — `BehaviorSettings`
-(`crates/operant-core/src/config.rs:748`, default `true`). `main.rs`
+(`crates/operant-core/src/config.rs:716`, field at `:748`, default `true`). `main.rs`
 bridges it into the TUI's config shim before any TUI launch: `true` →
 `ReasoningDisplayMode::Current` (the turn's trace stays where it streamed
 and hides once the next prompt lands), `false` → `Off`. `/thinking-display`
@@ -505,10 +630,16 @@ name this page mentions is in `REGISTERED_COMMANDS`.
 
 Other operator-facing entry points:
 
-- `operant tui` — the interactive client (what this page describes).
-- `operant tui debug …` and `operant tui debug simulate …` — the read-only
-  inspection and headless driver, documented in
-  [tui-debugging.md](tui-debugging.md).
+- Bare `operant` (no subcommand) — the interactive client; it launches
+  `TuiApp::enter(...).run()` when `tui.rich_output` is on
+  (`crates/operant-cli/src/main.rs:3888`).
+- `operant tui debug …` — the read-only inspection and headless
+  simulator, documented in [tui-debugging.md](tui-debugging.md)
+  (`cmd_tui_debug::TuiSubcommand::Debug`).
+- `operant tui effort|mode|output-style|theme|vim|keybindings` — the
+  state setters that keep TUI state and CLI state from drifting
+  (`TuiSubcommand`, `cmd_tui_debug.rs:47`; a missing subcommand shows the
+  current value, `set` changes it).
 - `operant chat --attach <socket>` — attaches this same TUI to a running
   gateway's session socket (`tui/adapter_types/tui_app.rs`); the client
   builds no runtime, registry, database handle, MCP child or AFT bridge,
