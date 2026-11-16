@@ -1,4 +1,25 @@
-# RT-2 — TUI half of the 2026-11-16 remediation (`ae9a27cf`): Z22 and Z23
+# RT-2 red-team: TUI red-team (Z23)
+
+**Status (iter-2495):** CLOSED. All eight Z23 rows resolved.
+
+- **Z23-B (HIGH, mouse click resolves to the WRONG message)** -- FIXED in iter-2495.
+  The resolver read a `display_messages()` row index as an `App::messages` index.
+  The two index spaces differ: tool rows, reasoning rows, settled tool cards and
+  annotations each take a display row without being an app message, and one app
+  message can expand to several rows. Fix: `display_messages_with_app_index()`
+  returns each row's app index from the same walk, cached beside the rows it
+  describes; `TuiState::display_message_app_index` exposes the map; the builders
+  use the mapped call so the map cannot be skipped by accident. The gap was
+  widest for a tool message and its rows, which is what the fleet's change made
+  common.
+- **Z23-E (LOW)** -- dead `App::thinking_expanded` field REMOVED (iter-2495).
+- **Z23-A/C/D/F/G/H** -- CLOSED as recorded: A's regression test proves the Z11
+  reload survives stream resumption; C is asserted by measurement (offset held
+  at 0 after reanchor and after a `+2` adjust); D is registered and
+  per-bullet bounded by the scope gate, with the load itself reported as
+  blocked-by-design rather than as a sweep; F is guarded by an explicit panic
+  before `resolve_content_pos` truncates; G and H need no code change (Z23-G
+  says RETAIN, not remove; Z23-H's failure is an existing blocking gate).
 
 > **STATUS (updated 2026-11-16, commit `d7ecc58f` / iter-2492).** `RT-Z23-B` is
 > **CLOSED**. `message_index_at_screen_row` now returns an `App::messages` index,

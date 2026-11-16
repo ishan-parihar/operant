@@ -1,4 +1,30 @@
-# RT-4 — red-team of `ae9a27cf` (iter-2490): the session socket (Z30) and the compression-arm reasoning fix (Z16)
+# RT-4 red-team: socket and reasoning (Z30, Z16)
+
+**Status (iter-2495):** PARTIALLY CLOSED.
+
+- **RT-Z30-A (HIGH, exploitation path unchanged)** -- FIXED in iter-2495. The ACP
+  socket (`acp/server.rs:39`) bound with `UnixListener::bind` directly, bypassing
+  `bind_unless_live`, so it was left at 0o755 and never authorized a peer while
+  carrying MORE authority than the session socket (`command` runs arbitrary
+  editor-agent commands, `stop` kills a session). The gate now lives in
+  `socket_auth.rs` (moved out of `session_server.rs`, behaviour unchanged) and
+  `acp::server` calls it. Regression test asserts the ACP socket is 0o600.
+- **RT-Z30-B** -- RECORDED, NOT FIXED (by design). The AF_UNIX `LOCAL_PEERCRED`
+  peer check only compiles on Linux; the off-Linux gate has no `getpeereid`
+  equivalent here. Papered rather than guessed.
+- **RT-Z30-C** -- RECORDED, NOT FIXED. The operant home is deliberately
+  world-writable; the socket inherits that trust level.
+- **RT-Z16-B (HIGH)** -- STILL OPEN. Z16's own fix hoisted `mark_effort_unsupported`
+  into the `UnsupportedCapability` arm at `agent/run.rs:1785`, but `chat_streaming`
+  is called from three sites (1886, 1934, 1969, 2020) and `fitted_request` from
+  five. The other paths still rely on the inner guard, so a second config choice
+  stays cached as final rather than a rejected fallback. Fix is one shared
+  classifier, not a second site.
+- **RT-Z16-A/C/D** -- A and D still asserted; C is unbounded in the truncation
+  case (settled rows are counted at full length while the buffer truncates).
+- **RT-Z21-A** -- STILL OPEN. `/ponytail` sets a process-global override with no
+  slot or session binding, so a stale level persists after the fleet test is
+  replaced and bleeds into the next handover's prompts.
 
 > **STATUS (updated 2026-11-16, commit `d7ecc58f` / iter-2492).** `RT-Z30-A` is
 > **CLOSED**: the ACP socket now calls the same `0600` mode tightening and the
