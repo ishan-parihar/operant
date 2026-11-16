@@ -100,7 +100,7 @@ auxiliary model, no prompt-cache invalidation. Summarizes what happened
 recently in a session so a user juggling multiple sessions re-orients
 instantly. Cost: zero.
 
-### 7. Ponytail (frozen prefix, when `always_on`; user message, when invoked)
+### 7. Ponytail (frozen prefix, when its inject mode is `always_on`; user message, when invoked)
 
 `ponytail.rs` + `crates/operant-core/src/skills_guard.rs` (the
 install guard) + the SkillManager extra roots. The fourth self-updating
