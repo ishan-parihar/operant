@@ -1748,6 +1748,147 @@ mod tests {
     use super::*;
     use crate::agent::clients::openai::OpenAIModelClient;
 
+    /// (A1-agent-loop HIGH-1 and HIGH-2) The two per-turn cells that
+    /// `run()` never cleared, and the turn-start reset that now does.
+    ///
+    /// The agent is long-lived: one instance serves many turns (a slot, a
+    /// TUI session). A cell that carries a value from turn N into turn N+1 is
+    /// a cross-turn leak, and these two had no reset path at all -- the
+    /// constructor set them once and nothing ever cleared them.
+    ///
+    /// These tests exercise the RESET DIRECTLY rather than through `run()`,
+    /// because `run()` needs a model client, a tool registry and a database
+    /// to get as far as the reset block, and the block's position is the
+    /// thing under test. The mutation check for the pairing is the
+    /// `run_resets_both_cells` assertion below, which reads the source of
+    /// `run()` and fails if either clear disappears.
+    #[test]
+    fn stream_progress_and_thinking_timeout_start_empty_and_clear() {
+        let agent = tests_support::agent_for_recap_test();
+
+        // A fresh agent has neither.
+        assert!(
+            agent.stream_progress_at().is_none(),
+            "a fresh agent has no stream-progress stamp"
+        );
+        assert!(
+            !agent
+                .thinking_timeout_hit
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "a fresh agent has not hit a thinking timeout"
+        );
+
+        // Turn N: a chunk arrived, then a thinking-timeout failure.
+        agent.note_stream_progress();
+        assert!(
+            agent.stream_progress_at().is_some(),
+            "the stamp is set while a turn is streaming"
+        );
+        agent
+            .thinking_timeout_hit
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // Turn N+1 begins. This is the block `run()` executes at turn start.
+        agent
+            .stream_progress_at
+            .lock()
+            .expect("stream_progress_at lock poisoned")
+            .take();
+        agent
+            .thinking_timeout_hit
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(
+            agent.stream_progress_at().is_none(),
+            "turn N+1 must not inherit turn N's progress stamp -- it would              make the idle detector compare against an Instant this turn              never produced, so a slow first chunk looks already-idle"
+        );
+        assert!(
+            !agent
+                .thinking_timeout_hit
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "turn N+1 must not inherit turn N's thinking-timeout flag -- it              would annotate an unrelated failure as a thinking timeout and              append raise-your-timeout guidance to an error that had none"
+        );
+    }
+
+    /// The reset must live in `run()`, not only in the test above.
+    ///
+    /// The two asserts above prove the FIELDS are clearable; they do not
+    /// prove `run()` clears them. Deleting the reset block leaves them green
+    /// -- a correct primitive nobody calls, which is the same shape as the
+    /// defect. This reads `run()`'s own text and fails if either clear is
+    /// removed, and checks it sits in the same block as the sibling resets
+    /// so it cannot drift into a different phase of the turn.
+    #[test]
+    fn run_resets_both_cells_alongside_the_other_per_turn_state() {
+        let source = include_str!("run.rs");
+        let start = source
+            .find("pub async fn run(")
+            .unwrap_or_else(|| panic!("run() must exist in run.rs"));
+        // Anchor on the first sibling reset in the group rather than on
+        // `run()` itself: the reset block sits ~5 KB into a long function,
+        // and a byte window from the signature would have to be large enough
+        // to swallow unrelated code. From `iteration_budget.reset()` onward
+        // is exactly the block under test.
+        // Anchor on `clear_tool_durations()` -- the LAST sibling reset before
+        // the two under test -- and read far enough forward to cross the
+        // explanatory comment block that precedes them. The comment names both
+        // fields, which is why the assertions below match statements rather
+        // than mentions.
+        let block_start = start
+            + source[start..]
+                .find("self.clear_tool_durations();")
+                .expect("run() must clear the per-turn tool-duration map");
+        let block = &source[block_start..(block_start + 2100).min(source.len())];
+
+        assert!(
+            block.contains("self.clear_tool_durations();"),
+            "the per-turn reset block must be where this test looks"
+        );
+        // Match STATEMENTS, not mentions. The first version of this test
+        // grepped for the field names anywhere in the window, and the
+        // explanatory comment above the reset block names both of them --
+        // so deleting the reset left the test green. A test that matches its
+        // own documentation is worse than no test.
+        for (statement, why) in [
+            (
+                "self.stream_progress_at",
+                "run() must clear stream_progress_at at turn start; without it \
+                 a fresh turn inherits the previous turn's progress verdict",
+            ),
+            (
+                "self.thinking_timeout_hit",
+                "run() must clear thinking_timeout_hit at turn start; without it \
+                 a thinking-timeout from turn N is reported as turn N+1's failure",
+            ),
+        ] {
+            assert!(
+                block.contains(statement),
+                "{why} -- looked for the statement `{statement}` inside run()'s \
+                 turn-start reset block"
+            );
+        }
+        // And each must be a WRITE (`.take()` / `.store(`), not a read. A
+        // read of the field in this window is the idle detector comparing
+        // against the stamp, which is exactly what must not happen here.
+        for (write, field) in [
+            ("stream_progress_at", "stream_progress_at"),
+            ("thinking_timeout_hit", "thinking_timeout_hit"),
+        ] {
+            let at = block
+                .find(&format!("self.{field}"))
+                .unwrap_or_else(|| panic!("`self.{field}` missing from the reset block"));
+            let statement = &block[at..(at + 200).min(block.len())];
+            assert!(
+                statement.contains(".take()") || statement.contains(".store("),
+                "`self.{field}` appears in run()'s reset block but is not \
+                 cleared there -- found `{}` instead of a `.take()` / `.store(`. \
+                 A bare read leaves the previous turn's value in place.",
+                statement.lines().next().unwrap_or("")
+            );
+            let _ = write;
+        }
+    }
+
     /// R48-1/R48-2: the tools that reach a shell or spawn agents must be in
     /// the permission-prompt list — the AFT family (the DEFAULT surface),
     /// and verify_task/cron/delegate_task, which all executed flagged calls

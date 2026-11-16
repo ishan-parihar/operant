@@ -1315,6 +1315,36 @@ impl OperantAgent {
         // entry per tool call for its whole life.
         self.clear_tool_durations();
 
+        // (A1-agent-loop HIGH-1 and HIGH-2) Two more per-turn cells that every
+        // sibling in this block resets and these did not.
+        //
+        // `stream_progress_at` is the per-chunk stamp the idle detector reads.
+        // Left over from the PREVIOUS turn it is an old Instant, so
+        // `progress_before_this_attempt` starts pre-aged: a slow first chunk
+        // looks like a stream that has already been idle for the gap between
+        // turns, and the retry budget rearms on a comparison against a
+        // timestamp nothing in this turn produced. The stamp is also read by
+        // `should_rearm`, so the first attempt of a fresh turn inherits the
+        // previous turn's progress verdict.
+        //
+        // `thinking_timeout_hit` is worse-lived: set when a failure happened
+        // with no content on a reasoning model, it annotates the NEXT turn's
+        // failure as a thinking-timeout and appends thinking-timeout guidance
+        // to an unrelated error -- telling the operator to raise a timeout for
+        // a turn that never had one.
+        //
+        // Both are set only inside a turn (the writer for the stamp is
+        // `note_stream_progress`, per chunk), so clearing at the top is the
+        // same discipline the rest of this block follows. `.ok()` is not used
+        // here: the sibling locks above deliberately panic on poison rather
+        // than skip a reset silently (RT-476).
+        self.stream_progress_at
+            .lock()
+            .expect("stream_progress_at lock poisoned")
+            .take();
+        self.thinking_timeout_hit
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
         let mut messages = turn_ctx.messages;
 
         // ── TurnStart lifecycle hook ─────────────────────────────────────
