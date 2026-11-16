@@ -734,9 +734,6 @@ pub trait PlatformAdapter: Send + Sync {
     /// Send a message through the platform
     async fn send_message(&self, message: OutgoingMessage) -> Result<()>;
 
-    /// Handle an incoming update (webhook or poll result)
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>>;
-
     /// Get the adapter's specific configuration as JSON
     fn config_json(&self) -> serde_json::Value;
 

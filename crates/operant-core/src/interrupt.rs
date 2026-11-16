@@ -124,11 +124,6 @@ impl Default for InterruptFlag {
     }
 }
 
-// Safety: AtomicBool is Send + Sync, and Arc is Send + Sync.
-// The struct contains no other state.
-unsafe impl Send for InterruptFlag {}
-unsafe impl Sync for InterruptFlag {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

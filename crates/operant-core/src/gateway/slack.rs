@@ -15,10 +15,11 @@ use super::*;
 /// in this tree: `start()` logs "event-based, no polling" and returns, and
 /// nothing opens a `wss://` connection or reads the Events API.
 ///
-/// The `handle_update` parser below is therefore DEAD CODE — no caller
-/// ever feeds it an update (the trait's `handle_update` is dispatched by
-/// the Telegram and Discord pollers, and by the webhook adapter's HTTP
-/// handler; Slack has neither).
+/// The inbound parser below is therefore DEAD CODE — no caller ever feeds
+/// it an update (the trait method it used to be dispatched through was
+/// deleted in iter-2495, and Telegram and Discord parse in their own poll
+/// loops while the webhook adapter has its own HTTP handler; Slack has
+/// none of those).
 ///
 /// The gateway reports this adapter as "enabled" when a token is
 /// configured, which made an operator believe they could receive Slack
@@ -340,49 +341,6 @@ impl PlatformAdapter for SlackAdapter {
             return Err(Error::Agent(format!("Slack API error: {err}")));
         }
         Ok(message_id.to_string())
-    }
-
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse Slack event
-        let event = match update.get("event") {
-            Some(e) => e,
-            None => return Ok(None),
-        };
-
-        let msg_type = event
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or_default();
-
-        if msg_type != "message" {
-            return Ok(None);
-        }
-
-        let user = event
-            .get("user")
-            .and_then(|u| u.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        let content = event
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        let channel = event
-            .get("channel")
-            .and_then(|c| c.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        if content.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(
-            IncomingMessage::new("slack", user.clone(), user, channel, content).with_raw(update),
-        ))
     }
 
     fn config_json(&self) -> serde_json::Value {

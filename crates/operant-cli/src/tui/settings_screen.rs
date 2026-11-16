@@ -5,7 +5,6 @@
 // Changes are persisted via Settings::save_sync() or settings.json writes.
 
 use crate::tui::adapter_types::config::Settings;
-use crate::tui::adapter_types::output_styles::{builtin_styles, find_style};
 use crate::tui::overlays::{modal_search_line, render_dark_overlay, render_dialog_bg};
 use crate::tui::theme_colors;
 use operant_core::config::AppConfig;

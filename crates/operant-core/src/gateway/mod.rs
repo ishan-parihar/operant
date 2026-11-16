@@ -12,12 +12,12 @@ pub mod status;
 /// A platform can be in the gateway's registry and still be OUTBOUND-ONLY:
 /// the adapter has a complete inbound parser, but nothing ever calls it.
 ///
-/// The `PlatformAdapter::handle_update` trait method is DEAD — it has no
-/// production caller for ANY adapter. The platforms that receive use their
-/// own path instead: Telegram's and Discord's poll loops and the webhook
-/// adapter's own HTTP handler. The adapters that do NOT — Slack,
-/// WhatsApp, Email and SMS — have an inbound parser that nothing reaches,
-/// so a message sent to them is never seen by the agent.
+/// There is no `PlatformAdapter::handle_update` trait method: it was dead for
+/// every adapter and was deleted (iter-2495). The platforms that receive use
+/// their own path instead -- Telegram's and Discord's poll loops and the
+/// webhook adapter's own HTTP handler. The adapters that do NOT -- Slack,
+/// WhatsApp, Email and SMS -- have an inbound parser that nothing reaches, so
+/// a message sent to them is never seen by the agent.
 ///
 /// This table is the single source of that truth, so the adapters' status
 /// reports and the `operant gateway status` command cannot disagree.
@@ -2039,12 +2039,12 @@ mod tests {
 
     /// EVERY outbound-only adapter must say so in its status report.
     ///
-    /// `PlatformAdapter::handle_update` is called from NOWHERE in the
-    /// workspace — the Telegram and Discord poll loops use their own
-    /// static parsers, and the webhook adapter has its own HTTP handler.
-    /// So the trait method is dead for all seven adapters, and the
-    /// adapters that implement a complete inbound parser — Slack,
-    /// WhatsApp, Email, SMS — never receive anything.
+    /// The `PlatformAdapter::handle_update` trait method was deleted in
+    /// iter-2495: it was dead for all seven adapters, since the Telegram and
+    /// Discord poll loops use their own static parsers and the webhook adapter
+    /// has its own HTTP handler. The adapters that still implement a complete
+    /// inbound parser -- Slack, WhatsApp, Email, SMS -- never receive
+    /// anything.
     ///
     /// The status report used to say "enabled" and nothing more, so an
     /// operator believed they could receive messages on a channel that
@@ -2512,10 +2512,10 @@ mod tests {
     ///
     /// Telegram, Discord and Webhooks receive — through their own poll
     /// loops and the webhook adapter's HTTP handler. The
-    /// `PlatformAdapter::handle_update` trait method is DEAD: it has no
-    /// production caller for ANY adapter. Slack, WhatsApp, Email and SMS
-    /// have an inbound parser that nothing reaches, so a message sent to
-    /// them is never seen by the agent — and the table must say so.
+    /// trait method `handle_update` is gone (deleted iter-2495, dead for every
+    /// adapter). Slack, WhatsApp, Email and SMS still have an inbound parser
+    /// that nothing reaches, so a message sent to them is never seen by the
+    /// agent -- and the table must say so.
     ///
     /// The test is over the whole set, so a platform added to the gateway
     /// without a decision here fails it.
@@ -2926,12 +2926,6 @@ mod tests {
         async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
             Ok(())
         }
-        async fn handle_update(
-            &self,
-            _update: serde_json::Value,
-        ) -> Result<Option<IncomingMessage>> {
-            Ok(None)
-        }
         fn config_json(&self) -> serde_json::Value {
             serde_json::json!({})
         }
@@ -3058,12 +3052,6 @@ mod tests {
         ) -> Result<String> {
             Ok(String::new())
         }
-        async fn handle_update(
-            &self,
-            _update: serde_json::Value,
-        ) -> Result<Option<IncomingMessage>> {
-            Ok(None)
-        }
         fn config_json(&self) -> serde_json::Value {
             serde_json::json!({})
         }
@@ -3092,12 +3080,6 @@ mod tests {
         async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
             self.sends.fetch_add(1, Ordering::SeqCst);
             Err(Error::Agent(self.error.clone()))
-        }
-        async fn handle_update(
-            &self,
-            _update: serde_json::Value,
-        ) -> Result<Option<IncomingMessage>> {
-            Ok(None)
         }
         fn config_json(&self) -> serde_json::Value {
             serde_json::json!({})

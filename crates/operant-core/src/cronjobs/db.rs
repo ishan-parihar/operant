@@ -1200,6 +1200,33 @@ impl CronDb {
         Ok(found.is_some())
     }
 
+    /// The job ids whose claim was just settled as `abandoned` by
+    /// [`Self::claim_stale_claims`].
+    ///
+    /// (RT-1, HIGH) The reclaim scan settles the claim but CANNOT re-arm the
+    /// job: `claim_job_occurrence` is `INSERT OR IGNORE` against a UNIQUE index
+    /// on (job_id, occurrence), so the abandoned occurrence keeps losing every
+    /// future claim race, and `run_job` skips before reaching the only writer
+    /// of `next_run_at`. The scheduler calls this to advance those jobs to
+    /// their next occurrence, or the job is wedged forever.
+    ///
+    /// DISTINCT because one job can have several abandoned claims; each job is
+    /// re-armed once per scan.
+    pub fn abandoned_claim_jobs(&self) -> Result<Vec<String>, Error> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT job_id FROM cron_claims
+                  WHERE outcome = 'abandoned'",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare abandoned_claim_jobs: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| Error::Agent(format!("Failed to read abandoned cron claims: {e}")))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::Agent(format!("Failed to read abandoned cron claims: {e}")))
+    }
+
     /// One claim row, for the `operant cron` surfaces that report state.
     pub fn get_claim(&self, job_id: &str, occurrence: &str) -> Result<Option<CronClaim>, Error> {
         let conn = self.lock_conn()?;

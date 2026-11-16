@@ -136,40 +136,6 @@ impl PlatformAdapter for SmsAdapter {
         Ok(())
     }
 
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse Twilio webhook payload
-        let from = update["From"]
-            .as_str()
-            .or_else(|| update["from"].as_str())
-            .unwrap_or("");
-        let body = update["Body"]
-            .as_str()
-            .or_else(|| update["body"].as_str())
-            .unwrap_or("");
-
-        if from.is_empty() && body.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(IncomingMessage {
-            platform: "sms".to_string(),
-            channel_id: from.to_string(),
-            user_id: from.to_string(),
-            username: from.to_string(),
-            content: body.to_string(),
-            is_group_chat: false,
-            is_channel_post: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-            media_urls: Vec::new(),
-            deliver_to: None,
-            deliver_only: false,
-            authenticated: false,
-
-            raw: update,
-        }))
-    }
-
     fn config_json(&self) -> serde_json::Value {
         json!({
             "platform": "sms",
@@ -177,8 +143,8 @@ impl PlatformAdapter for SmsAdapter {
             "account_sid_configured": self.account_sid.is_some(),
             "from_number": self.from_number,
             // The adapter can SEND but not RECEIVE: nothing in the
-            // runtime invokes this adapter's `handle_update`, so an
-            // inbound message never reaches the agent. The status report
+            // nothing in the runtime ever called this adapter's inbound
+            // parser, so an inbound message never reached the agent. The status report
             // used to say "enabled" and nothing more, so an operator
             // believed they could receive SMS messages. (RT-86.)
             // The inbound truth, from the gateway's single table — so

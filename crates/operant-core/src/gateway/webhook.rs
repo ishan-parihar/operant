@@ -314,10 +314,6 @@ impl PlatformAdapter for WebhookAdapter {
         Ok(())
     }
 
-    async fn handle_update(&self, _update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        Ok(None)
-    }
-
     fn config_json(&self) -> serde_json::Value {
         serde_json::json!({
             "platform": "webhook",

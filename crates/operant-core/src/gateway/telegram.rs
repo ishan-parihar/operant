@@ -720,25 +720,6 @@ impl PlatformAdapter for TelegramAdapter {
         Ok(())
     }
 
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Shared callback-query routing (inline keyboard taps) first, then
-        // the regular message parser. The polling loop uses the same static
-        // helper so button taps work on every Telegram transport.
-        if let Some(msg) = Self::handle_callback_update(
-            &self.client,
-            self.token.as_deref().unwrap_or_default(),
-            &crate::tools::platform_bases::telegram_api_base(),
-            update.clone(),
-        )
-        .await
-        {
-            return Ok(Some(msg));
-        }
-
-        // Parse Telegram update — delegates to the static parse_update
-        TelegramAdapter::parse_update(update)
-    }
-
     async fn send_approval_prompt(
         &self,
         channel_id: &str,
@@ -1338,8 +1319,8 @@ impl TelegramAdapter {
     ///    the prompt message.
     ///
     /// Returns `None` for non-callback updates (delegate to `parse_update`).
-    /// Shared by `handle_update` and the Telegram polling loop so button
-    /// taps work on every transport.
+    /// Shared by the Telegram polling loop so button taps work on every
+    /// transport.
     pub(crate) async fn handle_callback_update(
         client: &reqwest::Client,
         token: &str,
@@ -1818,7 +1799,7 @@ pub(crate) fn telegram_message_is_service(message: &serde_json::Value) -> bool {
 
 impl TelegramAdapter {
     /// Parse a Telegram update into an IncomingMessage.
-    /// This is the same logic used by handle_update but callable without a trait object.
+    /// Callable without a trait object, which is how the poll loop uses it.
     pub(crate) fn parse_update(update: serde_json::Value) -> Result<Option<IncomingMessage>> {
         // Channel posts (plan-2026-10-09 §3): a `channel_post` update is the
         // same body shape as `message` minus `from` — the channel itself is

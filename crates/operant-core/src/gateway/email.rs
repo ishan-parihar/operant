@@ -300,41 +300,6 @@ impl PlatformAdapter for EmailAdapter {
         Ok(())
     }
 
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse email webhook payload (format depends on the email forwarding service)
-        let from = update["from"]
-            .as_str()
-            .or_else(|| update["sender"].as_str())
-            .unwrap_or("");
-        let subject = update["subject"].as_str().unwrap_or("(no subject)");
-        let body = update["body"]
-            .as_str()
-            .or_else(|| update["text"].as_str())
-            .unwrap_or("");
-
-        if from.is_empty() && body.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(IncomingMessage {
-            platform: "email".to_string(),
-            channel_id: from.to_string(),
-            user_id: from.to_string(),
-            username: from.to_string(),
-            content: format!("Subject: {}\n\n{}", subject, body),
-            is_group_chat: false,
-            is_channel_post: false,
-            timestamp: chrono::Utc::now().timestamp(),
-            thread_id: None,
-            media_urls: Vec::new(),
-            deliver_to: None,
-            deliver_only: false,
-            authenticated: false,
-
-            raw: update,
-        }))
-    }
-
     fn config_json(&self) -> serde_json::Value {
         json!({
             "platform": "email",
@@ -342,8 +307,8 @@ impl PlatformAdapter for EmailAdapter {
             "smtp_host": self.smtp_host,
             "smtp_user_configured": self.smtp_user.is_some(),
             // The adapter can SEND but not RECEIVE: nothing in the
-            // runtime invokes this adapter's `handle_update`, so an
-            // inbound message never reaches the agent. The status report
+            // nothing in the runtime ever called this adapter's inbound
+            // parser, so an inbound message never reached the agent. The status report
             // used to say "enabled" and nothing more, so an operator
             // believed they could receive email messages. (RT-86.)
             // The inbound truth, from the gateway's single table — so

@@ -304,52 +304,6 @@ impl PlatformAdapter for DiscordAdapter {
         Ok(message_id.to_string())
     }
 
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse Discord message create event
-        let d = match update.get("d") {
-            Some(d) => d,
-            None => return Ok(None),
-        };
-
-        let author = match d.get("author") {
-            Some(a) => a,
-            None => return Ok(None),
-        };
-
-        let content = d
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if content.is_empty() || author.get("bot").and_then(|b| b.as_bool()).unwrap_or(false) {
-            return Ok(None);
-        }
-
-        let channel_id = d
-            .get("channel_id")
-            .and_then(|c| c.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        Ok(Some(
-            IncomingMessage::new(
-                "discord",
-                author
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .unwrap_or("unknown"),
-                author
-                    .get("username")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("unknown"),
-                channel_id,
-                content,
-            )
-            .with_raw(update),
-        ))
-    }
-
     fn config_json(&self) -> serde_json::Value {
         serde_json::json!({
             "platform": "discord",

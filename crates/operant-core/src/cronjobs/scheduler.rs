@@ -422,13 +422,77 @@ impl CronScheduler {
     /// settled, so the claim is closed for good.
     fn claim_stale_claims(&self) {
         let horizon = chrono::Duration::seconds(Self::CLAIM_HORIZON_FLOOR_SECS);
-        match self.db.claim_stale_claims(horizon) {
-            Ok(0) => {}
-            Ok(n) => warn!(
-                "abandoned {n} cron claim(s) older than {}s — the occurrence is skipped, not re-dispatched",
-                horizon.num_seconds()
-            ),
-            Err(e) => warn!("cron claim reclaim scan failed: {e}"),
+        // (RT-1, HIGH) ABANDONING THE CLAIM IS NOT ENOUGH — the occurrence's
+        // `next_run_at` must move too.
+        //
+        // `claim_job_occurrence` is `INSERT OR IGNORE` against a UNIQUE index
+        // on (job_id, occurrence). The row it leaves behind is permanent:
+        // settling it (`settled_at`) changes the ANTI-JOIN in `get_due_jobs`,
+        // so the row becomes visible again, but the unique index still makes
+        // every future `claim_job_occurrence` for that same occurrence return
+        // `Ok(0)` -- "someone already owns this". `run_job` treats that as a
+        // skip and returns before `mark_job_run`, which is the ONLY production
+        // writer of `next_run_at`.
+        //
+        // So without this advance, a job whose claim was abandoned by the
+        // scan is wedged forever: every tick re-selects the row, loses the
+        // claim race, and skips. It never runs again until an operator resets
+        // `next_run_at` by hand. Advancing here is the same write the normal
+        // path would have made, so the cadence continues from where it
+        // stopped instead of the job dying silently.
+        //
+        // The abandoned occurrence is still never re-dispatched -- that is
+        // what "skip" means and it stays true. What changes is that the NEXT
+        // occurrence is reachable.
+        let reclaimed = match self.db.claim_stale_claims(horizon) {
+            Ok(n) => {
+                if n > 0 {
+                    warn!(
+                        "abandoned {n} cron claim(s) older than {}s — the occurrence is \
+                         skipped, not re-dispatched",
+                        horizon.num_seconds()
+                    );
+                }
+                n
+            }
+            Err(e) => {
+                warn!("cron claim reclaim scan failed: {e}");
+                0
+            }
+        };
+        if reclaimed == 0 {
+            return;
+        }
+        // Walk the jobs whose claim was just abandoned and re-arm them. The
+        // scan is bounded by the horizon, so this is bounded work: only jobs
+        // that actually lost an occurrence are touched.
+        for job_id in self.db.abandoned_claim_jobs().unwrap_or_default() {
+            // The id is enough to load the row; a job deleted between the
+            // scan and here simply has nothing to re-arm.
+            let Some(job) = self.db.get_job(&job_id).ok().flatten() else {
+                continue;
+            };
+            let Some(next_run) = self.compute_next_run(&job) else {
+                // An unparseable schedule has no next occurrence to compute.
+                // Leave the row alone and say so -- silently clearing it
+                // would disable the job with no trace.
+                warn!(
+                    "cron job {} had a claim abandoned but its schedule yields no next \
+                     occurrence — the operator must re-arm it",
+                    job.id
+                );
+                continue;
+            };
+            match self.db.set_next_run(&job.id, Some(next_run.clone())) {
+                Ok(()) => info!(
+                    "cron job {} had a claim abandoned; re-armed for {}",
+                    job.id, next_run
+                ),
+                Err(e) => warn!(
+                    "cron job {} had a claim abandoned but could not be re-armed: {e}",
+                    job.id
+                ),
+            }
         }
     }
 
@@ -2510,17 +2574,51 @@ mod tests {
             "the ledger records WHY the occurrence never ran"
         );
 
-        // The job is not wedged: its next occurrence fires normally.
-        cron_db
-            .set_next_run(&id, Some(chrono::Utc::now().to_rfc3339()))
-            .expect("arm the next occurrence");
+        // (RT-1, HIGH) THE WEDGE, AND ITS FIX. This used to call
+        // `set_next_run` by hand before ticking, which hid the defect: nothing
+        // in production advances `next_run_at` for an abandoned job. The
+        // abandoned claim's occurrence key still holds the UNIQUE index, so
+        // every future claim race for it is lost and `run_job` skips before
+        // reaching `mark_job_run` -- the only production writer of
+        // `next_run_at`. The job was therefore wedged forever.
+        //
+        // The reclaim scan now re-arms the job itself, so this asserts the
+        // scheduler advanced the row WITHOUT the test touching it. A
+        // subsequent tick must fire.
+        let rearmed = cron_db
+            .get_job(&id)
+            .expect("read")
+            .expect("row")
+            .next_run_at
+            .expect("the reclaim scan must advance next_run_at");
+        assert_ne!(
+            rearmed, crashed_occurrence,
+            "the re-armed occurrence must be a NEW key, or the guard still wedges"
+        );
+        assert!(
+            rearmed > crashed_occurrence,
+            "the re-armed occurrence must be in the FUTURE ({rearmed} vs {crashed_occurrence})"
+        );
+
+        // The re-arm is a PRODUCTION next occurrence (now + the job's own
+        // cadence), so it is legitimately not due on the very next tick -- the
+        // original fixture forced `next_run_at = now`, which is not what the
+        // reclaim scan computes. Wait for the cadence the same way a real
+        // scheduler does, then tick. This is the assertion that the job is not
+        // wedged: it fires again with NO operator intervention.
+        // The fixture's schedule is the every-second cron expression
+        // `"* * * * * *"`, so one cadence is one second. Sleeping past it
+        // makes the re-armed occurrence due, which is exactly what a real
+        // scheduler's next tick would see.
+        std::thread::sleep(std::time::Duration::from_millis(1_250));
         scheduler.tick().await.expect("the next tick");
         assert_eq!(
             std::fs::read_to_string(&marker)
                 .map(|s| s.len())
                 .unwrap_or(0),
             1,
-            "the job's next cadence occurrence fires despite the abandonment"
+            "the job's next cadence occurrence fires despite the abandonment -- \
+             the reclaim scan re-armed it, so no operator intervention is needed"
         );
     }
 

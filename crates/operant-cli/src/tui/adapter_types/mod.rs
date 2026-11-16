@@ -12,7 +12,6 @@ pub mod history;
 pub mod import_config;
 pub mod items;
 pub mod model_registry;
-pub mod output_styles;
 pub mod provider_id;
 pub mod spinner;
 pub mod tui_app;

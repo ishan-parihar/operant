@@ -445,12 +445,6 @@ mod tests {
         ) -> crate::error::Result<String> {
             Ok("msg-id".to_string())
         }
-        async fn handle_update(
-            &self,
-            _update: serde_json::Value,
-        ) -> crate::error::Result<Option<crate::gateway::IncomingMessage>> {
-            Ok(None)
-        }
         fn config_json(&self) -> serde_json::Value {
             serde_json::json!({})
         }

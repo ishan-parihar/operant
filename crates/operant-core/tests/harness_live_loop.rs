@@ -535,12 +535,6 @@ async fn channel_adapter_seam_routes_to_host() {
         ) -> operant_core::error::Result<String> {
             Ok("id".to_string())
         }
-        async fn handle_update(
-            &self,
-            _u: Value,
-        ) -> operant_core::error::Result<Option<operant_core::IncomingMessage>> {
-            Ok(None)
-        }
         fn config_json(&self) -> Value {
             json!({})
         }

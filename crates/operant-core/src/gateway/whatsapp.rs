@@ -163,41 +163,6 @@ impl PlatformAdapter for WhatsAppAdapter {
         Ok(())
     }
 
-    async fn handle_update(&self, update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        // Parse WhatsApp webhook payload
-        if let Some(entry) = update["entry"].as_array().and_then(|e| e.first())
-            && let Some(change) = entry["changes"].as_array().and_then(|c| c.first())
-            && let Some(msg) = change["value"]["messages"]
-                .as_array()
-                .and_then(|m| m.first())
-        {
-            let from = msg["from"].as_str().unwrap_or("");
-            let text = msg["text"]["body"].as_str().unwrap_or("");
-            let name = change["value"]["contacts"][0]["profile"]["name"]
-                .as_str()
-                .unwrap_or("WhatsApp User");
-
-            return Ok(Some(IncomingMessage {
-                platform: "whatsapp".to_string(),
-                channel_id: from.to_string(),
-                user_id: from.to_string(),
-                username: name.to_string(),
-                content: text.to_string(),
-                is_group_chat: false,
-                is_channel_post: false,
-                timestamp: chrono::Utc::now().timestamp(),
-                thread_id: None,
-                media_urls: Vec::new(),
-                deliver_to: None,
-                deliver_only: false,
-                authenticated: false,
-
-                raw: update,
-            }));
-        }
-        Ok(None)
-    }
-
     fn config_json(&self) -> serde_json::Value {
         json!({
             "platform": "whatsapp",
@@ -205,8 +170,8 @@ impl PlatformAdapter for WhatsAppAdapter {
             "token_configured": self.token.is_some(),
             "phone_number_id_configured": self.phone_number_id.is_some(),
             // The adapter can SEND but not RECEIVE: nothing in the
-            // runtime invokes this adapter's `handle_update`, so an
-            // inbound message never reaches the agent. The status report
+            // nothing in the runtime ever called this adapter's inbound
+            // parser, so an inbound message never reached the agent. The status report
             // used to say "enabled" and nothing more, so an operator
             // believed they could receive WhatsApp messages. (RT-86.)
             // The inbound truth, from the gateway's single table — so
