@@ -58,7 +58,9 @@ impl JourneyViewState {
         Self::default()
     }
 
-    pub fn open(&mut self, skills_dir: PathBuf, memory_dir: PathBuf) {
+    /// `skill_roots` is the RESOLVED root list (`crate::skill_roots::skill_roots`),
+    /// not the pool alone - see the note at the loader below (RT-Z43-G).
+    pub fn open(&mut self, skill_roots: &operant_core::skills::SkillRoots, memory_dir: PathBuf) {
         self.visible = true;
         self.active_pane = JourneyPane::Skills;
         self.skills_cursor = 0;
@@ -73,13 +75,23 @@ impl JourneyViewState {
         // This connects skills and memories as first-class graph nodes
         // with edges derived from lexical overlap, powering the
         // self-learning visualization.
+        // The graph is built from the POOL directory specifically (the
+        // operator's own skills), which is the first resolved root.
+        let skills_dir = skill_roots.roots.first().cloned().unwrap_or_default();
         self.graph = Some(learning_graph::build_learning_graph(
             &skills_dir,
             &memory_dir,
         ));
 
         // Load skills (same primitive as skills_view.rs).
-        let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
+        // The RESOLVED roots, not the pool alone (RT-Z43-G): this pane built
+        // `SkillManager::new(skills_dir)` and passed no extra roots at all, so
+        // it omitted the vendor roots, the operator's `extra_roots` AND the
+        // project root. The `/skills` overlay had the same shape until its
+        // signature was fixed; a panel that shows "the skills" while listing a
+        // strict subset is the advertised-but-invisible inversion the skill-roots
+        // resolver exists to remove.
+        let mut mgr = operant_core::skills::SkillManager::from_roots(skill_roots);
         match mgr.load_all() {
             Ok(mut loaded) => {
                 loaded.sort_by(|a, b| a.name.cmp(&b.name));

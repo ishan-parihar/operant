@@ -627,13 +627,13 @@ impl App {
             "skill" => {
                 let name = args.trim();
                 let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
-                let pool = self.config.skills.root_dir.clone();
                 if name.is_empty() {
-                    self.skills_view.open(
-                        pool,
-                        vendor_roots,
-                        self.config.skills.extra_roots.clone(),
-                    );
+                    // The RESOLVED roots, not the pre-resolver triple: the
+                    // overlay must list what `operant skills list` lists, and
+                    // that goes through `crate::skill_roots::skill_roots`
+                    // (RT-Z43-G).
+                    self.skills_view
+                        .open(&crate::skill_roots::skill_roots(&self.config));
                     return true;
                 }
                 // Optional trailing instruction after the skill name:
@@ -714,12 +714,11 @@ impl App {
                 }
             }
             "skills" => {
-                let vendor_roots = crate::skill_roots::vendor_skill_roots(&self.config);
-                self.skills_view.open(
-                    self.config.skills.root_dir.clone(),
-                    vendor_roots,
-                    self.config.skills.extra_roots.clone(),
-                );
+                // The RESOLVED roots (RT-Z43-G): `/skills` and `/journey` must
+                // list the same set the CLI listing and the in-loop tools do,
+                // including the project root.
+                self.skills_view
+                    .open(&crate::skill_roots::skill_roots(&self.config));
                 true
             }
             "plugins" => {
@@ -2198,9 +2197,11 @@ impl App {
             // (planned for a later iteration). Surface a "coming soon" status
             // rather than silently dropping.
             "journey" => {
-                let skills_dir = self.config.skills.root_dir.clone();
                 let memory_dir = operant_core::platform::operant_home().join("memory");
-                self.journey_view.open(skills_dir, memory_dir);
+                // The RESOLVED roots (RT-Z43-G): the Skills pane must list the
+                // same set as `/skills`, the CLI listing and the in-loop tools.
+                self.journey_view
+                    .open(&crate::skill_roots::skill_roots(&self.config), memory_dir);
                 true
             }
             // /setup — suspend the TUI and shell out to `operant setup` so the

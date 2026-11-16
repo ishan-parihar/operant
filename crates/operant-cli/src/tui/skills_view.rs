@@ -17,7 +17,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use std::cell::Cell;
-use std::path::PathBuf;
 
 use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame};
 use crate::tui::theme_colors;
@@ -59,16 +58,20 @@ impl SkillsViewState {
         Self::default()
     }
 
-    /// Open over the operator's pool, the vendor roots, and any additional
-    /// roots the operator configured (`[skills] extra_roots`). All three are
-    /// roots; the pool is only the first one, so the overlay lists what the
-    /// resolver lists instead of the pool alone.
-    pub fn open(
-        &mut self,
-        skills_dir: PathBuf,
-        vendor_roots: Vec<std::path::PathBuf>,
-        extra_roots: Vec<PathBuf>,
-    ) {
+    /// Open over the config's RESOLVED skill roots.
+    ///
+    /// Takes a `&SkillRoots` rather than a list of paths because the list is
+    /// the bug: this used to take `(pool, vendor_roots, extra_roots)`, and the
+    /// resolver's FOURTH root - `project_root`, from `[skills] project_root` -
+    /// has no parameter to arrive in. Every caller passed the pre-resolver
+    /// triple, so `/skills` and the `/journey` Skills pane omitted a root the
+    /// CLI listing, the in-loop tools and `operant doctor` all saw: the model
+    /// was told a skill exists that the panel built to show it did not list
+    /// (RT-Z43-G).
+    ///
+    /// A three-argument signature cannot carry a fourth root. Taking the
+    /// resolved struct means the next root lands everywhere at once.
+    pub fn open(&mut self, roots: &operant_core::skills::SkillRoots) {
         self.visible = true;
         self.stage = SkillsStage::List;
         self.selected = 0;
@@ -81,15 +84,14 @@ impl SkillsViewState {
         // SkillManager::load_all is fast (one readdir + one read per skill).
         // Errors (e.g. dir doesn't exist yet on a fresh install) are surfaced
         // inline rather than crashing the overlay.
-        let mut mgr = operant_core::skills::SkillManager::new(skills_dir);
-        // The vendor roots AND the operator's own extra roots ride as extra
-        // roots, so the overlay lists the installed integrations and plugin
-        // skills too — the typeahead derives from this view, so they are
-        // invocable as well (iter-2159). Without `extra_roots` here the
-        // overlay and the resolver disagreed, and the panel showed a subset.
-        for root in vendor_roots.into_iter().chain(extra_roots) {
-            mgr.add_extra_root(Some(root));
-        }
+        //
+        // `from_roots` is the same constructor every other surface uses
+        // (`crate::skill_roots::skill_manager`), so the overlay cannot pick up
+        // a subset by accident. It was `SkillManager::new(pool)` plus one
+        // `add_extra_root` per vendor root, which is exactly how the project
+        // root went missing (iter-2159 fixed that shape for `extra_roots`; the
+        // fourth root arrived later and no signature changed).
+        let mut mgr = operant_core::skills::SkillManager::from_roots(roots);
         match mgr.load_all() {
             Ok(mut loaded) => {
                 // Sort by (category, name) so related skills cluster visually.
@@ -544,6 +546,73 @@ fn truncate_to_width(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (RT-Z43-G) THE project-root test. The overlay must list a skill that
+    /// lives ONLY in the project root.
+    ///
+    /// `open` used to take `(pool, vendor_roots, extra_roots)` and build the
+    /// manager by hand, so the resolver's fourth root - `project_root`, from
+    /// `[skills] project_root` - had no parameter to arrive in. `operant skills
+    /// list` and the in-loop `skills_list` tool went through the resolver and
+    /// saw the skill; this panel did not. The model was told a skill exists
+    /// that the panel built to show it omitted.
+    ///
+    /// Mutation-proven: reverting `open` to `SkillManager::new(pool)` +
+    /// `add_extra_root` fails the project-root assertion.
+    #[test]
+    fn the_overlay_lists_a_skill_that_lives_only_in_the_project_root() {
+        let base = std::env::temp_dir().join(format!(
+            "operant-skills-view-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        // A project root holding one skill, and a SEPARATE pool holding a
+        // different one, so the assertion cannot pass on the pool alone.
+        let project = base.join("project");
+        let pool = base.join("pool");
+        for (dir, name) in [(&project, "projonly"), (&pool, "poolonly")] {
+            let skill_dir = dir.join("skills").join(name);
+            std::fs::create_dir_all(&skill_dir).expect("skill dir");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: probe\n---\n\n# {name}\n"),
+            )
+            .expect("SKILL.md");
+        }
+
+        // The resolver with the project root pinned explicitly. `workspace`
+        // is the third argument; `explicit_project_root` the fourth.
+        let roots = operant_core::skills::SkillRoots::resolve(
+            &operant_core::config::SkillsSettings {
+                root_dir: pool.clone(),
+                extra_roots: Vec::new(),
+                project_root: project.to_string_lossy().to_string(),
+                ..Default::default()
+            },
+            &[],
+            None,
+            None,
+        );
+
+        let mut view = SkillsViewState::new();
+        view.open(&roots);
+        let names: Vec<String> = view.skills.iter().map(|s| s.name.clone()).collect();
+
+        assert!(
+            names.iter().any(|n| n == "poolonly"),
+            "the pool skill must be listed, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "projonly"),
+            "a skill living ONLY in the project root must be listed, got {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
