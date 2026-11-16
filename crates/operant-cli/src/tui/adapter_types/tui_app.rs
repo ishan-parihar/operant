@@ -661,9 +661,13 @@ impl TuiApp {
 
             // Create the user-question channel and register the sender with
             // operant_core::user_question. The clarify tool will push
-            // UserQuestionRequest { question, choices, reply_tx } to this
-            // channel; the TUI drains it in the run loop and opens the
-            // ask_user_dialog. (iter-97 — closes Bug #2 from iter-82 audit.)
+            // UserQuestionRequest { question, choices, session_id, reply_tx } to
+            // this channel; the TUI drains it in the run loop and opens the
+            // ask_user_dialog. `session_id` (iter-2536) is what lets the
+            // GATEWAY's receiver route the ask to the chat that raised it; the
+            // TUI is one process serving one operator, so it does not need it,
+            // but the type is shared. (iter-97 — closes Bug #2 from iter-82
+            // audit.)
             let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
                 operant_core::user_question::UserQuestionRequest,
             >();
