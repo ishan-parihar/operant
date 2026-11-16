@@ -218,7 +218,7 @@ mod tabs;
 mod tests;
 
 pub use keys::handle_settings_key;
-pub(crate) use keys::{select_next_visible, select_prev_visible, toggle_or_cycle_current};
+pub(crate) use keys::{select_next_visible, select_prev_visible};
 pub use render::render_settings_screen;
 pub(crate) use state::all_entries;
 pub(crate) use tabs::{group_for, tab_for};

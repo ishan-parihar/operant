@@ -490,18 +490,13 @@ fn list_skills(config: &AppConfig, json: bool, tree: bool) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
     // Every root the resolver produces — the vendor roots (installed content
-    // integrations and plugin-contributed dirs) AND `[skills] extra_roots` —
-    // so the CLI lists exactly what the agent can run. Without the extra
-    // roots this listing was a subset of the agent's, which is the whole
-    // complaint the plan was written for.
-    for root in crate::skill_roots::vendor_skill_roots(config)
-        .into_iter()
-        .chain(config.skills.extra_roots.iter().cloned())
-    {
-        manager.add_extra_root(Some(root));
-    }
+    // integrations and plugin-contributed dirs), `[skills] extra_roots` AND the
+    // project root — so the CLI lists exactly what the agent can run. The old
+    // hand-built `vendor_skill_roots + extra_roots` chain omitted the project
+    // root the resolver adds, so the CLI's `list` under-reported the pool the
+    // agent actually sees. `skill_roots` is the ONE list, in precedence order.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
@@ -616,7 +611,10 @@ fn inspect_skill(config: &AppConfig, id: &str) -> Result<()> {
         anyhow::bail!("Skill '{}' not found.", id);
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list, not the pool alone: a skill that lives
+    // only in [skills] extra_roots or the project root is inspectable by the
+    // same name the CLI advertises it under.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager
         .load_all()
         .with_context(|| format!("Failed to load skills from '{}'", skills_dir.display()))?;
@@ -1001,8 +999,9 @@ fn uninstall_skill(config: &AppConfig, name: &str) -> Result<()> {
 }
 
 fn update_skill(config: &AppConfig, name: &str) -> Result<()> {
-    let skills_dir = &config.skills.root_dir;
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list: a skill living only in an extra root
+    // must remain readable before and after the disk reload.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let old_skill = manager
@@ -1036,7 +1035,9 @@ fn browse_skills(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    let mut manager = SkillManager::new(skills_dir.clone());
+    // The resolver's whole root list, so `list` and `search` report the same
+    // set the agent can run.
+    let mut manager = crate::skill_roots::skill_manager(config);
     let installed = manager.load_all().context("Failed to load skills")?;
 
     let entries = match std::fs::read_dir(skills_dir) {
@@ -1094,7 +1095,9 @@ fn browse_skills(config: &AppConfig) -> Result<()> {
 }
 
 fn check_skill(config: &AppConfig, name: &str) -> Result<()> {
-    let mut manager = SkillManager::new(config.skills.root_dir.clone());
+    // The resolver's whole root list: the version check must see the same
+    // skill the CLI `list` does, extra_roots included.
+    let mut manager = crate::skill_roots::skill_manager(config);
     manager.load_all().context("Failed to load skills")?;
 
     let skill = manager
