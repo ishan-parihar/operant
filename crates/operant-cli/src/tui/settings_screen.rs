@@ -145,17 +145,6 @@ pub struct SettingsScreen {
 
     // ---- Real settings fields ----
     pub output_style: String,
-    /// Which glyph draws the boundary between two status-line segments.
-    ///
-    /// Mirrors `[tui] bar_style` rather than living in `settings.json`: the
-    /// status line is the bar's only consumer and the config key already owns
-    /// the value. Before this row existed that key's only control was a
-    /// hand-edited TOML line, so the operator had eight styles and no way to
-    /// reach one (plan 2026-11-15 U1).
-    pub bar_style: String,
-    /// The bar styles `SeparatorStyle::ALL` offers, cached so a frame does not
-    /// rebuild the list per row.
-    pub bar_style_options: Vec<&'static str>,
     /// The live `operant.toml` values, read once per open. A row the panel
     /// draws from the registry reads its current value from here, so the panel
     /// never reads the file per frame.

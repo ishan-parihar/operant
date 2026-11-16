@@ -1536,11 +1536,6 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Default voice for the selected provider (provider-specific identifier)",
     ),
     (
-        "tui.bar_style",
-        "default_bar_style()",
-        "Which glyph draws the boundary between two status-line segments (plan 2026-11-15 U11). One of the `SeparatorStyle::key()` names: `dot` (the default, and the historical look), `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. An unknown value warns at startup and falls back to `dot` rather than to a style that renders nothing — see `tui::status_line::style::SeparatorStyle::parse`, which returns the style plus whether the key was recognised, for why that is NOT OMP's `powerline-thin` fallback. The two powerline styles need a patched font (Nerd Font U+E0B0/U+E0B1); without one the terminal draws tofu. `ascii` exists for that case.",
-    ),
-    (
         "tui.colors",
         "std::collections::BTreeMap::new()",
         "(plan 2026-11-14 U1) Per-role TUI colour overrides, `role = \"#rrggbb\"`. Applied ON TOP of the active theme's palette by `tui::theme_colors::set_active_theme`, so a key here wins over the theme's own value for that role. Keys are the `Role::key()` names the vendored palette publishes (`accent`, `ai_text`, `border`, …); an unknown key or a non-hex value is reported by `Palette::from_pairs` and skipped rather than failing the whole palette. Empty by default, which is byte-identical to the historical look because the role palette already defaults to it.",
@@ -3473,11 +3468,6 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
-        key: "tui.bar_style",
-        widget: Widget::Text,
-        live: true,
-    },
-    SettingRow {
         key: "tui.colors",
         widget: Widget::None,
         live: true,
@@ -3950,7 +3940,6 @@ pub const KNOWN_KEYS: &[&str] = &[
     "tts.enabled",
     "tts.provider",
     "tts.voice",
-    "tui.bar_style",
     "tui.colors",
     "tui.compact_width",
     "tui.double_escape_action",

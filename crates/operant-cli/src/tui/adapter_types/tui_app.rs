@@ -105,24 +105,6 @@ impl TuiApp {
         // role colours are live on the FIRST frame rather than after a theme
         // switch. Without this the config section would have no reader at all.
         let role_colors = app_config.tui.colors.clone();
-        // (plan 2026-11-15 U11) `[tui] bar_style`, hoisted and installed for the
-        // same reason as the role colours above: the separator is read per frame
-        // at the paint site, so the operator's choice is live on the FIRST frame.
-        // An unknown key warns and falls back to `dot`, which is the look that
-        // shipped before this key existed.
-        let bar_style = app_config.tui.bar_style.clone();
-        let (bar_style, known) = crate::tui::status_line::style::SeparatorStyle::parse(&bar_style);
-        crate::tui::status_line::style::set_style(Some(bar_style));
-        if !known {
-            tracing::warn!(
-                bar_style = app_config.tui.bar_style,
-                known = ?crate::tui::status_line::style::SeparatorStyle::ALL
-                    .iter()
-                    .map(|style| style.key())
-                    .collect::<Vec<_>>(),
-                "unknown [tui] bar_style; falling back to 'dot'"
-            );
-        }
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
         app.double_escape_action = double_escape_action;

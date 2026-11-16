@@ -51,6 +51,10 @@ pub fn user_text() -> Color {
 pub fn user_bg() -> Color {
     super::palette::role_color(super::palette::Role::UserBg)
 }
+/// The composer (input area) surface fill — the input area itself is themeable.
+pub fn composer_bg() -> Color {
+    super::palette::role_color(super::palette::Role::ComposerBg)
+}
 pub fn ai_text() -> Color {
     super::palette::role_color(super::palette::Role::AiText)
 }
@@ -120,11 +124,6 @@ pub fn diff_added_color() -> Color {
 /// Diff "removed" row ink (plan 2026-11-14 U6).
 pub fn diff_removed_color() -> Color {
     super::palette::role_color(super::palette::Role::ToolDiffRemoved)
-}
-
-/// Status-line bar fill (plan 2026-11-14 U7).
-pub fn status_line_bg() -> Color {
-    super::palette::role_color(super::palette::Role::StatusLineBg)
 }
 
 /// Foreground for one syntax category (plan 2026-11-14 U5).

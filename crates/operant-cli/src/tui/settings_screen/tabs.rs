@@ -202,7 +202,6 @@ mod tests {
     /// the keys.
     #[test]
     fn the_tab_for_a_key_is_stable_under_its_prefix() {
-        assert_eq!(tab_for("tui.bar_style"), SettingsTab::Appearance);
         assert_eq!(tab_for("agent.context_window"), SettingsTab::Model);
         assert_eq!(tab_for("context.auto_compact"), SettingsTab::Context);
         assert_eq!(tab_for("context_injection.enabled"), SettingsTab::Context);
