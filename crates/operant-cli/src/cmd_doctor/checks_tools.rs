@@ -551,17 +551,13 @@ pub fn run_platform_checks(
         // external memory provider left to hold a key for.
         ("memory", vec![], true),
         ("cron", vec![], true),
-        // browser: sourcehound (keyless) OR any cloud-provider key
-        (
-            "browser",
-            vec![
-                "BROWSERBASE_API_KEY",
-                "BROWSER_USE_API_KEY",
-                "FIRECRAWL_API_KEY",
-                "CAMOFOX_URL",
-            ],
-            sourcehound_present,
-        ),
+        // browser: sourcehound ONLY, and there is no second way in. The old
+        // BROWSERBASE_API_KEY / BROWSER_USE_API_KEY / FIRECRAWL_API_KEY /
+        // CAMOFOX_URL requirements selected nothing — build_browser_provider
+        // ignores its argument and every other name lands on sourcehound — so
+        // a phantom key next to a missing binary reported "(available)" for a
+        // browser that could not run. Availability is sourcehound_present, full stop.
+        ("browser", vec![], sourcehound_present),
         ("vision", vec![], config.vision.provider.is_some()),
     ];
 

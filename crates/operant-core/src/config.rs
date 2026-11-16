@@ -2562,13 +2562,17 @@ impl Default for MemorySettings {
 
 /// Browser provider configuration.
 ///
-/// `provider` selects the browser backend:
-/// - `"sourcehound"` (default) — the sourcehound browser engine driven over
-///   its MCP server (`cloakctl.navigate` / `cloakctl.read` / `cloakctl.act`)
-/// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
-/// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
-/// - `"browser-use"` — Browser Use cloud agent (`BROWSER_USE_API_KEY`)
-/// - `"firecrawl"` — Firecrawl scrape API (`FIRECRAWL_API_KEY`)
+/// `provider` has exactly ONE accepted value: `"sourcehound"` (the default),
+/// the sourcehound browser engine driven over its MCP server
+/// (`cloakctl.navigate` / `cloakctl.read` / `cloakctl.act`).
+///
+/// Every other name is accepted at load for config compatibility and then
+/// IGNORED by `build_browser_provider` — the purged `camofox` /
+/// `browserbase` / `browser-use` / `firecrawl` and the retired `lightpanda` /
+/// `obscura` / `igs` all land on sourcehound, and `warn_legacy_keys` says so
+/// once at load. There is no env var that selects a browser engine, so the
+/// old `CAMOFOX_URL` / `BROWSERBASE_API_KEY` / `BROWSER_USE_API_KEY` /
+/// `FIRECRAWL_API_KEY` settings configure nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BrowserSettings {

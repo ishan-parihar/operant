@@ -83,7 +83,11 @@ const OBSERVE_ALLOW: &[&str] = &[
     "video_analyze",
     "transcribe_audio",
     "osv_check",
-    "browser_camofox_state",
+    // `browser_camofox_state` stood here: camofox was purged with the other
+    // browser engines (sourcehound is the only provider now) and the tool file
+    // is gone, so the row named a tool that can never be registered. The
+    // allow list is matched literally (`glob_match`, no substring or prefix
+    // semantics), so nothing live was shadowed by it.
     "debug_env",
     "debug_system",
     // Holon's read API is read-only by construction (operant_os::api)
