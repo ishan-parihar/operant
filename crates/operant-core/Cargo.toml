@@ -66,7 +66,14 @@ regex = "1.10"
 dirs = { workspace = true }
 shell-words = "1.1.1"
 base64 = "0.22"
-kokoro-tiny = "0.1.0"
+# Phonon TTS (gradium/phonon-31m-en, Apache 2.0) — the local, offline default
+# voice. It replaces kokoro-tiny: Phonon 31m is smaller (41M params vs 82M),
+# ~3x faster on one CPU core, streams audio frame-by-frame, and its runtime is
+# pure Rust (`xn`) with no ONNX Runtime download and no ORT API-version
+# hazard. The `hf` feature enables the Hugging Face JSON tokenizer; weights are
+# GGUF (q8_0 default, q4k for size-constrained builds) and the model is NOT a
+# crate dependency — it is downloaded on first use into the phonon cache dir.
+ptts = { version = "0.7", features = ["hf"], default-features = false }
 hound = "3.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1.7", features = ["v4"] }

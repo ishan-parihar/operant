@@ -9,7 +9,6 @@ members = [
     "crates/operant-plugins",
     "crates/operant-harness",
 ]
-exclude = ["vendor/ndarray-npy", "vendor/kokoro-tiny"]
 
 [workspace.package]
 version = "0.3.0"
@@ -116,11 +115,3 @@ codegen-units = 1
 [workspace.lints.clippy]
 clone_on_copy = "warn"
 needless_borrow = "warn"
-
-# RT-18: kokoro-tiny -> ndarray-npy 0.9 pins zip 2, and every zip below 9.0.0 is in RUSTSEC-2026-0367/0368/0369.
-# This patch keeps the same ndarray-npy API and bumps only its zip requirement; see vendor/ndarray-npy/README.md.
-[patch.crates-io]
-ndarray-npy = { path = "vendor/ndarray-npy" }
-# kokoro-tiny 0.1.0 uses `atty` (RUSTSEC-2021-0145 unsound, RUSTSEC-2024-0375 unmaintained)
-# for one stdin check in its binary; the vendored copy uses std IsTerminal. See vendor/kokoro-tiny/README.md.
-kokoro-tiny = { path = "vendor/kokoro-tiny" }

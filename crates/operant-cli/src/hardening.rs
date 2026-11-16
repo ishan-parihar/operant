@@ -21,12 +21,14 @@
 //! ## What is NOT ported, and why it matters
 //!
 //! codex strips the whole `LD_*` environment family. **Measured and refused
-//! here:** `ldd target/release/operant` resolves `libonnxruntime.so.1` out of
-//! `~/.local/lib/operant/`, which means `LD_LIBRARY_PATH` is load-bearing for
-//! this binary's Kokoro TTS default. Stripping it would break a shipped
-//! feature to close a hole this deployment does not have. That measurement is
-//! recorded as RG-019; the narrow `LD_PRELOAD`-only variant needs its own
-//! measurement before anyone reaches for it.
+//! here:** `LD_LIBRARY_PATH` was load-bearing when the default TTS engine was
+//! Kokoro, which linked `libonnxruntime.so.1`. That measurement is recorded as
+//! RG-019 and the narrow `LD_PRELOAD`-only variant still needs its own
+//! measurement before anyone reaches for it. (iter-2513 replaced Kokoro with
+//! Phonon, whose `ptts` runtime is pure Rust and links no `libonnxruntime`, so
+//! the original evidence no longer applies — but the refusal still stands: a
+//! *second* `LD_*` dependency may exist in any build, and stripping the family
+//! on the assumption that nothing needs it is exactly the bet RG-019 lost.)
 
 /// Set `RLIMIT_CORE` to `{0,0}` so the kernel never writes a core dump.
 ///
@@ -167,12 +169,20 @@ mod tests {
     }
 
     #[test]
-    fn the_ld_strip_is_not_ported_because_it_would_break_kokoro() {
+    fn the_ld_strip_is_not_ported() {
         // RG-019's lesson, pinned where someone would reach for the port.
-        // `ldd target/release/operant` resolves `libonnxruntime.so.1` from
-        // `~/.local/lib/operant/`, so `LD_LIBRARY_PATH` is load-bearing for the
-        // default TTS engine. Stripping it would break a shipped feature to
-        // close a hole this deployment does not have.
+        //
+        // When this was written, `ldd target/release/operant` resolved
+        // `libonnxruntime.so.1` from `~/.local/lib/operant/`, so
+        // `LD_LIBRARY_PATH` was load-bearing for the default TTS engine
+        // (Kokoro). Stripping it would have broken a shipped feature to close
+        // a hole this deployment does not have.
+        //
+        // iter-2513 replaced Kokoro with Phonon (`ptts`, pure Rust, no
+        // `libonnxruntime`), so that specific dependency is gone. The port
+        // stays refused on principle: any second `LD_*` dependency in any
+        // build makes the family load-bearing, and RG-019's bet — that
+        // nothing needs it — is the one that already lost.
         //
         // The check is deliberately narrow so it does not false-positive on the
         // module doc, which has to NAME the thing codex does to explain why we

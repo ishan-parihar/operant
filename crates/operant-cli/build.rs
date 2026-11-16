@@ -12,39 +12,29 @@
 //! without build-deps; this parser is 25 lines against a stable lock format,
 //! mirrored on operant-core/build.rs.
 //!
-//! ## The ONNX Runtime RUNPATH
+//! ## No RUNPATH any more (iter-2513)
 //!
-//! The binary links `libonnxruntime.so.1` dynamically whenever the ONNX
-//! Runtime is present, and the loader finds a shared library through the
-//! RUNPATH — an absolute directory baked into the executable. WITHOUT one the
-//! binary dies before `main`, so it cannot explain itself:
+//! This build script used to emit a RUNPATH so the loader could find
+//! `libonnxruntime.so.1`, which Kokoro (the previous TTS default) linked
+//! dynamically. Without it the binary died before `main`:
 //!
 //! ```text
 //! error while loading shared libraries: libonnxruntime.so.1: cannot open shared object file
 //! ```
 //!
-//! `scripts/dev-env.sh` adds that RUNPATH through `RUSTFLAGS`, so only a
-//! build that SOURCED it got one. Every other build path in this tree — a
-//! plain `cargo build`, and the `cargo build --release -p operant-cli` that
-//! `scripts/install.sh` runs — produced an artifact that could not start, and
-//! the failure named the shared object rather than the build command.
-//! Measured twice in one session: once by `cargo build`, once by a
-//! `cargo test` relink of the same path.
+//! The whole apparatus — the RUSTFLAGS copy in `dev-env.sh`, the library copy
+//! in `install.sh`, the `ORT_LIB_LOCATION` pin, the API-24 probe — existed for
+//! that one dependency. iter-2513 replaced Kokoro with Phonon, whose `ptts`
+//! runtime is pure Rust, and `readelf -d` on the rebuilt binary shows no
+//! libonnxruntime NEEDED entry at all. The emission is therefore GONE, not
+//! disabled: a RUNPATH naming a directory nothing needs is a false claim in
+//! the ELF header. If a future dependency links a shared library again, emit
+//! the RUNPATH next to it, in the same change.
 //!
-//! The RUNPATH is therefore emitted HERE, by the build script, so every build
-//! of the binary carries it. The directory is the RUNTIME copy
-//! (`~/.local/lib/operant`), not the checkout: an rpath into a disposable
-//! worktree dies with the worktree, and `install.sh` populates the runtime
-//! directory with the shared object the loader is looking for.
-//!
-//! Two more facts about the same path:
-//!
-//! * `cargo test` HARDLINKS the test harness over `target/debug/operant`, so
-//!   after a test build that path holds the harness, not the CLI. Rebuild
-//!   with `scripts/build.sh` before testing the binary.
-//! * The flag is Linux-only (`-Wl,-rpath` is a GNU ld spelling the MSVC
-//!   linker does not accept) and it is gated on the TARGET's OS, not the
-//!   host's, so a cross-link never receives it.
+//! One fact about `target/debug/operant` survives, because it is not about
+//! linking at all: `cargo test` HARDLINKS the test harness over that path, so
+//! after a test build it holds the harness, not the CLI. Rebuild with
+//! `scripts/build.sh` before testing the binary.
 
 fn main() {
     let rev = memory_wire_lock_rev().unwrap_or_else(|| "unknown".to_string());
@@ -53,36 +43,14 @@ fn main() {
         "cargo:rustc-env=OPERANT_MEMORY_WIRE_REV_SHORT={}",
         &rev[..rev.len().min(7)]
     );
-    emit_onnx_runtime_rpath();
-}
-
-/// Emit the RUNPATH that lets the binary find `libonnxruntime.so.1`.
-///
-/// Emitted unconditionally on Linux: the runtime directory is where the
-/// shared object is INSTALLED, so it may not exist yet at build time — and
-/// on a machine where ONNX is linked statically the entry is simply unused.
-fn emit_onnx_runtime_rpath() {
-    // The TARGET's OS, not the host's: the flag must not reach a link for a
-    // platform whose linker does not speak it.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
-        return;
-    }
-    let dir = std::env::var("OPERANT_RUNTIME_LIB_DIR")
-        .ok()
-        .filter(|d| !d.is_empty())
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .filter(|h| !h.is_empty())
-                .map(|home| format!("{home}/.local/lib/operant"))
-        })
-        .unwrap_or_default();
-    if dir.is_empty() {
-        return;
-    }
-    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{dir}");
-    println!("cargo:rerun-if-env-changed=OPERANT_RUNTIME_LIB_DIR");
-    println!("cargo:rerun-if-env-changed=HOME");
+    // No rpath is emitted any more. Kokoro, the previous TTS default, linked
+    // `libonnxruntime.so.1` dynamically and needed a RUNPATH pointing at
+    // `~/.local/lib/operant` so an installed binary could find it (iter-425).
+    // iter-2513 replaced Kokoro with Phonon, whose `ptts` runtime is pure Rust
+    // with no shared ONNX dependency: `readelf -d target/release/operant` now
+    // shows only libgcc_s/libm/libc/ld-linux. Adding an rpath back without a
+    // corresponding NEEDED entry would be a lie in the ELF header, so this
+    // call is gone rather than neutered.
 }
 
 /// The locked git rev of the `memory-wire` package: the 40-hex tail of its

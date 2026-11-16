@@ -48,6 +48,7 @@ pub mod notification_tool;
 pub mod osv_check;
 pub mod patch;
 pub mod patch_tool;
+pub mod phonon;
 pub mod platform_bases;
 pub mod process_tool;
 pub mod reaction_tool;

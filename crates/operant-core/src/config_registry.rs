@@ -1527,8 +1527,8 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     ("tts.enabled", "false", "<no note>"),
     (
         "tts.provider",
-        "\"kokoro\".to_string()",
-        "TTS provider: kokoro|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper",
+        "\"phonon\".to_string()",
+        "TTS provider: phonon|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper",
     ),
     (
         "tts.voice",

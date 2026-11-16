@@ -4,9 +4,8 @@
 #
 # Required because:
 #  - libclang (for bindgen via espeak-rs-sys / ort-sys)
-#  - ONNX Runtime (for ort-sys via kokoro-tiny)
 #  - cmake (for espeak-rs-sys's espeak-ng build)
-#  - alsa runtime lib (for cpal via kokoro-tiny's playback feature)
+#  - alsa runtime lib (for cpal)
 #
 # To provision the dependencies, see scripts/provision-build-deps.sh.
 
@@ -21,7 +20,6 @@ set -e
 # provisioning and linking agree with no configuration.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
-ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4"
 
 # libclang. One resolution for every build script, in
 # scripts/libclang-resolve.sh. The old inline version fell through to
@@ -40,48 +38,6 @@ fi
 _resolved_libclang="$(resolve_libclang "$LOCAL_DIR")"
 export LIBCLANG_PATH="$_resolved_libclang"
 
-# ONNX Runtime (prebuilt tarball from microsoft/onnxruntime releases)
-export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
-# Dynamic linking of the ONNX runtime is a LOCAL-ONLY choice, and it is the
-# reason a locally built operant differs from a released one. Measured on the
-# same source, same commit:
-#
-#   CI release v0.2.0   NEEDED: libstdc++ libgcc_s libm libc ld-linux  (no onnx)
-#                       52 MB, statically linked ONNX, self-contained
-#   this dev-env        NEEDED: ... plus libonnxruntime.so.1
-#                       31 MB, needs a shared library at runtime
-#
-# Every problem chased in iters 425-430 -- the missing RUNPATH, the ONNX copy in
-# install.sh, the provisioning step in build.yml -- comes from this one line plus
-# ORT_LIB_LOCATION above. CI sources neither, so the published binary has never
-# needed the shared object.
-#
-# MEASURED, do not assume -- and note the second hypothesis also failed. Two
-# attempts to reproduce the release build locally, both on this machine:
-#
-#   ORT_PREFER_DYNAMIC_LINK=0 (ORT_LIB_LOCATION left pointing at local/)
-#     error: ort-sys could not link to the ONNX Runtime build in
-#            '.../local/onnxruntime-linux-x64-1.24.4/lib'
-#
-#   both variables emptied
-#     [ort-sys] [DEBUG] doing full static linking since no single-file library
-#     was found
-#     .../ort-sys-2.0.0-rc.12/build/static_link/mod.rs:134: panicked
-#
-# The local tarball ships only shared objects (libonnxruntime.so, .so.1,
-# .so.1.24.4) and no single-file static library, which is what the second
-# attempt was looking for and could not find. The CI runner evidently resolves an
-# ONNX distribution this one does not have; that was not identified, and the
-# mechanism behind the self-contained 52 MB release binary is therefore NOT
-# established. What is established is only the negative: neither of the two
-# obvious ways to build it statically works here.
-#
-# So a local build legitimately needs the shared library, which is what the
-# RUNPATH in this file is for, and iter-430's attempt to provision ONNX in CI was
-# a regression reverted in c2f7d59c. Matching the release build locally is an
-# open question, not a one-line flip. Do not write otherwise.
-export ORT_PREFER_DYNAMIC_LINK="${ORT_PREFER_DYNAMIC_LINK:-1}"
-
 # Bindgen needs GCC's resource headers (stddef.h etc.) on systems without clang resource dir
 export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:--I/usr/lib/gcc/x86_64-linux-gnu/14/include -I/usr/include}"
 
@@ -91,63 +47,18 @@ export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$LOCAL_DIR/pkgconfig}"
 # The linker search path for the repo's own static libraries (libsonic.a, the
 # one crates/operant-core/build.rs looks for) and CARGO_INCREMENTAL=0 (this
 # host has two CPUs; an incremental rebuild costs more here than a fresh one).
-# check.sh used to set these ITSELF while re-implementing the rest of this
-# file by hand — and the copy drifted (it dropped the ONNX link flags below,
-# so a binary built through check.sh carried no RUNPATH and exited 127 in any
-# shell that had not sourced this file). The environment is ONE source now:
-# check.sh sources this file (RT-167).
+# The environment is ONE source: check.sh sources this file (RT-167).
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-L native=$LOCAL_DIR/lib"
 export CARGO_INCREMENTAL=0
 
-# Runtime linker path so the built binary can find libonnxruntime + libasound
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
-
-# Embed the ONNX Runtime path in the binary as an rpath. Without it the shipped
-# executable carries no record of where its shared library lives: `ldd` reports
-# "libonnxruntime.so.1 => not found" and the binary exits 127 unless the shell
-# that runs it happens to have sourced this file. An installed binary must not
-# depend on the caller's environment — that is the whole difference between a
-# build and a deployment. (Static linking is not an option: ort-sys cannot link
-# the prebuilt ONNX Runtime that way.)
+# Runtime linker path for libasound (alsa).
 #
-# RUNTIME_LIB_DIR, not ORT_DIR: the build tree may be a disposable worktree or a
-# checkout on a tmpfs, and an rpath into one makes every install die the moment
-# that directory goes away. The runtime copy is what install.sh provisions into
-# the user's library directory, which outlives any checkout.
-RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
-# The same directory, under the name the build script reads: the RUNPATH is
-# emitted from crates/operant-cli/build.rs so EVERY build of the binary
-# carries it (a plain `cargo build`, and the one `scripts/install.sh` runs,
-# used to produce an artifact that exited 127 without this file sourced).
-# The dev-env's RUSTFLAGS rpath stays too — a build through this file is the
-# sanctioned path and must keep working if the build script is ever bypassed.
-export OPERANT_RUNTIME_LIB_DIR="$RUNTIME_LIB_DIR"
-if [ -d "$RUNTIME_LIB_DIR" ] && [ -d "$ORT_DIR/lib" ]; then
-  # BOTH names, deliberately. CARGO_TARGET_<triple>_RUSTFLAGS is only read by
-  # cargo when it is cross-compiling to that triple, so on a native build the
-  # linker search path and rpath were silently dropped and the build died with
-  # a bare "linking with `cc` failed" and no hint which library was missing.
-  # Every native ONNX build in this repo needed a manual RUSTFLAGS= prefix
-  # until this was set under both. Verified: with only the per-target form,
-  # `echo $RUSTFLAGS` is empty after sourcing this file.
-  _ORT_LINK_FLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$RUNTIME_LIB_DIR"
-  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$_ORT_LINK_FLAGS"
-  # Preserve a caller's own RUSTFLAGS rather than clobbering them.
-  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$_ORT_LINK_FLAGS"
-else
-  # Say what is missing, here, rather than letting the build die two minutes
-  # later with "unable to find library -lonnxruntime" and no connection to the
-  # cause. Six builds failed that way on 2026-09-29 before this branch existed.
-  if [ ! -d "$ORT_DIR/lib" ]; then
-    echo "[dev-env] WARNING: ONNX Runtime not found at $ORT_DIR/lib" >&2
-    echo "[dev-env]          builds will fail at the link step." >&2
-    echo "[dev-env]          run: bash scripts/provision-build-deps.sh" >&2
-  fi
-  if [ ! -d "$RUNTIME_LIB_DIR" ]; then
-    echo "[dev-env] WARNING: no runtime lib dir at $RUNTIME_LIB_DIR" >&2
-    echo "[dev-env]          the built binary would exit 127 on install." >&2
-  fi
-fi
+# ONNX Runtime used to be exported here too (iter-2513 removed it). Kokoro,
+# the previous TTS default, linked libonnxruntime.so.1 and made the installed
+# binary exit 127 without this file sourced. Phonon's `ptts` runtime is pure
+# Rust, so `readelf -d` on the built binary now shows no libonnxruntime NEEDED
+# entry and no rpath is required. Keep the alsa path: cpal still dlopens it.
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib}"
 
 # pip-installed cmake lands in a venv. Prepend it only if it is actually there —
 # a PATH entry pointing at a nonexistent directory is noise, and the old value
@@ -163,5 +74,4 @@ fi
 
 echo "[dev-env] LOCAL_DIR=$LOCAL_DIR"
 echo "[dev-env] LIBCLANG_PATH=$LIBCLANG_PATH"
-echo "[dev-env] ORT_LIB_LOCATION=$ORT_LIB_LOCATION"
 echo "[dev-env] PATH includes $(which cmake cargo rustc 2>/dev/null | tr '\n' ' ')"

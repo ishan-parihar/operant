@@ -19,7 +19,7 @@ const BUILTIN_NAMES: &[&str] = &[
     "neutts",
     "kittentts",
     "piper",
-    "kokoro",
+    "phonon",
 ];
 
 /// Central map of registered TTS providers.

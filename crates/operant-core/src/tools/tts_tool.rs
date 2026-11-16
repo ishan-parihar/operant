@@ -11,9 +11,10 @@
 //! - NeuTTS (local, free): On-device TTS via neutts binary
 //! - KittenTTS (local, free): On-device 25MB model via kittentts
 //! - Piper (local, free): OHF-Voice/piper1-gpl neural VITS
+//! - Phonon (local, free, DEFAULT): Gradium phonon-31m-en, 41M params,
+//!   Apache 2.0, streaming, via the `ptts` runtime
 
 use async_trait::async_trait;
-use kokoro_tiny::TtsEngine;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -26,6 +27,7 @@ use tracing::debug;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
+use crate::tools::phonon;
 use crate::tools::tts_command_provider::CommandProvider;
 use crate::tools::tts_provider::{AudioFormat, TtsProvider};
 use crate::tools::tts_registry::TtsPluginRegistry;
@@ -39,7 +41,11 @@ pub struct TtsTool {
     mistral_key: String,
     gemini_key: String,
     xai_key: String,
-    kokoro_engine: Arc<Mutex<Option<TtsEngine>>>,
+    /// Phonon (gradium/phonon-31m-en) engine, loaded lazily on first use.
+    /// `ptts::Synth` is a single-stream, CPU-resident model; the tool holds it
+    /// behind a `tokio::Mutex` and every synthesis borrows it mutably. This is
+    /// the local, offline default voice — it replaces the old Kokoro engine.
+    phonon: Arc<Mutex<Option<phonon::PhononSynth>>>,
     plugin_registry: Arc<TtsPluginRegistry>,
     command_providers: Arc<Mutex<HashMap<String, CommandProvider>>>,
 }
@@ -49,7 +55,7 @@ pub struct TtsTool {
 pub struct TtsArgs {
     /// The text to convert to speech
     pub text: String,
-    /// TTS provider to use: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro
+    /// TTS provider to use: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, phonon
     #[serde(default = "default_provider")]
     pub provider: String,
     /// Voice ID or name (provider-specific)
@@ -60,11 +66,11 @@ pub struct TtsArgs {
 }
 
 fn default_provider() -> String {
-    "kokoro".to_string()
+    "phonon".to_string()
 }
 
 fn default_voice() -> String {
-    "af_sky".to_string()
+    "default".to_string()
 }
 
 impl Default for TtsTool {
@@ -83,7 +89,7 @@ impl TtsTool {
             mistral_key: std::env::var("MISTRAL_API_KEY").unwrap_or_default(),
             gemini_key: std::env::var("GEMINI_API_KEY").unwrap_or_default(),
             xai_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
-            kokoro_engine: Arc::new(Mutex::new(None)),
+            phonon: Arc::new(Mutex::new(None)),
             plugin_registry: Arc::new(TtsPluginRegistry::new()),
             command_providers: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -229,11 +235,11 @@ impl TtsTool {
             "neutts" => self.neutts_local(args).await,
             "kittentts" => self.kittentts_local(args).await,
             "piper" => self.piper_local(args).await,
-            "kokoro" => self.kokoro_local(args).await,
+            "phonon" => self.phonon_local(args).await,
             _ => ToolResult::error(
                 "text_to_speech",
                 format!(
-                    "Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, kokoro, or registered command/plugin providers",
+                    "Unknown provider: {}. Available: edge, elevenlabs, openai, minimax, mistral, gemini, xai, neutts, kittentts, piper, phonon, or registered command/plugin providers",
                     args.provider
                 ),
             ),
@@ -899,91 +905,65 @@ except Exception as e:
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "engine_lock is Some after the init block above returns on failure"
-    )]
-    async fn kokoro_local(&self, args: &TtsArgs) -> ToolResult {
+    /// Phonon (gradium/phonon-31m-en) — the local, offline default voice.
+    ///
+    /// The engine is loaded lazily on first call: `phonon::load_or_download`
+    /// fetches a pinned GGUF checkpoint into `~/.cache/phonon/` when it is
+    /// missing and returns a warm `Synth` otherwise. `ptts` surfaces errors as
+    /// `Result`, so unlike the old `ort` binding there is no panic-on-load
+    /// hazard to catch here.
+    async fn phonon_local(&self, args: &TtsArgs) -> ToolResult {
         let voice = if args.voice.is_empty() {
-            "af_sky"
+            "default"
         } else {
-            &args.voice
+            args.voice.as_str()
         };
 
-        let mut engine_lock = self.kokoro_engine.lock().await;
+        let mut engine_lock = self.phonon.lock().await;
         if engine_lock.is_none() {
-            match start_kokoro().await {
+            match phonon::load_or_download().await {
                 Ok(engine) => *engine_lock = Some(engine),
                 Err(e) => {
                     return ToolResult::error(
                         "text_to_speech",
-                        format!("Failed to initialize Kokoro engine: {}", e),
+                        format!("Failed to initialize Phonon engine: {e}"),
                     );
                 }
             }
         }
 
-        let engine = engine_lock
-            .as_mut()
-            .expect("engine initialized before use (guarded by init check)");
+        // The `Some` above is the only way this block is reachable without an
+        // early return, so the `None` arm is unreachable in practice. It is
+        // still handled rather than `expect`ed: a panic in the TUI or gateway
+        // would take the whole session down for a tool failure.
+        let Some(engine) = engine_lock.as_ref() else {
+            return ToolResult::error("text_to_speech", "Phonon engine failed to initialize");
+        };
 
         match engine.synthesize(&args.text, Some(voice)) {
-            Ok(audio) => {
-                let spec = hound::WavSpec {
-                    channels: 1,
-                    sample_rate: 24000, // Kokoro default sample rate
-                    bits_per_sample: 16,
-                    sample_format: hound::SampleFormat::Int,
-                };
-
-                let mut cursor = std::io::Cursor::new(Vec::new());
-                {
-                    let mut writer = match hound::WavWriter::new(&mut cursor, spec) {
-                        Ok(w) => w,
-                        Err(e) => {
-                            return ToolResult::error(
-                                "text_to_speech",
-                                format!("Failed to create WAV writer: {}", e),
-                            );
-                        }
-                    };
-
-                    for sample in audio {
-                        // Convert f32 (-1.0 to 1.0) to i16
-                        let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32)
-                            as i16;
-                        if let Err(e) = writer.write_sample(s) {
-                            return ToolResult::error(
-                                "text_to_speech",
-                                format!("Failed to write sample: {}", e),
-                            );
-                        }
-                    }
-                    if let Err(e) = writer.finalize() {
-                        return ToolResult::error(
-                            "text_to_speech",
-                            format!("Failed to finalize WAV: {}", e),
-                        );
-                    }
+            Ok(samples) => match phonon::write_wav(&samples, engine.sample_rate()) {
+                Ok(wav_bytes) => {
+                    let audio_base64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &wav_bytes,
+                    );
+                    ToolResult::success(
+                        "text_to_speech",
+                        json!({
+                            "success": true,
+                            "audio": audio_base64,
+                            "format": "wav",
+                            "provider": "phonon",
+                            "voice": voice
+                        }),
+                    )
                 }
-
-                let wav_bytes = cursor.into_inner();
-                let audio_base64 =
-                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wav_bytes);
-                ToolResult::success(
+                Err(e) => ToolResult::error(
                     "text_to_speech",
-                    json!({
-                        "success": true,
-                        "audio": audio_base64,
-                        "format": "wav",
-                        "provider": "kokoro",
-                        "voice": voice
-                    }),
-                )
-            }
-            Err(e) => {
-                ToolResult::error("text_to_speech", format!("Kokoro synthesis failed: {}", e))
-            }
+                    format!("Failed to encode Phonon audio: {e}"),
+                ),
+            },
+            Err(e) => ToolResult::error("text_to_speech", format!("Phonon synthesis failed: {e}")),
         }
     }
 }
@@ -995,7 +975,7 @@ impl OperantTool for TtsTool {
     }
 
     fn description(&self) -> &str {
-        "Convert text to speech using AI voice providers (Edge, ElevenLabs, OpenAI, MiniMax, Mistral, Gemini, xAI, NeuTTS, KittenTTS, Piper)"
+        "Convert text to speech using AI voice providers (Phonon [local, default], Edge, ElevenLabs, OpenAI, MiniMax, Mistral, Gemini, xAI, NeuTTS, KittenTTS, Piper)"
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1029,43 +1009,10 @@ impl OperantTool for TtsTool {
     }
 }
 
-/// Starts the Kokoro engine on its own task. `ort` panics when the installed
-/// ONNX Runtime does not serve the API it was built against (BUGS CR-1); the
-/// release profile unwinds, so that panic reaches here as a `JoinError` and
-/// becomes a tool error instead of ending the gateway or the TUI.
-async fn start_kokoro() -> Result<TtsEngine, String> {
-    join_engine_start(tokio::spawn(TtsEngine::new()).await)
-}
-
-fn join_engine_start<T, E: std::fmt::Display>(
-    joined: Result<Result<T, E>, tokio::task::JoinError>,
-) -> Result<T, String> {
-    match joined {
-        Ok(engine) => engine.map_err(|e| e.to_string()),
-        Err(e) if e.is_panic() => Err(
-            "the installed ONNX Runtime does not provide the API this build needs (ORT API 24; BUGS CR-2)"
-                .to_string(),
-        ),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[tokio::test]
-    async fn a_panicking_engine_start_is_a_tool_error() {
-        // CR-1: a panic while the engine starts must come back as an error the
-        // tool can report, not unwind out of the gateway or TUI.
-        let task: tokio::task::JoinHandle<Result<(), String>> =
-            tokio::spawn(async { panic!("ORT API 24 is not served") });
-
-        let err = join_engine_start(task.await).unwrap_err();
-
-        assert!(err.contains("ONNX Runtime"), "got: {err}");
-    }
 
     #[test]
     fn test_tts_schema() {
@@ -1078,12 +1025,12 @@ mod tests {
 
     #[test]
     fn test_default_provider() {
-        assert_eq!(default_provider(), "kokoro");
+        assert_eq!(default_provider(), "phonon");
     }
 
     #[test]
     fn test_default_voice() {
-        assert_eq!(default_voice(), "af_sky");
+        assert_eq!(default_voice(), "default");
     }
 
     #[tokio::test]
@@ -1117,16 +1064,20 @@ mod tests {
         assert!(!result.success);
     }
 
-    /// Model-backed check for BUGS RT-18: the cached Kokoro model and voices
-    /// load through the vendored ndarray-npy (zip 9), and the tool returns
-    /// audible speech. Run with `cargo test -p operant-core kokoro_speaks -- --ignored`.
+    /// Model-backed check: the Phonon checkpoint downloads into the cache and
+    /// the tool returns audible 24 kHz speech. Run with
+    /// `cargo test -p operant-core phonon_speaks -- --ignored`.
+    ///
+    /// This is the live counterpart to the unit tests above: those prove the
+    /// tool's wiring and schema without a model, this one proves the model
+    /// actually loads and speaks.
     #[tokio::test]
-    #[ignore = "needs the Kokoro model and voices in ~/.cache/kokoros"]
-    async fn kokoro_speaks_through_the_tool_with_the_cached_model() {
+    #[ignore = "needs the Phonon checkpoint in ~/.cache/phonon (downloads ~70 MB)"]
+    async fn phonon_speaks_through_the_tool_with_the_cached_model() {
         let tool = TtsTool::new();
         let result = tool
             .execute(
-                json!({"text": "Operant audio check.", "provider": "kokoro"}),
+                json!({"text": "Operant audio check.", "provider": "phonon"}),
                 ToolContext::default(),
             )
             .await;
@@ -1143,7 +1094,7 @@ mod tests {
         let seconds = samples.len() as f32 / spec.sample_rate as f32;
         let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
         eprintln!(
-            "kokoro live check: {seconds:.2}s at {} Hz, peak {peak}",
+            "phonon live check: {seconds:.2}s at {} Hz, peak {peak}",
             spec.sample_rate
         );
         assert_eq!(spec.sample_rate, 24_000);

@@ -190,7 +190,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/operant-cli/src/cmd_setup.rs",
-        "`~/.cache/kokoros` — the model cache, not the operant home",
+        "`~/.cache/phonon` — the Phonon model cache, not the operant home",
     ),
     (
         "crates/operant-providers/src/lib.rs",

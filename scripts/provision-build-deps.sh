@@ -68,24 +68,13 @@ if [ -e "$LINK_DIR/libclang.so" ]; then
   echo "[provision] LIBCLANG_PATH=$LINK_DIR"
 fi
 
-# ── 2. ONNX Runtime (for ort-sys via kokoro-tiny) ──
-ORT_VERSION="1.24.4"
-ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-$ORT_VERSION"
-if [ ! -f "$ORT_DIR/lib/libonnxruntime.so" ]; then
-  echo "[provision] downloading ONNX Runtime $ORT_VERSION..."
-  curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-linux-x64-$ORT_VERSION.tgz" \
-    -o "$LOCAL_DIR/ort.tgz"
-  tar xzf "$LOCAL_DIR/ort.tgz" -C "$LOCAL_DIR"
-  rm "$LOCAL_DIR/ort.tgz"
-fi
-
 # ── 3. cmake (for espeak-rs-sys's espeak-ng build) ──
 if ! command -v cmake >/dev/null 2>&1; then
   echo "[provision] installing cmake via pip..."
   pip3 install cmake
 fi
 
-# ── 4. alsa runtime (for cpal via kokoro-tiny's playback feature) ──
+# ── 4. alsa runtime (for cpal) ──
 # Create a libasound.so symlink so the linker can find the runtime libasound.so.2
 mkdir -p "$LOCAL_DIR/lib"
 ALSA_SYSTEM="/usr/lib/x86_64-linux-gnu/libasound.so.2"

@@ -2431,7 +2431,7 @@ impl Default for SttSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TtsSettings {
-    /// TTS provider: kokoro|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper
+    /// TTS provider: phonon|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper
     pub provider: String,
     pub enabled: bool,
     /// Default voice for the selected provider (provider-specific identifier)
@@ -2441,7 +2441,7 @@ pub struct TtsSettings {
 impl Default for TtsSettings {
     fn default() -> Self {
         Self {
-            provider: "kokoro".to_string(),
+            provider: "phonon".to_string(),
             enabled: false,
             voice: None,
         }

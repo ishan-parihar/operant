@@ -1010,7 +1010,7 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
             ("OpenAI", "OpenAI TTS models (tts-1, tts-1-hd)"),
             ("xAI", "Grok TTS (if available through xAI)"),
             ("Mistral", "Mistral TTS (if available)"),
-            ("Kokoro", "Free local TTS, no API key needed"),
+            ("Phonon", "Free local TTS (default), no API key needed"),
             ("MiniMax", "MiniMax TTS voice synthesis"),
             ("Google Gemini", "Google Gemini TTS"),
             ("NeuTTS", "Local TTS via Neuphonic"),
@@ -1022,7 +1022,7 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
             "openai",
             "xai",
             "mistral",
-            "kokoro",
+            "phonon",
             "minimax",
             "google-gemini",
             "neutts",
@@ -1043,36 +1043,48 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
                 tts_options[sel].0
             ));
 
-            // Download Kokoro model files if selected
-            if tts_values[sel] == "kokoro" {
+            // Download the Phonon checkpoint if selected. This is the local,
+            // offline default: a ~65 MB q8_0 GGUF plus its tokenizer and one
+            // voice, fetched from a pinned Hugging Face revision.
+            if tts_values[sel] == "phonon" {
                 let cache_dir = dirs::home_dir()
                     .unwrap_or_default()
                     .join(".cache")
-                    .join("kokoros");
-                let model_path = cache_dir.join("kokoro-v1.0.onnx");
-                let voices_path = cache_dir.join("voices-v1.0.bin");
+                    .join("phonon")
+                    .join("gradium")
+                    .join("phonon-31m-en");
+                let model_path = cache_dir.join("model.q8.gguf");
+                let config_path = cache_dir.join("config.json");
+                let tokenizer_path = cache_dir.join("tokenizer.json");
+                let voice_path = cache_dir.join("default-voice.safetensors");
 
-                if !model_path.exists() || !voices_path.exists() {
-                    print_info("Kokoro requires model files (~338 MB). Downloading now...");
+                if !model_path.exists() || !config_path.exists() {
+                    print_info("Phonon requires model files (~65 MB). Downloading now...");
                     std::fs::create_dir_all(&cache_dir).ok();
 
                     let client = reqwest::Client::new();
                     if !model_path.exists() {
-                        print_info("  Downloading kokoro-v1.0.onnx (311 MB)...");
-                        match download_file_to(&client, "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", &model_path).await {
+                        print_info("  Downloading model.q8.gguf (65 MB)...");
+                        match download_file_to(&client, "https://huggingface.co/gradium/phonon-31m-en/resolve/main/model.q8.gguf", &model_path).await {
                             Ok(_) => print_success("  Model downloaded."),
                             Err(e) => print_warning(&format!("  Download failed: {}. TTS will download on first use.", e)),
                         }
                     }
-                    if !voices_path.exists() {
-                        print_info("  Downloading voices-v1.0.bin (27 MB)...");
-                        match download_file_to(&client, "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", &voices_path).await {
-                            Ok(_) => print_success("  Voices downloaded."),
-                            Err(e) => print_warning(&format!("  Download failed: {}. TTS will download on first use.", e)),
-                        }
-                    }
+                    let _ = download_file_to(
+                        &client,
+                        "https://huggingface.co/gradium/phonon-31m-en/resolve/main/config.json",
+                        &config_path,
+                    )
+                    .await;
+                    let _ = download_file_to(
+                        &client,
+                        "https://huggingface.co/gradium/phonon-31m-en/resolve/main/tokenizer.json",
+                        &tokenizer_path,
+                    )
+                    .await;
+                    let _ = download_file_to(&client, "https://huggingface.co/gradium/phonon-31m-en/resolve/main/default-voice.safetensors", &voice_path).await;
                 } else {
-                    print_success("Kokoro model files already present.");
+                    print_success("Phonon model files already present.");
                 }
             }
         }

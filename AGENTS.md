@@ -437,11 +437,30 @@ These are the user's intentional design choices. Do not replace, remove, or
 "improve" them. New AI agents working on this repo must respect these defaults:
 
 ### Voice / TTS
-- **Default: Kokoro** (`tools/tts_tool.rs`)
-- Kokoro engine is loaded lazily via `kokoro-tiny::TtsEngine`
-- Default voice: `af_sky`
-- Config: `config.tts.provider = "kokoro"` in `operant.example.toml`
+- **Default: Phonon** (`tools/tts_tool.rs`, engine wrapper in `tools/phonon.rs`)
+  — Gradium's `phonon-31m-en`: 41M params, Apache 2.0, English, streaming on
+  CPU at ~20x real time with ~5 ms time-to-first-byte.
+- The engine is loaded lazily via `ptts::synth::Synth` (the `ptts` crate, from
+  `gradium-ai/xn-ptts`). The runtime is pure Rust on the `xn` CPU backend —
+  no ONNX Runtime, no `ort` version pin, no `libonnxruntime.so`.
+- **GGUF, not ONNX.** Weights are `model.q8.gguf` (~65 MB, near-lossless),
+  with `q4k` (~55 MB) as the disk-constrained option. The ONNX export
+  (`onnx-community/phonon-31m-en-ONNX`) was evaluated and rejected: it would
+  require reimplementing Phonon's streaming flow-matching loop and Mimi decode
+  loop over `ort`, for no size win at q8_0.
+- The checkpoint is NOT a crate dependency. `tools/phonon.rs` downloads a
+  revision-pinned GGUF into `~/.cache/phonon/gradium/phonon-31m-en/` on first
+  use; a warm cache never touches the network.
+- Default voice: `default` (the checkpoint's own voice; more voices live in
+  `gradium/phonon-voices`)
+- Config: `config.tts.provider = "phonon"` in `operant.example.toml`
 - Do NOT switch to Edge TTS, OpenAI TTS, or any other provider as the default
+
+> **History (iter-2513):** this was Kokoro (`kokoro-tiny::TtsEngine`, voice
+> `af_sky`, `kokoro-v1.0.onnx` + `voices-v1.0.bin` from GitHub). Kokoro is
+> removed entirely, along with the `vendor/kokoro-tiny` and `vendor/ndarray-npy`
+> `[patch.crates-io]` entries that existed only for it (RT-18's zip advisory
+> pin and the `atty` swap are now moot).
 
 ### Memory
 - **Default: memory-wire** (`memory_wire.rs`) — in-process memory engine
@@ -684,11 +703,16 @@ issue, not a missing clone.
 
 ## Build Environment Setup
 
-The build needs libclang (for bindgen), ONNX Runtime (for kokoro-tiny), and
-alsa runtime libs (for cpal). All of these are pre-provisioned under the
-repo's own `local/` directory (`$LOCAL_DIR`; `scripts/dev-env.sh` derives it
-from the script's own location, and `LOCAL_DIR=<path>` overrides it). The two
-scripts under `scripts/` apply the required env vars.
+The build needs libclang (for bindgen) and alsa runtime libs (for cpal). All of
+these are pre-provisioned under the repo's own `local/` directory
+(`$LOCAL_DIR`; `scripts/dev-env.sh` derives it from the script's own location,
+and `LOCAL_DIR=<path>` overrides it). The two scripts under `scripts/` apply the
+required env vars.
+
+(ONNX Runtime was a third requirement until iter-2513: `kokoro-tiny` linked
+`libonnxruntime.so`. Phonon's `ptts` runtime is pure Rust, so `ORT_LIB_LOCATION`
+is now vestigial — it is still exported so an existing `local/` tree keeps
+working, but nothing consumes it.)
 
 ```bash
 # 1. Source the dev env (sets LIBCLANG_PATH, ORT_LIB_LOCATION, etc.)
@@ -1393,7 +1417,7 @@ MUST know before touching the render layer:
 ## MVP Deployment (Current Focus)
 
 **Goal**: Make operant deployable and functional for end-to-end testing.
-**Config defaults**: memory-wire memory provider, sourcehound browser/web tools, Kokoro TTS (set in `operant.example.toml`).
+**Config defaults**: memory-wire memory provider, sourcehound browser/web tools, Phonon TTS (set in `operant.example.toml`).
 **Web dashboard**: Copied from operant-agent, wired to axum backend.
 
 ### Quick Start for AI Agents
@@ -1678,9 +1702,10 @@ model = "gpt-4"       # Default model (override in user config)
 6. **Commit** with `feat(iter-N): ...` / `fix(iter-N): ...` / `docs(iter-N): ...`.
 7. **PUSH.** `git push origin main`. Then `git log origin/main -1` to confirm.
 8. **Do not commit** `target/`, `*.sqlite` test artifacts, or `~/.operant/.env`.
-9. **Respect the design preferences** — Kokoro TTS, memory-wire memory,
-    sourcehound browser/web tools, 7 platforms in the gateway registry (the
-    deleted `operant-channels` crate is gone (2026-10-17 purge). Do not "improve" them.
+9. **Respect the design preferences** — Phonon TTS (GGUF q8_0, `phonon-31m-en`),
+    memory-wire memory, sourcehound browser/web tools, 7 platforms in the gateway
+    registry (the deleted `operant-channels` crate is gone (2026-10-17 purge). Do
+    not "improve" them.
 10. **Follow "Rust Code Standards"** — borrow before clone, typed errors in
     library crates, no `unwrap` in production, measure before claiming
     performance, regression test for every fix.

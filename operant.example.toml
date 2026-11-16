@@ -809,9 +809,15 @@ groq_model = "whisper-large-v3-turbo"
 openai_model = "whisper-1"
 
 [tts]
-# provider: kokoro (default, local) | edge | elevenlabs | openai | minimax | mistral | gemini | xai | neutts | piper
-provider = "kokoro"
-# voice = "af_sky"   # provider-specific voice id
+# provider: phonon (default, local, offline) | edge | elevenlabs | openai |
+#           minimax | mistral | gemini | xai | neutts | piper
+#
+# phonon is Gradium's phonon-31m-en: 41M params, Apache 2.0, ~65 MB GGUF,
+# streams on CPU at ~20x real time. The checkpoint downloads into
+# ~/.cache/phonon on first use; nothing is fetched at build time.
+provider = "phonon"
+# voice = "default"   # provider-specific voice id; `phonon` uses "default"
+#                     # or a name from ~/.cache/phonon/gradium/phonon-31m-en
 enabled = false
 
 # ── Holon (docs/agentic-os/) — operant as the organization's runtime ─────
