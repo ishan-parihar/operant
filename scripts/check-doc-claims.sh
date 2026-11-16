@@ -303,6 +303,45 @@ if grep -qE '^\s*├── BUGS\.md' AGENTS.md; then
   fail=1
 fi
 
+# --- the library's derived tool counts ------------------------------------
+# A library page that states a tool count is making a claim about the registry.
+# Derive both numbers from the same place the registry comes from, so the page
+# and the code cannot disagree silently.
+if [ -d docs/library ]; then
+  python3 - <<'PY' || fail=1
+import pathlib, re, sys
+
+names = set()
+for p in pathlib.Path("crates/operant-core/src/tools").rglob("*.rs"):
+    t = p.read_text(errors="ignore")
+    names |= set(re.findall(r'fn name\(&self\)\s*->\s*&[^\{]*\{\s*"([a-z0-9_]+)"', t))
+
+b = pathlib.Path("crates/operant-core/src/tools/builtin.rs").read_text(errors="ignore")
+m = re.search(r'fn builtin_tool_names\(\)[^{]*\{(.*?)\n\}', b, re.S)
+listed = len(set(re.findall(r'"([a-z0-9_]+)"', m.group(1)))) if m else -1
+
+problems = []
+if listed < 0:
+    problems.append("could not read builtin_tool_names() -- the derivation is broken")
+for page in pathlib.Path("docs/library").glob("*.md"):
+    t = page.read_text(errors="ignore")
+    for n in re.findall(r'`?\(\s*(\d{2,4})\s+types? implement\s+`?name\(\)', t):
+        if int(n) != len(names):
+            problems.append(f"{page}: claims {n} types implement name(); derived {len(names)}")
+    for n in re.findall(r'(\d{2,4})\s+names in\s+`builtin_tool_names\(\)', t):
+        if int(n) != listed:
+            problems.append(f"{page}: claims {n} names in builtin_tool_names(); derived {listed}")
+
+if problems:
+    print("DRIFT library tool counts:")
+    for p in problems:
+        print("       " + p)
+    sys.exit(1)
+print(f"OK    library tool counts: {len(names)} name() impls, {listed} in builtin_tool_names() -- every stated count matches")
+PY
+  [ $? -ne 0 ] && fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
   say ""
   say "docs-check: all AGENTS.md code-surface claims match the code"
