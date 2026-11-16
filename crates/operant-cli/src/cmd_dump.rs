@@ -5,13 +5,18 @@ use operant_core::config::AppConfig;
 
 pub async fn handle_dump_command(config: &AppConfig, all: bool, json: bool) -> Result<()> {
     if all {
+        // `dump` prints the whole config, so it is the widest credential
+        // surface in the CLI. Mask before either serializer sees it
+        // (RT-Z43-C).
+        let masked = operant_core::config::redact_secrets(
+            &serde_json::to_value(config).context("Failed to serialize config")?,
+        );
         if json {
             // --all --json: output the full config as JSON
-            let val = serde_json::to_value(config).context("Failed to serialize config")?;
-            println!("{}", serde_json::to_string_pretty(&val)?);
+            println!("{}", serde_json::to_string_pretty(&masked)?);
         } else {
             let yaml =
-                serde_yaml::to_string(config).context("Failed to serialize config as YAML")?;
+                serde_yaml::to_string(&masked).context("Failed to serialize config as YAML")?;
             println!("{}", yaml);
         }
         return Ok(());

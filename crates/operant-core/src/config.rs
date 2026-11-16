@@ -3556,6 +3556,52 @@ pub fn coerce_json_value(raw: &str) -> serde_json::Value {
     serde_json::Value::String(raw.to_string())
 }
 
+/// Mask secret-looking values in a serialized config before it is printed.
+///
+/// ONE heuristic, shared by every surface that dumps an `AppConfig` to a
+/// human: `operant config show`, `operant dump --all` (YAML and JSON) and the
+/// agent's `config` tool. Before this existed the CLI printed the config
+/// unmasked, so `operant config show` wrote the provider API keys, the SMTP
+/// password and the webhook secrets straight to the terminal and into
+/// whatever log or paste the operator used next (RT-Z43-C).
+///
+/// The keys are matched case-insensitively on `api_key`, `token`, `secret`,
+/// `password`, `pass` and `auth`. `pass` is broad on purpose: it exists
+/// because `email_smtp_pass` matches NONE of the others (RT-307).
+///
+/// This masks a DUMP, not the config itself. Never round-trip through it:
+/// `operant config set` reads the real `AppConfig`, and a masked value must
+/// never reach `set_nested_json`.
+pub fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+
+    fn is_secret_like(key: &str) -> bool {
+        let lower = key.to_ascii_lowercase();
+        lower.contains("api_key")
+            || lower.contains("token")
+            || lower.contains("secret")
+            || lower.contains("password")
+            || lower.contains("pass")
+            || lower == "auth"
+    }
+
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                if is_secret_like(k) {
+                    out.insert(k.clone(), Value::String("***".to_string()));
+                } else {
+                    out.insert(k.clone(), redact_secrets(v));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(redact_secrets).collect()),
+        other => other.clone(),
+    }
+}
+
 /// Recursively navigate into a nested `serde_json::Value` object and set
 /// the leaf value — the in-memory twin of `persist_config_key`, used by
 /// `operant config set` and the agent's config tool (the config tool's
@@ -4327,6 +4373,75 @@ mod rt418_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (RT-Z43-C) THE mutation test for the credential dump. `operant config
+    /// show`, `operant dump --all` and the agent's `config` tool all print an
+    /// `AppConfig`; before this, the CLI serialized it VERBATIM, so the
+    /// provider keys and the SMTP password went to the terminal and into
+    /// whatever paste or log followed.
+    ///
+    /// Asserts the real config shape, not an invented one: an `AppConfig::default()`
+    /// round-tripped through JSON, with a key planted in each secret family.
+    #[test]
+    fn redact_secrets_masks_every_credential_family() {
+        let mut root = serde_json::to_value(AppConfig::default()).expect("config to json");
+
+        // Plant a value under each family the heuristic claims to cover. The
+        // SMTP password is the one that started it: `email_smtp_pass` matched
+        // NONE of the original rules and was returned verbatim (RT-307).
+        let cases = [
+            ("openai.api_key", "sk-probe-openai"),
+            ("anthropic.api_key", "sk-probe-anthropic"),
+            ("gateway.telegram.bot_token", "tg-probe-token"),
+            ("gateway.webhooks_secret", "whsec-probe"),
+            ("gateway.email_smtp_pass", "smtp-probe-pass"),
+            ("gateway.slack.signing_secret", "slack-probe-secret"),
+        ];
+        for (dotted, planted) in cases {
+            let segments: Vec<&str> = dotted.split('.').collect();
+            set_nested_json(&mut root, &segments, planted).expect("plant secret");
+        }
+
+        let masked = redact_secrets(&root);
+        let text = serde_json::to_string(&masked).expect("masked to json");
+        for (dotted, planted) in cases {
+            assert!(
+                !text.contains(planted),
+                "{dotted}: the value {planted:?} survived redaction"
+            );
+            assert!(
+                text.contains("***"),
+                "{dotted}: the key must be present but masked, got: {text}"
+            );
+        }
+        // A non-secret leaf is untouched: redaction is not a blanket scrub.
+        assert!(
+            text.contains(&AppConfig::default().agent.model),
+            "a non-secret value must survive redaction"
+        );
+    }
+
+    /// The helper masks a DUMP; it must never be used to round-trip.
+    ///
+    /// `operant config set` reads the real `AppConfig` through
+    /// `set_nested_json`. If a masked value ever reached that path the
+    /// operator's next `config set` would silently write "***" over their key.
+    #[test]
+    fn redact_secrets_is_not_a_config_mutation_path() {
+        let config = AppConfig::default();
+        let masked = redact_secrets(&serde_json::to_value(&config).expect("to json"));
+        assert_ne!(
+            serde_json::to_string(&masked).expect("masked"),
+            serde_json::to_string(&serde_json::to_value(&config).expect("to json")).expect("plain"),
+            "the two serializations must differ while secrets are present"
+        );
+        // And the original is untouched by the call: it takes &Value.
+        assert_eq!(
+            serde_json::to_value(&config).expect("to json"),
+            serde_json::to_value(AppConfig::default()).expect("to json"),
+            "redaction must not mutate the caller's config"
+        );
+    }
 
     /// iter-2462: the loop-detection kill switch is REACHABLE.
     ///

@@ -92,7 +92,13 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
 }
 
 fn handle_show(config: &AppConfig) -> Result<()> {
-    let yaml = serde_yaml::to_string(config).context("Failed to serialize config as YAML")?;
+    // The printed config is a DUMP: mask it. `operant config show` is the most
+    // likely place an operator pastes their config into an issue, and it must
+    // not carry the provider keys (RT-Z43-C).
+    let masked = operant_core::config::redact_secrets(
+        &serde_json::to_value(config).context("Failed to serialize config")?,
+    );
+    let yaml = serde_yaml::to_string(&masked).context("Failed to serialize config as YAML")?;
     println!("{}", yaml);
     // ENV-1 provenance: the values above are the EFFECTIVE ones, and an
     // environment variable silently beats operant.toml on every load. Name

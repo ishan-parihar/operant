@@ -26,7 +26,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::config::{install_runtime_config, runtime_config};
 use crate::error::Result;
@@ -253,35 +253,9 @@ fn set_config_value(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Mask secret-looking values (api_key / token / secret / password / auth)
-/// in a config dump so the model never echoes credentials back.
-fn redact_secrets(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut out = Map::new();
-            for (k, v) in map {
-                let lower = k.to_ascii_lowercase();
-                let secret_like = lower.contains("api_key")
-                    || lower.contains("token")
-                    || lower.contains("secret")
-                    || lower.contains("password")
-                    // `email_smtp_pass` matches NONE of the rules above, so
-                    // the SMTP password was returned VERBATIM to the model
-                    // and into the transcript (RT-307).
-                    || lower.contains("pass")
-                    || lower == "auth";
-                if secret_like {
-                    out.insert(k.clone(), Value::String("***".to_string()));
-                } else {
-                    out.insert(k.clone(), redact_secrets(v));
-                }
-            }
-            Value::Object(out)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(redact_secrets).collect()),
-        other => other.clone(),
-    }
-}
+/// Mask secret-looking values in a config dump so the model never echoes
+/// credentials back. The heuristic lives in ONE place: `config::redact_secrets`.
+use crate::config::redact_secrets;
 
 /// Resolve the effective config file path (mirrors `operant config path`).
 fn config_file_path() -> String {
