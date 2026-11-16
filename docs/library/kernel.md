@@ -4,11 +4,15 @@ Owns: the persistent kernel's mechanism — kernel_exec/state/refine, the
 sidecar protocol, and the tool bridge.
 Not for: the composable provider runtime ([harness.md](harness.md)).
 
+Source: `crates/operant-core/src/tools/kernel/` (`mod.rs`, `runtime.rs`,
+`sidecar.rs`, `kernel_tool.rs`, `harness_tools.rs`, `tool_bridge.rs`),
+`kernel-sidecar/kernel_sidecar/` (`server.py`, `kernel.py`, `harness.py`,
+`vendor.py`), `scripts/check-kernel-sidecar.sh` (the sidecar gate),
+`crates/operant-core/src/agent/background_review.rs` (the `harness_auto_learn`
+producer).
+
 Plan 015. Implements persistent execution and learned state for operant under the
 **replace, never duplicate** contract, extended with the RLM-lite tool bridge.
-Host-side source: `crates/operant-core/src/tools/kernel/` (mod, runtime,
-sidecar, kernel_tool, harness_tools, tool_bridge); sidecar:
-`kernel-sidecar/kernel_sidecar/server.py`.
 
 ## What you get
 

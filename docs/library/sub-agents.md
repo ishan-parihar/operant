@@ -82,14 +82,7 @@ reservation while a model stream was still live.
 
 A re-dispatched background delegation with the same `request_key` returns the
 existing handle instead of starting a second child (iter-2360). Without a key,
-losing the handle and re-dispatching ran the work twice. The key is checked
-**before** the breadth budget (iter-2366): a replay needs no worker slot, so it
-must not be refused for want of one — refusing it pushes the caller to
-re-dispatch under a new key, which is the double-spend the key exists to
-prevent. A blank or whitespace-only key is treated as **no key** (iter-2384):
-two dispatches that both send `""` are two separate delegations, not one
-replay — the key was compared verbatim before, so an empty string matched
-every other empty string and merged two different goals into one handle.
+losing the handle and re-dispatching ran the work twice.
 
 ## Intention
 
