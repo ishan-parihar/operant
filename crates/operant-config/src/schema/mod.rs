@@ -34,7 +34,6 @@ mod helpers;
 mod media;
 mod memory_store;
 mod platform_cfg;
-mod prop_kinds;
 mod proxy;
 
 pub use core::*;
