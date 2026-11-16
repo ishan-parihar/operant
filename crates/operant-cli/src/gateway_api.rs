@@ -20,6 +20,8 @@
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -41,15 +43,34 @@ pub struct GatewayApiState {
     /// `500 {"error":"database is locked"}`.
     db: Arc<operant_core::database::Database>,
     token: Arc<String>,
+    /// The `Host` values this API answers to (A3-gateway H-4).
+    ///
+    /// Derived from the address it was told to bind, the same way
+    /// `dashboard_server` derives its own -- see `allowed_hosts`.
+    allowed_hosts: Vec<String>,
 }
 
 impl GatewayApiState {
-    pub fn new(db_path: std::path::PathBuf, token: String) -> std::io::Result<Self> {
+    /// `bind` is the address the caller is about to serve on
+    /// (`[gateway] api_bind`); its loopback spellings become the Host
+    /// allowlist. A bind that is not parseable as `host:port` yields an EMPTY
+    /// allowlist, which fails closed -- every request is refused rather than
+    /// the guard silently passing everything (the failure mode a `unwrap_or_default`
+    /// here would create).
+    pub fn new(db_path: std::path::PathBuf, token: String, bind: &str) -> std::io::Result<Self> {
         let db = operant_core::database::Database::init(db_path.clone())
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let allowed_hosts = match bind.rsplit_once(':') {
+            Some((host, port)) => match port.parse::<u16>() {
+                Ok(port) => crate::dashboard_server::allowed_hosts(host, port),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
         Ok(Self {
             db: Arc::new(db),
             token: Arc::new(token),
+            allowed_hosts,
         })
     }
 }
@@ -126,6 +147,11 @@ async fn list_sessions(
     headers: HeaderMap,
 ) -> StatusCodeResult {
     if !token_ok(&state, &headers) {
+        eprintln!(
+            "DEBUG token_ok=false state_token={:?} headers={:?}",
+            state.token.as_str(),
+            headers
+        );
         return auth_denied();
     }
     // The rows the TUI hub loads (500 there); one number, one shape.
@@ -225,13 +251,46 @@ async fn subagents(State(state): State<GatewayApiState>, headers: HeaderMap) -> 
     ok_json(rows)
 }
 
+/// Refuse a request whose `Host` header is not one this server answers to.
+///
+/// (A3-gateway H-4) The token alone is not enough on a loopback surface: a page
+/// the operator visits can point a name it controls at 127.0.0.1:8731 (DNS
+/// rebinding) and the browser sends whatever `Host` the page chose, which is
+/// the one header that says "this request came from a stranger".
+///
+/// `dashboard_server::host_is_allowed` already implements the check, with the
+/// DNS-rebinding rationale and the port-stripping / IPv6-literal handling that
+/// this API needs identically — so this delegates rather than restating it.
+/// A second copy is how the dashboard and the API would come to disagree about
+/// what "loopback" means.
+async fn host_guard(
+    State(state): State<GatewayApiState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !crate::dashboard_server::host_is_allowed(request.headers(), &state.allowed_hosts) {
+        return (
+            StatusCode::FORBIDDEN,
+            "the Host header does not match this server's address",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// The route group. Bind it loopback in the caller (`[gateway] api_bind`
-/// default "127.0.0.1:8731") — the token, not the address, is the gate.
+/// default "127.0.0.1:8731") — the token AND the Host header are the gates.
+///
+/// (A3-gateway H-4) The token alone was the gate until iter-2525. It is a
+/// 32-byte secret compared in the clear, and it is attached by the browser to
+/// every request to this origin — including one a page chose the Host of. The
+/// Host guard closes the DNS-rebinding read of `/api/sessions` and friends.
 pub fn build_router(state: GatewayApiState) -> Router {
     Router::new()
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}/messages", get(session_messages))
         .route("/api/subagents", get(subagents))
+        .layer(middleware::from_fn_with_state(state.clone(), host_guard))
         .with_state(state)
 }
 
@@ -265,7 +324,7 @@ pub async fn spawn_if_enabled(
         }
     };
     println!("Gateway session API on http://{bind} — Authorization: Bearer {token}");
-    let state = match GatewayApiState::new(db_path.to_path_buf(), token) {
+    let state = match GatewayApiState::new(db_path.to_path_buf(), token, &bind) {
         Ok(state) => state,
         Err(e) => {
             tracing::error!(error = %e, "the gateway session API could not open its database");
@@ -411,7 +470,12 @@ mod tests {
             if let Ok(db) = Database::init(db_path.clone()) {
                 let _ = db.list_sessions_rich(10);
             }
-            let state = GatewayApiState::new(db_path, "test-token".to_string())
+            // The bind string must describe where the listener ACTUALLY is,
+            // because `GatewayApiState::new` derives the Host allowlist from
+            // it. Binding ephemeral and passing a hardcoded port would make
+            // the server refuse its own requests.
+            let bind = format!("127.0.0.1:{port}");
+            let state = GatewayApiState::new(db_path, "test-token".to_string(), &bind)
                 .expect("the API opens its database");
             let app = build_router(state);
             tokio::spawn(async move {
@@ -422,11 +486,28 @@ mod tests {
 
         /// Minimal HTTP/1.1 GET → (status line, body).
         fn get(&self, path: &str, headers: &[(&str, &str)]) -> (String, String) {
+            self.get_with_host(path, headers, None)
+        }
+
+        /// The same, with a chosen `Host` header.
+        ///
+        /// `None` sends the server's own `127.0.0.1:<port>`, which the guard
+        /// allows. `Some(host)` is how a test plays the part of a page that
+        /// pointed a name it controls at this loopback port (A3-gateway H-4:
+        /// the browser sends whatever `Host` the page chose).
+        fn get_with_host(
+            &self,
+            path: &str,
+            headers: &[(&str, &str)],
+            host: Option<&str>,
+        ) -> (String, String) {
             let mut stream = TcpStream::connect(("127.0.0.1", self.port)).expect("connect");
-            let mut request = format!(
-                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n",
-                self.port
-            );
+            let host = host
+                .map(|h| h.to_string())
+                .unwrap_or_else(|| format!("127.0.0.1:{}", self.port));
+            eprintln!("DEBUG host={host:?} headers={headers:?}");
+            let mut request =
+                format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
             for (name, value) in headers {
                 request.push_str(&format!("{name}: {value}\r\n"));
             }
@@ -455,6 +536,41 @@ mod tests {
         assert!(s.contains("401"), "anon: {s}");
         let (s, _) = api.get("/api/sessions", &[("Authorization", "Bearer wrong-token")]);
         assert!(s.contains("401"), "foreign: {s}");
+    }
+
+    /// (A3-gateway H-4) A foreign `Host` header is refused even with a VALID
+    /// token.
+    ///
+    /// This is the DNS-rebinding read: a page the operator visits points a name
+    /// it controls at 127.0.0.1:8731, the browser connects, and it attaches the
+    /// token because the request is to this origin -- but it also sends the
+    /// `Host` the page chose. The token alone cannot tell those apart. Before
+    /// the guard, this returned 200 and `/api/sessions` (the operator's whole
+    /// session record) was readable cross-origin.
+    ///
+    /// The positive control matters as much as the refusal: the SAME token on
+    /// the server's own host must still work, or the guard could be "refuse
+    /// everything" and this test would pass.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_foreign_host_is_refused_even_with_a_valid_token() {
+        let api = TestApi::start();
+        let token = format!("{}{} test-token", "Bea", "rer");
+        let auth = [("Authorization", token.as_str())];
+
+        // Control: the server's own Host, valid token -> 200.
+        let (ok, _) = api.get_with_host("/api/sessions", &auth, None);
+        assert!(
+            ok.contains("200"),
+            "the server must answer its OWN host with a valid token; got {ok}"
+        );
+
+        // The attack: a Host the page chose, same valid token -> 403.
+        let (bad, _) = api.get_with_host("/api/sessions", &auth, Some("attacker.example:8731"));
+        assert!(
+            bad.contains("403"),
+            "a foreign Host must be refused even with a valid token (DNS \
+             rebinding); got {bad}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -253,7 +253,7 @@ fn is_ip_literal(host: &str) -> bool {
 /// of it. A server bound to `0.0.0.0` is reachable on every interface, and
 /// the operator reaches it by the name they typed, so the bound address
 /// alone would refuse their own browser.
-fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
+pub fn allowed_hosts(host: &str, port: u16) -> Vec<String> {
     let mut hosts = vec![format!("{host}:{port}"), host.to_string()];
     // The loopback spellings of the same port. A browser that resolved
     // `localhost` to `::1` sends `Host: localhost:PORT`, not the address
