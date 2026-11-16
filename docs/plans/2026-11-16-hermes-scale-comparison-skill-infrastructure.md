@@ -257,6 +257,20 @@ where copying hermes would be a regression.
 
 ## 4. Ordered execution plan (when the operator says go)
 
+> **EXECUTED 2026-11-16.** All five slices landed and were deployed.
+> Iterations: F-1 = iter-2468, F-5 = iter-2469, F-4 = iter-2473,
+> F-2 = iter-2474, F-3 = iter-2477. Two labels (2470, 2475) were taken by
+> peers mid-flight; those slices renumbered rather than rewriting history.
+> Order was dependency-driven exactly as planned: the scan cache had to
+> precede the quarantine.
+>
+> Measured outcome: 0 new test failures against a pre-slice baseline
+> (8 pre-existing slack/webhook/kernel failures, unchanged by the work),
+> 0 clippy debt in the five touched files, and a live end-to-end
+> quarantine verified on the deployed binary (a project skill carrying
+> `rm -rf /` is refused with a full explanation while its benign
+> neighbour still loads).
+
 Each slice: one iteration, one commit, one push, mutation-proven.
 
 | slice | finding | acceptance |
@@ -307,3 +321,31 @@ still real* (F-1). One (F-3) lost its headline statistic and kept its point.
 That is the ratio I would expect from an honest red-team: most claims survive
 contact with the code, and the ones that do not are worth finding before
 someone builds on them.
+
+---
+
+## 7. Execution log (what actually shipped)
+
+| slice | iter | commit subject | mutation proof |
+|---|---|---|---|
+| F-1 | 2468 | a shadowed skill is reported, not silently dropped | reverting to the bare `continue` fails the shadow assertion |
+| F-5 | 2469 | search breaks a match tie by root precedence, not the alphabet | reverting the sort to `(tier, name)` fails |
+| F-4 | 2473 | cache skill scan verdicts by content digest + scanner version | two mutations, each failing only its own test |
+| F-2 | 2474 | project skills are scanned and quarantined before they load | two mutations: disabling the check, and re-flattening the project root |
+| F-3 | 2477 | a written description must fit the row the index shows | dropping the `unchanged` clause, and deleting the create call site |
+
+### Two things the execution taught that the plan did not know
+
+**F-2 was worse than "no load-path caller".** The quarantine had nothing to
+key on: `SkillManager::from_roots` flattened `SkillRoots.project` into the
+generic extra roots, so every project skill loaded as
+`SkillOrigin::Integration`. `SkillOrigin::Project` existed and was never
+passed to `load_root` by anything -- the enum variant read as implemented.
+Fixing the missing call alone would not have fired.
+
+**A mutation proof that cannot fail is not a proof -- caught twice more.**
+The first F-3 create test called `validate_description_budget` directly and
+PASSED under a mutation that deleted the call site, because it never
+exercised the wiring. Rewritten to drive the real `execute` path, the same
+mutation fails. This is the iter-2429 lesson recurring; it is worth stating
+in every plan that the test must cover the call, not just the callee.
