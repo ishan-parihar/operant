@@ -9,11 +9,15 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 const SPOTIFY_API: &str = "https://api.spotify.com/v1";
 
 fn spotify_token() -> Option<String> {
-    std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN").ok()
+    std::env::var("OPERANT_SPOTIFY_ACCESS_TOKEN")
+        .or_else(|_| std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN"))
+        .ok()
 }
 
 fn spotify_available() -> bool {
-    std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN").is_ok()
+    std::env::var("OPERANT_SPOTIFY_ACCESS_TOKEN")
+        .or_else(|_| std::env::var("HERMES_SPOTIFY_ACCESS_TOKEN"))
+        .is_ok()
         || (std::env::var("SPOTIFY_CLIENT_ID").is_ok()
             && std::env::var("SPOTIFY_CLIENT_SECRET").is_ok())
 }

@@ -7,14 +7,14 @@
 # painted during the live turn under --frame-per-event).
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-CAP="$JCODE_SCRATCH_DIR/atcap"
+CAP="${OPERANT_SCRATCH_DIR:-${JCODE_SCRATCH_DIR:-/tmp}}/atcap"
 rm -rf "$CAP"
 mkdir -p "$CAP"
-FIX="$JCODE_SCRATCH_DIR/atfix"
+FIX="${OPERANT_SCRATCH_DIR:-${JCODE_SCRATCH_DIR:-/tmp}}/atfix"
 mkdir -p "$FIX/home/.operant"
 
 env HOME="$FIX/home" \
-    HERMES_HOME="$FIX/home/.operant" \
+    OPERANT_HOME="$FIX/home/.operant" \
     OPERANT_COLOR_DEPTH=truecolor TERM=xterm-256color TZ=UTC \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     ANTHROPIC_API_KEY=offline-capture \

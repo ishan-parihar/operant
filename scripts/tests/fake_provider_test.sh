@@ -108,11 +108,11 @@ snapshot_real_config() {
   done
 }
 BEFORE="$(snapshot_real_config)"
-OUT="$(HOME="$TMP/home" HERMES_HOME="$TMP/home/.operant" OPENAI_API_KEY=fake \
+OUT="$(HOME="$TMP/home" OPERANT_HOME="$TMP/home/.operant" OPENAI_API_KEY=fake \
   "${OPERANT_BIN:-$ROOT/target/debug/operant}" -c "$TMP/operant.toml" run --query 'hello' 2>&1)"
-STREAM_OUT="$(HOME="$TMP/home" HERMES_HOME="$TMP/home/.operant" OPENAI_API_KEY=fake \
+STREAM_OUT="$(HOME="$TMP/home" OPERANT_HOME="$TMP/home/.operant" OPENAI_API_KEY=fake \
   "${OPERANT_BIN:-$ROOT/target/debug/operant}" -c "$TMP/operant.toml" run --query 'hello stream' --stream 2>&1)"
-MCP_OUT="$(HOME="$TMP/home" HERMES_HOME="$TMP/home/.operant" \
+MCP_OUT="$(HOME="$TMP/home" OPERANT_HOME="$TMP/home/.operant" \
   "${OPERANT_BIN:-$ROOT/target/debug/operant}" -c "$TMP/operant.toml" mcp test fake 2>&1)"
 AFTER="$(snapshot_real_config)"
 grep -q 'LOCAL-FAKE-OK' <<<"$OUT"

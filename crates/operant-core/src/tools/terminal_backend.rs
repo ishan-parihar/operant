@@ -254,8 +254,9 @@ impl DockerBackend {
 
     /// Locate the docker CLI binary.
     fn find_docker() -> String {
-        // Check HERMES_DOCKER_BINARY env var first
-        if let Ok(override_path) = std::env::var("HERMES_DOCKER_BINARY")
+        // Check OPERANT_DOCKER_BINARY env var first (legacy HERMES_DOCKER_BINARY)
+        if let Ok(override_path) = std::env::var("OPERANT_DOCKER_BINARY")
+            .or_else(|_| std::env::var("HERMES_DOCKER_BINARY"))
             && !override_path.is_empty()
         {
             return override_path;

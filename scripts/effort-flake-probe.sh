@@ -10,12 +10,12 @@
 # syntax error, no product defect, no scenario change needed.
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-FIX="$JCODE_SCRATCH_DIR/atfix"
+FIX="${OPERANT_SCRATCH_DIR:-${JCODE_SCRATCH_DIR:-/tmp}}/atfix"
 N="${1:-3}"
 fails=0
 for i in $(seq 1 "$N"); do
     out=$(env HOME="$FIX/home" \
-        HERMES_HOME="$FIX/home/.operant" \
+        OPERANT_HOME="$FIX/home/.operant" \
         OPERANT_COLOR_DEPTH=truecolor TERM=xterm-256color TZ=UTC \
         LANG=C.UTF-8 LC_ALL=C.UTF-8 \
         ANTHROPIC_API_KEY=offline-capture \

@@ -121,10 +121,8 @@ pub fn load_context_dir(dir: &Path) -> String {
 
 /// Load context files from `~/.config/operant/context` when available.
 pub fn load_default_context_files() -> String {
-    dirs::config_dir()
-        .map(|dir| dir.join("operant").join("context"))
-        .map(|dir| load_context_dir(&dir))
-        .unwrap_or_default()
+    let dir = crate::platform::operant_home().join("context");
+    load_context_dir(&dir)
 }
 
 /// Load the nearest workspace context file while walking from `working_dir` up

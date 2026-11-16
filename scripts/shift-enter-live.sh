@@ -88,7 +88,7 @@ with open(cfg, "w") as fh:
 
 env = dict(os.environ)
 env["HOME"] = home_dir
-env["HERMES_HOME"] = os.path.join(home_dir, ".operant")
+env["OPERANT_HOME"] = os.path.join(home_dir, ".operant")
 # Name a kitty-protocol terminal: the app's own detection (terminal_setup.rs,
 # perf/theme probes) and the byte encoding under test then agree. A raw pty
 # passes bytes through verbatim, so the app sees exactly what we write.

@@ -159,15 +159,18 @@ pub fn default_operant_root() -> PathBuf {
 /// The effective operant home for this process.
 ///
 /// Resolution order:
-/// 1. `$HERMES_HOME` — an explicit operator choice. It wins over the
-///    sticky profile: a deployment that sets it means it.
-/// 2. The sticky active profile — `<root>/profiles/<name>`, when
+/// 1. `$OPERANT_HOME` — the explicit operator choice (primary). It wins
+///    over the sticky profile: a deployment that sets it means it.
+/// 2. `$HERMES_HOME` — the legacy name for the same variable. It is read
+///    as a fallback so an existing deployment that only sets `HERMES_HOME`
+///    keeps working, with a one-time deprecation warning.
+/// 3. The sticky active profile — `<root>/profiles/<name>`, when
 ///    `<root>/active_profile` names a profile that exists.
-/// 3. The default root (`~/.operant`).
+/// 4. The default root (`~/.operant`).
 ///
 /// This is THE resolver: every store under the operant home resolves
 /// through it, so a profile is isolated from the default one and the
-/// operator's `HERMES_HOME` still overrides everything.
+/// operator's explicit home still overrides everything.
 pub fn operant_home() -> PathBuf {
     if let Some(explicit) = explicit_home() {
         return explicit;
@@ -182,8 +185,12 @@ pub fn operant_home() -> PathBuf {
     }
 }
 
-/// `$HERMES_HOME`, when it is set and non-empty.
+/// `$OPERANT_HOME` (primary) or `$HERMES_HOME` (legacy fallback).
 fn explicit_home() -> Option<PathBuf> {
+    if let Some(value) = env::var("OPERANT_HOME").ok().filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(value));
+    }
+    // Legacy fallback: HERMES_HOME was the name before iter-2527.
     env::var("HERMES_HOME")
         .ok()
         .filter(|value| !value.is_empty())

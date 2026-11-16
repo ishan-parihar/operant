@@ -22,13 +22,13 @@ cargo fetch
 export CARGO_NET_OFFLINE=true
 
 # Workspace tests must not read or write the operator's live Operant tree.
-# HOME stays unchanged because Cargo needs ~/.cargo; HERMES_HOME redirects
+# HOME stays unchanged because Cargo needs ~/.cargo; OPERANT_HOME redirects
 # Operant's store, and OPERANT_CONFIG_DIR redirects config discovery.
 SELFTEST_HOME="$(mktemp -d)"
 trap 'rm -rf "$SELFTEST_HOME"' EXIT
-export HERMES_HOME="$SELFTEST_HOME/.operant"
+export OPERANT_HOME="$SELFTEST_HOME/.operant"
 export OPERANT_CONFIG_DIR="$SELFTEST_HOME/config"
-mkdir -p "$HERMES_HOME" "$OPERANT_CONFIG_DIR"
+mkdir -p "$OPERANT_HOME" "$OPERANT_CONFIG_DIR"
 
 # Provider credentials must not leak into a gate that may build an agent.
 unset OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY GEMINI_API_KEY

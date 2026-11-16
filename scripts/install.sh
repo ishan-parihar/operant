@@ -177,6 +177,6 @@ printf '%s\n' "─────────────────────�
 
 echo ""
 echo "Browser tooling: sourcehound -> $(command -v sourcehound || echo MISSING)"
-echo "Skills: $(find "${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') installed"
+echo "Skills: $(find "${OPERANT_SKILLS_DIR:-${OPERANT_HOME:-${HERMES_HOME:-$HOME/.operant}}/skills}" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') installed"
 
 print_cta

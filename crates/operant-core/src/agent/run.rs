@@ -1401,7 +1401,8 @@ impl OperantAgent {
         // sibling of `HERMES_REQUEST_TIMEOUT` (one model call) and
         // `HERMES_MAX_ITERATIONS` (iteration count). Malformed or
         // non-positive values keep the 20-minute default.
-        let turn_wall_clock_limit_secs: u64 = std::env::var("HERMES_TURN_TIMEOUT")
+        let turn_wall_clock_limit_secs: u64 = std::env::var("OPERANT_TURN_TIMEOUT")
+            .or_else(|_| std::env::var("HERMES_TURN_TIMEOUT"))
             .ok()
             .and_then(|v| v.trim().parse().ok())
             .filter(|secs| *secs > 0)

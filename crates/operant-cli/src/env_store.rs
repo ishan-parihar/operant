@@ -44,7 +44,9 @@ fn create_secret_temp(path: &Path) -> io::Result<fs::File> {
 ///
 /// During tests, override with `HERMES_TEST_ENV_PATH` to use a temp path.
 pub fn operant_env_path() -> PathBuf {
-    if let Ok(test_path) = std::env::var("HERMES_TEST_ENV_PATH") {
+    if let Ok(test_path) =
+        std::env::var("OPERANT_TEST_ENV_PATH").or_else(|_| std::env::var("HERMES_TEST_ENV_PATH"))
+    {
         return PathBuf::from(test_path);
     }
     operant_core::platform::operant_home().join(".env")

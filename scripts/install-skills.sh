@@ -31,9 +31,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POOL_DIR="${OPERANT_BUNDLED_SKILLS_DIR:-$SCRIPT_DIR/../skills}"
 
 # User skills dir: honors the same overrides the binary honors.
-#   HERMES_SKILLS_DIR  → config `[skills] root_dir` override (binary reads it)
-#   HERMES_HOME        → operant home (default `~/.operant`)
-SKILLS_DIR="${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}"
+#   OPERANT_SKILLS_DIR → config `[skills] root_dir` override (binary reads it)
+#   OPERANT_HOME       → operant home (default `~/.operant`)
+#   HERMES_SKILLS_DIR / HERMES_HOME → legacy fallback (pre-iter-2527)
+SKILLS_DIR="${OPERANT_SKILLS_DIR:-${OPERANT_HOME:-${HERMES_HOME:-$HOME/.operant}}/skills}"
 
 # A literal `$` in the resolved path means an env var arrived unexpanded
 # (observed 2026-10-24: one run seeded 658 files into a literal `$HOME/`
@@ -43,7 +44,7 @@ if [[ "$SKILLS_DIR" == *'$'* || "$POOL_DIR" == *'$'* ]]; then
   echo "install-skills: resolved path still contains an unexpanded '\$':" >&2
   echo "  SKILLS_DIR=$SKILLS_DIR" >&2
   echo "  POOL_DIR=$POOL_DIR" >&2
-  echo "  Check HERMES_SKILLS_DIR / HERMES_HOME / OPERANT_BUNDLED_SKILLS_DIR." >&2
+  echo "  Check OPERANT_SKILLS_DIR / OPERANT_HOME / OPERANT_BUNDLED_SKILLS_DIR." >&2
   exit 1
 fi
 

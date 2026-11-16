@@ -3702,6 +3702,10 @@ pub fn default_config_paths() -> Vec<PathBuf> {
     if let Some(config_dir) = dirs::config_dir() {
         paths.push(config_dir.join("operant").join("config.toml"));
     }
+    // NOTE: the `dirs::config_dir()/operant/config.toml` candidate above is a
+    // LEGACY path kept for backward compatibility. New installs resolve the
+    // config from `operant_home()/operant.toml` (the candidate below). The
+    // legacy path will be removed after one release cycle.
 
     // The home candidate is the EFFECTIVE home (`platform::operant_home`):
     // the active profile's own `operant.toml`, or `HERMES_HOME`'s. The
@@ -4158,52 +4162,94 @@ impl AppConfig {
     pub fn apply_env_overrides(&mut self) -> Result<()> {
         apply_string_option_override("OPENAI_API_KEY", &mut self.client.api_key)?;
         apply_string_value_override("OPENAI_BASE_URL", &mut self.client.base_url);
-        apply_string_value_override("HERMES_MODEL", &mut self.agent.model);
-        apply_usize_override("HERMES_MAX_ITERATIONS", &mut self.agent.max_iterations)?;
-        apply_u64_override("HERMES_TOOL_TIMEOUT", &mut self.agent.tool_timeout_secs)?;
-        apply_u64_override(
+        // Dual-name: OPERANT_* primary, HERMES_* legacy (pre-iter-2527).
+        apply_string_value_override_dual("OPERANT_MODEL", "HERMES_MODEL", &mut self.agent.model);
+        apply_usize_override_dual(
+            "OPERANT_MAX_ITERATIONS",
+            "HERMES_MAX_ITERATIONS",
+            &mut self.agent.max_iterations,
+        )?;
+        apply_u64_override_dual(
+            "OPERANT_TOOL_TIMEOUT",
+            "HERMES_TOOL_TIMEOUT",
+            &mut self.agent.tool_timeout_secs,
+        )?;
+        apply_u64_override_dual(
+            "OPERANT_REQUEST_TIMEOUT",
             "HERMES_REQUEST_TIMEOUT",
             &mut self.agent.request_timeout_secs,
         )?;
-        apply_usize_override("HERMES_CONTEXT_WINDOW", &mut self.agent.context_window)?;
-        apply_usize_override(
+        apply_usize_override_dual(
+            "OPERANT_CONTEXT_WINDOW",
+            "HERMES_CONTEXT_WINDOW",
+            &mut self.agent.context_window,
+        )?;
+        apply_usize_override_dual(
+            "OPERANT_MAX_HEALING_ATTEMPTS",
             "HERMES_MAX_HEALING_ATTEMPTS",
             &mut self.agent.max_healing_attempts,
         )?;
-        apply_bool_override("HERMES_STREAM", &mut self.agent.stream)?;
-        apply_string_option_override("HERMES_SYSTEM_PROMPT", &mut self.agent.system_prompt)?;
-        apply_u64_override(
+        apply_bool_override_dual("OPERANT_STREAM", "HERMES_STREAM", &mut self.agent.stream)?;
+        apply_string_option_override_dual(
+            "OPERANT_SYSTEM_PROMPT",
+            "HERMES_SYSTEM_PROMPT",
+            &mut self.agent.system_prompt,
+        )?;
+        apply_u64_override_dual(
+            "OPERANT_AUTONOMOUS_INTERVAL",
             "HERMES_AUTONOMOUS_INTERVAL",
             &mut self.autonomous.interval_secs,
         )?;
-        apply_path_override("HERMES_AUTONOMOUS_TODO", &mut self.autonomous.todo_path)?;
-        apply_path_override("HERMES_AUTONOMOUS_STATUS", &mut self.autonomous.status_path)?;
-        apply_string_value_override(
+        apply_path_override_dual(
+            "OPERANT_AUTONOMOUS_TODO",
+            "HERMES_AUTONOMOUS_TODO",
+            &mut self.autonomous.todo_path,
+        )?;
+        apply_path_override_dual(
+            "OPERANT_AUTONOMOUS_STATUS",
+            "HERMES_AUTONOMOUS_STATUS",
+            &mut self.autonomous.status_path,
+        )?;
+        apply_string_value_override_dual(
+            "OPERANT_AUTONOMOUS_TEST_COMMAND",
             "HERMES_AUTONOMOUS_TEST_COMMAND",
             &mut self.autonomous.test_command,
         );
-        apply_string_value_override(
+        apply_string_value_override_dual(
+            "OPERANT_AUTONOMOUS_GIT_REMOTE",
             "HERMES_AUTONOMOUS_GIT_REMOTE",
             &mut self.autonomous.git_remote,
         );
-        apply_string_value_override(
+        apply_string_value_override_dual(
+            "OPERANT_AUTONOMOUS_GIT_BRANCH",
             "HERMES_AUTONOMOUS_GIT_BRANCH",
             &mut self.autonomous.git_branch,
         );
-        apply_string_value_override(
+        apply_string_value_override_dual(
+            "OPERANT_AUTONOMOUS_COMMIT_MESSAGE",
             "HERMES_AUTONOMOUS_COMMIT_MESSAGE",
             &mut self.autonomous.commit_message,
         );
-        apply_u64_override(
+        apply_u64_override_dual(
+            "OPERANT_AUTONOMOUS_COMMAND_TIMEOUT",
             "HERMES_AUTONOMOUS_COMMAND_TIMEOUT",
             &mut self.autonomous.command_timeout_secs,
         )?;
-        apply_usize_override(
+        apply_usize_override_dual(
+            "OPERANT_AUTONOMOUS_MAX_FAILURES",
             "HERMES_AUTONOMOUS_MAX_FAILURES",
             &mut self.autonomous.max_failures_per_state,
         )?;
-        apply_string_value_override("HERMES_LOG_LEVEL", &mut self.logging.level);
-        apply_path_override("HERMES_SKILLS_DIR", &mut self.skills.root_dir)?;
+        apply_string_value_override_dual(
+            "OPERANT_LOG_LEVEL",
+            "HERMES_LOG_LEVEL",
+            &mut self.logging.level,
+        );
+        apply_path_override_dual(
+            "OPERANT_SKILLS_DIR",
+            "HERMES_SKILLS_DIR",
+            &mut self.skills.root_dir,
+        )?;
         validate_context_window(self.agent.context_window)?;
         // RT-197: the env override is a path the operator wrote by hand too,
         // so it gets the same expansion as the file value.
@@ -4211,14 +4257,23 @@ impl AppConfig {
 
         // Gateway env var overrides
         apply_string_option_override("TELEGRAM_BOT_TOKEN", &mut self.gateway.telegram_token)?;
-        apply_bool_override(
+        apply_bool_override_dual(
+            "OPERANT_TELEGRAM_ENABLED",
             "HERMES_TELEGRAM_ENABLED",
             &mut self.gateway.telegram_enabled,
         )?;
         apply_string_option_override("DISCORD_BOT_TOKEN", &mut self.gateway.discord_token)?;
-        apply_bool_override("HERMES_DISCORD_ENABLED", &mut self.gateway.discord_enabled)?;
+        apply_bool_override_dual(
+            "OPERANT_DISCORD_ENABLED",
+            "HERMES_DISCORD_ENABLED",
+            &mut self.gateway.discord_enabled,
+        )?;
         apply_string_option_override("SLACK_BOT_TOKEN", &mut self.gateway.slack_token)?;
-        apply_bool_override("HERMES_SLACK_ENABLED", &mut self.gateway.slack_enabled)?;
+        apply_bool_override_dual(
+            "OPERANT_SLACK_ENABLED",
+            "HERMES_SLACK_ENABLED",
+            &mut self.gateway.slack_enabled,
+        )?;
         apply_string_option_override(
             "OPERANT_WHATSAPP_PHONE_NUMBER_ID",
             &mut self.gateway.whatsapp_phone_number_id,
@@ -4236,6 +4291,16 @@ fn read_env(name: &str) -> Option<String> {
         record_env_override(name);
     }
     value
+}
+
+/// Read an env var with a dual-name fallback: `OPERANT_*` is primary, `HERMES_*`
+/// is the legacy name (before iter-2527). When the legacy name is the one that
+/// resolves, a one-time deprecation warning is logged.
+fn read_env_dual(operant_name: &str, hermes_name: &str) -> Option<String> {
+    if let Some(value) = read_env(operant_name) {
+        return Some(value);
+    }
+    read_env(hermes_name)
 }
 
 /// The environment variables that overrode the config file in THIS process,
@@ -4289,6 +4354,72 @@ fn apply_string_value_override(name: &str, target: &mut String) {
     if let Some(value) = read_env(name) {
         *target = value;
     }
+}
+
+// ── Dual-name variants (OPERANT_* primary, HERMES_* legacy) ──────────────
+
+fn apply_string_value_override_dual(operant: &str, legacy: &str, target: &mut String) {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = value;
+    }
+}
+
+fn apply_string_option_override_dual(
+    operant: &str,
+    legacy: &str,
+    target: &mut Option<String>,
+) -> Result<()> {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = Some(value);
+    }
+    Ok(())
+}
+
+fn apply_u64_override_dual(operant: &str, legacy: &str, target: &mut u64) -> Result<()> {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = value.parse().map_err(|_| {
+            Error::Config(format!(
+                "Environment variable '{}' must be an unsigned integer.",
+                operant
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn apply_usize_override_dual(operant: &str, legacy: &str, target: &mut usize) -> Result<()> {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = value.parse().map_err(|_| {
+            Error::Config(format!(
+                "Environment variable '{}' must be an unsigned integer.",
+                operant
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn apply_bool_override_dual(operant: &str, legacy: &str, target: &mut bool) -> Result<()> {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => {
+                return Err(Error::Config(format!(
+                    "Environment variable '{}' must be a boolean.",
+                    operant
+                )));
+            }
+        };
+    }
+    Ok(())
+}
+
+fn apply_path_override_dual(operant: &str, legacy: &str, target: &mut PathBuf) -> Result<()> {
+    if let Some(value) = read_env_dual(operant, legacy) {
+        *target = PathBuf::from(value);
+    }
+    Ok(())
 }
 
 fn apply_u64_override(name: &str, target: &mut u64) -> Result<()> {

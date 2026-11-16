@@ -1229,9 +1229,8 @@ impl App {
             // /refresh-model-list — drop the cached catalog and re-fetch the
             // active provider's live model list (the picker opens on it).
             "refresh-model-list" => {
-                let cache = dirs::cache_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("operant")
+                let cache = operant_core::platform::operant_home()
+                    .join("cache")
                     .join("models.json");
                 let _ = std::fs::remove_file(&cache);
                 crate::tui::operant_app::provider::catalog_scheduler::bump_catalog_generation();

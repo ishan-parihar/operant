@@ -1140,7 +1140,8 @@ impl CliConfig {
         let mut config = Self::default();
         let config_dir = config.config_dir.clone();
 
-        config.config_file = std::env::var("HERMES_CONFIG")
+        config.config_file = std::env::var("OPERANT_CONFIG")
+            .or_else(|_| std::env::var("HERMES_CONFIG"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| config_dir.join("config.yaml"));
         config.local_config_file = config_dir.join("config.local.yaml");
@@ -1150,73 +1151,82 @@ impl CliConfig {
             load_dotenv_file(&config.env_file)?;
         }
 
-        // Apply HERMES_* env var overrides
+        // Apply OPERANT_*/HERMES_* env var overrides
         config.apply_operant_env_overrides();
 
         Ok(config)
     }
 
-    /// Apply HERMES_* environment variable overrides to the config.
+    /// Apply `OPERANT_*` (primary) and `HERMES_*` (legacy) environment variable
+    /// overrides to the config. Each override tries the `OPERANT_*` name first,
+    /// then falls back to the `HERMES_*` legacy name (pre-iter-2527).
     fn apply_operant_env_overrides(&mut self) {
-        // HERMES_MODEL → agent default model
-        if let Ok(val) = std::env::var("HERMES_MODEL")
+        // OPERANT_MODEL → agent default model
+        if let Ok(val) = std::env::var("OPERANT_MODEL").or_else(|_| std::env::var("HERMES_MODEL"))
             && !val.is_empty()
         {
             self.api.default_model = Some(val);
         }
 
-        // HERMES_LOG_LEVEL
-        if let Ok(val) = std::env::var("HERMES_LOG_LEVEL")
+        // OPERANT_LOG_LEVEL
+        if let Ok(val) =
+            std::env::var("OPERANT_LOG_LEVEL").or_else(|_| std::env::var("HERMES_LOG_LEVEL"))
             && !val.is_empty()
         {
             self.logging.level = Some(val);
         }
 
-        // HERMES_MAX_ITERATIONS
-        if let Ok(val) = std::env::var("HERMES_MAX_ITERATIONS")
+        // OPERANT_MAX_ITERATIONS
+        if let Ok(val) = std::env::var("OPERANT_MAX_ITERATIONS")
+            .or_else(|_| std::env::var("HERMES_MAX_ITERATIONS"))
             && let Ok(n) = val.parse::<u32>()
         {
             self.agent.max_turns = Some(n);
         }
 
-        // HERMES_TOOL_TIMEOUT
-        if let Ok(val) = std::env::var("HERMES_TOOL_TIMEOUT")
+        // OPERANT_TOOL_TIMEOUT
+        if let Ok(val) =
+            std::env::var("OPERANT_TOOL_TIMEOUT").or_else(|_| std::env::var("HERMES_TOOL_TIMEOUT"))
             && let Ok(n) = val.parse::<u64>()
         {
             self.terminal.timeout = Some(n);
         }
 
-        // HERMES_REQUEST_TIMEOUT
-        if let Ok(val) = std::env::var("HERMES_REQUEST_TIMEOUT")
+        // OPERANT_REQUEST_TIMEOUT
+        if let Ok(val) = std::env::var("OPERANT_REQUEST_TIMEOUT")
+            .or_else(|_| std::env::var("HERMES_REQUEST_TIMEOUT"))
             && let Ok(n) = val.parse::<u64>()
         {
             self.api.timeout_seconds = Some(n);
         }
 
-        // HERMES_CONTEXT_WINDOW
-        if let Ok(val) = std::env::var("HERMES_CONTEXT_WINDOW")
+        // OPERANT_CONTEXT_WINDOW
+        if let Ok(val) = std::env::var("OPERANT_CONTEXT_WINDOW")
+            .or_else(|_| std::env::var("HERMES_CONTEXT_WINDOW"))
             && let Ok(n) = val.parse::<u32>()
         {
             self.api.max_tokens = Some(n);
         }
 
-        // HERMES_STREAM
-        if let Ok(val) = std::env::var("HERMES_STREAM") {
+        // OPERANT_STREAM
+        if let Ok(val) = std::env::var("OPERANT_STREAM").or_else(|_| std::env::var("HERMES_STREAM"))
+        {
             self.display.streaming = Some(matches!(
                 val.to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             ));
         }
 
-        // HERMES_SKILLS_DIR
-        if let Ok(val) = std::env::var("HERMES_SKILLS_DIR")
+        // OPERANT_SKILLS_DIR
+        if let Ok(val) =
+            std::env::var("OPERANT_SKILLS_DIR").or_else(|_| std::env::var("HERMES_SKILLS_DIR"))
             && !val.is_empty()
         {
             self.operant.skills_dir = Some(PathBuf::from(val));
         }
 
-        // HERMES_HOME — already handled in paths
-        // HERMES_CONFIG — already handled in load path selection
+        // OPERANT_HOME — already handled in platform::operant_home()
+        // OPERANT_CONFIG — already handled in load path selection
     }
 }
 
