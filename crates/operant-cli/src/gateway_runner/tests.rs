@@ -806,7 +806,7 @@ fn turn_progress_and_permissions_resolve_per_session_not_from_the_global() {
 /// (A1-gateway MED-1) The progress receiver HANDLES the events that explain a
 /// gap to the operator, rather than dropping them into a catch-all.
 ///
-/// Four `AgentEvent` variants fell through `_ => {}` and vanished. Each one
+/// Six `AgentEvent` variants fell through `_ => {}` and vanished. Each one
 /// marks something the operator would otherwise misread:
 ///
 ///   CompactionStarted / CompactionCompleted -- the turn is rebuilding its
@@ -815,9 +815,13 @@ fn turn_progress_and_permissions_resolve_per_session_not_from_the_global() {
 ///     retry looks like a slow model.
 ///   ModelFallback -- a DIFFERENT model answered. That is a billing and
 ///     behaviour fact the operator never agreed to, and it was silent.
+///   ToolError -- a tool failed and nothing said so. `ToolComplete` is only
+///     rendered for TTS audio, so a failure produced no channel output.
+///   RateLimitNotice -- the provider is 429ing the turn, which otherwise
+///     looks exactly like a stall.
 ///
-/// The catch-all stays (the enum is large and most of it is internal), so
-/// this asserts the four are named, not that the wildcard is gone.
+/// The catch-all stays (the enum is 25 variants and most are internal), so
+/// this asserts the six are named, not that the wildcard is gone.
 #[test]
 fn the_progress_receiver_names_the_events_that_explain_a_gap() {
     let source = include_str!("../gateway_runner.rs");
@@ -826,6 +830,8 @@ fn the_progress_receiver_names_the_events_that_explain_a_gap() {
         ("AgentEvent::CompactionCompleted", "context compacted:"),
         ("AgentEvent::RetryScheduled", "retry "),
         ("AgentEvent::ModelFallback", "model fallback:"),
+        ("AgentEvent::ToolError", "tool failed:"),
+        ("AgentEvent::RateLimitNotice", "rate limited"),
     ] {
         // Naming the arm is not enough: a no-op arm (`Variant { .. } => {}`)
         // still names it and still drops the event. Each arm must also
@@ -848,8 +854,8 @@ fn the_progress_receiver_names_the_events_that_explain_a_gap() {
         .matches("send_message_return_id(&platform, msg)")
         .count();
     assert!(
-        sends >= 4,
-        "expected at least 4 progress sends (the four gap-explaining arms); found {sends}. Building a line and not sending it is the same silent drop with extra steps"
+        sends >= 6,
+        "expected at least 6 progress sends (the six gap-explaining arms); found {sends}. Building a line and not sending it is the same silent drop with extra steps"
     );
 }
 

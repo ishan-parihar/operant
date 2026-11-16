@@ -6928,6 +6928,29 @@ pub async fn start_gateway(
                         .with_thread_id(thread_id);
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                 }
+                // A tool that FAILED. `ToolComplete` is emitted for the
+                // successes the renderer cares about (TTS audio), so a
+                // failure had no channel output at all: the operator saw the
+                // tool row stop and no reason.
+                AgentEvent::ToolError { name, error, .. } => {
+                    let line = format!("tool failed: {name}: {error}");
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
+                // A 429 classified mid-turn. Without this the turn looks
+                // stalled while the provider is rate-limiting it.
+                AgentEvent::RateLimitNotice { retry_after_secs } => {
+                    let line = match retry_after_secs {
+                        Some(secs) => format!("rate limited, retrying in {secs}s"),
+                        None => "rate limited, retrying".to_string(),
+                    };
+                    let msg = OutgoingMessage::new(&channel_id, &line)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
                 AgentEvent::ModelFallback { from, to, reason } => {
                     let line = format!("model fallback: {from} -> {to} ({reason})");
                     let msg = OutgoingMessage::new(&channel_id, &line)
