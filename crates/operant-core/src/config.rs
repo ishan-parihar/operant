@@ -5863,9 +5863,11 @@ wonderful_unknown_key = 42
     #[test]
     fn a_parked_field_is_not_live_even_when_the_warning_forgets_it() {
         // A peer can park a key by editing only the doc comment: that is what
-        // happened to the two historian keys, which say "PARKED ... accepted and
-        // ignored" while `unused_setting_warnings` names neither. The row table
-        // must still call them dead, or the panel offers two dead controls.
+        // happened to the two historian keys, whose docs say "(retired, ...) ...
+        // accepted and ignored" while `unused_setting_warnings` names neither.
+        // The row table must still call them dead, or the panel offers two dead
+        // controls. The phrase is matched by the generator's PARKED_MARKERS, so
+        // this test guards the ROW, not the wording.
         for key in [
             "agent.context_historian",
             "agent.context_historian_max_span",

@@ -507,15 +507,21 @@ impl OperantAgent {
     //    to positions in a list that no longer existed on turn N+1: the planner
     //    would skip live messages or re-fold already-summarized ones.
     //
-    // Neither is fixable by substitution. `Message` carries no stable id, so a
-    // compartment cannot be keyed to the rows it summarizes; that is a redesign
-    // of the message type, not a repair of this rung.
+    // WHY "ADD THE MISSING GUARDS" WAS NOT THE REPAIR (iter-2453). The
+    // reference implementation's persisted compartment anchor is ALSO positional
+    // — an ordinal recomputed on every read as a count over `(time_created, id)`
+    // minus finished summaries — so "`Message` carries no stable id" was never
+    // the reason this could not work. What makes theirs survivable is four
+    // fail-closed guards plus per-block content fingerprints re-verified INSIDE
+    // the publish transaction. Those guard a producer, a publish transaction and
+    // a render path; this repo has none of the three, so the guards would guard
+    // nothing.
     //
-    // The TABLE and the PURE LOGIC in `historian.rs` are kept: the store, the
-    // span planner, the no-progress guard and the fold hash are all correct and
-    // independently useful, and a future design that keys compartments to stable
-    // ids can reuse them unchanged. What was deleted is the rung that could not
-    // work.
+    // `historian.rs`, the `compartments` Rust helpers and `CompartmentRecord`
+    // were therefore DELETED rather than kept. Only the v5 migration remains,
+    // because `DATABASE_MIGRATIONS` is append-only and the schema version a
+    // build understands is `migrations.len()`. See the retirement note on
+    // `config::AppConfig::context_historian`.
 
     /// Compact a request list back under the hard context cap.
     ///
