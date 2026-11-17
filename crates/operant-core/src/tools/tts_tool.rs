@@ -233,7 +233,17 @@ impl TtsTool {
             openai_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             minimax_key: std::env::var("MINIMAX_API_KEY").unwrap_or_default(),
             mistral_key: std::env::var("MISTRAL_API_KEY").unwrap_or_default(),
-            gemini_key: std::env::var("GEMINI_API_KEY").unwrap_or_default(),
+            // `cmd_auth` writes `GOOGLE_API_KEY` when the operator runs
+            // `operant auth add google` (cmd_auth.rs), while this provider read
+            // only `GEMINI_API_KEY`. An operator who added a Google key through
+            // the tool's own auth command therefore got "GEMINI_API_KEY not
+            // set" for a key they had already configured. Both names are
+            // accepted; the service-specific one wins when both are present.
+            gemini_key: std::env::var("GEMINI_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+                .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
+                .unwrap_or_default(),
             xai_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
             phonon: Arc::new(Mutex::new(None)),
             plugin_registry: Arc::new(TtsPluginRegistry::new()),
@@ -814,7 +824,14 @@ impl TtsTool {
     // =========================================================================
     async fn gemini_tts(&self, args: &TtsArgs) -> ToolResult {
         if self.gemini_key.is_empty() {
-            return ToolResult::error("text_to_speech", "GEMINI_API_KEY not set");
+            // Name both variables: the operator may have set either one, and
+            // "GEMINI_API_KEY not set" when they set GOOGLE_API_KEY (which is
+            // what `operant auth add google` writes) reads as a broken install
+            // rather than a key-name mismatch.
+            return ToolResult::error(
+                "text_to_speech",
+                "GEMINI_API_KEY (or GOOGLE_API_KEY) not set",
+            );
         }
 
         let voice = resolve_voice(&args.voice, GEMINI_DEFAULT_VOICE);
@@ -1693,5 +1710,60 @@ mod tests {
             "edge output is not an MPEG frame: {:?}",
             &mp3[..mp3.len().min(4)]
         );
+    }
+
+    /// `operant auth add google` writes `GOOGLE_API_KEY`; this provider must see it.
+    ///
+    /// `cmd_auth`'s provider table names `GOOGLE_API_KEY` for `google`
+    /// (cmd_auth.rs), while the TTS provider read only `GEMINI_API_KEY`. An
+    /// operator who added a Google key through the tool's OWN auth command was
+    /// told "GEMINI_API_KEY not set" for a key they had already configured, and
+    /// nothing in core ever consulted the other name.
+    ///
+    /// Both names are accepted now. This test is the whole guard: it can only
+    /// pass if `TtsTool::new` reads the fallback, because the error message
+    /// names the variable that is missing.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_google_api_key_configured_by_auth_is_visible_to_gemini_tts() {
+        // BOTH vars are captured, whatever they are. An earlier version of this
+        // test returned early when `GEMINI_API_KEY` was unset -- which is the
+        // normal case on a machine that configured Google through
+        // `operant auth` -- so it tested nothing and passed with the fix
+        // reverted. A test that cannot fail is not a test.
+        let original_gemini = std::env::var_os("GEMINI_API_KEY");
+        let original_google = std::env::var_os("GOOGLE_API_KEY");
+        // SAFETY: serialised by `#[serial_test::serial]`; both vars are
+        // restored below on every path.
+        unsafe { std::env::remove_var("GEMINI_API_KEY") };
+        unsafe { std::env::set_var("GOOGLE_API_KEY", "probe-google-key") };
+
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "Audit probe.", "provider": "gemini"}),
+                ToolContext::default(),
+            )
+            .await;
+
+        unsafe { std::env::remove_var("GOOGLE_API_KEY") };
+        match original_gemini {
+            Some(v) => unsafe { std::env::set_var("GEMINI_API_KEY", v) },
+            None => unsafe { std::env::remove_var("GEMINI_API_KEY") },
+        }
+        match original_google {
+            Some(v) => unsafe { std::env::set_var("GOOGLE_API_KEY", v) },
+            None => unsafe { std::env::remove_var("GOOGLE_API_KEY") },
+        }
+
+        // The key IS configured, so the failure must NOT be the missing-key
+        // one. A network/auth failure is fine and expected here: the point is
+        // that the provider got as far as USING the credential.
+        if let Some(err) = result.error {
+            assert!(
+                !err.contains("not set"),
+                "a GOOGLE_API_KEY from `operant auth add google` must be visible                  to the gemini TTS provider, got: {err}"
+            );
+        }
     }
 }
