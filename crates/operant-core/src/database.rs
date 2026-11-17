@@ -3070,6 +3070,22 @@ impl Database {
 
     // === Search Expansion ===
 
+    /// Quote a caller query for FTS5 so its OPERATORS cannot reach the grammar.
+    ///
+    /// FTS5's MATCH grammar treats `"`, `*`, `:`, `-`, `(`, `)` and the bare
+    /// keywords `AND`/`OR`/`NOT`/`NEAR` as syntax. A query carrying any of them
+    /// (a quoted phrase from a model, a hyphenated path, a CJK/Latin mix) returns
+    /// a PARSE ERROR, which the caller below swallowed into a silent LIKE
+    /// substring fallback -- plausible-looking results that are neither FTS
+    /// ranked nor what the query asked for. Wrapping the whole query as one
+    /// quoted phrase makes it a literal term: double every `"` and wrap in
+    /// `"`, so the grammar never sees an operator.
+    ///
+    /// AGENTS.md requires new FTS5 call sites to escape; this is the one helper.
+    fn escape_fts5_query(query: &str) -> String {
+        format!("\"{}\"", query.replace('"', "\"\""))
+    }
+
     /// Search messages using FTS5, with LIKE fallback for CJK queries.
     pub fn search_messages_fts(
         &self,
@@ -3084,7 +3100,10 @@ impl Database {
             // CJK charset ─ use LIKE fallback since FTS5 tokenizer handles CJK poorly
             self.search_messages_like(&conn, query, session_id, limit)
         } else {
-            // Try FTS5 first, fall back to LIKE on error
+            // Try FTS5 first, fall back to LIKE on error.
+            // `search_messages_fts5` escapes the query's FTS5 operators at the
+            // bind (see it) -- an unescaped quote or hyphenated identifier made
+            // this a PARSE ERROR, silently swallowed into a LIKE substring match.
             match self.search_messages_fts5(&conn, query, session_id, limit) {
                 Ok(results) => Ok(results),
                 Err(_) => self.search_messages_like(&conn, query, session_id, limit),
@@ -3100,6 +3119,12 @@ impl Database {
         session_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<SearchResult>> {
+        // Escape at THE bind -- the single point every FTS5 query passes.
+        // Doing it here (rather than at each caller) is what stops the hole
+        // being reintroduced, and stops double-escaping: an already-quoted
+        // query passed in would otherwise get quoted a second time and match
+        // the literal quote characters instead of the words.
+        let fts_query = Self::escape_fts5_query(query);
         let mut stmt = conn
             .prepare(
                 "SELECT m.session_id, m.id, m.role, m.content, m.timestamp
@@ -3112,7 +3137,7 @@ impl Database {
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare FTS search: {}", e)))?;
         let rows = stmt
-            .query_map(params![query, session_id, limit], |row| {
+            .query_map(params![fts_query.as_str(), session_id, limit], |row| {
                 Ok(SearchResult {
                     session_id: row.get(0)?,
                     message_id: row.get::<_, i64>(1)?.to_string(),
@@ -5288,6 +5313,111 @@ mod tests {
             .search_messages_fts("quick brown", None, Some(10))
             .unwrap();
         assert!(!results.is_empty());
+    }
+
+    // A caller query carrying FTS5 grammar characters (`"`, `-`, `NEAR`, ...)
+    // was bound raw to `messages_fts MATCH ?1`. The parse error was swallowed by
+    // `Err(_) => search_messages_like`, so a search for a quoted phrase or a
+    // hyphenated identifier silently returned substring results -- looking
+    // plausible, ranked not at all, and built for a different query.
+    //
+    // HONEST SCOPE: only MALFORMED grammar discriminates between escaped and
+    // unescaped. A well-formed caller phrase (`"a b"`) is a no-op under
+    // escaping, so the test below pins behaviour PRESERVATION, not the fix;
+    // `a_query_with_an_unterminated_quote...` and
+    // `a_query_with_fts_keywords...` are the mutation guards that fail when the
+    // escape is removed.
+    #[test]
+    fn a_query_with_fts5_grammar_chars_is_not_swallowed_into_the_like_fallback() {
+        let db = test_db();
+        db.save_message(
+            "test-session",
+            "user",
+            "the quick brown fox jumps",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            "test-session",
+            "user",
+            "quick brown bears are elsewhere",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
+
+        // A well-formed quoted phrase must keep its FTS meaning (this is the
+        // no-regression case; the malformed case is the mutation guard below).
+        let results = db
+            .search_messages_fts("\"quick brown fox\"", None, Some(10))
+            .expect("an FTS query must not degrade silently");
+        assert_eq!(
+            results.len(),
+            1,
+            "the quoted phrase should match exactly one message"
+        );
+        assert!(results[0].content.contains("jumps"));
+    }
+
+    #[test]
+    fn a_query_with_an_unterminated_quote_is_not_swallowed_into_the_like_fallback() {
+        let db = test_db();
+        db.save_message(
+            "test-session",
+            "user",
+            "quick brown fox",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message("test-session", "user", "fox bears", "2024-01-01T00:00:01Z")
+            .unwrap();
+
+        // An UNTERMINATED quote is the classic FTS5 parse error. Raw, this hit
+        // `Err(_) => LIKE` and matched every message containing "fox".
+        let results = db
+            .search_messages_fts("quick \"brown\\", None, Some(10))
+            .expect("a malformed FTS phrase must not degrade silently");
+        // Escaped, FTS5 reads the quoted phrase as the words `quick brown`
+        // (the inner escaped quote is literal), so the "quick brown fox"
+        // message matches and the "fox bears" one does not. What matters for
+        // this regression is that it is ONE message, not the substring match
+        // on "fox" that the LIKE fallback returned for both.
+        assert_eq!(
+            results.len(),
+            1,
+            "the escaped phrase should match one message, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn a_query_with_fts_keywords_is_matched_as_text() {
+        let db = test_db();
+        db.save_message(
+            "test-session",
+            "user",
+            "fox AND bears together",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            "test-session",
+            "user",
+            "bears alone",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
+
+        // `AND` is FTS grammar: unescaped, this was a CONJUNCTION (and then a
+        // parse error turning into LIKE). Escaped, it is the literal phrase.
+        let results = db
+            .search_messages_fts("fox AND bears", None, Some(10))
+            .expect("keyword-carrying query must not degrade silently");
+        assert_eq!(
+            results.len(),
+            1,
+            "the literal phrase should match one message, got {}",
+            results.len()
+        );
     }
 
     #[test]

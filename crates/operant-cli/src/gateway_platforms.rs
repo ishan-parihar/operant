@@ -136,14 +136,40 @@ fn setup_whatsapp(config: &mut AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// First `n` chars of `s`, cut on a char boundary.
+///
+/// A byte slice (`&s[..n]`) panics when byte `n` lands inside a multi-byte
+/// char. Hostnames can be internationalised, so this is the RT-301 class.
+fn char_prefix(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Last `n` chars of `s`, cut on a char boundary. See `char_prefix`.
+fn char_suffix(s: &str, n: usize) -> String {
+    let skip = s.chars().count().saturating_sub(n);
+    s.chars().skip(skip).collect()
+}
+
+/// Mask a long hostname for display: first `edge` chars, an ellipsis, last
+/// `edge` chars. A short value is returned whole.
+///
+/// Char-boundary safe: an internationalised hostname can carry multi-byte chars,
+/// and a byte slice at `edge` could land inside one. Same class as RT-301/313/317.
+fn mask_host(host: &str, threshold: usize, edge: usize) -> String {
+    if host.len() <= threshold {
+        return host.to_string();
+    }
+    format!(
+        "{}\u{2026}{}",
+        char_prefix(host, edge),
+        char_suffix(host, edge)
+    )
+}
+
 fn setup_email_smtp(config: &mut AppConfig) -> Result<()> {
     print_platform_header("Email (SMTP)");
     if let Some(host) = &config.gateway.email_smtp_host {
-        let masked = if host.len() > 20 {
-            format!("{}…{}", &host[..10], &host[host.len() - 10..])
-        } else {
-            host.clone()
-        };
+        let masked = mask_host(host, 20, 10);
         println!(
             "  {} SMTP host: {} {}",
             style("SMTP").bold(),
@@ -258,4 +284,36 @@ fn setup_webhooks(config: &mut AppConfig) -> Result<()> {
 
     config.gateway.webhooks_enabled = config.gateway.webhooks_addr.is_some();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{char_prefix, char_suffix, mask_host};
+
+    // The production helpers. These must call the real ones, not a local copy of
+    // the logic: an earlier version of this suite passed WITH the byte-slice bug
+    // restored, which is how a vacuous regression test ships.
+    #[test]
+    fn a_multibyte_host_is_masked_without_panicking() {
+        // "a"*9 then é (2 bytes): byte 10 lands INSIDE the é, so &host[..10]
+        // panics. 20 more bytes puts it past the 20-byte threshold.
+        let host = format!("{}é{}", "a".repeat(9), "b".repeat(20));
+        assert!(host.len() > 20);
+        let masked = mask_host(&host, 20, 10);
+        assert!(masked.contains('\u{2026}'), "masked: {masked}");
+        assert!(masked.ends_with("bbbbbbbbbb"), "kept the tail: {masked}");
+    }
+
+    #[test]
+    fn a_short_host_is_returned_whole() {
+        assert_eq!(mask_host("smtp.example.com", 20, 10), "smtp.example.com");
+    }
+
+    #[test]
+    fn prefix_and_suffix_respect_char_boundaries() {
+        let s = "日本語テストデータ";
+        assert_eq!(char_prefix(s, 2), "日本");
+        assert_eq!(char_suffix(s, 2), "ータ");
+        assert_eq!(mask_host(s, 10, 2), "日本\u{2026}ータ");
+    }
 }

@@ -174,13 +174,13 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         let abs_idx = start + i;
         let selected = abs_idx == state.selected_file;
 
-        // Truncate path to fit
+        // Truncate path to fit. `take_width` cuts on a grapheme boundary:
+        // `file.path` is a filesystem path from `git diff` output, so a
+        // non-ASCII name (cafes with accents, CJK) whose cut lands mid-char
+        // would panic the draw with a byte-index-not-a-char-boundary error.
+        // Same class as RT-301, RT-313, RT-317.
         let avail = inner.width.saturating_sub(10) as usize;
-        let path = if file.path.len() > avail {
-            format!("…{}", &file.path[file.path.len() - avail..])
-        } else {
-            file.path.clone()
-        };
+        let path = truncate_path(&file.path, avail);
 
         let is_collapsed = *state.collapsed.get(abs_idx).unwrap_or(&false);
         let collapse_char = if is_collapsed { "\u{25b8}" } else { "\u{25be}" }; // ▸ / ▾
@@ -630,3 +630,50 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Truncate a diff file path to `avail` display cells, prefixing an ellipsis.
+///
+/// `file.path` is a filesystem path from `git diff` output, so a non-ASCII name
+/// is ordinary. Cutting with a byte slice (`&file.path[file.path.len() - avail..]`)
+/// panics when the cut lands inside a multi-byte char, killing the draw. Same
+/// class as RT-301 / RT-313 / RT-317.
+fn truncate_path(path: &str, avail: usize) -> String {
+    if path.len() <= avail {
+        path.to_string()
+    } else {
+        format!("\u{2026}{}", take_width(path, avail))
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::truncate_path;
+
+    // The production helper. These tests must call it, not re-implement it:
+    // an earlier version of this test called `take_width` directly and PASSED
+    // with the byte-slice bug restored, which is how a vacuous test ships.
+    #[test]
+    fn a_multibyte_diff_path_is_truncated_without_panicking() {
+        // Byte `avail` lands inside a 3-byte CJK char here.
+        let path = "src/日本語のファイル名がとても長い場合のテスト.rs";
+        let out = truncate_path(path, 10);
+        assert!(out.starts_with('\u{2026}'), "truncated: {out:?}");
+        assert!(
+            out.chars().count() <= 11,
+            "bounded: {}",
+            out.chars().count()
+        );
+    }
+
+    #[test]
+    fn an_accented_path_is_truncated_without_panicking() {
+        let path = format!("src/{}{}.rs", "café".repeat(8), "x".repeat(20));
+        let out = truncate_path(&path, 8);
+        assert!(out.starts_with('\u{2026}'));
+    }
+
+    #[test]
+    fn a_short_path_is_untouched() {
+        assert_eq!(truncate_path("a.rs", 10), "a.rs");
+    }
+}

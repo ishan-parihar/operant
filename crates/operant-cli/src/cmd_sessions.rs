@@ -11,6 +11,26 @@ use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::database::Database;
 
+/// Truncate a session title for the one-line list display.
+///
+/// Cuts on a CHAR boundary. A byte slice (`&title[..39]`) panicked whenever byte
+/// 39 fell inside a multi-byte char -- a session title is arbitrary conversation
+/// text, so an accented or CJK title is ordinary, not adversarial. Same class as
+/// RT-301 / RT-313 / RT-317.
+fn truncate_title(title: &str) -> String {
+    const MAX: usize = 40;
+    if title.len() <= MAX {
+        return title.to_string();
+    }
+    let cut = title
+        .char_indices()
+        .take_while(|(i, _)| *i < MAX - 1)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}\u{2026}", &title[..cut])
+}
+
 /// Manage conversation sessions
 #[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
@@ -466,11 +486,7 @@ async fn cmd_browse(config: &AppConfig) -> Result<()> {
         .enumerate()
         .map(|(i, s)| {
             let title = s.title.as_deref().unwrap_or("(untitled)");
-            let display_title = if title.len() > 40 {
-                format!("{}…", &title[..39])
-            } else {
-                title.to_string()
-            };
+            let display_title = truncate_title(title);
             format!(
                 "{} | {:.8} | {} ({} msgs)",
                 i + 1,
@@ -790,5 +806,48 @@ mod tests {
 
         let resolved = resolve_session(&db, None).expect("no-id resume must resolve");
         assert_eq!(resolved.id, "newer", "no id means most recent");
+    }
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::truncate_title;
+
+    // A session title is arbitrary conversation text (the `sessions.title`
+    // column), so it can carry any UTF-8. The old `&title[..39]` panicked
+    // whenever byte 39 fell inside a multi-byte char. Same class as
+    // RT-301 / RT-313 / RT-317.
+    //
+    // The regression: an accented title long enough to take the truncation
+    // branch, where the 39-byte cut lands inside the multi-byte char. Under the
+    // old byte-slice code this test panics; under the char-boundary cut it
+    // passes. Mutation-prove by restoring the byte slice.
+    #[test]
+    fn a_multibyte_session_title_does_not_panic_when_truncated() {
+        // 38 ASCII then "é" (2 bytes): byte 39 is INSIDE the é.
+        let title = format!("{}é{}", "a".repeat(38), "b".repeat(10));
+        assert!(title.len() > 40, "must take the truncation branch");
+        let out = truncate_title(&title);
+        assert!(out.ends_with('\u{2026}'), "truncated: {out:?}");
+        // Bounded in CHARS (the ellipsis is one char), not bytes: the cut is
+        // 39 bytes, which for a multi-byte char is fewer than 39 chars.
+        assert!(
+            out.chars().count() <= 40,
+            "char-bounded: {} chars",
+            out.chars().count()
+        );
+    }
+
+    #[test]
+    fn a_cjk_session_title_does_not_panic_when_truncated() {
+        let title = "日本語のセッションタイトルです、これはとても長い文章です".to_string();
+        assert!(title.len() > 40);
+        let out = truncate_title(&title);
+        assert!(out.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn a_short_title_is_returned_unchanged() {
+        assert_eq!(truncate_title("hello"), "hello");
     }
 }
