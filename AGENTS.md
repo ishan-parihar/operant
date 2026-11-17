@@ -343,6 +343,36 @@ incident happened.
     origin branch is a peer's in-flight leg — coordinate (rule 3) or
     leave it; never prune blind. The owner-ordered worktree retirement
     (iter-631) removed the *pattern*, not the duty to check.
+12. **A shared worktree's HEAD is DETACHED and SHARED — a peer's `reset`
+    can delete YOUR commit, so push the moment you commit and know how to
+    get it back.** (ADDED iter-2600 after a commit was destroyed under me.)
+    MEASURED 2026-11-18: `git symbolic-ref -q HEAD` in this shared tree
+    prints nothing ("no branch") — every agent here works on ONE detached
+    HEAD. Its reflog recorded exactly this sequence:
+    `HEAD@{2}: commit: docs(iter-2599)` (mine), then
+    `HEAD@{1}: reset: moving to origin/main` (a PEER syncing themselves),
+    then `HEAD@{0}: commit: docs(iter-2600)` (the peer's next commit on
+    the same HEAD). A `reset --hard`/`checkout` aimed at "catch up to
+    origin" moves the SHARED head and silently discards whatever commit
+    was sitting on it. Rules 2 and 4 forbid YOU from doing that; they do
+    not stop a peer doing it, so two disciplines follow:
+    - **Push immediately after every commit, then confirm.** Do not batch
+      a session's commits and push at the end: an unpushed commit in this
+      tree is one peer `reset` away from being orphaned. Rule 1's
+      "push, confirm" is the whole defence.
+    - **If `git log --oneline -1` is no longer your commit and a push
+      reported a non-fast-forward you did not cause, run
+      `git reflog` FIRST.** The object survives the ref move, so recovery
+      is `git cherry-pick <your-sha>` — but check `git show <sha>^` for
+      whose commit it sits on before pushing it back: if the parent is a
+      peer's commit they deliberately discarded, do NOT resurrect their
+      chain. Instead rebuild your own change on current `origin/main` in a
+      throwaway worktree (`git worktree add /tmp/<label>-push HEAD`), which
+      leaves the shared dirty tree and its peer WIP untouched.
+    - **Never `git reset`, `git checkout <ref>` or `git stash` to "clean up"
+      this shared tree.** They move or empty the head a peer is relying
+      on, and rule 9's stash mechanics are untracked-unaware. Stage only
+      your explicit paths (rule 3) and leave everything else alone.
 
 ### What Counts as an Iteration
 
