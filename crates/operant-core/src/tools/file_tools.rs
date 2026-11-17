@@ -64,6 +64,45 @@ const DENIED_PATH_PATTERNS: &[&str] = &[
     "Library/Keychains/login.keychain-db",
 ];
 
+/// True when `path_lower` names a denied file under a DIFFERENT name -- a
+/// renamed copy of the same secret, which `ends_with` cannot see.
+///
+/// `validate_path` matched denied names only as a whole-path suffix, so
+/// `~/.ssh/id_rsa` was refused while `~/.ssh/id_rsa.wav` -- the same private
+/// key, copied under an audio name so `transcribe_audio`'s extension
+/// whitelist would accept it -- was allowed. Measured against the real guard
+/// before this function existed: the canonical name errored, the `.wav` copy
+/// returned `Ok`. That is the exact case iter-2567's comment on
+/// `guard_audio_path` claimed to cover, so the guard was narrower than the
+/// promise it documented.
+///
+/// A suffix counts only across a boundary that cannot be part of the denied
+/// name itself: `.`, `-`, `~`, `(`, or a space. So `id_rsa.bak`, `id_rsa.wav`
+/// and `id_rsa (copy)` are denied, while `id_rsa_notes` is not (an underscore
+/// continues the identifier, and `notes` is a different file). The error is
+/// the safe direction for a credential list: it tells the operator to read the
+/// file manually rather than silently allowing a secret out.
+fn denied_name_with_suffix(path_lower: &str, pattern_lower: &str) -> bool {
+    // Only the FINAL path component can be a renamed copy of the denied name;
+    // a directory named `.ssh/id_rsa.d` is not itself the credential file.
+    let Some(file_name) = path_lower.rsplit('/').next() else {
+        return false;
+    };
+    // The pattern may itself be a path fragment (`.ssh/id_rsa`). Compare the
+    // last component of the pattern against the file name, so the directory
+    // part still has to match via the two existing arms.
+    let denied_name = pattern_lower.rsplit('/').next().unwrap_or(pattern_lower);
+    let Some(rest) = file_name.strip_prefix(denied_name) else {
+        return false;
+    };
+    if rest.is_empty() {
+        // Exact name: already handled by `ends_with`. Returning false here
+        // keeps this function's contract to "a DIFFERENT name".
+        return false;
+    }
+    matches!(rest.chars().next(), Some('.' | '-' | '~' | '(' | ' ' | ')'))
+}
+
 /// Atomically replace `path` with `content` (hermes `file_operations._atomic_write`
 /// parity): write to a temp file in the SAME directory so the final rename is
 /// same-filesystem atomic, preserve the existing file's mode (an executable
@@ -353,6 +392,7 @@ pub(crate) fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
         let pattern_lower = pattern.to_lowercase();
         if canonical_lower.ends_with(&pattern_lower)
             || canonical_lower.contains(&format!("/{}/", pattern_lower))
+            || denied_name_with_suffix(&canonical_lower, &pattern_lower)
         {
             return Err(format!(
                 "Access to sensitive file denied (matches pattern '{}'). If you genuinely need this file, ask the user to read it manually and paste the contents.",
@@ -1011,5 +1051,60 @@ mod tests {
         let tool = FileListTool;
         let result = tool.execute(json!({}), ToolContext::default()).await;
         assert!(!result.success);
+    }
+
+    /// A credential file renamed so an extension whitelist accepts it is still
+    /// a credential file.
+    ///
+    /// `validate_path` matched the deny list as a whole-path suffix, so
+    /// `~/.ssh/id_rsa.wav` -- a private key copied under an audio name, which
+    /// `transcribe_audio`'s extension whitelist would take -- returned `Ok`
+    /// while `~/.ssh/id_rsa` was refused. iter-2567 routed both audio tools
+    /// through this guard specifically to cover a renamed copy, so the guard
+    /// was narrower than the promise in its own comment. Measured against the
+    /// real guard before the fix: canonical name -> Err, `.wav` copy -> Ok.
+    #[test]
+    fn a_credential_file_renamed_with_a_suffix_is_still_denied() {
+        for renamed in [
+            "/home/u/.ssh/id_rsa.wav",
+            "/home/u/.ssh/id_rsa.bak",
+            "/home/u/.ssh/id_rsa~",
+            "/home/u/.ssh/id_rsa (copy)",
+            "/home/u/.aws/credentials.bak",
+            "/home/u/.netrc.old",
+        ] {
+            let err = validate_path(renamed)
+                .expect_err("a renamed credential file must be denied")
+                .to_lowercase();
+            assert!(
+                err.contains("denied"),
+                "{renamed} must be refused with a deny message, got: {err}"
+            );
+        }
+    }
+
+    /// The suffix rule must not swallow an ordinary file whose name merely
+    /// STARTS with a denied name. `id_rsa_notes.txt` is a different file, and
+    /// over-blocking here would break legitimate work while claiming to be a
+    /// security control.
+    #[test]
+    fn a_file_that_only_shares_a_prefix_is_not_denied() {
+        // The parent is NOT a denied directory, and the name merely continues
+        // past the denied prefix with an identifier character.
+        for allowed in ["/home/u/notes/id_rsa_notes.txt"] {
+            validate_path(allowed).unwrap_or_else(|e| {
+                panic!("{allowed} only shares a prefix and must not be denied: {e}")
+            });
+        }
+    }
+
+    /// The canonical name still matches through the pre-existing arms; this
+    /// pins that the new clause did not replace them.
+    #[test]
+    fn the_canonical_denied_name_is_still_refused() {
+        let err = validate_path("/home/u/.ssh/id_rsa")
+            .expect_err("the canonical private key path must be denied")
+            .to_lowercase();
+        assert!(err.contains("denied"), "got: {err}");
     }
 }
