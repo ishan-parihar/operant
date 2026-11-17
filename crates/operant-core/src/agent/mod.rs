@@ -296,7 +296,13 @@ impl From<&BehaviorSettings> for AgentConfig {
             // above claimed facades thread the operator's switch — the same defect
             // iter-1631 fixed for `show_turn_attribution`, one line above.
             loop_detection_enabled: settings.loop_detection_enabled,
-            approval_mode: "smart".to_string(),
+            // THREADED, not a literal, for the same reason as the two above:
+            // `approval_mode` is documented in docs/library/security.md as an
+            // operator setting, and `approval.rs` hangs the blast-radius gate off
+            // it, but this line hardcoded "smart" — so the only way to reach
+            // "manual" or "off" was a code change, and the config key was
+            // rejected as unknown.
+            approval_mode: settings.approval_mode.clone(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
             record_trajectories: false,

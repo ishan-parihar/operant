@@ -356,6 +356,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "true",
         "Whether core's cross-iteration repetition circuit breaker (an identical tool-call streak, R35) and its warning nudge are active. Default on. Reachable from `operant.toml` as `[agent] loop_detection_enabled`. iter-2462 threaded it: `AgentConfig::from(&BehaviorSettings)` filled it with a literal `true` while the field's own doc claimed facades thread the operator's switch — the identical defect iter-1631 fixed for show_turn_attribution, one line above, left next to the comment describing that fix. Set false when a workflow legitimately repeats the same call.",
     ),
+    (
+        "agent.approval_mode",
+        "smart",
+        "Tool-approval posture: `smart` (default, pattern-based checks), `manual` (prompt for every tool), or `off` (no checks at all, including the blast-radius gate). Documented in docs/library/security.md since before it was reachable: `From<&BehaviorSettings>` hardcoded the literal `smart` — the same unwired-switch defect iter-1631/2462 fixed for show_turn_attribution and loop_detection_enabled, two entries above. Because BehaviorSettings denies unknown fields, an operator's `[agent] approval_mode` was parked as unknown rather than silently ignored, so the loader did say so — but the key could not be set. Set `off` only on a host you control: it disables a safety guard.",
+    ),
     ("agent.stream", "true", "<no note>"),
     ("agent.system_prompt", "None", "<no note>"),
     ("agent.tool_progress", "ToolProgressMode::Auto", "<no note>"),
@@ -2013,6 +2018,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "agent.approval_mode",
+        widget: Widget::Cycle,
+        live: true,
+    },
+    SettingRow {
         key: "agent.stream",
         widget: Widget::Bool,
         live: true,
@@ -3649,6 +3659,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "agent.show_reasoning",
     "agent.show_turn_attribution",
     "agent.loop_detection_enabled",
+    "agent.approval_mode",
     "agent.stream",
     "agent.system_prompt",
     "agent.tool_progress",

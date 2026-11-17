@@ -182,6 +182,13 @@ show_turn_attribution = true
 # streak) and its warning nudge. Default ON; set false to disable the breaker
 # when a workflow legitimately repeats the same call.
 loop_detection_enabled = true
+# Tool-approval posture: "smart" (default, pattern-based checks),
+# "manual" (prompt for every tool), or "off" (no checks at all, including
+# the blast-radius gate). Was documented but UNWIREABLE until iter-2571:
+# `From<&BehaviorSettings>` hardcoded "smart", and because this struct
+# denies unknown fields the key was rejected as unknown rather than applied.
+# "off" disables a safety guard — set it only on a host you control.
+approval_mode = "smart"
 # Largest share of `context_window` that ONE tool result may occupy before its
 # bulk is withheld behind an explicit marker (iter-357). The kept head, the
 # token count, the per-token price and the number of tokens removed are all

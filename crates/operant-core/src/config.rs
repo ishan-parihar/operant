@@ -715,6 +715,20 @@ pub enum ReasoningEffortParam {
 #[serde(default, deny_unknown_fields)]
 pub struct BehaviorSettings {
     pub model: String,
+    /// Approval mode for tool execution: "smart" (default, pattern-based),
+    /// "manual" (prompt for every tool), or "off" (no checks).
+    ///
+    /// Documented in `docs/library/security.md` as an operator setting, but
+    /// until this field existed `AgentConfig::from(&BehaviorSettings)` hardcoded
+    /// the literal `"smart"` — the one field in that impl that was not threaded.
+    /// Because `BehaviorSettings` carries `deny_unknown_fields`, writing
+    /// `[agent] approval_mode = "off"` did not silently no-op: the loader parked
+    /// the key in `<config>.unknown.toml` and printed "names keys this operant
+    /// build does not know", so the operator was told the key was ignored. The
+    /// blast-radius gate hangs off this value (`approval.rs`), so "off" really
+    /// does disable it.
+    #[serde(default = "default_approval_mode")]
+    pub approval_mode: String,
     pub max_iterations: usize,
     pub tool_timeout_secs: u64,
     pub request_timeout_secs: u64,
@@ -1094,6 +1108,12 @@ fn default_fallback_on_errors() -> bool {
     true
 }
 
+/// The default approval posture. Mirrors `AgentConfig`'s own default so the two
+/// can never disagree about what an unset key means.
+fn default_approval_mode() -> String {
+    "smart".to_string()
+}
+
 fn default_memory_nudge_interval() -> usize {
     10
 }
@@ -1232,6 +1252,7 @@ impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
             model: "gpt-4".to_string(),
+            approval_mode: default_approval_mode(),
             max_iterations: 90,
             tool_timeout_secs: 30,
             request_timeout_secs: 120,
@@ -4586,19 +4607,28 @@ mod tests {
         );
     }
 
-    /// iter-2462: the loop-detection kill switch is REACHABLE.
+    /// iter-2462 / iter-2571: TWO operator switches are REACHABLE —
+    /// `loop_detection_enabled` and `approval_mode`.
     ///
-    /// The defect: `AgentConfig::from(&BehaviorSettings)` filled
+    /// The defect, twice: `AgentConfig::from(&BehaviorSettings)` filled
     /// `loop_detection_enabled` with a literal `true` while the field's own doc
     /// claimed facades thread the operator's switch — the identical bug iter-1631
     /// fixed for `show_turn_attribution`, one line above it, left sitting next to
     /// the comment describing that fix. Every construction site set true, so no
     /// operator could turn the breaker off.
     ///
+    /// `approval_mode` was the same shape and survived longer: it is documented
+    /// in docs/library/security.md with three settings, `approval.rs` hangs the
+    /// blast-radius gate off it, and this impl hardcoded `"smart"`. Because
+    /// BehaviorSettings denies unknown fields, the operator's `[agent]
+    /// approval_mode = "off"` was not silently dropped — the loader parked it in
+    /// `<config>.unknown.toml` and said so — but the key could not be set at all.
+    ///
     /// This asserts the property that matters: the value comes from the settings,
-    /// in BOTH directions, and defaults to ON so existing configs are unchanged.
+    /// in BOTH directions, and defaults are unchanged so existing configs behave
+    /// exactly as before.
     #[test]
-    fn loop_detection_is_threaded_from_settings_not_hardcoded() {
+    fn operator_switches_are_threaded_from_settings_not_hardcoded() {
         // The default must stay ON: an operator who never set the key keeps the
         // behaviour they had.
         assert!(
@@ -4627,6 +4657,38 @@ mod tests {
             "a true setting must reach AgentConfig"
         );
 
+        // `approval_mode` is documented in docs/library/security.md and
+        // `approval.rs` hangs the blast-radius gate off it, but `From` hardcoded
+        // the literal "smart" — so "manual" and "off" were unreachable without a
+        // code change, and the config key itself was rejected as unknown.
+        // Assert BOTH directions: a non-default must reach AgentConfig, and the
+        // default must still be "smart" (the assertion above would pass if the
+        // field were hardwired to any non-"smart" value).
+        let off = BehaviorSettings {
+            approval_mode: "off".to_string(),
+            ..BehaviorSettings::default()
+        };
+        assert_eq!(
+            crate::agent::AgentConfig::from(&off).approval_mode,
+            "off",
+            "approval_mode = \"off\" must reach AgentConfig, or the documented \
+             kill switch is decorative"
+        );
+        let manual = BehaviorSettings {
+            approval_mode: "manual".to_string(),
+            ..BehaviorSettings::default()
+        };
+        assert_eq!(
+            crate::agent::AgentConfig::from(&manual).approval_mode,
+            "manual",
+            "approval_mode = \"manual\" must reach AgentConfig"
+        );
+        assert_eq!(
+            crate::agent::AgentConfig::from(&BehaviorSettings::default()).approval_mode,
+            "smart",
+            "an unset approval_mode must still mean \"smart\""
+        );
+
         // And it must survive a TOML round-trip, which is the path an operator's
         // operant.toml actually takes.
         let parsed: BehaviorSettings =
@@ -4634,6 +4696,20 @@ mod tests {
         assert!(
             !parsed.loop_detection_enabled,
             "the key must be readable from operant.toml"
+        );
+
+        // The operator path for approval_mode specifically: this is the exact
+        // line that used to be parked as an unknown key, because the field did
+        // not exist on BehaviorSettings at all.
+        let parsed: BehaviorSettings = toml::from_str("approval_mode = \"off\"\n").expect("parses");
+        assert_eq!(
+            parsed.approval_mode, "off",
+            "[agent] approval_mode must be readable from operant.toml"
+        );
+        assert_eq!(
+            crate::agent::AgentConfig::from(&parsed).approval_mode,
+            "off",
+            "and it must reach the agent, not just the settings struct"
         );
     }
 
