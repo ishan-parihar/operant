@@ -94,6 +94,12 @@ the alias table and the config-value table (all four derived from the code). So:
 Same rule for config keys: a backticked `snake_case` name in a Configuration
 section is a key that must exist in `crates/operant-core/src/config.rs`.
 
+A `path:NNN` line citation is ADVISORY, not a claim: line numbers drift every
+time the file changes, so a citation that was exact when written becomes wrong
+months later and nothing catches it. Cite the module by path (which the E303 gate
+checks exists) and the symbol by name; add `:NNN` only when the line number adds
+reader value beyond the symbol, and expect it to rot.
+
 ## What the gate runs against your page
 
 Five codes, and the first four are what the genome runs on every lint:

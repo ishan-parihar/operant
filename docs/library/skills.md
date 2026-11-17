@@ -79,7 +79,7 @@ skill whose platform, env vars, or required commands are missing.
 `web_search` to work". The 2026-10-31 codex contrast found the equivalent in the
 codex tree's skills model (a 15-LOC struct) and recorded it as the one row in that
 family worth importing — wired to the tool `is_available()` the registry already has
-(`crates/operant-core/src/tools.rs:325`, called at `:640`, `:655`, `:686`, `:728`), so
+(`crates/operant-core/src/tools.rs:342`, the trait method; the registry's async `is_available` is at `:993`), so
 no new mechanism is needed, only the declaration and the check.
 
 Row: `docs/audit/2026-10-31-codex-architecture-deepen/03-skills.md` and

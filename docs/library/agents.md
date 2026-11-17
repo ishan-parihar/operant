@@ -140,9 +140,9 @@ removes the block a running delegation would have reported against, so every
 row still `running` or `queued` becomes `abandoned`. Without it a delegation
 silently disappears from the roster with no terminal state.
 
-`open_agents_menu` (`crates/operant-cli/src/tui/app/commands.rs:2542`) is the
+`open_agents_menu` (`crates/operant-cli/src/tui/app/commands.rs:2626`) is the
 one converter from that string to the `AgentStatus` enum the view renders
-(`agents_view.rs:26`, with `Idle`/`Running`/`WaitingForTool`/`Complete`/`Failed`
+(`crates/operant-cli/src/tui/agents_view.rs:26`, with `Idle`/`Running`/`WaitingForTool`/`Complete`/`Failed`
 and a colour per state). The mapping is liberal on purpose: `complete`,
 `completed` and `done` all map to Complete; `failed` and `error` both map to
 Failed; anything unrecognised falls through to Idle.
