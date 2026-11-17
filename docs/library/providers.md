@@ -8,10 +8,13 @@ machinery (here, §OAuth), the `[client]` config keys
 ([config.md](config.md)).
 
 Source: `crates/operant-core/src/client.rs` (OpenAI-compatible + SSE),
-`crates/operant-core/src/agent/clients/` (Anthropic adapter),
+`crates/operant-core/src/agent/clients/` (Anthropic adapter;
+`clients/openai.rs` is the loop's own adapter onto that client),
 `provider_catalog.rs`, `model_catalog.rs`, `models_dev.rs`,
 `credential_pool.rs`, `credential_files.rs`, `rate_limiter.rs`,
-`reasoning_timeouts.rs`, `oauth/` + `oauth_refresh.rs`,
+`agent/pooled_client.rs` (per-provider rotation),
+`reasoning_timeouts.rs`, `oauth/` (mod, pkce, singleflight, device,
+loopback, http, store) + `oauth_refresh.rs`,
 `crates/operant-cli/src/provider.rs` (CLI registry),
 `crates/operant-core/src/tools/platform_bases.rs`.
 
@@ -27,6 +30,21 @@ Two wire clients, selected by provider name:
   every row.
 - **`agent/clients/`** — the Anthropic adapter (messages API,
   `cache_control` breakpoints on the system prompt, thinking blocks).
+
+Behind those two wire clients sit four modules that name a route rather than
+carry bytes. `agent/model_client.rs` is the provider-agnostic trait itself:
+`ModelClient` plus the `ChatRequest` and `StreamChunk` types every adapter
+implements. `agent/chat_provider.rs` is the DECLARATION side — one trait
+implementation per vendor plus one registration line, naming that vendor's
+alternate spellings and model prefixes and its models.dev id for pricing;
+adding a provider is that pair of edits, and the live call stays in the
+fallback chain. `agent/runtime_key.rs` is the structural identity that
+replaces free-form display strings: a `RuntimeKey` is `{ vendor, model,
+revision }`, so two spellings of one runtime produce one key, and cache
+entries, cooldown bookkeeping and failover decisions key off something
+structural. `agent/provider_registry.rs` is the cross-provider fallback
+registry — a chain entry is turned into a `RuntimeKey` and the anti-thrash
+check runs over it, so an Anthropic → OpenAI chain does not oscillate.
 
 Tool schemas are normalized per provider by `schema.rs` +
 `crates/operant-api/src/schema.rs` (JSON Schema cleaning: unsupported
@@ -56,19 +74,38 @@ Two layers:
   failover and load balancing: thread-safe, configurable selection
   (fill-first, round-robin, random, least-used), seeding from
   env/config/OAuth refresh (iter-66).
+- **`agent/pooled_client.rs`** — the rotation LOOP, inside the client rather
+  than above it. `PooledModelClient` wraps a `ModelClient` with that
+  provider's `CredentialPool` and runs hermes's
+  `mark_exhausted_and_rotate` on a classified credential error: the key that
+  failed is marked exhausted with an error-class cooldown (401 → 5 min,
+  429 → 1 hour, a sole-credential transient → 60 s) and the next available
+  key is tried, bounded by the attempt budget. An error class with no
+  cooldown is not retried against a fresh key, because that is a request
+  the provider rejected rather than a credential that ran out.
 - **`credential_files.rs`** — the registry of protected credential files
   the agent must never read or send (`tools/file_tools.rs`'s hard-deny
   list is the built-in layer; this is the registerable layer on top).
 - The account side: `[oauth]` (authorization-code + PKCE, device-code,
   single-flight refresh; `mcp_oauth.rs` is the separate MCP-server OAuth
   path), `oauth_refresh.rs` (background refresh for provider-account
-  tokens — Anthropic, Codex, xAI, Nous). Two files under `oauth/` hold
-  the mechanics that paragraph names: `pkce.rs` mints the RFC 7636
+  tokens — Anthropic, Codex, xAI, Nous).
+- The flows under `oauth/`: `pkce.rs` mints the RFC 7636
   `code_verifier` / `code_challenge` pair and the RFC 6749 §10.12 `state`
-  parameter, and `singleflight.rs` (`RefreshCoordinator`) collapses N
+  parameter; `singleflight.rs` (`RefreshCoordinator`) collapses N
   concurrent callers that discover the same expiry into ONE
-  rotating-refresh-token spend per account. API keys live in
-  `~/.operant/.env` (0600), never in the config file.
+  rotating-refresh-token spend per account; `device.rs` is the RFC 8628
+  device grant for a box with no browser, with the SERVER owning the
+  polling cadence; `loopback.rs` is the redirect listener that binds an
+  ephemeral port instead of a fixed one (a hardcoded 8080 collides, can be
+  held by a stale process, and can be pre-bound by a hostile local process
+  that then receives the authorization code); `http.rs` is the injectable
+  `HttpEndpoint` boundary every flow depends on instead of `reqwest`, so a
+  test drives the code, device and refresh paths with canned responses;
+  `store.rs` is the account INDEX — keys and ordering, never tokens — whose
+  `TokenRef` serializes a truncated SHA-256 fingerprint, enforced
+  structurally rather than by convention.
+- API keys live in `~/.operant/.env` (0600), never in the config file.
 
 ## Rate limiting (`rate_limiter.rs`)
 
@@ -104,6 +141,23 @@ base. Both the gateway adapters and the agent's tools read from it; the
 tools used to hard-code public URLs while the adapters read config
 directly, so a `TELEGRAM_API_BASE` proxy could split-brain (RT-1xx
 family). One module, one truth.
+
+## Switching model or provider
+
+In the TUI, bare `/model` opens the inline picker over the live
+catalogue; `/model <selector>` takes the selector grammar
+`@role[:level]`, `role[:level]` or `[provider/]modelId[:level]`, and
+`/model set-default` writes the session's current model into
+`agent.model` without having made it the default silently.
+`/refresh-model-list` drops the cached `~/.operant/cache/models.json`
+and refetches. From the shell, `operant model` shows the live model,
+provider, base URL, streaming, context window and iteration cap
+(`--json` for the same as data), and `operant model set <name>`
+persists `agent.model`. The underlying keys are `[client] base_url`
+and `[client] api_key` for the route, `[agent] model` for the model,
+`[agent] fallback_models` plus `fallback_on_errors` for same-provider
+fallback, and the `[providers.models.<id>]` profiles with
+`[[providers.fallback_chain]]` for cross-provider failover.
 
 ## Intention
 

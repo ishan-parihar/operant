@@ -11,7 +11,13 @@ environment traps (`docs/RUNBOOK.md`).
 Source: `crates/operant-core/src/config.rs` (`AppConfig` and every
 settings struct), `crates/operant-core/src/config_registry.rs` (the
 GENERATED key table), `crates/operant-config/src/` (the shared section
-types `AppConfig` composes), `scripts/gen-config-registry.py` (the
+types `AppConfig` composes), `crates/operant-config/src/providers.rs`
+(the `[providers]` section types),
+`crates/operant-config/src/schema/core.rs`,
+`crates/operant-config/src/schema/memory_store.rs` (embedding routes
+and the memory store table),
+`crates/operant-config/src/schema/proxy.rs` (the `[proxy]` table and
+the runtime proxy config), `scripts/gen-config-registry.py` (the
 generator), `operant.example.toml` (the template).
 
 Counts on this page are as of commit `a80d65bc` and were derived from

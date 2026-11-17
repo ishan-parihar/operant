@@ -58,6 +58,22 @@ outputs 32×128 KB, aft stderr ring 64 lines, drained child pipes, …).
 landed with the arena cap + debounced malloc_trim at turn end
 (iter-1336/1337).
 
+## Checkpoints and rewind
+
+Filesystem checkpoints are the working-directory safety net: they are
+on when `[checkpoints] enabled` is true, the store lives under
+`[checkpoints] base_dir` (default `~/.operant/checkpoints`), and
+`[checkpoints] max_snapshots`, `max_total_size_mb` and
+`max_file_size_mb` bound what is captured. `operant checkpoints
+status` reports the store and the current directory's count,
+`list` prints the hashes, `prune [keep]` keeps the N newest
+(default 10), and `clear` drops this directory's set. The
+`checkpoint` tool (`ensure`, `list`, `restore`, `diff`) lets the agent
+take and restore one mid-mutation. Conversation rewinding is a
+different mechanism: `/rewind` opens the selector, `/rewind <n>`
+targets the Nth prompt back, and the rewind is a FORK into a new
+session, so the old transcript stays listed under `/session`.
+
 ## Intention
 
 One storage engine (SQLite, bundled, no external service) with

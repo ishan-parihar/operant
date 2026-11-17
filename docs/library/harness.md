@@ -8,7 +8,9 @@ Not for: the persistent Python kernel ([kernel.md](kernel.md)), plugins
 Source: `crates/operant-harness/src/` (`claim.rs`, `composition.rs`,
 `discovery.rs`, `effect.rs`, `harness.rs`, `host.rs`, `provider.rs`,
 `pool.rs`, `pool_provider.rs`, `report.rs`, `row.rs`, `swap.rs`,
-`wasm_provider.rs`), `crates/operant-core/src/harness_adapters.rs`,
+`wasm_provider.rs`, `error.rs` (the kernel error type), `metrics.rs`
+(G8 — atomic counters per state transition for a host metrics
+pipeline)), `crates/operant-core/src/harness_adapters.rs`,
 `harness_slots.rs`, `harness_seams_r3.rs`, `pool_adapter.rs`,
 `runtime_adapter.rs`, `crates/operant-cli/src/cmd_architecture.rs` (the
 operator surface).

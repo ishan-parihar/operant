@@ -11,15 +11,19 @@ surface ([cli-surface.md](cli-surface.md)).
 Source: `crates/operant-core/src/tools.rs` (registry + `OperantTool`
 trait), `crates/operant-core/src/tools/` (the families),
 `crates/operant-core/src/tools/clarify_tool.rs` (the `clarify` tool),
+`crates/operant-core/src/user_question.rs` (the channel it answers on),
 `crates/operant-core/src/tool_guardrails.rs`,
 `crates/operant-core/src/tools/tool_state.rs`,
 `crates/operant-core/src/tools/tool_search.rs` +
-`tools/tool_search/name_recovery.rs`, `crates/operant-core/src/aft_bridge.rs` +
+`tools/tool_search/name_recovery.rs`, `tools/tool_search/deferred.rs`
+(turn-triggered materialisation), `crates/operant-core/src/aft_bridge.rs` +
 `crates/operant-core/src/tools/aft_tools.rs`,
 `crates/operant-core/src/rtk_bridge.rs` (the rtk command-rewrite bridge),
 `crates/operant-core/src/terminal_hints.rs` (terminal-failure hints),
 `crates/operant-core/src/binary_updater.rs`,
 `crates/operant-core/src/schema.rs` (JSON Schema generation),
+`crates/operant-api/src/tool.rs` (the `Tool` trait + `ToolSpec` /
+`ToolResult` the registry and the WASM plugin bridge both satisfy),
 `crates/operant-cli/src/main.rs` (the conditional registrations the CLI
 adds on top of `builtin.rs`).
 
@@ -50,6 +54,14 @@ changes the agent's toolset.
 `tools/tool_search.rs` adds a **deferred-dispatch trio**: `tool_search`,
 `tool_describe`, `tool_call` — the model can discover and call tools
 without every schema riding the prompt (hermes tool_search parity).
+
+That bridge is MODEL-driven: a tool the model never thinks to search for stays
+invisible for the whole session. `tools/tool_search/deferred.rs` adds the
+TURN-driven half. When the current user turn overlaps a deferred tool's name
+or description, `materialise_for_turn` selects it and `materialise` re-injects
+it into the model-visible array for that request, idempotently — a tool
+already visible is never added twice, so applying it twice equals applying it
+once. `estimate_schema_tokens` reports what the deferral saved.
 
 ### The registration path, in order
 
@@ -147,11 +159,12 @@ itself is the 1,359-line `patch_tool.rs`.
 |---|---|---|
 | `memory_store`, `memory_search` | `tools/memory_tools.rs` | Retired names (`memory_recall`, `memory_save`, `memory_smart_search`) resolve through the registry's ALIAS layer at zero schema cost. The provider degrades to a logged miss, never a dead turn. See [memory.md](memory.md). |
 | `skills_list`, `skill_view`, `skill_manage` | `tools/skills_tool.rs` | Vendor roots come from `crates/operant-cli/src/skill_roots.rs` (ONE list). `skill_manage` stays pool-only, so a vendor skill can never be written in place. See [skills.md](skills.md). |
+| `clarify` | `tools/clarify_tool.rs` over `user_question.rs` | Pushes a `UserQuestionRequest` (question, choices, reply oneshot) onto the `USER_QUESTION_TX` static and awaits the oneshot; the TUI drains it into the `ask_user_dialog` and the answer becomes the tool result. A dismissed dialog drops the sender, the tool sees `RecvError`, and the model gets `[user dismissed the question]`. |
 | `sop` | `tools/sop_tool.rs` | Reads `~/.operant/sops/*.toml`; no name lists them, a name reads one. An unreadable or unknown SOP is an error result naming what it looked for. |
 | `cron` | `tools/cron_tool.rs` over `cronjobs::db::CronDb` | Cron expressions are calendar rules in UTC; `every N<unit>` phrases are fixed durations. Actions: `create`, `list`, `get`, `update`, `delete`, `pause`, `resume`. Delivery origin is captured from the live surface into the turn's `ToolContext` (RT-534), so a model cannot invent a delivery target. |
 | `kanban` | `tools/kanban_tool.rs` over `kanban::KanbanDb` | Action-keyed (`action` + optional fields). An unknown action or a missing required field is an error result naming it. |
 | `todo` | `tools/todo_tool.rs` | FILE-BACKED per session (`<operant_home>/todos/<hash>.json`) since iter-1234; a fresh process rehydrates from disk. Content and item count are capped, duplicates collapse, and `merge: true` updates by id. Active items are re-injected after compaction. |
-| `learning_manage` | `tools/learning_mutation_tool.rs` | `action = "delete"` or `"edit"` on a learning-graph node id. An unknown node or a malformed id is an error result from `learning_graph`. |
+| `learning_manage` | `tools/learning_mutation_tool.rs` over `agent/learning_graph.rs` | `action = "delete"` or `"edit"` on a learning-graph node id. An unknown node or a malformed id is an error result from `learning_graph`. |
 | `config_manage` | `tools/config_tool.rs` | `get` / `set` / `show` / `path` / `reload` against the process-global runtime config. A `set` is validated by round-tripping `AppConfig`; an invalid change is REJECTED, never silently applied. Changes are runtime-only by design — persistence is `operant config set` or a file edit. |
 | `checkpoint` | `tools/checkpoint_tool.rs` | Shadow-git snapshots; see [persistence.md](persistence.md). |
 | `session_search`, `session_insights`, `verify_task`, `evidence_recall` | `tools/session_search_tool.rs`, `tools/insights_tool.rs`, `tools/verification_tool.rs`, `tools/evidence_recall.rs` | `evidence_recall` resolves the key a compression marker named (default 4,096 chars, ceiling so one recovery cannot spend more context than the compression saved). An unknown key is an error result. |

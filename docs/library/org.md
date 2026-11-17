@@ -9,10 +9,19 @@ the injection seam), the kernel sidecar ([kernel.md](kernel.md)).
 
 Source: `crates/operant-core/src/org/` (mod, seat_policy,
 seat_policy_db, seat_budgets, seat_authority, context_injection,
-worklog), `crates/operant-os/src/` (the Holon runtime crate),
+worklog), `crates/operant-core/src/kanban/` (mod, db, dispatcher,
+diagnostics, notify, triage), `crates/operant-core/src/cronjobs/`
+(mod, db, lock, schedule, scheduler, suggestions),
+`crates/operant-core/src/curator/` (mod, archiver, backup, review), `crates/operant-os/src/` (the Holon runtime crate:
+`api.rs` — the read-only Holon API client over the `api_*` views;
+`supervisor.rs` — the per-org run supervisor that claims, spawns
+and leases bodies; `policy.rs` — `policy.json` → the live seat policy
+phase C; `enforcement.rs` — the seat authority mounted from that
+policy; `chair.rs` — the Chair's channel identity resolution and
+dispatch; `contract.rs` — the vendored `result.json` JSON Schemas;
+`archive.rs` — phase G one-time copy of the org stores),
 `crates/operant-core/src/kanban/`, `crates/operant-core/src/cronjobs/`,
-`crates/operant-core/src/curator/`,
-`crates/operant-cli/src/cmd_org.rs`, `cmd_kanban.rs`, `cmd_cron.rs`,
+`crates/operant-core/src/curator/`,`crates/operant-cli/src/cmd_org.rs`, `cmd_kanban.rs`, `cmd_cron.rs`,
 `cmd_budget.rs`. Read FIRST: `docs/agentic-os/README.md` and
 `docs/agentic-os/BOUNDARY.md`.
 

@@ -7,9 +7,17 @@ Not for: what gets injected into a turn ([context-injection.md](context-injectio
 the memory store ([memory.md](memory.md)).
 
 Source: `crates/operant-core/src/context_management.rs`,
-`crates/operant-core/src/context/` (mod, lcm, rollup, adaptive, embedder),
+`crates/operant-core/src/context_budget.rs` (per-surface costs),
+`crates/operant-core/src/context/` (mod, lcm, rollup, adaptive,
+embedder, assertion_extract), `crates/operant-core/src/historian.rs`
+(compartment planning; the fold rung is gone, iter-2404),
 `crates/operant-core/src/agent/llm_compressor.rs`,
-`crates/operant-core/src/tools/lcm_tools.rs`.
+`crates/operant-core/src/agent/compress.rs` (the preflight pass),
+`crates/operant-core/src/agent/evidence/` (mod, chain, classify, route,
+recall, types, methods/code.rs, methods/lossless.rs,
+methods/lossy.rs),
+`crates/operant-core/src/tools/lcm_tools.rs`,
+`crates/operant-core/src/tools/evidence_recall.rs`.
 
 ## Why this exists
 
@@ -88,7 +96,11 @@ nothing lost to compaction is truly gone) and `lcm_stats`.
 evidence-gated retrieval: multi-round recall that terminates once enough
 distinct evidence is gathered. `context/embedder.rs` collapses the
 embedding-provider contract to one `embed` call (`"local:hash"` for tests
-and zero-dependency setups).
+and zero-dependency setups). `context/assertion_extract.rs` is the opt-in
+LLM fact miner beside them: a structured call over recent conversation text
+that decodes `(subject, predicate, object)` triples, gated by
+`agent.context_lcm_assertion_extraction` and driven from
+`lcm_assert`'s `extract` action.
 
 ## 3. Scheduled autocompact — removed
 
@@ -97,6 +109,58 @@ caller, and the live compaction is `compact_history_now`
 (`crates/operant-core/src/agent/events.rs`), which the `/compact` command
 rides. The operator CLI surface is `operant context status / recall /
 sessions` (`crates/operant-cli/src/cmd_context.rs`).
+
+## 4. The evidence layer (tool-result shaping, `[compression]`)
+
+The ladder above shrinks CONVERSATION; the evidence layer under
+`agent/evidence/` shrinks TOOL RESULTS, at the one chokepoint where a result
+becomes model-visible text (after secret redaction, before the spend guard).
+`evidence/mod.rs` names the three properties it guarantees — never worse
+(a result is never larger afterwards), fail-open (a panicking method leaves
+the payload untouched), recoverable (a lossy method only runs when the full
+text is retrievable) — and `evidence/classify.rs` picks a
+`(Subject, ContentFormat)` pair for the result. `evidence/route.rs` then
+splits a JSON envelope into its payload fields, leaving metadata such as
+`exit_code` alone; `stderr` is deliberately never routed, because compressing
+it destroys the failure detail the model needed.
+
+`evidence/chain.rs` runs the selected methods in order and refuses to return
+a result larger than the input or to propagate a panic.
+`evidence/methods/lossless.rs` holds the methods that cannot lose
+information, and `evidence/methods/lossy.rs` the ones that can — every one
+of those declares a `Recovery::Recall`, and `evidence/methods/code.rs` (the
+comment stripper and the signature-only aggressive filter, both string-aware
+so a `//` inside a literal is not a comment) is the pair that exists because
+an `aft_read` of 2000 lines costs 10-25K tokens.
+
+`evidence/recall.rs` names where a lossy method's full text went. The owner
+is the SESSION STORE — the row the tool result was written to — so there is
+one copy rather than two that drift, and `tools/evidence_recall.rs` is the
+agent-facing tool that reads it back. That tool is deliberately NOT
+`lcm_recall`: the LCM tool searches earlier CONVERSATION, this one resolves
+a key in one session's tool results.
+
+## 5. The historian rung — removed
+
+`historian.rs` planned durable COMPARTMENTS for closed spans of a
+conversation, with the fold driven by `agent.context_historian`. The rung
+was deleted in iter-2404: the fold stored a summary and left the message list
+unchanged, so it saved no tokens, and its positional anchor went stale as
+soon as the summarizer rewrote the list upstream. The pure logic
+(`plan_span`, `validate_span`, `parse_compartment`, `fold_hash`) and the
+`compartments` table stay for a future design that keys compartments to
+stable message ids. The config key is accepted and ignored.
+
+## 6. Per-surface budgets (`context_budget.rs`)
+
+The agent pays for its TOOL SURFACE on every request, not once. The RT-192
+measurement behind this module: five memory tools cost ~590 tokens per
+request, and consolidating them to two removed ~178 permanently, because the
+redundancy was in the schemas that ride the wire each turn. `SurfaceCost`
+records what one surface costs, `ContextBudget` totals and ranks them against
+a target, and `optimize` returns the ranked reductions. The disclosure block
+this feeds is the `<context_budget>` block on the turn tail (see
+[context-injection.md](context-injection.md)).
 
 ## Prompt-cache stability (the constraint everything respects)
 

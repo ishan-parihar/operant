@@ -1,6 +1,6 @@
 //! DM/feed context injection — phase 1 (the cron seam).
 //!
-//! Design: `docs/plan-2026-10-08-dm-feed-context-injection.md` — approved
+//! Design: `docs/plans/plan-2026-10-08-dm-feed-context-injection.md` — approved
 //! 2026-10-08 with the owner's rulings: per-aspect character quotas (the
 //! MEMORY.md budget model, applied to four aspect classes) and re-ranking
 //! across the classes (recency + lexical affinity + author authority).

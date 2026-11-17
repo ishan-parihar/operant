@@ -1220,7 +1220,7 @@ impl CronScheduler {
 /// `repeat_times` semantics match hermes: `None` or `<= 0` means infinite.
 /// `repeat_completed` is the count BEFORE this run; the run itself pushes it
 /// to `repeat_completed + 1`.
-/// iter-666 (docs/plan-2026-10-07-two-tier-memory-hybrid.md): the seat's
+/// iter-666 (docs/plans/plan-2026-10-07-two-tier-memory-hybrid.md): the seat's
 /// curated MEMORY.md — its continuity thread — read at cycle start. No
 /// file (the cold-start state) returns the prompt byte-identical, so
 /// the wiring is dark-mergeable: upgrading operant cannot change a

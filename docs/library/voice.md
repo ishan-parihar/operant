@@ -10,7 +10,8 @@ store ([gateway.md](gateway.md)), the model message path
 ([agent-loop.md](agent-loop.md)).
 
 Source: `crates/operant-core/src/tools/tts_tool.rs` (dispatch + the
-built-ins), `crates/operant-core/src/tools/tts_provider.rs` (the trait and
+built-ins), `crates/operant-core/src/tools/phonon.rs` (the Phonon engine
+wrapper), `crates/operant-core/src/tools/tts_provider.rs` (the trait and
 error type), `crates/operant-core/src/tools/tts_registry.rs`
 (`TtsPluginRegistry`), `crates/operant-core/src/tools/tts_command_provider.rs`
 (`CommandProvider`), `crates/operant-core/src/tools/transcription_tool.rs`
@@ -76,8 +77,9 @@ validate the voice id and reject it (`edge-tts`: `ValueError: Invalid voice
 provider's own default, so an omitted `voice` works everywhere.
 
 **Phonon is the configured default** (`[tts] provider = "phonon"` in
-`operant.example.toml`): the engine loads lazily via `ptts`
-(`Synth::builder`), default voice `default`, backed by a revision-pinned
+`operant.example.toml`): the engine lives in `tools/phonon.rs` and loads
+lazily via `ptts` (`Synth::builder`), default voice `default`, backed by a
+revision-pinned
 GGUF checkpoint (`gradium/phonon-31m-en`, ~65 MB q8_0) cached under
 `~/.operant/cache/phonon/<repo>-<rev>/` (the one home owns it; a
 pre-iter-2524 `~/.cache/phonon/gradium/phonon-31m-en` tree is migrated on

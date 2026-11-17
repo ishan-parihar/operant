@@ -2,8 +2,7 @@
 //!
 //! Peripherals are the agent's "arms and legs": remote devices that run minimal
 //! firmware and expose capabilities (GPIO, sensors, actuators) as tools.
-//! See `docs/hardware-peripherals-design.md` for the communication protocol
-//! and firmware integration guide.
+//! See `docs/library/tools.md` for the tool-side contract and design.
 
 use async_trait::async_trait;
 

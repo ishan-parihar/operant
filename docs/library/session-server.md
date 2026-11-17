@@ -14,7 +14,9 @@ client and the default path), `crates/operant-core/src/socket_auth.rs` (the
 peer-authentication gate every UNIX-socket server here uses),
 `crates/operant-cli/src/cmd_acp.rs` (the ACP daemon and its thin client),
 `crates/operant-cli/src/gateway_runner.rs`
-(`start_gateway`, the `GatewaySessionHandler`, `SessionBus`, the slot counts),
+(`start_gateway`, the `GatewaySessionHandler`, `SessionBus`, the slot counts,
+and `gateway_runner/turn_state.rs` — the per-channel turn-state JSON for
+auto-continue recovery),
 `crates/operant-cli/src/cmd_gateway.rs` (`operant gateway run --socket`),
 `crates/operant-cli/src/main.rs` (`operant chat --attach`).
 

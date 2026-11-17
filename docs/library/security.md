@@ -24,7 +24,10 @@ up), `crates/operant-core/src/write_origin.rs` (`TASK_ORIGIN`),
 `crates/operant-core/src/write_approval.rs` (staged writes — also has zero
 production callers), `crates/operant-core/src/tool_guardrails.rs`,
 `crates/operant-core/src/tools/file_tools.rs` (path guards, `holon_command_fence`),
-`crates/operant-cli/src/hardening.rs` (startup process hardening).
+`crates/operant-cli/src/hardening.rs` (startup process hardening),
+`crates/operant-api/src/glob.rs` (the `*`-only matcher behind the two
+tool-exposure allowlists — the frozen dialect that is a permission
+widening, not a refactor, to extend).
 
 Counts below were read from the code on 2026-11-17 at `449c9dd2`; they move
 when the code moves.

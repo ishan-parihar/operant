@@ -60,6 +60,21 @@ HttpOnly cookie the CLI's browser launch exchanges); a foreign `Host`
 header is refused (AD-040). `operant dashboard server --stop` /
 `--status` manage a real pid file.
 
+## Reading a trace
+
+`operant logs show [N]` prints the last N lines (default 50) of the
+live log, `--level` and `--component` filter, and `operant logs follow`
+tails it like `tail -f`. `operant status` summarizes version, model,
+data dir, ESTOP state and harness mount counters (`--json` for
+scripts, `--deep` to add the API-key status). `operant insights
+sessions` walks the session history, and the `insights` tool answers
+the same questions from inside a turn. `operant dashboard server`
+serves the four-route status view on port 9119 and opens a browser;
+`--stop` and `--status` manage the pid file. The `[observability]`
+section selects an observer backend (`none` default, anything else
+means the console observer) and its OTLP keys are accepted but
+unread, so they are reported rather than exported.
+
 ## Intention
 
 Observability is opt-in wiring with zero hot-path cost: counters are
