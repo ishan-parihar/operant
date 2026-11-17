@@ -7,7 +7,7 @@ Not for: the harness kernel ([harness.md](harness.md)), MCP
 ([tools.md](tools.md)).
 
 Source: `crates/operant-plugins/src/` (lib, host, runtime, signature,
-wasm_tool, watcher, error),
+`wasm_tool.rs`, `watcher.rs`, `error.rs`),
 `crates/operant-cli/src/plugin_tools.rs` (tool + observer bridges),
 `crates/operant-cli/src/plugin_memory.rs` (memory bridge),
 `crates/operant-cli/src/plugins_install.rs`,

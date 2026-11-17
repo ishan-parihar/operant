@@ -10,7 +10,8 @@ Source: `crates/operant-core/src/agent/` (mod, run, builders, prompting,
 stream, turn_finalizer, turn_retry_state, turn_rules, turn_context,
 error_classifier, fallback, iteration_budget, stream_retry_budget,
 turn_end_heuristics, message_safety, runtime_key, pooled_client,
-provider_registry, chat_provider, model_client).
+provider_registry, chat_provider, model_client, compress, historian,
+learning_graph).
 
 The platform contract the loop is ported against is
 `crates/operant-api/src/runtime_traits.rs` — the `RuntimeAdapter` trait that
@@ -54,6 +55,41 @@ abort — the loop self-heals instead of dying.
 5. **Next iteration or stop** — `turn_end_heuristics.rs` detects cut-off /
    truncated responses and requests continuation instead of surfacing a
    partial answer as final (hermes `_has_natural_response_ending` parity).
+
+## Message and argument repair (`agent/message_safety.rs`)
+
+The model's output is not always a well-formed message list, and a strict
+provider rejects a malformed one for the WHOLE request.
+`agent/message_safety.rs` is the repair layer between the two, run from
+`agent/run.rs` before every send and from `agent/stream.rs` when an argument
+blob fails to parse:
+
+- `repair_tool_call_arguments` (`stream.rs:1091`) salvages a truncated or
+single-quoted argument string against the tool's own schema, and
+`unrepairable_args_message` is what the model sees when it cannot be
+salvaged: an actionable error result rather than a dead turn.
+- `drop_orphaned_tool_messages`, `repair_message_sequence`,
+`sanitize_tool_calls_for_strict_api` and `drop_thinking_only_and_merge_users`
+(`run.rs:4952-4975`, and again after a compaction at `compress.rs:540-547`)
+re-establish the invariant a strict API enforces: every tool result has its
+call, every call has its results, no orphan messages, no thinking-only turn.
+
+## Empty responses and turn rules (`agent/turn_rules.rs`)
+
+An empty assistant turn — no visible text, no reasoning, no tool calls — is a
+provider that answered with nothing, and accepting it as the final answer
+surfaces silence as success. `agent/turn_rules.rs` is the shared decision
+surface for that: `AssistantTurn::is_empty` is the one definition of "empty",
+`EmptyResponseCounter` carries the ladder (`EMPTY_RESPONSE_MAX_RETRIES` = 3,
+scored per turn and reset by a non-empty answer), and
+`is_degenerate_final_text` catches a final that is punctuation or a repeated
+character rather than prose.
+
+The module is deliberately pure data and pure functions — no agent handle, no
+provider, no I/O — so every caller reaches the same conclusion from the same
+scripted input instead of keeping its own copy of the ladder. Its header
+records why: the ladder, the emptiness test and the retry cap were duplicated
+across two agents, and R23/R24 already had to port the same fix twice.
 
 ## Failure handling: classify, then act
 
@@ -187,6 +223,21 @@ minimum instead of giving ineffective `/compact` advice.
 | Truncated final answer | continuation prompt | `turn_end_heuristics.rs` |
 | Repeated identical tool calls | guardrail ladder | `tool_guardrails.rs` |
 | Reasoning model slow-start | timeout floors | `reasoning_timeouts.rs` |
+
+## The compression pass (`agent/compress.rs`)
+
+`agent/compress.rs` is the preflight compression surface the loop drives, not
+a stage of the turn. `PreflightConfig` carries the knobs (threshold ratio,
+protected head/tail counts, pass and character caps) and the free functions
+next to it do the mechanical work: `fast_trim_tool_results` trims tool-result
+bulk, `repair_tool_pairs` re-pairs a message list whose tool calls and results
+were separated, `reinject_todos` puts the todo list back after a compaction
+removed it, `parse_context_limit_from_error` reads a provider's stated limit
+out of an overflow error, and `next_probe_tier` steps the probe down a tier.
+
+The file's own header says it is `agent/mod.rs`'s method-group impl block
+extracted verbatim, which is why the loop's compression code is reachable
+through one module rather than being spread across the turn.
 
 ## The agent-directory leaves
 

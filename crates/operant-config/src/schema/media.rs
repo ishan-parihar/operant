@@ -17,8 +17,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `max_images` (and the `trim_old_images` LRU policy) bounds the per-request
 /// image budget, but operators running shell-style tools over directories of
-/// personal or sensitive images should be aware of the upload semantics. See
-/// `docs/book/src/contributing/privacy.md` for the project's privacy stance.
+/// personal or sensitive images should be aware of the upload semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
 pub struct MultimodalConfig {

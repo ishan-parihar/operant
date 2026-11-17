@@ -279,6 +279,10 @@ one narrow concern; the layering table above says which plane owns them, and
 this is the stem list a reader needs to find one:
 
 - **Chrome and icons**: `figures.rs` (the icon constants),
+  `banner.rs` (the OPERANT ASCII wordmark in three sizes, above the
+  welcome panel), `space.rs` (the TUI's spacing ladder in cells — one
+  doubling scale, `XXS * 2 == XS` up to `XL`, that every modal-sizing call
+  site reads instead of re-typing `-2` / `-4`) and
   `rustle.rs` (the welcome box's ambient blink lines). Its header names a
   caller in the render layer that does not exist anywhere in the tree — no
   non-test call site remains, so read it as an unreferenced ported leaf.
@@ -290,16 +294,54 @@ this is the stem list a reader needs to find one:
 - **Terminal capability**: `keyboard_enhancement.rs` (the Kitty
   keyboard-protocol enablement that makes Shift+Enter arrive),
   `terminal_setup.rs` (the `/terminal-setup` help that tells the operator
-  how), `image_render.rs` (Kitty / Sixel / iTerm2 inline images) and
+  how), `image_render.rs` (Kitty / Sixel / iTerm2 inline images),
   `image_paste.rs` (clipboard image detection and text paste via
-  platform CLI tools, no native bindings).
-- **Input and search**: `fold_search.rs` (case-insensitive search that
+  platform CLI tools, no native bindings) and `clipboard.rs` (the single
+  owner of every clipboard WRITE — a preference-ordered chain of arboard,
+  wl-copy, xclip, xsel and an OSC 52 tty escape, so a copy either goes
+  through it or does not happen at all).
+- **Input and search**: `input.rs` (the slash-command predicate and
+  parser — `is_slash_command` / `parse_slash_command`, the pair every
+  submit path asks "is this a command?" with), `input_history.rs` (the
+  persistent submitted-prompt log at `<home>/history.jsonl`, which is what
+  makes up/down cycle across sessions and what the ghost engine bootstraps
+  from), `external_editor.rs` (Ctrl+G: composer text → temp file → the
+  resolved `$VISUAL`/`$EDITOR`/`vi` on the suspended terminal → composer
+  text), `fold_search.rs` (case-insensitive search that
   cannot panic on fold-length drift — BUGS.md R48-3) and
   `slash_usage.rs` (recent-usage tracking that orders `/` suggestions).
+- **Notices**: `notifications.rs` (the `NotificationKind` taxonomy the
+  composer's notices are routed by — transient kinds to the 3 s status
+  line, `Error` to a persistent inline transcript card).
 - **Live rows and marks**: `background_tasks.rs` (persistent rows for
   work that must outlive the turn), `rewind_marks.rs` (the rewind
-  selector's live mark source) and `session_switch.rs` (the hub's
-  Enter → session-switch handle).
+  selector's live mark source), `session_switch.rs` (the hub's
+  Enter → session-switch handle) and `pinned_images.rs` (the registry of
+  terminal graphics placed outside ratatui's cell grid, repainted after
+  every draw so a Kitty/Sixel/iTerm2 image survives the flush that used to
+  erase it).
+- **Surfaces opened by a command**: `ask_user_dialog.rs` (the
+  model-initiated `AskUserQuestion` overlay — question, numbered choices,
+  free-text line), `context_viz.rs` (the `/context` window + rate-limit
+  bars), `diff_viewer.rs` + `diff_viewer/parse.rs` (the `/diff` two-pane
+  file list + unified diff, and the `git diff HEAD` / `parse_unified_diff`
+  pair that feeds it), `export_dialog.rs` (the `/export` JSON-vs-Markdown
+  format picker), `import_config_dialog.rs` (the import preview and
+  selection overlay), `journey_view.rs` (the `/journey` skills + memories
+  timeline), `plugins_hub.rs` (the `/plugins` browser and
+  enable/disable toggle), `rewind_selector.rs` (the fullscreen `/rewind`
+  transcript selector), `settings_screen.rs` + `settings_screen/keys.rs` +
+  `settings_screen/tabs.rs` (the `/config` searchable settings panel, its
+  key routing and edit helpers, and the prefix-derived tab/heading
+  classification that stops a flat list of 385 registry rows),
+  `skills_view.rs` (the `/skills` browser with SKILL.md inspect),
+  `stats_dialog.rs` (the `/stats` four-tab overlay), `theme_screen.rs`
+  (the `/theme` picker with colour swatches) and `usage_overlay.rs` (the
+  always-on session cost / cache / token panel).
+- **Keybinding catalogue**: `keybindings/registry.rs` — the
+  `KeyBindingRegistry` construction, registration, context-fallback
+  lookup, matching and removal, split out of the `keybindings.rs`
+  monolith.
 
 `tui/messages/markdown_enhanced.rs` is a 7-line comment-only stub: its
 doc header describes the table renderer it once held, and the module now
@@ -313,7 +355,19 @@ and costs nothing in a release build.
 ### The `app/` leaves
 
 `tui/app/` is the event loop, and the files below are the ones that are not
-the loop itself. `herdr_lifecycle.rs` is the Herdr editor-pane lifecycle
+the loop itself. Four of them are `impl App` method families split out of
+the former `app/mod.rs` monolith, named here by what their methods do rather
+than by what they are called: `messaging.rs` (messages and notices —
+`add_message`, `push_notice`, `check_token_warnings`, `invalidate_transcript`,
+`take_input`), `prompt.rs` (the composer's state — `set_prompt_text`,
+`refresh_prompt_input`, the input stash, `run_external_editor`, the
+file-suggest spawn), `providers.rs` (provider and model management —
+`set_model`, `apply_theme`, `cycle_configured_model`, the inline model and
+effort pickers) and `turn_state.rs` (the `TurnState` lifecycle and the
+per-turn metadata sync — `begin_turn`, the agent-mode snapshots, the rewind
+flow entry, onboarding persistence).
+
+`herdr_lifecycle.rs` is the Herdr editor-pane lifecycle
 bridge; `session_display.rs` is the ONE converter from a core conversation
 to the TUI's display state (both rebuild paths call it rather than each
 carrying its own lossy copy). The rest are the split-out contract tests —
@@ -344,8 +398,56 @@ page's family description:
   `process_memory.rs` (process-memory history types).
 - **Scheduler and catalog**: `catalog_scheduler.rs` (provider catalog
   scheduling), `fuzzy_engine.rs` (the fuzzy-match engine),
-  `graph_topology.rs` (memory-graph topology helpers),
-  `helpers/model_names.rs` (human-friendly model names).
+  `fuzzy.rs` (the thin typo-tolerant adapter slash-command matching
+  calls through to it), `graph_topology.rs` (memory-graph topology helpers),
+  `helpers/model_names.rs` (human-friendly model names),
+  `helpers/git.rs` (the git-probe family — `gather_git_info`,
+  `parse_recent_commits`, `parse_numstat`, `porcelain_status_letter` — that
+  the info-widget tests reach through `operant_app::app::helpers`),
+  `provider_metadata/catalog.rs` (the `OPENAI_COMPAT_PROFILES` and
+  `LOGIN_PROVIDERS` tables the `/connect` surfaces read).
+- **Ported type leaves**: `build.rs` (build-progress path, cache and TTL,
+  `read_build_progress`), `bus.rs` (the batch sub-call progress types plus
+  `BusEvent` / `Bus` / `latest_update_status`), `compaction.rs`
+  (`CHARS_PER_TOKEN` and the one best-effort context-size heuristic that
+  reconciles split vs subset provider token accounting), `core.rs`
+  (char/byte boundary helpers and `DisplayMessageRoleExt::effective_role`,
+  which recovers a lost `background_task` role from the notification's
+  shape), `id.rs` (`SESSION_NAMES` and `session_icon`), `keybind.rs` (the
+  platform Alt/Option label helpers), `plan.rs` (`PlanItem`, the
+  server-shared swarm plan item), `prompt.rs` (the swarm effort consts and
+  `ContextInfo`), `protocol.rs` (the ported slice of operant-protocol),
+  `session.rs` (`RenderedImage` / `RenderedImageAnchor` and the
+  attached-image label parsers), `storage.rs` (a declared port-excision
+  leaf: operant-storage's state dirs, secrets and env files are not
+  ported), `todo.rs` (the todo/feedback type family — the
+  `semantic_state!` macro with its ten invocations, `TodoItem` /
+  `TodoPlan` / `TodoGoal` and the pass predicates), `usage.rs`
+  (`OpenAIUsageWindow` / `OpenAIUsageData` / `OpenAiResetCredits` plus the
+  staleness consts), `util.rs` (token-estimation helpers —
+  `estimate_tokens`, `format_approx_token_count`, `ApproxTokenSeverity`)
+  and `usage_overlay.rs` (the ported usage-overlay TYPES —
+  `UsageOverlayStatus` and friends; the live panel that renders them is
+  `tui/usage_overlay.rs`, cited above).
+- **Environment, logging and permissions**: `env.rs` (the centralized
+  `set_var` / `remove_var` wrappers over `std::env`, so the unsafe of
+  Rust 2024 env mutation lives in one auditable place), `logging.rs`
+  (the log writer for `<home>/logs/` with rotation and thread-local
+  server/session/provider context), `logging/watchdog.rs` (the stall
+  watchdog: `beat` / `begin_work` / `is_busy` / `resource_snapshot`, plus
+  the operant-local `frame()` and `start_monitor()` halves the TUI wires),
+  `permissions.rs` (the permission-mode types the overlay reads),
+  `safety.rs` (the file-backed permission-decision surface —
+  `PermissionRequest` / `PermissionResult` / `Decision` and
+  `record_permission_via_file`), `keyboard.rs` (the kitty/tmux
+  keyboard-enhancement request/reset block and `reapply_terminal_modes_to`)
+  and `mermaid.rs` (the W9 cfg-fallback: `is_mermaid_lang`,
+  `RenderResult`, `result_to_lines` and the placeholder parsers).
+- **The markdown re-export facade**: `markdown.rs` re-exports the
+  `operant_markdown` entry points under the vendored path the ported
+  renderers import (`render_markdown`, `render_markdown_with_width`,
+  `highlight_line`, `center_code_blocks`, …). A symbol missing from that
+  list is a `[port-unresolved]` excision, not an oversight.
 - **Info widgets** (`tui/operant_app/info_widget/`): `info_widget_frame.rs`
   (border chrome), `info_widget_layout.rs` and
   `info_widget_layout_tests.rs` (widget placement), `info_widget_overview.rs`

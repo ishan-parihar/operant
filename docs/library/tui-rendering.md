@@ -204,6 +204,12 @@ neutral model; `operant_markdown::markdown_wrap` for the ratatui path).
 A CJK character is two columns, and a combining mark is zero — the wrap
 never splits a grapheme that `unicode-width` reports as one column.
 
+`operant_render_core::wrap` (backed by `wrap.rs`) is that shared half, and
+it is shared because width is backend-specific: a `WidthMeasure` is the
+trait a front-end implements (the terminal measures in monospace columns,
+the desktop in pixels via font metrics), so the wrapping algorithm itself
+never learns which backend it is running on.
+
 ## Stage 4 — the paint (`operant_ui/ui_viewport.rs` + `ui_messages.rs`)
 
 `draw_messages(frame, app, area, prepared, show_native_scrollbar)`
@@ -231,6 +237,19 @@ never splits a grapheme that `unicode-width` reports as one column.
 Every one of those renderers is a pure `(&DisplayMessage, width, …) ->
 Vec<Line>`, and every one calls into `operant_markdown` for anything that
 contains prose.
+
+**Every bar in the transcript is one primitive.** `status_line/meter.rs`
+holds `MeterStyle` (the `█`/`░` glyph pair) and `meter_cells` (fraction →
+filled/empty cell counts, round-half-up and clamped) plus `meter` for the
+string form. It exists because `█`/`░` was implemented three times with
+three different rounding rules for the same input — the context overlay
+truncated, the usage overlay rounded, the markdown progress bar truncated
+— so the same fraction drew a different number of cells depending on
+which surface you looked at. `meter_cells` is separate from `meter`
+precisely so a caller that colours the two halves differently (the context
+overlay) does not have to build a string and count its characters back.
+The users are the tool rows in `ui_messages.rs`, the progress bar in
+`markdown_wrap.rs`, the usage panel and `/context`.
 
 ## Stage 5 — markdown (`operant_markdown/`)
 
@@ -264,8 +283,13 @@ default.
 
 **Math.** `markdown_text_preprocess.rs` normalises LaTeX (the shared
 `operant_render_core::normalize_latex_math`) and escapes currency
-(`$5`, `$5.99`) so the math parser does not swallow it. Actual formulas
-go through `operant_render_core::math` (`render_inline_latex`,
+(`$5`, `$5.99`) so the math parser does not swallow it. That is the whole
+job of `operant_render_core/preprocess.rs` (the `preprocess.rs` leaf of the
+neutral core) — the guard exists because pulldown-cmark's math extension
+treats ANY `$`-delimited run as inline math, so `$5` or `$5x$` would
+otherwise be parsed as a formula; the shared core mirrors the authoritative
+renderer's escape rather than diverging from it. Actual formulas go through
+`operant_render_core::math` (`math.rs` — `render_inline_latex`,
 `render_display_latex`), which is a small terminal renderer, not a TeX
 engine: it recognises the constructs models use most (fractions, roots,
 scripts, matrices) and preserves unknown commands instead of dropping
@@ -274,9 +298,28 @@ mdwright-latex dependency, so `latex_image_lines` returns `None`
 unconditionally (`mod.rs:1066`) and both callers already fall back to
 `math_display_lines` — a port state, not a regression.
 
+`reasoning.rs` (also in `operant_render_core`) is the other shared string
+layer: `REASONING_SENTINEL` plus `reasoning_line_markup` /
+`reasoning_partial_markup` / `reasoning_line_content`. It lives in the
+backend-neutral core rather than in `operant_markdown` precisely so the
+streaming/server path and the TUI renderer wrap and unwrap a reasoning
+line with the SAME escaping rules — the sentinel is the invisible
+separator placed just inside both ends of an emphasis run, which is what
+keeps the flanking `*` adjacent to non-whitespace, and the renderer keys
+its dim+italic styling off it rather than off a role name.
+
 **Code blocks** are highlighted with syntect (`HighlightLines`, the
 `base16-ocean.dark` theme is one of the bundled defaults), cached by
 `highlight_code_cached`, and wrapped with `unicode-width`.
+
+The neutral core has ONE more markdown-shaped leaf, and it is a second
+parser rather than a helper: `operant_render_core/markdown.rs` turns text
+into the backend-neutral `Document` (`parse_markdown`). It mirrors the
+SEMANTICS of this stage's renderer but emits `operant_render_core::model`
+types instead of `ratatui` spans, so a front-end adapts the document to its
+own backend. It is extracted-from, not a replacement for, the ratatui
+renderer above — that one stays authoritative until the core reaches
+parity.
 
 ## Stage 6 — mermaid (`operant_mermaid/` + the fallback)
 
@@ -359,7 +402,15 @@ ONE owner:
   `ui_diagram_pane.rs` (the diagram pane), `ui_memory.rs` and
   `ui_memory_estimates.rs` (the memory band and its estimates),
   `ui_todo_changes.rs` (the "what changed" delta under a `todo` tool row),
-  `ui_tools.rs` (the tool rows), `ui_input.rs` (the composer band).
+  `ui_tools.rs` (the tool rows) and `ui_tools/batch.rs` (the batch tool
+  row's own parse layer — sub-call output splitting, per-sub-call
+  success/error, completion counts, sub-call params and intent),
+  `ui_input.rs` (the composer band).
+- **The composer**: `composer.rs` is the chat composer's visual layer
+  (ported from codex `chat_composer.rs` / `composer_layout.rs`): the
+  filled-band surface, the two-column prompt gutter, the dimmed
+  placeholder, and the blank rows above and below the text. `ui_input.rs`
+  draws the band it lives in; this is what the band contains.
 - **The pinned diagram family**: `ui_pinned.rs`, `ui_pinned_layout.rs`,
   `ui_pinned_selection.rs`, `ui_pinned_table.rs`, `ui_pinned_utils.rs`,
   `ui_pinned_mermaid_debug.rs` and `ui_pinned_tests.rs` — one feature
@@ -372,16 +423,38 @@ ONE owner:
 Stage 5 above names the markdown entry points; the remaining files in
 `tui/operant_markdown/` are `markdown_render_support.rs` (the shared
 render-support helpers), `markdown_types.rs` (the vendored document types),
-and the four test-case files under `markdown_tests/cases/` that the suite
-drives — `copy_target_contract.rs` (copy-target detection),
-`latex_streaming.rs` (math while streaming), `placeholders.rs`
-(image/diagram placeholder preservation) and `wrapping_currency.rs`
-(currency wrapping). Stage 6 names the mermaid stages;
+and the six test-case files under `markdown_tests/cases/` that the suite
+drives. `cases.rs` is the vendored include hub that pulls all six into the
+`markdown_tests` module — read it as the index, not as a test body — and
+the cases are `rendering.rs` (heading/emphasis/list/blockquote/code
+rendering), `copy_target_contract.rs` (copy-target detection),
+`latex_streaming.rs` (math while streaming), `streaming_cache.rs`
+(centered/streaming render behaviour and the cache's stability under it),
+`placeholders.rs` (image/diagram placeholder preservation) and
+`wrapping_currency.rs` (currency wrapping).
+
+Stage 6 names the mermaid engine's entry and limits; its grammar is split
+across the stage's parsers: `draw.rs` (the orthogonal router — unique
+lanes per route, explicit crossing marks, labels in reserved gutters),
+`parse.rs` (the strict flowchart parser, where every non-comment byte
+must be consumed and node groups expand into explicit edges inside the
+edge cap), `relations.rs` (the class and ER grammars — members,
+endpoint cardinalities, relationship kinds, and the state-diagram
+delegation) and `sequence.rs` (bounded sequence timelines with ordered
+messages and explicitly nested control fragments).
 `tui/operant_mermaid/syntax.rs` is the shared lexical-boundary layer the
 family parsers call (statement splitting with family-specific quote and
 member rules, source limits enforced before scanning, undecoded entities
 failing intact). `tui/operant_render/memory_tiles.rs` is the memory-tile
-renderer the render stage draws.
+renderer the render stage draws; `chrome.rs` is the ratatui-only chrome
+leaf the layout calls (`clear_area`, `left_aligned_content_inset`,
+`centered_content_block_width`, `left_pad_lines_to_block_width`,
+`draw_right_rail_chrome`, `align_if_unset`); and `swarm_gallery.rs` is
+the transcript-card closure of the swarm gallery — the status/age/glyph
+helpers, the spinner cadence, `GalleryMember`, the display sort and
+`render_swarm_chat_cards`, which is what the live transcript path draws
+beneath a `swarm spawn` tool call (the strip/dock/panel/grid half stays
+ported-but-excised pending W7).
 
 ## Stage 8 — the frame entry and the post-passes (`render/mod.rs`)
 
@@ -431,6 +504,12 @@ logical text with gutters stripped. `render::copy_selection`
 (`copy_selection.rs:19`) is the other consumer: `selected_lines` builds
 the `Line` list and `selection_copy` the text, both through the same
 `keep` predicate, so what is highlighted is exactly what is copied.
+
+`render/utils.rs` is the render layer's own shared leaf: `display_width`,
+the single cell-width primitive every width-sensitive path calls instead
+of `.chars().count()` or `.len()` (grapheme clusters are indivisible, so
+a base plus its accents is one cell and a ZWJ emoji sequence is one cell),
+`take_width` for a bounded prefix, and `balanced_wrap`.
 
 ## The theme layer (`vendor/style/`)
 

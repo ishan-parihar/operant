@@ -12,6 +12,8 @@ snapshots a bad write can be undone from),
 `crates/operant-core/src/profile.rs`,
 `crates/operant-config/src/` (the shared type crate —
 `schema/platform_cfg.rs` is the `platform` table),
+`crates/operant-config/src/policy.rs` (the shell-command splitter
+`split_unquoted_segments` the Holon command fence applies),
 `crates/operant-cli/src/config.rs` (CLI layer),
 `crates/operant-cli/src/env_store.rs`,
 `crates/operant-core/src/env_passthrough.rs`,
@@ -131,6 +133,21 @@ all four surfaces (measured, so an agent adding a key cannot skip them), while a
 the backlog is tracked rather than hidden; `--list-legacy` regenerates it.
 `scripts/tests/config_key_gate_test.sh` mutation-tests both halves, because a
 gate that has never fired is not known to work.
+
+## Changing a setting
+
+From the shell: `operant config set <dotted.key> <value>` (for example
+`operant config set agent.context_window 200000`) writes through the
+surgical writer and touches nothing else in the file.
+`operant config describe [section]` lists every key with its default,
+its current value and its note, and `operant config notes <key>` gives
+the full note for one; an unknown key answers with the near-miss
+suggestion. `operant config show` prints the EFFECTIVE config as YAML
+with secrets masked and names any environment variable that overrode
+the file. In the TUI, `/config` (or `/settings`) opens the visual panel
+over the same registry, with tabs for Appearance, Model, Context,
+Tools, Skills, Memory, Gateway and Advanced; a visual row writes
+`settings.json`, everything else writes `operant.toml`.
 
 ## Intention
 

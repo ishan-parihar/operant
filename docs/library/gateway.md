@@ -15,8 +15,14 @@ webhook_subscriptions, admin, lifecycle, dispatch_breaker, types),
 `crates/operant-core/src/gateway_pipeline.rs` (hooks),
 `crates/operant-core/src/gateway_markdown.rs`,
 `crates/operant-cli/src/gateway_runner.rs` (+ `gateway_runner/` split:
-turn_state, session handling) and `gateway_commands.rs`,
-`gateway_platforms.rs`, `crates/operant-cli/src/cmd_gateway.rs`.
+`turn_state.rs` — one JSON file per channel under
+`<operant_home>/.turn_state/` for auto-continue recovery — and session
+handling) plus `gateway_commands.rs`,
+`gateway_platforms.rs`, `crates/operant-cli/src/cmd_gateway.rs`,
+`crates/operant-api/src/channel.rs` (the `Channel` trait + the
+`ChannelMessage` / `SendMessage` pair the adapters speak),
+`crates/operant-api/src/agent.rs` (`TurnEvent` — the streaming frames
+the WS handler relays and correlates by `id`).
 
 ## The registry: 7 platforms, all real
 

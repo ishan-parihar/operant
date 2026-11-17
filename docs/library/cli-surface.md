@@ -15,6 +15,8 @@ Source: `crates/operant-cli/src/main.rs` (the `Commands` enum + dispatch),
 `crates/operant-cli/src/gateway_api.rs`,
 `crates/operant-cli/src/gateway_runner/allocator.rs`,
 `crates/operant-cli/src/gateway_runner/enrichment.rs`,
+`crates/operant-cli/src/cmd_channel.rs` (the `channel` subcommand:
+list/start/doctor/add/remove/bind-telegram/send),
 `crates/operant-cli/src/skill_roots.rs`, `prompt_helpers.rs`,
 `hardening.rs`, `post_setup.rs`, `memory_provider_tools.rs`,
 `crates/operant-cli/src/integrations/`,

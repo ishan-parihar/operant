@@ -59,6 +59,20 @@ text rendering and ref-based element selectors (`@e1`, `@e2`, …)
 matching the Python operant-agent's `ariaSnapshot` output — so the
 model can address elements semantically instead of by coordinate.
 
+## Driving a browser
+
+Ask the model to drive a page and it calls the `browser` tool with a
+`command` of `navigate`, `snapshot`, `click`, `type` or `scroll`; the
+`browser_cdp` and `browser_dialog` tools sit beside it on the same
+session. Nothing to configure first: `[browser] provider` is accepted
+and ignored, and a missing `sourcehound` binary degrades every browser
+tool to a message naming the fix (`SOURCEHOUND_BINARY` overrides the
+path). The operator's own surface is cookie import:
+`operant cookies discover` lists the browser databases found on the
+machine, `operant cookies import --browser chrome` pulls them live (or
+pass a Netscape `cookies.txt` / EditThisCookie JSON path), `--dry-run`
+previews, and `operant cookies export` writes them back out.
+
 ## Intention
 
 One engine instead of a provider zoo: the sourcehound binary already

@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=aa5d7fec8e53 -->
+<!-- genome:zone records sha=d6a48d6ad416 -->
 **Decisions** (44)
 
 | ID | Title | Status | Description |
@@ -48,7 +48,7 @@
 | AD-043 | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written | Active | A defect recorded without its visibility to the caller carries the wrong severity, and the fix that ships is the fix for the severity that was written |
 | AD-044 | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it | Active | one runtime daemon per machine owns the registry, the child processes and the session writes; every CLI session attaches to it |
 
-**Regressions** (20)
+**Regressions** (21)
 
 | ID | Title | Severity | Description |
 |---|---|---|---|
@@ -72,6 +72,7 @@
 | RG-021 | a live repro that cannot reach its provider proves nothing about the feature | High | a live repro that cannot reach its provider proves nothing about the feature |
 | RG-022 | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) | High | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) |
 | RG-023 | a library contract no gate runs is a contract nobody has | High | a library contract no gate runs is a contract nobody has |
+| RG-024 | source comment cites a doc deleted without a tombstone | High | source comment cites a doc deleted without a tombstone |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
