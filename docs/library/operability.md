@@ -8,7 +8,8 @@ Not for: the gateway daemon ([gateway.md](gateway.md)), the dashboard
 (`AGENTS.md`).
 
 Source: `crates/operant-cli/src/cmd_doctor/` (mod, checks_api,
-checks_config, checks_fix, checks_tools, check_result),
+checks_config, checks_fix, checks_tools, checks_integrations
+(editor/pane integrations — Herdr, Omarchy), check_result),
 `crates/operant-core/src/doctor.rs`, `crates/operant-core/src/binary_updater.rs`
 (the self-updating integrations), `crates/operant-cli/src/cmd_setup.rs`,
 `cmd_update.rs`, `cmd_service.rs`, `cmd_backup.rs`, `cmd_import.rs`,

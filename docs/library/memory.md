@@ -17,6 +17,12 @@ Source: `crates/operant-core/src/memory_provider.rs`,
 <https://github.com/ishan-parihar/memory-wire> (cargo git-dependency,
 advanced by `scripts/sync-vendors.sh`, rev baked into the binary).
 
+The contract the engine satisfies is `crates/operant-api/src/memory_traits.rs`
+(the `Memory` trait, plus the `ExportFilter` that backs GDPR Art. 20 data
+portability). Everything below is an implementation of that trait: the
+provider seam in `memory_provider.rs` is what lets the engine be swapped
+without touching the loop.
+
 ## The one engine
 
 `[memory] provider = "memory-wire"` — and that is the whole choice (plan

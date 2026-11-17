@@ -82,43 +82,28 @@ coverage_units = ["crates/*/src/**/*.rs"]
 coverage_label = "library"
 # Each row is a unit with no library page AND a reason. An empty reason is not
 # an exemption, it is a deferral with the paperwork missing.
+# An exemption REASON lives INSIDE the string, not in a trailing comment,
+# so `genome lint` can check the claim: if the reason names a library page,
+# that page must really contain the unit (E311). 2026-11-17 iter-2554.
 coverage_exempt = [
-  # Leaf modules a reader reaches only through the page that owns their family;
-  # each is named in its owner's prose even though its own stem is not.
-  #
-  # The gate compares these rows EXACTLY (`rel in exempt`), so the reason is a
-  # comment on the row, not text inside the string. The owning page named in
-  # each reason was checked to really discuss the family it is claimed to own.
-  #
-  # operant-api's trait files: one trait family each, reached through the page
-  # that owns the subsystem the trait abstracts. No library page is the home of
-  # the `operant-api` crate itself -- its files are cited per-trait by the page
-  # of the subsystem that implements them (observability_traits.rs by
-  # observability.md, session_keys.rs by gateway.md, vad.rs by voice.md, ...).
-  "crates/operant-api/src/memory_traits.rs",        # leaf; the Memory trait, owned by docs/library/memory.md
-  "crates/operant-api/src/peripherals_traits.rs",   # leaf; the Peripheral trait, owned by docs/library/tools.md
-  "crates/operant-api/src/runtime_traits.rs",       # leaf; the RuntimeAdapter trait, owned by docs/library/agent-loop.md
-  #
-  # The cmd_* handlers: one file per `operant <command>`, each reached only
-  # through the dispatch arm in main.rs. The page that owns the COMMAND owns
-  # the file; docs/library/cli-surface.md names the `cmd_*.rs` glob and the
-  # direct variants, and each row below names the page that owns its command's
-  # mechanism.
-  "crates/operant-cli/src/cmd_auth.rs",             # leaf; `operant auth`, owned by docs/library/providers.md (credentials)
-  "crates/operant-cli/src/cmd_completion.rs",       # leaf; `operant completion`, owned by docs/library/cli-surface.md
-  "crates/operant-cli/src/cmd_continue.rs",         # leaf; `operant continue`, owned by docs/library/sessions.md
-  "crates/operant-cli/src/cmd_curator.rs",          # leaf; `operant curator`, owned by docs/library/org.md (Kanban/cron/curator)
-  "crates/operant-cli/src/cmd_dashboard.rs",        # leaf; `operant dashboard`, owned by docs/library/observability.md (dashboards)
-  "crates/operant-cli/src/cmd_debug.rs",            # leaf; `operant debug`, owned by docs/library/operability.md (doctor/report battery)
-  "crates/operant-cli/src/cmd_doctor/checks_integrations.rs",  # leaf; one doctor check family, owned by docs/library/operability.md
-  "crates/operant-cli/src/cmd_dump.rs",             # leaf; `operant dump`, owned by docs/library/cli-surface.md
-  "crates/operant-cli/src/cmd_hooks.rs",            # leaf; `operant hooks`, owned by docs/library/cli-surface.md (the shell_hooks runtime)
-  "crates/operant-cli/src/cmd_migrate.rs",          # leaf; `operant migrate`, owned by docs/library/persistence.md (migrations)
-  "crates/operant-cli/src/cmd_model.rs",            # leaf; `operant model`, owned by docs/library/providers.md (model selection)
-  "crates/operant-cli/src/cmd_profile.rs",          # leaf; `operant profile`, owned by docs/library/config.md (profiles)
-  "crates/operant-cli/src/cmd_sop.rs",              # leaf; `operant sop`, owned by docs/library/skills.md (SOPs)
-  "crates/operant-cli/src/cmd_tools.rs",            # leaf; `operant tools`, owned by docs/library/tools.md (tool state)
-  "crates/operant-cli/src/cmd_version.rs",          # leaf; `operant version`, owned by docs/library/cli-surface.md
+  "crates/operant-api/src/memory_traits.rs -> leaf; the Memory trait, owned by docs/library/memory.md",
+  "crates/operant-api/src/peripherals_traits.rs -> leaf; owned by docs/library/tools.md",
+  "crates/operant-api/src/runtime_traits.rs -> leaf; the RuntimeAdapter trait, owned by docs/library/agent-loop.md",
+  "crates/operant-cli/src/cmd_auth.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_completion.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_continue.rs -> leaf; owned by docs/library/sessions.md",
+  "crates/operant-cli/src/cmd_curator.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_dashboard.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_debug.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_doctor/checks_integrations.rs -> leaf; owned by docs/library/operability.md",
+  "crates/operant-cli/src/cmd_dump.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_hooks.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_migrate.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_model.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_profile.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_sop.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_tools.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-cli/src/cmd_version.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
 ]
 
 # E019: a doc's DERIVED claim about the code must match the code. The script is the

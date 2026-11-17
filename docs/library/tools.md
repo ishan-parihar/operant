@@ -363,6 +363,14 @@ layer that sits above it.
 The RT-192 lesson lives here too: doc comments serialize into schemas and
 cost wire tokens per request — model-facing text only.
 
+The tool-side contract a peripheral implements lives in the `operant-api`
+crate: `crates/operant-api/src/peripherals_traits.rs` defines the Peripheral
+trait — a hardware board (STM32, RPi GPIO) that exposes its GPIO, sensors
+and actuators to the agent AS TOOLS. That is the whole design: a peripheral
+is not a special case in the loop, it is a tool source, so the registry,
+the schema discipline above and the approval layer all apply to it
+unchanged.
+
 ## Failure modes — what the operator sees
 
 1. **A missing subprocess.** sourcehound-backed tools (`web_scrape`,

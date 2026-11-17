@@ -14,6 +14,7 @@ Source: `crates/operant-core/src/session/` (mod, autocompact),
 `crates/operant-core/src/session_recap.rs`,
 `crates/operant-core/src/tools/checkpoint_tool.rs`,
 `crates/operant-cli/src/cmd_sessions.rs`,
+`crates/operant-cli/src/cmd_continue.rs` (resume the last session in the TUI),
 `crates/operant-cli/src/cmd_checkpoints.rs`,
 `crates/operant-cli/src/tui/session_hub/` (mod.rs + render.rs — the
 full-frame picker that replaced the 70x20 `session_browser` modal).

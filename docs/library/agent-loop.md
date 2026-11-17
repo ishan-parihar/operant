@@ -12,6 +12,12 @@ error_classifier, fallback, iteration_budget, stream_retry_budget,
 turn_end_heuristics, message_safety, runtime_key, pooled_client,
 provider_registry, chat_provider, model_client).
 
+The platform contract the loop is ported against is
+`crates/operant-api/src/runtime_traits.rs` — the `RuntimeAdapter` trait that
+abstracts an execution environment (shell access, filesystem, capability
+declaration), so the same loop can run on a desktop, in a gateway, or in a
+future embedded host without the loop knowing which.
+
 ## The loop in one paragraph
 
 `OperantAgent::run()` implements the ReAct pattern: build the prompt

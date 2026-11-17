@@ -1992,16 +1992,42 @@ def lint_coverage(cfg: Cfg) -> list[str]:
     units = cfg.get("ops", "coverage_units", [])
     if not surfaces or not units:
         return []
-    exempt = set(cfg.get("ops", "coverage_exempt", []))
+    # Rows are "<path> -> <reason>" (2026-11-17 iter-2554): the reason lives
+    # INSIDE the string so the gate can check it. The old trailing-comment form
+    # was unreadable by any gate, so its "owned by X" claims went unverified.
+    exempt = {row.split("->", 1)[0].strip() for row in cfg.get("ops", "coverage_exempt", [])}
+    # 2026-11-17 iter-2554: an exemption REASON is a claim, so it is checked.
+    # The original rows said "owned by docs/library/X.md" while X never named
+    # the unit -- 18 rows of unauditable paperwork, exactly what genome.toml's
+    # own comment forbids ("an exemption nobody audits is an E311 false
+    # negative with better manners"). Rule: if the reason names a library page,
+    # that page must really contain the unit, or the exemption is a lie.
+    reason_by_unit: dict[str, str] = {}
+    for row in cfg.get("ops", "coverage_exempt", []):
+        if "->" in row:
+            unit, why = row.split("->", 1)
+            reason_by_unit[unit.strip()] = why.strip()
     label = cfg.get("ops", "coverage_label", "docs")
     docs = {cfg.rel(p): read(p) for p in cfg.globs(surfaces) if (cfg.root / p).is_file()}
     if not docs:
         return [f"E311 ops.coverage_surfaces matches no file — the coverage gate has nothing to read"]
     out = []
     for rel in files_of_units(cfg, units):
-        if rel in exempt or is_archived(cfg, rel):
-            continue
         name = Path(rel).stem
+        if rel in exempt:
+            why = reason_by_unit.get(rel, "")
+            named = [p for p in docs if p in why]
+            # The lexical unit a reader looks for is the COMMAND for a CLI
+            # wrapper (`cmd_auth.rs` is found as `auth`, its command name), and
+            # the module stem for everything else. Comparing `cmd_auth` against
+            # the page is the wrong string: cli-surface.md documents the command.
+            probe = name[4:] if name.startswith("cmd_") else name
+            if named and not any(probe in docs[p] for p in named):
+                out.append(f"E311 {rel} is exempt as 'owned by {named[0]}' but that page never names "
+                           f"`{name}` — put the unit in the page or fix the exemption reason")
+            continue
+        if is_archived(cfg, rel):
+            continue
         if not any(name in body for body in docs.values()):
             out.append(f"E311 {rel} is named by no {label} page — document it or add it to "
                        f"ops.coverage_exempt with the reason")
