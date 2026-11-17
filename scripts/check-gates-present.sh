@@ -277,16 +277,27 @@ fi
 MC=crates/operant-core/src/config.rs
 if [ -f "$MC" ]; then
   _fields=$(grep -cE '^    pub agentmemory_(url|secret|auto_spawn|version):' "$MC")
-  _caveat=$(grep -cF 'deny_unknown_fields makes removing a field a breaking change' "$MC")
+  # BOTH halves of the caveat are pinned, not one sentence. A check on a
+  # single phrase passes when an adjacent sentence is rewritten to argue the
+  # opposite -- "a trivial cleanup" sitting next to "deny_unknown_fields makes
+  # removing a field a breaking change" reads as a contradiction and the gate
+  # stayed green. Mutation-proven iter-2584.
+  _caveat_breaking=$(grep -cF 'deny_unknown_fields makes removing a field a breaking change' "$MC")
+  _caveat_deliberate=$(grep -cE 'legitimate choice, but it must be a deliberate one' "$MC")
   if [ "$_fields" -ne 4 ]; then
     say "SHIM-DRIFT $MC: found $_fields legacy agentmemory_* fields, expected 4"
     say "            protects: the config-compat shim -- an existing operant.toml that names a retired key must still PARSE (introduced iter-2581)"
     say "            if this removal is INTENTIONAL, it is a breaking config change: say so in docs/CHANGELOG.md and update the caveat below"
     fail=1
   fi
-  if [ "$_caveat" -eq 0 ]; then
+  if [ "$_caveat_breaking" -eq 0 ]; then
     say "MISSING-MARKER $MC: missing the compat caveat [deny_unknown_fields makes removing a field a breaking change]"
     say "            protects: the reason the shim exists is recorded next to the shim -- without it the fields read as forgotten cruft (introduced iter-2581)"
+    fail=1
+  fi
+  if [ "$_caveat_deliberate" -eq 0 ]; then
+    say "MISSING-MARKER $MC: missing the half that says removal must be DELIBERATE [legitimate choice, but it must be a deliberate one]"
+    say "            protects: against the caveat being softened in place -- a note calling the removal 'a trivial cleanup' next to 4 dead fields is the defect this gate exists to catch (iter-2584)"
     fail=1
   fi
 fi
