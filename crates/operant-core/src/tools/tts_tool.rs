@@ -1355,22 +1355,25 @@ mod tests {
     /// success carries decodable audio. Exercised here over every provider
     /// this host can reach without credentials, so a provider that regresses
     /// into a stub fails in the unit suite rather than in the operator's ear.
+    ///
+    /// The provider list is derived from `BUILTIN_PROVIDERS`, not written out
+    /// here (iter-2590). It used to be a second hardcoded copy of the same
+    /// eleven names, so a twelfth provider added to the dispatch would have
+    /// been silently ABSENT from this test -- and `assert_success_carries_audio`
+    /// passes vacuously for a name it never sees. That is the same
+    /// drift-a-hardcoded-list shape as iter-2586, in the test that guards the
+    /// stub regression itself.
     #[tokio::test]
     async fn no_builtin_provider_reports_success_without_audio() {
         let tool = TtsTool::new();
-        for provider in [
-            "edge",
-            "elevenlabs",
-            "openai",
-            "minimax",
-            "mistral",
-            "gemini",
-            "xai",
-            "neutts",
-            "kittentts",
-            "piper",
-            "phonon",
-        ] {
+        // Guard the derivation itself: an empty or truncated list would make
+        // the loop below pass without exercising anything.
+        assert!(
+            BUILTIN_PROVIDERS.len() >= 11,
+            "BUILTIN_PROVIDERS shrank to {} entries -- this test would cover almost nothing",
+            BUILTIN_PROVIDERS.len()
+        );
+        for provider in BUILTIN_PROVIDERS {
             let result = tool
                 .execute(
                     json!({"text": "Audit probe.", "provider": provider}),
