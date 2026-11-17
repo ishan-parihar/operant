@@ -1444,6 +1444,43 @@ mod tests {
         }
         assert!(BUILTIN_PROVIDERS.contains(&default_provider().as_str()));
         assert!(BUILTIN_PROVIDERS.contains(&"phonon"));
+
+        // The name says this test compares the list against the DISPATCH ARMS,
+        // but until iter-2586 it only checked that the list was non-empty and
+        // contained two hardcoded names. A provider added to BUILTIN_PROVIDERS
+        // with no arm (or an arm whose name was renamed) was advertised in the
+        // "unknown provider" message, selectable in the setup wizard, and then
+        // REFUSED at dispatch -- the exact failure the comment above claims to
+        // prevent. Compare the two for real: the set of advertised names must
+        // equal the set the tool can actually reach.
+        let advertised: std::collections::BTreeSet<&str> =
+            BUILTIN_PROVIDERS.iter().copied().collect();
+        let reachable: std::collections::BTreeSet<&str> = [
+            "edge",
+            "elevenlabs",
+            "openai",
+            "minimax",
+            "mistral",
+            "gemini",
+            "xai",
+            "neutts",
+            "kittentts",
+            "piper",
+            "phonon",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            advertised, reachable,
+            "BUILTIN_PROVIDERS and the dispatch arms disagree: advertised {:?} vs reachable {:?}",
+            advertised, reachable
+        );
+        // A duplicate would make the unknown-provider message repeat a name.
+        assert_eq!(
+            BUILTIN_PROVIDERS.len(),
+            advertised.len(),
+            "BUILTIN_PROVIDERS has a duplicate entry"
+        );
     }
 
     #[tokio::test]
