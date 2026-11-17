@@ -58,6 +58,33 @@ for page in $pages; do
   done < <(grep -n -o '\]([A-Za-z0-9_.-]*\.md[^)]*)' "$page")
 done
 
+# --- 4b. in-page TOC anchors resolve ---------------------------------------
+# A Contents block that points at a heading that does not exist is a promise the
+# page breaks, and it is invisible to a reader until they click. The anchor
+# algorithm is GitHub's: lowercase, drop backticks and emphasis, delete anything
+# that is not a word character, space, dot, underscore or dash, then spaces to
+# dashes. Underscores and DOTS SURVIVE -- `agents_view.rs` anchors as
+# `agents_view.rs`, not `agents_viewrs`, which is the mistake a naive slug
+# generator makes and which silently breaks every module-named heading.
+for page in $pages; do
+  python3 - "$page" <<'PY'
+import re, sys
+path = sys.argv[1]
+lines = open(path, errors="ignore").read().splitlines()
+
+def anchor(title):
+    s = title.lower().replace("`", "")
+    s = re.sub(r"[^\w\s.-]", "", s)
+    return re.sub(r"\s+", "-", s).strip("-")
+
+real = {anchor(l.lstrip("# ").strip()) for l in lines if l.startswith("#")}
+bad = [m.group(1) for m in re.finditer(r"\]\(#([^)]+)\)", "\n".join(lines))
+       if m.group(1).lower() not in real]
+for b in bad:
+    print(f"DEAD-ANCHOR {path} -> #{b}")
+PY
+done 2>&1 | while IFS= read -r line; do say "$line"; fail=1; done
+
 # --- 5. tool-shaped names the pages cite are registered --------------------
 # A tool name in a page that no family module registers is a typo or a tool that
 # was renamed. Either way it sends a reader to a tool the agent does not have.

@@ -51,6 +51,7 @@ Why it is different:
 - **Only enabled, functional tools reach the model** — the registry serves the intersection of *registered ∩ available ∩ not-disabled*, so the agent never sees tools that can't run.
 - **One stealth browser for everything** — the `sourcehound` binary serves both the web tools (`web_search` / `web_scrape` / `web_extract` / `web_crawl`) and the browser (`cloakctl.navigate` / `read` / `act`) over its own MCP server on stdio. No API keys; if the binary is missing, every web tool degrades to a helpful error.
 - **Local-first** — no telemetry, no account required; bring any OpenAI-compatible endpoint or a local model.
+- **A mechanism library you can read end to end** — every architectural element has one page that explains what it IS, how it works, and how to use it, with every path, config key and tool name derived from the code and checked by the gate. Start at [docs/library/README.md](docs/library/README.md); the full map is in [docs/INDEX.md](docs/INDEX.md).
 - **Persistent Kernel (opt-in)** — a stateful Python kernel whose variables survive across turns, a continual-harness store (session-local + global prompt/subagent lessons with snapshot rollback), and a tool bridge that lets one kernel cell call allowlisted tools in a loop (RLM-lite). See [docs/library/kernel.md](docs/library/kernel.md). Disabled by default; `git submodule update --init --recursive` + `[tools.kernel] enabled = true` to adopt.
 
 ---

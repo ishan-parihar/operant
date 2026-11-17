@@ -29,10 +29,10 @@ Counts on this page are as of commit `826a4568`.
 
 - [The registry](#the-registry)
 - [The interception seam (iter-1722)](#the-interception-seam-iter-1722)
-- [The builtin families (`tools/`, registered in `builtin.rs`)](#the-builtin-families-tools-registered-in-builtinrs)
+- [The builtin families (`tools/`, registered in `builtin.rs`)](#the-builtin-families-tools-registered-in-builtin.rs)
 - [The runtime CLI-admission capability system](#the-runtime-cli-admission-capability-system)
 - [AFT — 20 IDE-grade tools over a subprocess](#aft-20-ide-grade-tools-over-a-subprocess)
-- [The guardrail ladder (`tool_guardrails.rs`)](#the-guardrail-ladder-toolguardrailsrs)
+- [The guardrail ladder (`tool_guardrails.rs`)](#the-guardrail-ladder-tool_guardrails.rs)
 - [Tool schema discipline](#tool-schema-discipline)
 - [Failure modes — what the operator sees](#failure-modes-what-the-operator-sees)
 - [Intention](#intention)

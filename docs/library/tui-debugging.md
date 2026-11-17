@@ -52,7 +52,7 @@ operant tui debug simulate --keys <sequence> [flags]
 | Flag | Purpose |
 |------|---------|
 | `--keys <seq>` | Keystroke sequence to replay (required). |
-| `--mouse <seq>` | Mouse events to replay after the keys (`<action,x,y>` tokens; see [Mouse sequence vocabulary](#mouse-sequence-vocabulary)). Empty = none. |
+| `--mouse <seq>` | Mouse events to replay after the keys (`<action,x,y>` tokens; see [Mouse sequence vocabulary](#mouse-sequence-vocabulary---mouse)). Empty = none. |
 | `--assert <clauses>` | State assertions against `App::debug_snapshot()` (comma-separated). |
 | `--assert-screen <clauses>` | Screen-content assertions (comma-separated). |
 | `--dump-screen <path>` | Write the final rendered screen (one text row per line). |

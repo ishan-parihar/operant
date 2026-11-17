@@ -33,7 +33,7 @@ contract.
 - [`[skills]` (10 keys)](#skills-10-keys)
 - [`[plugins]` and `[harness]`](#plugins-and-harness)
 - [The org sections: `[bylaws]`, `[holon]`, `[socialization]`, `[integrations]`](#the-org-sections-bylaws-holon-socialization-integrations)
-- [`[context_injection]` (13 accepted, 11 describable)](#contextinjection-13-accepted-11-describable)
+- [`[context_injection]` (13 accepted, 11 describable)](#context_injection-13-accepted-11-describable)
 - [The background-model sections](#the-background-model-sections)
 - [The remaining sections](#the-remaining-sections)
 - [Failure modes — what the operator sees](#failure-modes-what-the-operator-sees)

@@ -18,11 +18,11 @@ its editor), `crates/operant-cli/src/tui/app/agent_events.rs` (the live roster),
 ## Contents
 
 - [The four things "agent" means here](#the-four-things-agent-means-here)
-- [The definition record](#the-definition-record-agents_viewrs)
-- [The live roster](#the-live-roster-agent_eventsrs)
-- [The worker](#the-worker-sub_agent_toolrs)
-- [The pane report](#the-pane-report-herdrs-and-herdr_lifecyclers)
-- [The pane guard](#the-pane-guard-herdr_pluginrs)
+- [The definition record](#the-definition-record-agents_view.rs)
+- [The live roster](#the-live-roster-agent_events.rs)
+- [The worker](#the-worker-sub_agent_tool.rs)
+- [The pane report](#the-pane-report-herdr.rs-and-herdr_lifecycle.rs)
+- [The pane guard](#the-pane-guard-herdr_plugin.rs)
 - [Configuration](#configuration)
 - [Surfaces](#surfaces)
 - [Failure modes](#failure-modes)
