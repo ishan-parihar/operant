@@ -515,6 +515,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// RT-534's OTHER half, and the one the test above cannot see.
+    ///
+    /// `a_cron_job_is_delivered_to_the_chat_that_created_it` HAND-BUILDS a
+    /// `ToolContext` with `cron_origin` populated, so it proves the cron tool
+    /// READS the field and nothing about whether anything ever SETS it. The
+    /// gateway does set it (`agent.set_cron_origin`, on every channel and
+    /// socket turn), but the only producer of a `ToolContext` is
+    /// `agent::stream::tool_context` — and it never carried the origin across,
+    /// so in production the field was `None` on every call: the tool wrote
+    /// `origin_platform`/`origin_chat_id` NULL and `deliver = "local"`, and the
+    /// scheduler's `deliver_result` logged "No delivery target" and discarded
+    /// the result. A chat that asked for a scheduled report never got one.
+    ///
+    /// SOURCE contract over the call site (the RT-534 / iter-2528 shape): the
+    /// producer must pass the agent's origin into the context. Needles are
+    /// concatenation-built so this test's own source cannot satisfy them.
+    #[test]
+    fn the_tool_context_producer_carries_the_agents_cron_origin() {
+        let src = include_str!("../agent/stream.rs");
+        let producer = format!("ToolContext::{}()", "default");
+        assert!(
+            src.contains(&producer),
+            "`tool_context` must build a ToolContext at all: {producer}"
+        );
+        let carried = format!("with_{}(self.{}())", "cron_origin", "cron_origin");
+        assert!(
+            src.contains(&carried),
+            "the ToolContext producer must carry the agent's cron origin into the \
+             context, or the cron tool always sees None: {carried}"
+        );
+    }
+
     #[test]
     fn test_cron_schema() {
         let schema = ToolSchema::from_type::<CronToolArgs>("cron", "test");

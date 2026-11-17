@@ -46,7 +46,17 @@ impl OperantAgent {
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
         let mut ctx = ToolContext::default()
             .with_session_id(session.clone())
-            .with_metadata("session_id", session);
+            .with_metadata("session_id", session)
+            // RT-534's other half. The gateway records where a cron job this
+            // turn creates should be delivered (`agent.set_cron_origin`), but
+            // the `cron` tool reads `ToolContext::cron_origin` — and this is
+            // the ONLY producer of a ToolContext, so until the origin was
+            // carried here the field was written on every channel turn and
+            // read by nothing. The tool therefore always saw `None`, wrote
+            // `origin_platform`/`origin_chat_id` as NULL and `deliver =
+            // "local"`, and the scheduler's `deliver_result` logged "No
+            // delivery target" and discarded the result.
+            .with_cron_origin(self.cron_origin());
         if self.unattended {
             ctx = ctx.with_metadata("unattended", "true");
         }

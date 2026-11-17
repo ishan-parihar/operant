@@ -376,6 +376,21 @@ impl ToolContext {
         self.session_id = Some(id.into());
         self
     }
+
+    /// Builder helper: attach the turn's cron origin (RT-534).
+    ///
+    /// The gateway sets this on the AGENT at turn start, but the only producer
+    /// of a `ToolContext` is `agent::stream::tool_context`, and until this
+    /// builder existed nothing carried the origin from the one to the other: the
+    /// field was written and never read, so `cron` always saw `None` and a job
+    /// created from a chat recorded no delivery target (`deliver_result` then
+    /// found no platform/chat and dropped the result with a warning). The
+    /// parallel of `with_session_id` — one field, both channels — for the same
+    /// reason.
+    pub fn with_cron_origin(mut self, origin: Option<crate::tools::cron_tool::CronOrigin>) -> Self {
+        self.cron_origin = origin;
+        self
+    }
 }
 
 impl ToolContext {
