@@ -138,6 +138,24 @@ PY
 hook_doc=$(grep -oE '[0-9]+ events \+ wildcard' AGENTS.md | grep -oE '[0-9]+' | head -1)
 check "hook events" "$hook_actual" "$hook_doc"
 
+# --- the release line ------------------------------------------------------
+# AGENTS.md states the release line in prose ("Current release line: X.Y.Z")
+# and that is a claim about Cargo.toml, exactly like the counts above. It was
+# wrong by a whole minor version (doc said 0.2.1, the manifest said 0.3.0) and
+# nothing caught it, because this script derived COUNTS and never a VERSION.
+ws_version=$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])" 2>/dev/null \
+  || python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])" 2>/dev/null)
+doc_version=$(grep -oE 'Current release line: .[0-9]+\.[0-9]+\.[0-9]+.' AGENTS.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ -z "$ws_version" ]; then
+  say "DRIFT version: could not derive the version from Cargo.toml"
+  fail=1
+elif [ "$ws_version" != "$doc_version" ]; then
+  say "DRIFT version: AGENTS.md says $doc_version, Cargo.toml has $ws_version"
+  fail=1
+else
+  say "OK    version: $ws_version (AGENTS.md and Cargo.toml agree)"
+fi
+
 # --- workspace members -----------------------------------------------------
 ws_actual=$(python3 -c "import tomllib;print(len(tomllib.load(open('Cargo.toml','rb'))['workspace']['members']))")
 ws_doc=$(grep -oE 'Workspace members \([0-9]+ crates' AGENTS.md | grep -oE '[0-9]+' | head -1)

@@ -406,7 +406,7 @@ gitignore is doing its job; leave them alone.
 
 ## Operant Project Context
 
-- Current release line: `0.2.1`
+- Current release line: `0.3.0` (derived from Cargo.toml by `scripts/check-doc-claims.sh`; this line said `0.2.1` until 2026-11-18, a whole minor version stale, because the check derived counts and never the version)
 - **Holon** (the Chair's agentic OS, a separate Python kernel) is proposed as operant's
   organization, with operant as its runtime: read `docs/agentic-os/README.md` (boundary, org-layer
   disposition, phased plan) before changing `operant-core/src/org/`, the cron cast, kanban, the
