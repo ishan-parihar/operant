@@ -589,6 +589,14 @@ pub fn run_platform_checks(
     // (`phonon::is_cached`), which the doctor checks without loading the
     // engine. The old check pointed at the ONNX Runtime, which iter-2513
     // removed entirely.
+    //
+    // The legacy-cache retirement runs here too, deliberately OUTSIDE the
+    // `enabled` branch: an operator who never turns TTS on would otherwise keep
+    // a second ~65 MB checkpoint outside the operant home forever, because the
+    // retirement that hangs off a model load is never reached. The call is
+    // guarded internally (it only deletes when the current cache is already
+    // complete), so this cannot cost an install its only copy.
+    operant_core::tools::phonon::retire_legacy_cache_if_complete();
     if config.tts.enabled {
         if operant_core::tools::phonon::is_cached() {
             check_ok("tts", "(phonon model cached)");

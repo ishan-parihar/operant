@@ -136,7 +136,15 @@ pub fn write_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
 /// part of the path so bumping `MODEL_REVISION` invalidates the cache instead
 /// of silently reusing the previous weights.
 pub fn cache_dir() -> Option<PathBuf> {
-    let home = crate::platform::operant_home();
+    cache_dir_for(&crate::platform::operant_home())
+}
+
+/// The cache path for a given operant home.
+///
+/// Split out from [`cache_dir`] so a test can point the derivation at a temp
+/// home instead of the real one; the production caller always passes the
+/// resolved operant home.
+fn cache_dir_for(home: &std::path::Path) -> Option<PathBuf> {
     Some(home.join("cache").join("phonon").join(format!(
         "{}-{}",
         repo_name(),
@@ -154,6 +162,16 @@ fn legacy_cache_dir() -> Option<PathBuf> {
 
 fn repo_name() -> &'static str {
     MODEL_REPO
+}
+
+/// The final path segment of [`repo_name`], i.e. `phonon-31m-en`.
+///
+/// `MODEL_REPO` is an owner/name pair, so its last segment -- not the whole
+/// string -- is what a filesystem path can end in. Comparing a `file_name()`
+/// against the full `repo_name()` can never match, which is how a guard written
+/// that way ends up compiling and never firing.
+fn repo_leaf() -> &'static str {
+    repo_name().rsplit('/').next().unwrap_or(repo_name())
 }
 
 /// Expected byte length of one model file, if it is pinned.
@@ -185,6 +203,30 @@ pub fn is_cached() -> bool {
         return false;
     };
     MODEL_FILES.iter().all(|f| file_is_complete(&dir, f))
+}
+
+/// Retire the legacy cache tree if the current cache is already complete.
+///
+/// [`download_missing`] retires it as a side effect of a model load, but an
+/// operator who never enables TTS (`[tts] enabled = false`) never reaches that
+/// path — and until it runs they are paying for a second 66 MB checkpoint
+/// outside the operant home forever. This exposes the same retirement on its
+/// own so a check surface can call it without loading the engine.
+///
+/// Safe to call unconditionally: it does nothing unless every entry in
+/// [`MODEL_FILES`] is present at the pinned size in the current cache, which
+/// is exactly when the old tree is pure duplication.
+pub fn retire_legacy_cache_if_complete() {
+    let Some(dir) = cache_dir() else {
+        return;
+    };
+    let Some(old) = legacy_cache_dir() else {
+        return;
+    };
+    if old == dir || !old.is_dir() {
+        return;
+    }
+    retire_legacy_cache(&dir, &old);
 }
 
 /// Download any missing checkpoint files into the cache, then load them.
@@ -318,7 +360,7 @@ fn retire_legacy_cache(dir: &Path, old: &Path) {
     // final component to compare is its LAST segment, not the whole string:
     // comparing the whole thing would never match and the cleanup would be
     // silently dead.
-    let repo_leaf = repo_name().rsplit('/').next().unwrap_or(repo_name());
+    let repo_leaf = repo_leaf();
     if old.file_name().and_then(|n| n.to_str()) != Some(repo_leaf) {
         return;
     }
@@ -334,6 +376,63 @@ fn retire_legacy_cache(dir: &Path, old: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drive the standalone entry point the doctor calls through a real pair of
+    /// dirs by pointing the process env at a temp home. `HERMES_HOME` is the
+    /// operant home resolver's explicit override, and `XDG_CACHE_HOME` moves
+    /// the legacy tree, so both halves can be redirected without touching the
+    /// real ones. Holds the crate-wide env lock so parallel tests cannot race
+    /// the vars.
+    #[test]
+    fn the_standalone_retirement_removes_a_duplicated_legacy_tree() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let sandbox = tempfile::tempdir().expect("sandbox");
+        let home = sandbox.path().join("home");
+        let xdg = sandbox.path().join("xdg");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&xdg).expect("xdg");
+
+        // The new cache, complete, at the path `cache_dir()` will derive.
+        let Some(dir) = cache_dir_for(&home) else {
+            panic!("cache_dir_for must derive a path");
+        };
+        std::fs::create_dir_all(&dir).expect("new cache dir");
+        for (file, size) in MODEL_FILE_SIZES {
+            std::fs::write(dir.join(file), vec![0u8; *size as usize]).expect("seed");
+        }
+        // A complete legacy tree under the redirected XDG cache home.
+        // `legacy_cache_dir` is `<cache_dir>/phonon/<repo_name>` and `repo_name`
+        // carries its owner, so the real path nests the owner directory.
+        let legacy = xdg.join("phonon").join(repo_name());
+        std::fs::create_dir_all(&legacy).expect("legacy dir");
+        std::fs::write(legacy.join("model.q8.gguf"), vec![1u8; 32]).expect("legacy weights");
+
+        let prev_home = std::env::var("HERMES_HOME").ok();
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        // SAFETY: serialised by the crate-wide env lock held for this test.
+        unsafe {
+            std::env::set_var("HERMES_HOME", &home);
+            std::env::set_var("XDG_CACHE_HOME", &xdg);
+        }
+
+        retire_legacy_cache_if_complete();
+
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HERMES_HOME", v),
+                None => std::env::remove_var("HERMES_HOME"),
+            }
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+                None => std::env::remove_var("XDG_CACHE_HOME"),
+            }
+        }
+
+        assert!(
+            !legacy.exists(),
+            "the doctor's unconditional call must retire a duplicated legacy tree"
+        );
+    }
 
     /// A temp dir standing in for the cache, with the four pinned files written
     /// at their expected sizes. Nothing in these tests touches the real
