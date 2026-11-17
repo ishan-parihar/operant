@@ -2430,9 +2430,29 @@ pub(crate) async fn create_runtime_agent_with_client(
 
     let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
         .unwrap_or_else(|| "openai".to_string());
+    // A `hint:<name>` model asks for a ROUTE, not a model name. This builder
+    // (the TUI, the gateway, autonomous and cron all come through it) used
+    // `behavior.model` verbatim for BOTH the provider inference and the client,
+    // so a configured `[[providers.model_routes]]` entry was ignored entirely
+    // and the literal `hint:reasoning` went on the wire as the model name.
+    // `create_agent_without_events` has resolved the hint since RT-96; this
+    // path never did. Resolve once here and use the route's model everywhere.
+    let (behavior_model, provider) = match config.providers.model_route_for_hint(&behavior.model) {
+        Some(route) => (route.model.clone(), route.provider.clone()),
+        None => {
+            if config.providers.is_model_hint(&behavior.model) {
+                anyhow::bail!(
+                    "the model is {:?}, but no [[providers.model_routes]] entry has \
+                     that hint. Add one, or use a model name directly.",
+                    behavior.model
+                );
+            }
+            (behavior.model.clone(), provider)
+        }
+    };
     let (model_client, pool_registry) = create_model_client_with_fallback(
         &provider,
-        &behavior.model,
+        &behavior_model,
         config,
         Some(event_tx.clone()),
     );
@@ -2467,11 +2487,20 @@ pub(crate) async fn create_runtime_agent_with_client(
         .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
         .with_llm_compressor(llm_compressor_config(config, context_window));
+        // The route's MODEL, not only its provider: `behavior_model` resolved
+        // `hint:<name>` above, but `agent_config.model` still holds the literal
+        // hint, and `OperantAgent::model()` falls back to `config.model` for
+        // every request it builds. Without this the provider came from the route
+        // and the wire still said `hint:reasoning`.
+        if behavior_model != config.agent.model {
+            agent.set_model(behavior_model.clone());
+        }
         // Plan 016 G1 — attach the harness when [harness].enabled = true.
         // Default is `None`, so this is a no-op for the dark-merge path.
         if let Some(h) = core.harness.clone() {
             agent = agent.with_harness(h);
         }
+
         // Pluggable context engine (hermes-lcm parity): when configured
         // (agent.context_engine = "lcm"), build_messages assembles via the
         // lossless DAG + fresh-tail engine instead of lossy eviction.
@@ -2585,6 +2614,13 @@ pub(crate) async fn create_agent_without_events(
         .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
         .with_llm_compressor(llm_compressor_config(config, context_window));
+        // Same reason as the runtime builder above: `model_name` resolved the
+        // hint, but `agent_config.model` still holds the literal `hint:<name>`,
+        // and `model()` falls back to `config.model` at every request build — so
+        // without this the provider came from the route and the wire did not.
+        if model_name != config.agent.model {
+            agent.set_model(model_name.clone());
+        }
         // Phase C (docs/agentic-os/): a Holon run — HOLON_RUN_DIR carries the
         // kernel's compiled policy.json — enforces that document through the
         // seat-authority consult on every tool call. Not a Holon run (no env
@@ -4897,5 +4933,38 @@ mod tests {
         );
         // Primary provider's pool is shared with the agent-path wrapper.
         assert!(pools.pool("free").is_some());
+    }
+
+    /// A `hint:<name>` model is a ROUTE, not a model name. `model_route_for_hint`
+    /// resolves it into `(route.model, route.provider)`, but until this fix only
+    /// the PROVIDER reached the client: `agent_config.model` kept the literal
+    /// `hint:<name>`, and `OperantAgent::model()` falls back to `config.model`
+    /// for every request it builds — so the provider was chosen from the route
+    /// while the WIRE still carried `hint:reasoning` as the model name.
+    ///
+    /// A SOURCE contract over both call sites, because the resolution lives in
+    /// two builders and a helper-level test cannot see either: a `set_model` in
+    /// only one of them leaves the other broken. The needles are concatenation-
+    /// built so this test's own source cannot satisfy them (RT-534/iter-2528).
+    #[test]
+    fn both_agent_builders_apply_the_resolved_route_model() {
+        let source = include_str!("main.rs");
+        let setter = format!("agent.{}(behavior_model.clone())", "set_model");
+        assert!(
+            source.contains(&setter),
+            "the runtime builder must apply the resolved route model, or the \
+             wire carries the literal hint: {setter}"
+        );
+        let setter2 = format!("agent.{}(model_name.clone())", "set_model");
+        assert!(
+            source.contains(&setter2),
+            "create_agent_without_events must apply the resolved route model: {setter2}"
+        );
+        // And the hint must actually be resolved on the path that never did.
+        let resolve = format!("model_route_for_hint(&{}.model)", "behavior");
+        assert!(
+            source.contains(&resolve),
+            "the runtime builder must resolve the hint at all: {resolve}"
+        );
     }
 }
