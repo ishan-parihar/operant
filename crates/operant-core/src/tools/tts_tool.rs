@@ -75,6 +75,49 @@ fn default_voice() -> String {
     "default".to_string()
 }
 
+/// MiniMax's current synchronous speech endpoint.
+///
+/// The old pin was `https://api.minimax.chat/v1/text_to_audio` with the model
+/// `speech-01`. The vendor's current API is `t2a_v2` on `api.minimax.io`, and
+/// `speech-01` is no longer a valid model id — only `speech-01-hd` /
+/// `speech-01-turbo` and the 2.x generations are. A request on the old pair
+/// fails outright rather than degrading.
+const MINIMAX_SPEECH_URL: &str = "https://api.minimax.io/v1/t2a_v2";
+const MINIMAX_DEFAULT_MODEL: &str = "speech-2.8-hd";
+/// A voice id the current API ships, so a caller who names none gets a real
+/// one instead of a name only the retired generation accepted.
+const MINIMAX_DEFAULT_VOICE: &str = "English_expressive_narrator";
+
+/// Gemini's current TTS model.
+///
+/// The old pin was `gemini-2.5-flash-preview-tts`, a preview generation with a
+/// published shutdown window. Two things changed beyond the name: 3.x takes the
+/// input text strictly as a verbatim transcript (turn-level directions move to
+/// `speech_metadata`), and the voice field is `prebuiltVoiceConfig.voiceName`.
+const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash-tts";
+const GEMINI_DEFAULT_VOICE: &str = "Kore";
+
+/// Decode the hex payload `t2a_v2` returns under `output_format: "hex"`.
+///
+/// This used to be handed back verbatim as if it were base64, so the caller
+/// received a string that no audio decoder could read while the tool reported
+/// success. Returns `None` on odd length or a non-hex digit, so a malformed
+/// payload is an error rather than silently-truncated audio.
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    s.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let hi = (pair[0] as char).to_digit(16)?;
+            let lo = (pair[1] as char).to_digit(16)?;
+            Some(((hi << 4) | lo) as u8)
+        })
+        .collect()
+}
+
 /// The voice this provider uses when the caller named none.
 ///
 /// `default_voice()` is the SCHEMA default, and it means "whatever this
@@ -587,19 +630,41 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "MINIMAX_API_KEY not set");
         }
 
-        let voice_id = resolve_voice(&args.voice, "female-shaonv");
+        // The caller may name a model; the default is the current MiniMax
+        // generation. The old pin (`speech-01`, bare) is not in the vendor's
+        // current enum at all — only `speech-01-hd` / `speech-01-turbo` are —
+        // so an unupdated config would fail against today's API.
+        let model = args
+            .model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .unwrap_or(MINIMAX_DEFAULT_MODEL);
+
+        let voice_id = resolve_voice(&args.voice, MINIMAX_DEFAULT_VOICE);
 
         let response = match self
             .client
-            .post("https://api.minimax.chat/v1/text_to_audio")
+            .post(MINIMAX_SPEECH_URL)
             .header("Authorization", format!("Bearer {}", self.minimax_key))
             .header("Content-Type", "application/json")
             .json(&json!({
-                "model": "speech-01",
+                "model": model,
                 "text": args.text,
-                "voice_id": voice_id,
-                "speed": 1.0,
-                "volume": 1.0
+                "stream": false,
+                "language_boost": "auto",
+                "output_format": "hex",
+                "voice_setting": {
+                    "voice_id": voice_id,
+                    "speed": 1.0,
+                    "vol": 1.0,
+                    "pitch": 0
+                },
+                "audio_setting": {
+                    "sample_rate": 32000,
+                    "bitrate": 128000,
+                    "format": "mp3",
+                    "channel": 1
+                }
             }))
             .send()
             .await
@@ -627,12 +692,50 @@ impl TtsTool {
             }
         };
 
-        // MiniMax returns base64 audio
-        let audio_base64 = result
+        // The transport succeeded, but that is not proof of audio: t2a_v2
+        // answers 200 with `base_resp.status_code != 0` for a refused
+        // request, and `data` may be null. Both used to fall through to a
+        // success carrying an empty audio string.
+        if let Some(code) = result
+            .get("base_resp")
+            .and_then(|b| b.get("status_code"))
+            .and_then(Value::as_i64)
+        {
+            if code != 0 {
+                let msg = result
+                    .get("base_resp")
+                    .and_then(|b| b.get("status_msg"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("no message");
+                return ToolResult::error(
+                    "text_to_speech",
+                    format!("MiniMax API error {code}: {msg}"),
+                );
+            }
+        }
+
+        // With `output_format: "hex"` the payload is hex-encoded, not base64.
+        // Returning the hex as if it were base64 produced "audio" no client
+        // could decode.
+        let audio_hex = result
             .get("data")
             .and_then(|d| d.get("audio"))
-            .and_then(|a| a.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("");
+        if audio_hex.is_empty() {
+            return ToolResult::error(
+                "text_to_speech",
+                "MiniMax returned no audio data in data.audio",
+            );
+        }
+        let audio_bytes = match hex_decode(audio_hex) {
+            Some(bytes) => bytes,
+            None => {
+                return ToolResult::error("text_to_speech", "MiniMax data.audio was not valid hex");
+            }
+        };
+        let audio_base64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &audio_bytes);
 
         ToolResult::success(
             "text_to_speech",
@@ -642,7 +745,7 @@ impl TtsTool {
                 "format": "mp3",
                 "provider": "minimax",
                 "voice": voice_id,
-                "model": "speech-01"
+                "model": model
             }),
         )
     }
@@ -714,12 +817,29 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "GEMINI_API_KEY not set");
         }
 
-        let voice = resolve_voice(&args.voice, "Kore");
+        let voice = resolve_voice(&args.voice, GEMINI_DEFAULT_VOICE);
+
+        // `gemini-2.5-flash-preview-tts` is the previous TTS generation and
+        // carries a published shutdown window, so the default is the current
+        // one. A caller may still name a model (including the 2.5 preview)
+        // while it is served.
+        let model = args
+            .model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .unwrap_or(GEMINI_DEFAULT_MODEL);
+
+        // The key goes in the query parameter only. Sending BOTH an
+        // `Authorization: Bearer` header and `?key=` is not a stricter check —
+        // it is a rejected request shape, and it put the credential in a
+        // second place for no benefit.
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        );
 
         let response = match self
             .client
-            .post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent")
-            .header("Authorization", format!("Bearer {}", self.gemini_key))
+            .post(&url)
             .header("Content-Type", "application/json")
             .query(&[("key", &self.gemini_key)])
             .json(&json!({
@@ -729,10 +849,11 @@ impl TtsTool {
                     }]
                 }],
                 "generationConfig": {
+                    "responseModalities": ["AUDIO"],
                     "speechConfig": {
                         "voiceConfig": {
-                            "prebuiltVoice": {
-                                "speaker": voice
+                            "prebuiltVoiceConfig": {
+                                "voiceName": voice
                             }
                         }
                     }
@@ -742,7 +863,9 @@ impl TtsTool {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult::error("text_to_speech", format!("API request failed: {}", e)),
+            Err(e) => {
+                return ToolResult::error("text_to_speech", format!("API request failed: {}", e));
+            }
         };
 
         if !response.status().is_success() {
@@ -762,7 +885,9 @@ impl TtsTool {
             }
         };
 
-        // Gemini returns base64 in candidates[0].content.parts[0].inlineData.data
+        // A 200 is not proof of audio: a blocked prompt comes back as a
+        // candidate with `finishReason` and no `inlineData`. Reporting success
+        // with an empty string is the bug this check exists to prevent.
         let audio_base64 = result
             .get("candidates")
             .and_then(|c| c.as_array())
@@ -773,8 +898,21 @@ impl TtsTool {
             .and_then(|arr| arr.first())
             .and_then(|p| p.get("inlineData"))
             .and_then(|d| d.get("data"))
-            .and_then(|a| a.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("");
+        if audio_base64.is_empty() {
+            let reason = result
+                .get("candidates")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|c| c.get("finishReason"))
+                .and_then(Value::as_str)
+                .unwrap_or("no candidate");
+            return ToolResult::error(
+                "text_to_speech",
+                format!("Gemini returned no audio (finishReason: {reason})"),
+            );
+        }
 
         ToolResult::success(
             "text_to_speech",
@@ -784,7 +922,7 @@ impl TtsTool {
                 "format": "mp3",
                 "provider": "gemini",
                 "voice": voice,
-                "model": "gemini-2.5-flash-preview-tts"
+                "model": model
             }),
         )
     }
@@ -1245,10 +1383,42 @@ mod tests {
         }
     }
 
+    /// The two providers whose vendor APIs moved under us. Both were pinned to
+    /// a model id / endpoint that today's API rejects, so the provider was
+    /// configured correctly and still could not synthesize. A pin that drifts
+    /// is invisible until someone calls it, which is why the values are
+    /// asserted here rather than left to a comment.
+    #[test]
+    fn the_minimax_and_gemini_pins_match_the_current_vendor_apis() {
+        assert_eq!(MINIMAX_SPEECH_URL, "https://api.minimax.io/v1/t2a_v2");
+        // Bare `speech-01` is not in the vendor enum any more.
+        assert_eq!(MINIMAX_DEFAULT_MODEL, "speech-2.8-hd");
+        // A voice the current API ships; the old default belonged to the
+        // retired generation.
+        assert_eq!(MINIMAX_DEFAULT_VOICE, "English_expressive_narrator");
+
+        assert_eq!(GEMINI_DEFAULT_MODEL, "gemini-3.8-flash-tts");
+        assert_ne!(GEMINI_DEFAULT_MODEL, "gemini-2.5-flash-preview-tts");
+    }
+
+    /// `t2a_v2` returns hex under `output_format: "hex"`. Handing that back
+    /// verbatim as if it were base64 is what the old code did, and no client
+    /// could decode the result while the tool reported success.
+    #[test]
+    fn minimax_hex_payload_is_decoded_not_passed_through() {
+        assert_eq!(hex_decode("48656c6c6f"), Some(b"Hello".to_vec()));
+        // The `0x` prefix some payloads carry is not part of the bytes.
+        assert_eq!(hex_decode("0x48656c6c6f"), Some(b"Hello".to_vec()));
+        // Empty is a missing payload, not empty audio.
+        assert_eq!(hex_decode(""), Some(Vec::new()));
+        // Malformed input is refused rather than silently truncated.
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode("zz"), None);
+    }
+
     #[test]
     fn an_unknown_provider_name_degrades_to_the_default_instead_of_erroring() {
         // The regression this pins: iter-2513 retired `kokoro`, and an
-        // operator whose operant.toml still names it would have got
         // "Unknown provider" on every request — a config that parsed
         // yesterday failing today.
         assert_eq!(resolve_provider_name("kokoro"), default_provider());

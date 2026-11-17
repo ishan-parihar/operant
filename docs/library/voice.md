@@ -89,9 +89,9 @@ an operator design choice — do not switch the default away from Phonon.
 | `edge` | free, keyless | `en-US-AriaNeural` | — | mp3 |
 | `elevenlabs` | `ELEVENLABS_API_KEY` | `pNInz6obpgDQGcFmaJgB` | `eleven_multilingual_v2` | mp3 |
 | `openai` | `OPENAI_API_KEY` | `alloy` | `gpt-4o-mini-tts` | audio bytes |
-| `minimax` | `MINIMAX_API_KEY` | — | — | audio bytes |
-| `mistral` | `MISTRAL_API_KEY` | — | — | audio bytes |
-| `gemini` | `GEMINI_API_KEY` | — | `gemini-2.5-flash-preview-tts` | audio bytes |
+| `minimax` | `MINIMAX_API_KEY` | `English_expressive_narrator` | `speech-2.8-hd` (`api.minimax.io/v1/t2a_v2`) | mp3 |
+| `mistral` | `MISTRAL_API_KEY` | — | `voxtral-mini-tts-2603` | audio bytes |
+| `gemini` | `GEMINI_API_KEY` | `Kore` | `gemini-3.8-flash-tts` | audio bytes |
 | `xai` | `XAI_API_KEY` | — | — | audio bytes |
 | `neutts` | `neutts` binary on PATH | — | `neuphonic/neutts-air-q4-gguf` | wav |
 | `kittentts` | `python3` + the `kittentts` package | `Jasper` | `KittenML/kitten-tts-nano-0.8-int8` | wav |
@@ -106,6 +106,34 @@ names is ignored with a warning.
 Edge services over the `edge-tts` CLI, which is why it earns no file
 dependency and is not the default. A missing CLI, a non-zero exit and a
 zero-length output file are each an explicit error.
+
+## Vendor pins: MiniMax and Gemini
+
+Both providers are pinned to their vendors' **current** published APIs;
+the pins are asserted in
+`crates/operant-core/src/tools/tts_tool.rs`
+(`the_minimax_and_gemini_pins_match_the_current_vendor_apis`) so a drift
+fails a unit test rather than a live call.
+
+**MiniMax** speaks `t2a_v2` on `https://api.minimax.io`, not the retired
+`api.minimax.chat/v1/text_to_audio`. Its model enum is
+`speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`,
+`speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo` —
+bare `speech-01` is **not** a valid id any more. The request carries
+`voice_setting` (voice_id/speed/vol/pitch) and `audio_setting`
+(sample_rate/bitrate/format/channel) objects plus `stream`,
+`language_boost` and `output_format: "hex"`. With `output_format: "hex"`
+the `data.audio` payload is **hex**, which the tool decodes to bytes
+before base64-ing it for the caller; a 200 can still carry a refusal via
+`base_resp.status_code != 0`, which the tool treats as an error.
+
+**Gemini** speaks `gemini-3.8-flash-tts`; the `gemini-2.5-flash-preview-tts`
+it replaces has a published shutdown window. The 3.x schema differs in
+shape, not just name: `parts[].text` is a **verbatim transcript**
+(turn-level directions belong in a `speech_metadata` field, never in the
+text), the voice comes from
+`speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`, and the request
+carries `responseModalities: ["AUDIO"]`.
 
 ## The two extension registries
 
