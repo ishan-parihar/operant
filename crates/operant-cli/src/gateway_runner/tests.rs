@@ -4422,3 +4422,50 @@ fn the_socket_turn_entry_resets_the_slot_before_it_runs() {
         "the reset must precede agent.run in the socket turn"
     );
 }
+
+/// (iter-2581) A command-scoped turn must not inherit the slot's last cron
+/// origin.
+///
+/// Slots are hash-assigned across session keys (`AgentSlots::index_for`), so
+/// one agent serves many chats. The channel and socket turn paths stamp the
+/// cron origin at turn start; the command path (`run_session_scoped_command`,
+/// which `/retry` uses to re-run a prompt) never did. A `cron create` in a
+/// retried turn therefore wrote the PREVIOUS chat's platform/chat_id as the
+/// delivery target, and `Scheduler::deliver_result` sends to exactly that
+/// `platform:chat_id` -- so chat B's scheduled result landed in chat A. That
+/// is a cross-chat leak, not the lost-result failure iter-2558 was about.
+///
+/// Behavioural: it dirties the slot the way a previous chat would, runs the
+/// command path, and reads the origin back.
+#[tokio::test]
+async fn a_command_turn_does_not_inherit_the_previous_chats_cron_origin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let handler = slow_echo_handler(&dir, 0);
+    let slot = handler.slots.slot_for("sess_cmd_origin");
+
+    // What the chat that used this slot last left behind.
+    let stale = operant_core::tools::cron_tool::CronOrigin {
+        platform: "telegram".to_string(),
+        chat_id: "-1009876543".to_string(),
+        thread_id: Some("7".to_string()),
+    };
+    slot.agent.set_cron_origin(Some(stale.clone()));
+    // Sanity: the dirt is actually there, or the assertion below proves nothing.
+    // Compared field by field because `CronOrigin` is not `PartialEq`, and
+    // deriving one for a test is a worse trade than naming the fields.
+    let dirty = slot.agent.cron_origin().expect("the slot must start dirty");
+    assert_eq!(dirty.platform, "telegram", "fixture must start dirty");
+    assert_eq!(dirty.chat_id, "-1009876543", "fixture must start dirty");
+
+    handler
+        .run_session_scoped_command("sess_cmd_origin", |_agent, _session_id| async move {
+            "ok".to_string()
+        })
+        .await;
+
+    assert!(
+        slot.agent.cron_origin().is_none(),
+        "a command-scoped turn must start with no delivery target: inheriting \
+         the previous chat's origin routes its cron results into THAT chat"
+    );
+}

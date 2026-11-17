@@ -3937,6 +3937,22 @@ impl GatewayMessageHandler {
         // conversation back to the store, so no other chat loses context.
         slot.agent.set_session_id(session_id.clone());
 
+        // (iter-2581) A command-scoped turn must not inherit the slot's last
+        // cron origin. Slots are hash-assigned across session keys
+        // (`index_for`), so several chats share one agent; the channel and
+        // socket turn paths each stamp the origin at turn start, but this path
+        // never did. A `/retry` therefore ran `agent.run()` with whatever
+        // chat used the slot last, and a `cron create` in the retried turn
+        // wrote THAT chat's platform/chat_id as its delivery target -- so the
+        // scheduled result was delivered into a different conversation, which
+        // is a cross-chat leak and not merely a lost result.
+        //
+        // Cleared rather than guessed: a command has no `message` to read a
+        // platform/channel from, and inventing one would route results to a
+        // chat that never asked. `None` is the cron tool's "local" case, which
+        // the scheduler records and does not deliver anywhere.
+        slot.agent.set_cron_origin(None);
+
         // 3. The operation, under the lock, against the invoker's session.
         op(Arc::clone(&slot.agent), session_id).await
     }
