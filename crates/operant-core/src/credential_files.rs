@@ -144,6 +144,29 @@ fn lexical_absolute(path: &Path) -> PathBuf {
     out
 }
 
+/// True when `path_lower` is `denied_lower` under a DIFFERENT final name --
+/// a renamed copy of the same credential, which equality cannot see.
+///
+/// This mirrors `file_tools::denied_name_with_suffix` deliberately: two guards
+/// over the same files that disagree about renames leave the weaker one as the
+/// real boundary. Here the asymmetry was observable --
+/// `~/.operant/auth.json.bak` was denied (that name is in the file tools' deny
+/// list) while `~/.operant/.env.bak` was allowed (`.env` lives only in this
+/// registry), so rotating a key and leaving the dotenv backup behind was
+/// enough to read the old one.
+fn renamed_copy_of(path_lower: &str, denied_lower: &str) -> bool {
+    let Some(rest) = path_lower.strip_prefix(denied_lower) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    // Only a separator or a suffix boundary may follow the denied name.
+    // `rest` starting with `/` would make the denied path a PARENT directory,
+    // which the `starts_with` arm already covers.
+    matches!(rest.chars().next(), Some('.' | '-' | '~' | '(' | ')' | ' '))
+}
+
 /// Return the reason a path is protected, or None when it's safe to read.
 pub fn protected_path_reason(path: &Path) -> Option<String> {
     // Compare against the lexically-normalized absolute path so protection
@@ -164,6 +187,22 @@ pub fn protected_path_reason(path: &Path) -> Option<String> {
         let candidate_str = candidate.to_string_lossy();
         absolute_lower == candidate_str
             || absolute_lower.starts_with(&format!("{}/", candidate_str))
+            // A renamed copy of a credential file is the same credential.
+            // Exact equality protects `~/.operant/.env` and not
+            // `~/.operant/.env.bak` -- a dotenv backup is exactly what an
+            // operator leaves behind when they rotate a key, and it holds the
+            // same secrets. Measured before this arm: `.env` denied,
+            // `.env.bak` and `.env.local` ALLOWED, while `auth.json.bak` was
+            // denied only because that name also appears in the file tools'
+            // DENIED_PATH_PATTERNS. The two guards disagreed about the same
+            // class of file, and the weaker one is the boundary.
+            //
+            // `renamed_copy_of` applies the same rule
+            // `file_tools::validate_path` uses: the denied name must be
+            // followed by a boundary that cannot continue the name (`.`, `-`,
+            // `~`, `(`, `)`, space), so `.env.bak` is caught while
+            // `.environment` is not.
+            || renamed_copy_of(&absolute_lower, &candidate_str)
     };
 
     for rel in BUILTIN_PROTECTED_RELATIVE {
@@ -257,5 +296,55 @@ mod tests {
     fn unrelated_file_is_not_protected() {
         let home = home_dir().expect("HOME set in tests");
         assert!(!is_protected_path(&home.join("Documents/notes.txt")));
+    }
+    /// A renamed copy of a credential store is the same credential.
+    ///
+    /// `matches_under` compared by equality, so the registry protected
+    /// `~/.operant/.env` and not `~/.operant/.env.bak` -- and a dotenv backup
+    /// is exactly what an operator leaves behind after rotating a key. The
+    /// asymmetry was observable against the OTHER guard: `auth.json.bak` was
+    /// already denied by `file_tools::DENIED_PATH_PATTERNS` (which iter-2578
+    /// taught to match suffixes), while `.env.bak` was not, because `.env`
+    /// lives only in this registry. Two guards over the same files that
+    /// disagree about renames leave the weaker one as the real boundary.
+    #[test]
+    fn a_renamed_copy_of_a_credential_store_is_protected() {
+        let home = home_dir().expect("HOME set in tests");
+        // The stores themselves.
+        for name in [".env", "auth.json", ".git-credentials"] {
+            let p = home.join(name);
+            assert!(
+                is_protected_path(&p),
+                "{} must be protected (pre-existing behaviour)",
+                p.display()
+            );
+        }
+        // And their renamed copies, which equality could not see.
+        for renamed in [".env.bak", ".env.local", "auth.json.bak"] {
+            let p = home.join(renamed);
+            assert!(
+                is_protected_path(&p),
+                "{} is a renamed credential store and must be protected -- \
+                 rotating a key and leaving the backup behind must not make \
+                 the old secret readable",
+                p.display()
+            );
+        }
+    }
+
+    /// The rename rule must not swallow an ordinary file that merely STARTS
+    /// with a protected name. `.environment.rc` is a different file, and
+    /// over-blocking here would break legitimate work under the banner of a
+    /// security control.
+    #[test]
+    fn a_file_that_only_shares_a_prefix_is_not_protected() {
+        let home = home_dir().expect("HOME set in tests");
+        // `.env` + "ironment" -- an identifier character continues the name.
+        let p = home.join(".environment.rc");
+        assert!(
+            !is_protected_path(&p),
+            "{} only shares a prefix with `.env` and must not be blocked",
+            p.display()
+        );
     }
 }
