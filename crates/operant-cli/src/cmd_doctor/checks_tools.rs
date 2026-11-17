@@ -597,6 +597,15 @@ pub fn run_platform_checks(
     // guarded internally (it only deletes when the current cache is already
     // complete), so this cannot cost an install its only copy.
     operant_core::tools::phonon::retire_legacy_cache_if_complete();
+    // An unknown `provider` in config degrades silently to the default (see
+    // `tts_tool::resolve_provider_name`), which is right for a typo but wrong
+    // for a RETIRED name: the operator's config still said `kokoro`, removed in
+    // iter-2513, and nothing in `operant doctor` ever said so -- the tool only
+    // logs a tracing warning nobody reads. Surface it where the operator is
+    // already looking (iter-2592).
+    if let Some(detail) = tts_unknown_provider_detail(&config.tts.provider) {
+        check_warn("tts", &detail);
+    }
     if config.tts.enabled {
         if operant_core::tools::phonon::is_cached() {
             check_ok("tts", "(phonon model cached)");
@@ -608,7 +617,17 @@ pub fn run_platform_checks(
         }
     } else {
         any_unavailable = true;
-        check_warn("tts", "(not configured \u{2014} run operant setup)");
+        // "not configured" was the whole message whenever `enabled = false`,
+        // which conflated two very different states (iter-2592). An operator
+        // who HAS provisioned the checkpoint but left TTS off was told to "run
+        // operant setup" -- advice that downloads nothing they are missing and
+        // does not mention the switch that would actually turn TTS on. The two
+        // states get separate messages now: provisioned-but-off is a config
+        // choice, absent-and-off is a setup task.
+        check_warn(
+            "tts",
+            tts_disabled_detail(operant_core::tools::phonon::is_cached()),
+        );
     }
 
     if any_unavailable {
@@ -1266,6 +1285,35 @@ fn human_bytes(bytes: i64) -> String {
     }
 }
 
+/// What the doctor says about TTS when `[tts] enabled = false`.
+///
+/// Two states that used to share one message (iter-2592): a checkpoint that is
+/// already downloaded but switched off is a deliberate configuration, while an
+/// absent one is a setup task. Telling the first operator to "run operant
+/// setup" sends them to a wizard that downloads nothing they are missing and
+/// never mentions the switch that would turn TTS on.
+fn tts_disabled_detail(cached: bool) -> &'static str {
+    if cached {
+        "(disabled \u{2014} the phonon model is downloaded; set [tts] enabled = true to use it)"
+    } else {
+        "(not configured \u{2014} run operant setup)"
+    }
+}
+
+/// What the doctor says when `[tts] provider` names something the tool cannot
+/// dispatch to. Such a value degrades silently to the default at runtime, which
+/// is correct for a typo but leaves a RETIRED name (the operator's config still
+/// said `kokoro` after iter-2513 removed it) looking like a working setting.
+fn tts_unknown_provider_detail(provider: &str) -> Option<String> {
+    let name = provider.trim();
+    if name.is_empty() || operant_core::tools::tts_tool::builtin_providers().contains(&name) {
+        return None;
+    }
+    Some(format!(
+        "(provider {name:?} is not a known TTS provider \u{2014} falling back to the default; edit [tts] provider)"
+    ))
+}
+
 #[cfg(test)]
 mod operant_binary_tests {
     use super::*;
@@ -1455,5 +1503,112 @@ mod memory_provider_surface_tests {
             !source.contains("using built-in memory"),
             "doctor still claims a built-in memory fallback, which no longer exists"
         );
+    }
+}
+
+#[cfg(test)]
+mod tts_doctor_message_tests {
+    use super::{tts_disabled_detail, tts_unknown_provider_detail};
+
+    /// A provisioned-but-disabled TTS must not be reported as "not configured".
+    ///
+    /// The regression (iter-2592, found on the operator's own live install): the
+    /// doctor printed `tts (not configured -- run operant setup)` for an operator
+    /// whose Phonon checkpoint was fully downloaded, because the only condition
+    /// it looked at was `[tts] enabled = false`. That advice sends them to a
+    /// wizard that downloads nothing they are missing, and it never mentions the
+    /// switch that would actually turn TTS on.
+    #[test]
+    fn a_downloaded_checkpoint_that_is_switched_off_is_not_reported_as_unconfigured() {
+        let cached = tts_disabled_detail(true);
+        assert!(
+            cached.contains("disabled"),
+            "the disabled-but-provisioned message must say so: {cached}"
+        );
+        assert!(
+            cached.contains("enabled = true"),
+            "it must name the switch that turns TTS on: {cached}"
+        );
+        assert!(
+            !cached.contains("not configured"),
+            "a provisioned install must not be told it is unconfigured: {cached}"
+        );
+        assert!(
+            !cached.contains("operant setup"),
+            "it must not send a provisioned operator to setup: {cached}"
+        );
+    }
+
+    /// The absent case still points at setup.
+    ///
+    /// The two states were split, not merged: an operator with no checkpoint at
+    /// all genuinely does need the wizard, and that message must survive.
+    #[test]
+    fn a_missing_checkpoint_is_still_reported_as_needing_setup() {
+        let absent = tts_disabled_detail(false);
+        assert!(
+            absent.contains("not configured"),
+            "the absent case must still say so: {absent}"
+        );
+        assert!(
+            absent.contains("operant setup"),
+            "the absent case must still point at setup: {absent}"
+        );
+    }
+
+    /// The two messages must actually differ.
+    ///
+    /// Without this, a refactor that collapsed both arms to one string would
+    /// keep every assertion above green while restoring the original defect.
+    #[test]
+    fn the_two_disabled_states_do_not_share_a_message() {
+        assert_ne!(
+            tts_disabled_detail(true),
+            tts_disabled_detail(false),
+            "the provisioned and the absent states collapsed back into one message"
+        );
+    }
+
+    /// A retired provider name is surfaced rather than silently degraded.
+    ///
+    /// `kokoro` was the default until iter-2513 removed it. An operator whose
+    /// config still names it gets the right behaviour at runtime (the tool
+    /// degrades to the default) but was told nothing: `operant doctor` printed
+    /// no row about it, and the only warning was a `tracing` line nobody reads.
+    /// This is the operator's actual live config, so it is the regression.
+    #[test]
+    fn a_retired_provider_name_is_named_in_the_doctor_output() {
+        let detail = tts_unknown_provider_detail("kokoro")
+            .expect("a retired provider name must produce a warning");
+        assert!(
+            detail.contains("kokoro"),
+            "it must name the bad value: {detail}"
+        );
+        assert!(
+            detail.contains("edit [tts] provider"),
+            "it must say how to fix it: {detail}"
+        );
+    }
+
+    /// A known provider is silent: the doctor must not cry wolf on a good config.
+    #[test]
+    fn every_builtin_provider_is_accepted_without_a_warning() {
+        for name in operant_core::tools::tts_tool::builtin_providers() {
+            assert!(
+                tts_unknown_provider_detail(name).is_none(),
+                "a supported provider ({name}) must not be reported as unknown"
+            );
+        }
+    }
+
+    /// An unset provider is not an unknown one.
+    ///
+    /// `provider` is a plain `String` with a default, but a hand-written config
+    /// may leave it empty; that is the "use the default" case, not a typo to
+    /// report.
+    #[test]
+    fn an_empty_or_whitespace_provider_is_not_reported() {
+        assert!(tts_unknown_provider_detail("").is_none());
+        assert!(tts_unknown_provider_detail("   ").is_none());
     }
 }
