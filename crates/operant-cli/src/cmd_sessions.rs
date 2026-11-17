@@ -13,22 +13,11 @@ use operant_core::database::Database;
 
 /// Truncate a session title for the one-line list display.
 ///
-/// Cuts on a CHAR boundary. A byte slice (`&title[..39]`) panicked whenever byte
-/// 39 fell inside a multi-byte char -- a session title is arbitrary conversation
-/// text, so an accented or CJK title is ordinary, not adversarial. Same class as
-/// RT-301 / RT-313 / RT-317.
+/// A session title is arbitrary conversation text, so `&title[..39]` panicked
+/// whenever byte 39 fell inside a multi-byte char. Delegates to the shared
+/// char-safe helper. See `operant_core::text_slice` (RT-301 class).
 fn truncate_title(title: &str) -> String {
-    const MAX: usize = 40;
-    if title.len() <= MAX {
-        return title.to_string();
-    }
-    let cut = title
-        .char_indices()
-        .take_while(|(i, _)| *i < MAX - 1)
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(0);
-    format!("{}\u{2026}", &title[..cut])
+    operant_core::text_slice::take_chars(title, 39, "\u{2026}")
 }
 
 /// Manage conversation sessions

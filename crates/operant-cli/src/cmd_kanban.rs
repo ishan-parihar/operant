@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::kanban::{KanbanDb, KanbanManager, TaskStatus};
+use operant_core::text_slice::char_prefix;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Subcommand)]
@@ -397,8 +398,9 @@ async fn cmd_list(config: &AppConfig, board_slug: &str, json: bool) -> Result<()
     println!("{}", "-".repeat(86));
 
     for (i, task) in tasks.iter().enumerate() {
+        // Char-boundary cut: a task title is operator text (RT-301 class).
         let display_title = if task.title.len() > 24 {
-            format!("{}…", &task.title[..23])
+            format!("{}…", char_prefix(&task.title, 23))
         } else {
             task.title.clone()
         };

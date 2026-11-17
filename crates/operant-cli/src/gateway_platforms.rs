@@ -136,20 +136,6 @@ fn setup_whatsapp(config: &mut AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// First `n` chars of `s`, cut on a char boundary.
-///
-/// A byte slice (`&s[..n]`) panics when byte `n` lands inside a multi-byte
-/// char. Hostnames can be internationalised, so this is the RT-301 class.
-fn char_prefix(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}
-
-/// Last `n` chars of `s`, cut on a char boundary. See `char_prefix`.
-fn char_suffix(s: &str, n: usize) -> String {
-    let skip = s.chars().count().saturating_sub(n);
-    s.chars().skip(skip).collect()
-}
-
 /// Mask a long hostname for display: first `edge` chars, an ellipsis, last
 /// `edge` chars. A short value is returned whole.
 ///
@@ -159,6 +145,7 @@ fn mask_host(host: &str, threshold: usize, edge: usize) -> String {
     if host.len() <= threshold {
         return host.to_string();
     }
+    use operant_core::text_slice::{char_prefix, char_suffix};
     format!(
         "{}\u{2026}{}",
         char_prefix(host, edge),
@@ -288,7 +275,8 @@ fn setup_webhooks(config: &mut AppConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{char_prefix, char_suffix, mask_host};
+    use super::mask_host;
+    use operant_core::text_slice::{char_prefix, char_suffix};
 
     // The production helpers. These must call the real ones, not a local copy of
     // the logic: an earlier version of this suite passed WITH the byte-slice bug

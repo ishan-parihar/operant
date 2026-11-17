@@ -23,6 +23,7 @@ use crate::gateway_commands::{
 };
 use operant_core::mcp::McpManager;
 use operant_core::observer::ObserverEvent;
+use operant_core::text_slice::char_prefix;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -315,8 +316,9 @@ fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
         };
         for key in keys {
             if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
+                // Char-boundary cut: arbitrary JSON from a gateway payload.
                 let truncated = if val.len() > 100 {
-                    format!("{}...", &val[..100])
+                    format!("{}...", char_prefix(val, 100))
                 } else {
                     val.to_string()
                 };
@@ -328,7 +330,7 @@ fn extract_tool_arg(name: &str, args: &str) -> Option<String> {
             for (_key, val) in obj.iter() {
                 if let Some(s) = val.as_str() {
                     let truncated = if s.len() > 100 {
-                        format!("{}...", &s[..100])
+                        format!("{}...", char_prefix(s, 100))
                     } else {
                         s.to_string()
                     };

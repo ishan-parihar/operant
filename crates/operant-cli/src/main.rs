@@ -69,6 +69,7 @@ mod prompt_helpers;
 pub mod provider;
 mod skill_roots;
 mod tui;
+use operant_core::text_slice::char_prefix;
 
 pub(crate) use tui::free_mode_dialog;
 pub(crate) use tui::image_paste;
@@ -3193,8 +3194,9 @@ fn preview_tool_args(args: &str) -> Option<String> {
             "text",
         ] {
             if let Some(val) = json.get(*key).and_then(|v| v.as_str()) {
+                // Char-boundary cut: an arbitrary JSON string from a response.
                 let truncated = if val.len() > 80 {
-                    format!("{}...", &val[..80])
+                    format!("{}...", char_prefix(val, 80))
                 } else {
                     val.to_string()
                 };

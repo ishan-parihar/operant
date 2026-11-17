@@ -12,6 +12,7 @@ use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::cronjobs::CronDb;
 use operant_core::mcp::McpManager;
+use operant_core::text_slice::char_prefix;
 
 /// Manage cron jobs
 #[derive(Debug, Clone, Subcommand)]
@@ -367,14 +368,16 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
         let next_run = display_next_run(job.next_run_at.as_deref(), &job.schedule);
         let last_output = job.last_status.as_deref().unwrap_or("—");
 
+        // Char-boundary cut: a job name is operator-supplied text, so a
+        // multi-byte char at byte 25 panicked `operant cron list` (RT-301 class).
         let display_name = if job.name.len() > 26 {
-            format!("{}…", &job.name[..25])
+            format!("{}…", char_prefix(&job.name, 25))
         } else {
             job.name.clone()
         };
 
         let display_schedule = if job.schedule_display.len() > 18 {
-            format!("{}…", &job.schedule_display[..17])
+            format!("{}…", char_prefix(&job.schedule_display, 17))
         } else {
             job.schedule_display.clone()
         };

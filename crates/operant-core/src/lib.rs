@@ -149,6 +149,7 @@ pub mod skills_guard;
 pub mod socket_auth;
 pub mod sops;
 pub mod sourcehound_cdp;
+pub mod text_slice;
 pub mod tool_guardrails;
 pub mod tools;
 pub mod trajectory;
