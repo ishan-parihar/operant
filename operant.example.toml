@@ -819,10 +819,10 @@ openai_model = "whisper-1"
 #
 # `voice` is optional. Omit it and each provider uses its OWN default: edge
 # en-US-AriaNeural, elevenlabs pNInz6obpgDQGcFmaJgB, openai alloy, minimax
-# female-shaonv, mistral c69964a6-ab8b-4f8a-9465-ec0925096ec8, gemini Kore,
-# xai eve, neutts neutral, kittentts Jasper, piper en_US-lessac-medium,
-# phonon `default`. The literal string "default" is only a voice name for
-# phonon, so it is not sent to the others.
+# English_expressive_narrator, mistral c69964a6-ab8b-4f8a-9465-ec0925096ec8,
+# gemini Kore, xai eve, neutts neutral, kittentts Jasper, piper
+# en_US-lessac-medium, phonon `default`. The literal string "default" is only a
+# voice name for phonon, so it is not sent to the others.
 #
 # `edge` is keyless but NOT local: it shells out to the `edge-tts` CLI
 # (pip install edge-tts), which talks to Microsoft's TTS service.
