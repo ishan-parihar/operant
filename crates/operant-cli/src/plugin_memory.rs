@@ -236,11 +236,27 @@ pub async fn build_plugin_memory_provider(
     }
 
     let plugins_dir = &plugin_dirs[0];
-    let parent = plugins_dir.parent()?;
-    // Default (disabled) signature verification — the CLI-level
-    // PluginSettings has no security section; runtime skill loading
-    // enforces [plugins.security] for the schema config.
-    let host = operant_plugins::host::PluginHost::new(parent).ok()?;
+    // Two things this used to get wrong:
+    //
+    // 1. `PluginHost::new(parent)` appends its own literal "plugins", so the
+    //    operator's configured path was used only for its PARENT — a
+    //    `plugin_dirs` leaf not named `plugins` scanned a sibling directory (or
+    //    created one). `with_plugins_dir` scans exactly what was configured.
+    // 2. `new` is `SignatureMode::Disabled`, so a WASM memory backend loaded
+    //    UNVERIFIED even under `[plugins] signature_mode = "strict"`. The tool
+    //    bridge and the CLI listing paths both honour the configured policy;
+    //    this path hardcoded the most permissive one, which made the memory
+    //    provider the one plugin surface that ignored the operator's security
+    //    setting. A memory plugin is agent code with a memory-write capability,
+    //    so it is the surface that most needs the check.
+    let signature_mode =
+        operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    let host = operant_plugins::host::PluginHost::with_plugins_dir(
+        plugins_dir,
+        signature_mode,
+        config.plugins.trusted_publisher_keys.clone(),
+    )
+    .ok()?;
 
     for (manifest, wasm_path) in host.memory_plugin_details() {
         if manifest.name == plugin_name {

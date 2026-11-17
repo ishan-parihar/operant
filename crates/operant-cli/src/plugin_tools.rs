@@ -11,7 +11,6 @@
 //! into the live agent. Feature-gated behind `plugins-wasm` (on by default
 //! since iter-1720; CI builds with `--no-default-features` to skip it).
 
-use anyhow::Context as _;
 use operant_core::config::AppConfig;
 use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolInterceptHandler, ToolRegistry};
@@ -105,12 +104,13 @@ pub async fn register_plugin_tools(
         return Ok(());
     }
 
-    // The PluginHost discovers `<workspace>/plugins/*`; for a configured
-    // plugin dir like `~/.operant/plugins` the workspace is its parent.
+    // The PluginHost discovers `<workspace>/plugins/*`. This used to pass
+    // `plugins_dir.parent()` so the host's own literal "plugins" append landed
+    // on the configured leaf — which only works when that leaf IS named
+    // `plugins`. For any other leaf (`plugin_dirs = ["/opt/my-plugins"]`) the
+    // host scanned `/opt/plugins` instead, while the log line below reported
+    // the configured path. `with_plugins_dir` scans exactly what was given.
     let plugins_dir = &plugin_dirs[0];
-    let parent = plugins_dir
-        .parent()
-        .context("plugins dir has no parent — cannot build plugin host")?;
 
     // Signature policy: `[plugins] signature_mode` / `trusted_publisher_keys`
     // in the AppConfig. Defaults to Disabled, matching the schema world's
@@ -131,8 +131,8 @@ pub async fn register_plugin_tools(
         plugins_dir = %plugins_dir.display(),
         "plugins: signature policy for the CLI tool bridge"
     );
-    let host = match operant_plugins::host::PluginHost::with_security(
-        parent,
+    let host = match operant_plugins::host::PluginHost::with_plugins_dir(
+        plugins_dir,
         signature_mode,
         config.plugins.trusted_publisher_keys.clone(),
     ) {
@@ -573,17 +573,17 @@ pub fn list_plugin_tools(config: &AppConfig) -> Vec<(String, usize)> {
     if plugin_dirs.is_empty() {
         return Vec::new();
     }
-    let parent = match plugin_dirs[0].parent() {
-        Some(p) => p.to_path_buf(),
-        None => return Vec::new(),
-    };
+    // Scan the configured directory itself, not its parent (see
+    // `PluginHost::with_plugins_dir`). Listing the wrong directory is the
+    // failure that makes an operator think a plugin is missing.
+    //
     // Same signature policy as the loader (iter-1726, audit F4): before
-    // this, `PluginHost::new` skipped verification, so under strict the CLI
+    // that, `PluginHost::new` skipped verification, so under strict the CLI
     // could LIST plugins the runtime refuses to load.
     let signature_mode =
         operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
-    let Ok(host) = operant_plugins::host::PluginHost::with_security(
-        &parent,
+    let Ok(host) = operant_plugins::host::PluginHost::with_plugins_dir(
+        &plugin_dirs[0],
         signature_mode,
         config.plugins.trusted_publisher_keys.clone(),
     ) else {
@@ -613,13 +613,11 @@ pub fn plugin_skill_roots(config: &AppConfig) -> Vec<std::path::PathBuf> {
     if plugin_dirs.is_empty() {
         return Vec::new();
     }
-    let Some(parent) = plugin_dirs[0].parent() else {
-        return Vec::new();
-    };
+    // Scan the configured directory itself, not its parent.
     let signature_mode =
         operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
-    let Ok(host) = operant_plugins::host::PluginHost::with_security(
-        parent,
+    let Ok(host) = operant_plugins::host::PluginHost::with_plugins_dir(
+        &plugin_dirs[0],
         signature_mode,
         config.plugins.trusted_publisher_keys.clone(),
     ) else {

@@ -40,6 +40,39 @@ impl PluginHost {
         Self::with_security(workspace_dir, SignatureMode::Disabled, Vec::new())
     }
 
+    /// Create a host that scans EXACTLY `plugins_dir`.
+    ///
+    /// `with_security` treats its argument as a WORKSPACE and appends the
+    /// literal `"plugins"`, which is right for the default layout
+    /// (`<home>/plugins`) and wrong for every other. Callers that hold an
+    /// operator-configured `[plugins] plugin_dirs` entry passed `.parent()` to
+    /// make the append land on the configured leaf — so an entry whose leaf is
+    /// NOT named `plugins` (`plugin_dirs = ["/opt/my-plugins"]`) silently
+    /// scanned `/opt/plugins` instead, and `operant plugins list` printed the
+    /// configured path while listing a different directory.
+    ///
+    /// This constructor removes the guess: the path given is the path scanned.
+    pub fn with_plugins_dir(
+        plugins_dir: &Path,
+        signature_mode: SignatureMode,
+        trusted_publisher_keys: Vec<String>,
+    ) -> Result<Self, PluginError> {
+        if !plugins_dir.exists() {
+            std::fs::create_dir_all(plugins_dir)?;
+        }
+        let mut host = Self {
+            plugins_dir: plugins_dir.to_path_buf(),
+            loaded: HashMap::new(),
+            signature_mode,
+            trusted_publisher_keys,
+        };
+        // Discover eagerly, exactly as `with_security` does. A host that is
+        // constructed but not scanned reports an empty inventory, which is
+        // indistinguishable from "no plugins installed".
+        host.discover()?;
+        Ok(host)
+    }
+
     /// Create a new plugin host with signature verification settings.
     pub fn with_security(
         workspace_dir: &Path,
@@ -584,6 +617,50 @@ mod tests {
         let dir = tempdir().unwrap();
         let host = PluginHost::new(dir.path()).unwrap();
         assert!(host.list_plugins().is_empty());
+    }
+
+    /// `with_security` treats its argument as a WORKSPACE and appends the
+    /// literal "plugins". Callers holding an operator-configured
+    /// `[plugins] plugin_dirs` entry worked around that by passing `.parent()`,
+    /// which only lands correctly when the leaf IS named `plugins`: for
+    /// `plugin_dirs = ["/opt/my-plugins"]` the host scanned `/opt/plugins`.
+    /// `with_plugins_dir` must scan the path it is given, whatever it is named.
+    #[test]
+    fn with_plugins_dir_scans_the_exact_path_not_its_leaf_name() {
+        let dir = tempdir().unwrap();
+        // A leaf deliberately NOT named "plugins".
+        let configured = dir.path().join("my-plugins");
+        std::fs::create_dir_all(&configured).unwrap();
+
+        let host =
+            PluginHost::with_plugins_dir(&configured, SignatureMode::Disabled, Vec::new()).unwrap();
+
+        assert_eq!(
+            host.plugins_dir(),
+            configured.as_path(),
+            "the host must scan the configured directory itself"
+        );
+        // The old shape would have produced `<tmp>/plugins` here.
+        assert_ne!(host.plugins_dir(), dir.path().join("plugins"));
+    }
+
+    /// The same, for a directory that does not exist yet: the constructor
+    /// creates exactly that path rather than a sibling named `plugins`.
+    #[test]
+    fn with_plugins_dir_creates_the_exact_path() {
+        let dir = tempdir().unwrap();
+        let configured = dir.path().join("nested").join("custom-plugins");
+        assert!(!configured.exists());
+
+        let host =
+            PluginHost::with_plugins_dir(&configured, SignatureMode::Disabled, Vec::new()).unwrap();
+
+        assert!(
+            configured.is_dir(),
+            "the configured directory itself must be created: {}",
+            configured.display()
+        );
+        assert_eq!(host.plugins_dir(), configured.as_path());
     }
 
     #[test]

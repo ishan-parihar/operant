@@ -278,13 +278,15 @@ async fn status_plugins(config: &AppConfig) -> Result<()> {
             println!("No plugin dirs configured ([plugins] plugin_dirs).");
             return Ok(());
         }
-        let parent = plugin_dirs[0]
-            .parent()
-            .context("plugins dir has no parent — cannot build plugin host")?;
         let signature_mode =
             operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
-        let host = operant_plugins::host::PluginHost::with_security(
-            parent,
+        // Scan EXACTLY the configured directory. Passing `.parent()` here (the
+        // old shape) made `with_security` append its own literal "plugins", so
+        // `plugin_dirs = ["/opt/my-plugins"]` actually listed `/opt/plugins`
+        // — and the "No plugins discovered in {}" message below then named the
+        // configured path while having read a different one.
+        let host = operant_plugins::host::PluginHost::with_plugins_dir(
+            &plugin_dirs[0],
             signature_mode,
             config.plugins.trusted_publisher_keys.clone(),
         )?;

@@ -591,12 +591,15 @@ async fn handle_plugins(State(state): State<DashboardState>, headers: HeaderMap)
     #[cfg(feature = "plugins-wasm")]
     {
         use operant_plugins::PluginTool as _;
-        if let Some(parent) = config.plugins.plugin_dirs.first().and_then(|d| d.parent()) {
+        // Scan the configured directory itself, not its parent — `with_security`
+        // appends its own literal "plugins", so the `.parent()` form only worked
+        // for a leaf actually named `plugins`.
+        if let Some(plugins_dir) = config.plugins.plugin_dirs.first() {
             let signature_mode = operant_plugins::host::PluginHost::parse_signature_mode(
                 &config.plugins.signature_mode,
             );
-            if let Ok(host) = operant_plugins::host::PluginHost::with_security(
-                parent,
+            if let Ok(host) = operant_plugins::host::PluginHost::with_plugins_dir(
+                plugins_dir,
                 signature_mode,
                 config.plugins.trusted_publisher_keys.clone(),
             ) {

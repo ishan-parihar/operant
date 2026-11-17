@@ -2184,10 +2184,10 @@ fn spawn_wasm_watcher(
         warn!("harness: watch_wasm enabled but plugins.plugin_dirs is empty — no watcher");
         return;
     };
-    let Some(parent) = dir.parent() else {
-        warn!(dir = %dir.display(), "harness: watch_wasm — plugins dir has no parent");
-        return;
-    };
+    // Scan the configured directory itself. `PluginHost::new` appends its own
+    // literal "plugins", so the old `.parent()` form only worked when the leaf
+    // was named `plugins`; any other leaf watched a sibling directory while the
+    // operator's config named this one.
     let trusted_keys: Vec<String> = config.plugins.trusted_publisher_keys.clone();
     if trusted_keys.is_empty() {
         warn!(
@@ -2211,7 +2211,8 @@ fn spawn_wasm_watcher(
         );
         return;
     }
-    let host = match PluginHost::new(parent) {
+    let host = match PluginHost::with_plugins_dir(&dir, SignatureMode::Strict, trusted_keys.clone())
+    {
         Ok(host) => host,
         Err(e) => {
             warn!(error = %e, "harness: watch_wasm — plugin host failed to initialize");
