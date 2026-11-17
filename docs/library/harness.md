@@ -128,9 +128,11 @@ unclassified access is rejected without an explicit approval token.
 
 ## Security
 
-- **Mount allowlist** — `[harness].mount_allowlist` is a deny-by-default
-  list of provider ids that may mount at boot. Anything outside the
-  list is rejected.
+- **Bounded mounts** — `[harness].max_active_providers` (default 64)
+  caps how many WASM providers may be live in one `Harness` instance, so a
+  single harness cannot absorb unbounded modules. There is no per-provider
+  id allowlist in the config; admission is bounded by that count plus the
+  signature check below.
 - **Approval-gated self-extension** — `harness_mount` and
   `harness_unmount` (model tools) require approval-policy membership.
   `harness_dump` is read-only and always available.
@@ -141,8 +143,10 @@ unclassified access is rejected without an explicit approval token.
   signature via the existing `operant-plugins/src/signature.rs` path.
 - **Generation ABA** — every swap bumps `SwapGeneration`; readers that
   snapshotted before a swap see a mismatch on next observation.
-- **Audit** — every mount/unmount/swap produces an audit line when
-  `[harness].audit = true`.
+- **Audit** — every mount/unmount/swap is traced through `tracing`, so
+  raising the log level records them. There is no `[harness].audit` flag;
+  the `[harness]` surface is exactly `enabled`, `architecture_toml`,
+  `max_active_providers` and `watch_wasm`.
 
 ## Composition kinds and their status
 

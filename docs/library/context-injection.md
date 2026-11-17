@@ -165,9 +165,10 @@ Everything here is off or cheap by default, so turning a modality on
 is a config edit. `[moa] enabled = true` plus `references` and
 `aggregator` enables the per-turn fan-out (the in-loop switch is
 `operant run --moa`). `[advisor] enabled = true` starts the
-transcript watchdog, with `[advisor.model]`, `continue_severity` and
-`timeout_secs` beside it. Recap runs on `agent.recap_idle_seconds`
-and takes its model slot from `[recap.model]`. Ponytail is
+transcript watchdog, with `[advisor.model]`, `[advisor]
+continue_severity` and `[advisor] timeout_secs` beside it. Recap runs
+on `agent.recap_idle_seconds` and takes its model slot from
+`[recap.model]`. Ponytail is
 `[agent.ponytail]` (`enabled`, `default_level`, `inject`), and
 `/ponytail [lite|full|ultra|off]` overrides it for the process
 without touching the file. Skills come from `/skills`, `/skill

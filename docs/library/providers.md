@@ -146,17 +146,18 @@ family). One module, one truth.
 
 In the TUI, bare `/model` opens the inline picker over the live
 catalogue; `/model <selector>` takes the selector grammar
-`@role[:level]`, `role[:level]` or `[provider/]modelId[:level]`, and
-`/model set-default` writes the session's current model into
-`agent.model` without having made it the default silently.
-`/refresh-model-list` drops the cached `~/.operant/cache/models.json`
-and refetches. From the shell, `operant model` shows the live model,
-provider, base URL, streaming, context window and iteration cap
-(`--json` for the same as data), and `operant model set <name>`
-persists `agent.model`. The underlying keys are `[client] base_url`
-and `[client] api_key` for the route, `[agent] model` for the model,
-`[agent] fallback_models` plus `fallback_on_errors` for same-provider
-fallback, and the `[providers.models.<id>]` profiles with
+`@role[:level]`, `role[:level]` or `[provider/]modelId[:level]`.
+Switching and persisting are separate acts: a switch applies to the
+session, and `/model set-default` writes that choice into
+`agent.model`. `/refresh-model-list` drops the cached
+`~/.operant/cache/models.json` and refetches. From the shell,
+`operant model` shows the live model, provider, base URL, streaming,
+context window and iteration cap (`--json` for the same as data), and
+`operant model set <name>` persists `agent.model`. The underlying keys
+are `[client] base_url` and `[client] api_key` for the route,
+`[agent] model` for the model, `[agent] fallback_models` plus
+`fallback_on_errors` for same-provider fallback, and the
+`[providers.models.<id>]` profiles with
 `[[providers.fallback_chain]]` for cross-provider failover.
 
 ## Intention
