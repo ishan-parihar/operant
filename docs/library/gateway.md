@@ -8,9 +8,9 @@ Not for: the agent loop behind a gateway turn
 ([providers.md](providers.md) §platform-bases), the daemon lifecycle
 ([operability.md](operability.md)).
 
-Source: `crates/operant-core/src/gateway/` (mod, telegram, discord,
-slack, whatsapp, email, sms, webhook, webhook_subscriptions, admin,
-lifecycle, dispatch_breaker, types),
+Source: `crates/operant-core/src/gateway/` (mod, telegram.rs,
+discord.rs, slack.rs, whatsapp.rs, email.rs, sms.rs, webhook.rs,
+webhook_subscriptions, admin, lifecycle, dispatch_breaker, types),
 `crates/operant-core/src/gateway_session.rs`,
 `crates/operant-core/src/gateway_pipeline.rs` (hooks),
 `crates/operant-core/src/gateway_markdown.rs`,
