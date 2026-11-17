@@ -95,15 +95,16 @@ Five verbs cover a deployment's whole life. `operant doctor` diagnoses
 (config, tools, integrations, API connectivity, platform, binaries)
 and `operant doctor --fix` runs the repair legs. `operant setup` is
 the first-run wizard; plain `operant setup` is already quick mode, so
-`--reconfigure` is the flag that changes behavior, and a section name
-(`provider`, `terminal`, `tts`, `gateway`, `agent`, `governance`)
-narrows it. `operant update check` / `apply` cover the binary (the
-binary does NOT self-swap; the command prints the git-pull /
-cargo-install / releases-page steps), while `operant update
-integrations [--only sourcehound|aft|ponytail]` refreshes the three
-external ones. `operant service install|start|stop|restart|status|
-logs|uninstall` manages `operant-gateway.service`, and `operant
-backup` / `operant import` snapshot and restore the operant home.
+`operant setup --reconfigure` is the form that changes behavior, and a
+section name (`provider`, `terminal`, `tts`, `browser`, `gateway`,
+`agent`, `governance`) narrows it. `operant update check` / `apply`
+cover the binary (the binary does NOT self-swap; the command prints
+the git-pull / cargo-install / releases-page steps), while
+`operant update integrations [--only sourcehound|aft|ponytail]`
+refreshes the three external ones. `operant service
+install|start|stop|restart|status|logs|uninstall` manages
+`operant-gateway.service`, and `operant backup` / `operant import`
+snapshot and restore the operant home.
 
 ## Intention
 
