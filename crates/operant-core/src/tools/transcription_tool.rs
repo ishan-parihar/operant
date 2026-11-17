@@ -409,10 +409,7 @@ impl OperantTool for TranscriptionTool {
 /// A free function rather than an inline branch so the rule is testable without
 /// a network call: the provider helpers are private and their failure paths all
 /// require I/O.
-fn transcription_envelope(
-    tool_call_id: &str,
-    result: TranscriptionResult,
-) -> ToolResult {
+fn transcription_envelope(tool_call_id: &str, result: TranscriptionResult) -> ToolResult {
     if result.success {
         return ToolResult::success(tool_call_id, result);
     }
@@ -545,10 +542,7 @@ mod tests {
             envelope.success,
             "a successful transcription must still report success"
         );
-        assert!(
-            envelope.error.is_none(),
-            "a success carries no error"
-        );
+        assert!(envelope.error.is_none(), "a success carries no error");
     }
 
     /// SOURCE contract over the call site: `execute` must route through the

@@ -37,6 +37,49 @@ impl SpotifyClient {
         })
     }
 
+    /// Turns one HTTP response into the tool result the model is allowed to see.
+    ///
+    /// Every helper below used to answer `ToolResult::success(...,
+    /// r.text().await.unwrap_or_default())` on any completed request. Two
+    /// defects, both of them "reporting success without the thing the caller
+    /// asked for":
+    ///
+    /// 1. **The status was never read.** Spotify answers a revoked token with
+    ///    401 and a JSON body, a missing resource with 404, a rate limit with
+    ///    429 (carrying a Retry-After the caller needs). All of those arrived as
+    ///    `success: true`, so the agent read `{"error": {...}}` as if it were
+    ///    player or playlist state.
+    /// 2. **`unwrap_or_default()` on the body.** A connection that dropped
+    ///    mid-response produced `success: true` with an EMPTY STRING — the
+    ///    quietest possible failure, indistinguishable from a genuinely empty
+    ///    payload.
+    ///
+    /// A non-2xx is an error; a body that could not be read is an error. This is
+    /// the same shape `transcription_envelope` restored in iter-2554: a tool
+    /// that hides a failure from the agent blinds the turn guardrail, the
+    /// observer and the failure counter, not just the human.
+    async fn response_result(name: &str, response: reqwest::Response) -> ToolResult {
+        let status = response.status();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(e) => {
+                return ToolResult::error(
+                    name,
+                    format!("Spotify returned HTTP {status} and the body could not be read: {e}"),
+                );
+            }
+        };
+        if !status.is_success() {
+            let detail = if body.trim().is_empty() {
+                "no response body".to_string()
+            } else {
+                body
+            };
+            return ToolResult::error(name, format!("Spotify returned HTTP {status}: {detail}"));
+        }
+        ToolResult::success(name, Value::String(body))
+    }
+
     /// A token that is not valid header text is an error for the caller to
     /// report, not a panic.
     fn headers(&self) -> Result<reqwest::header::HeaderMap, String> {
@@ -64,7 +107,7 @@ impl SpotifyClient {
             .send()
             .await
         {
-            Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
+            Ok(r) => Self::response_result("spotify", r).await,
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
         }
     }
@@ -82,7 +125,7 @@ impl SpotifyClient {
             req = req.json(&b);
         }
         match req.send().await {
-            Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
+            Ok(r) => Self::response_result("spotify", r).await,
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
         }
     }
@@ -100,7 +143,7 @@ impl SpotifyClient {
             req = req.json(&b);
         }
         match req.send().await {
-            Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
+            Ok(r) => Self::response_result("spotify", r).await,
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
         }
     }
@@ -118,7 +161,7 @@ impl SpotifyClient {
             req = req.json(&b);
         }
         match req.send().await {
-            Ok(r) => ToolResult::success("spotify", r.text().await.unwrap_or_default()),
+            Ok(r) => Self::response_result("spotify", r).await,
             Err(e) => ToolResult::error("spotify", format!("API error: {}", e)),
         }
     }
@@ -696,4 +739,112 @@ mod tests {
     );
     test_schema!(test_albums_schema, SpotifyAlbumsTool, "spotify_albums");
     test_schema!(test_library_schema, SpotifyLibraryTool, "spotify_library");
+
+    /// A one-line HTTP response server, so these tests drive a REAL reqwest
+    /// response through `response_result` rather than a synthetic one. `status`
+    /// and `body` are the only things a test needs to vary, and a real socket
+    /// means a body that drops mid-read is testable too (reqwest errors on it
+    /// instead of a mock quietly returning an empty string).
+    async fn serve_once(status_line: &'static str, body: &'static str, drop_body: bool) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            // Read the request head so the client's write completes.
+            let mut buf = vec![0u8; 64 * 1024];
+            let _ = socket.read(&mut buf).await;
+            let head = format!(
+                "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            if drop_body {
+                // Announce a body, send part of it, then hang up: reqwest's
+                // `text()` must return Err, which the OLD code turned into
+                // `success: true` with an empty string.
+                let partial = &body[..body.len() / 2];
+                let _ = socket
+                    .write_all(format!("{head}{partial}").as_bytes())
+                    .await;
+                let _ = socket.shutdown().await;
+            } else {
+                let _ = socket.write_all(format!("{head}{body}").as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// The two defects this file had: a non-2xx Spotify answer and an
+    /// unreadable body both arrived as `success: true`. A tool that reports
+    /// success on failure blinds the turn guardrail, the observer and the
+    /// failure counter, not just the reader.
+    #[tokio::test]
+    async fn a_spotify_error_status_is_not_reported_as_success() {
+        let url = serve_once(
+            "401 Unauthorized",
+            r#"{"error":{"status":401,"message":"Invalid access token"}}"#,
+            false,
+        )
+        .await;
+        let response = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("the loopback server answers");
+
+        let result = SpotifyClient::response_result("spotify", response).await;
+        assert!(!result.success, "a 401 must not be a success: {result:?}");
+        let error = result.error.unwrap_or_default();
+        assert!(
+            error.contains("401"),
+            "the status must reach the agent: {error}"
+        );
+        assert!(
+            error.contains("Invalid access token"),
+            "the provider's message must reach the agent: {error}"
+        );
+    }
+
+    /// A 429 carries a Retry-After the caller needs; dropping it to
+    /// `success: true` loses the one actionable field.
+    #[tokio::test]
+    async fn a_rate_limited_spotify_answer_is_an_error() {
+        let url = serve_once(
+            "429 Too Many Requests",
+            r#"{"error":"rate limited"}"#,
+            false,
+        )
+        .await;
+        let response = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("the loopback server answers");
+
+        let result = SpotifyClient::response_result("spotify", response).await;
+        assert!(!result.success, "429 must not be success: {result:?}");
+    }
+
+    /// The `unwrap_or_default()` half: a body that could not be read used to
+    /// be success with an empty string.
+    #[tokio::test]
+    async fn a_spotify_body_that_cannot_be_read_is_an_error() {
+        let url = serve_once("200 OK", "{\"is_playing\":true}", true).await;
+        let response = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .expect("the loopback server answers");
+
+        let result = SpotifyClient::response_result("spotify", response).await;
+        assert!(
+            !result.success,
+            "an unreadable body must not be success: {result:?}"
+        );
+    }
 }
