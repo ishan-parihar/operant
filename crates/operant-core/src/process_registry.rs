@@ -232,6 +232,21 @@ impl ProcessRegistry {
         if let Some(ref dir) = cwd {
             cmd.current_dir(dir);
         }
+        // The child gets the parent environment MINUS credential-bearing
+        // variables, exactly as `terminal_backend` and `code_execution` do.
+        //
+        // `Command` inherits the parent env implicitly, so a spawn with no
+        // explicit environment still handed a model-supplied `sh -c` string
+        // every credential the operant process holds (OPENAI_API_KEY,
+        // ANTHROPIC_API_KEY, *_TOKEN, AWS_*). The `process` tool is registered
+        // unconditionally and its command text comes from the model, so
+        // `process action=spawn command="env"` read the full set. The sibling
+        // tools already clear-and-rebuild for this reason (R40-16); this spawn
+        // was the one that did not.
+        cmd.env_clear();
+        cmd.envs(crate::tools::terminal_backend::sanitized_env(
+            &std::collections::HashMap::new(),
+        ));
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -531,6 +546,57 @@ mod tests {
         sleep(Duration::from_millis(500)).await;
         let sessions = registry.list().await;
         assert!(sessions.len() >= 2);
+    }
+
+    /// The `process` tool runs a MODEL-SUPPLIED command string, so a child that
+    /// inherits the parent environment hands the model every credential the
+    /// operant process holds. `terminal_backend` and `code_execution` clear and
+    /// rebuild for exactly this reason (R40-16); this spawn did not, so
+    /// `process action=spawn command="env"` printed the full set.
+    ///
+    /// Behavioural, not structural: it spawns a real `sh`, has it print the
+    /// variable, and asserts the VALUE the child actually saw. A source-grep
+    /// would have matched the comment above the fix.
+    #[tokio::test]
+    async fn a_spawned_child_does_not_inherit_a_credential_bearing_variable() {
+        // The variable name carries a secret fragment (`_TOKEN`) so
+        // `is_secret_env_var` must match it. A unique name avoids collision
+        // with anything already in the test process environment.
+        let name = "OPERANT_TEST_SECRET_TOKEN";
+        let value = "s3cr3t-value-must-not-cross";
+        // SAFETY: single-threaded test setup; the variable is removed again
+        // below and no other test in this module reads the environment.
+        unsafe {
+            std::env::set_var(name, value);
+        }
+
+        let registry = ProcessRegistry::new();
+        let session = registry
+            .spawn(format!("printenv {name} || echo __ABSENT__"), None)
+            .await
+            .expect("the child spawns");
+        let _ = registry.wait(&session.id, Some(10)).await;
+
+        // The polled snapshot carries the captured output; `output` itself is
+        // private, which is deliberate.
+        let output = registry
+            .poll(&session.id)
+            .await
+            .map(|s| s.output_buffer)
+            .unwrap_or_default();
+
+        unsafe {
+            std::env::remove_var(name);
+        }
+
+        assert!(
+            !output.contains(value),
+            "the child saw {name}={value:?}: credential-bearing variables must not reach a model-supplied command"
+        );
+        assert!(
+            output.contains("__ABSENT__"),
+            "the variable must be genuinely unset, not merely empty: {output:?}"
+        );
     }
 
     fn finished_session(id: &str, started_at: f64) -> ProcessSession {
