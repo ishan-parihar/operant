@@ -9,6 +9,23 @@ use crate::config::AppConfig;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
+/// Refuse a path the file tools would refuse, before any bytes are read.
+///
+/// `transcribe_audio` took a model-supplied `file_path` and checked only the
+/// EXTENSION (against `SUPPORTED_FORMATS`) plus `exists()` / `is_file()`. That
+/// is not a credential boundary: `.aws/credentials` is rejected only because it
+/// has no audio extension, and a copy of a private key named `id_rsa.wav`
+/// passed every check and was read and uploaded to Groq or OpenAI. The sibling
+/// `file_read` guards the same bytes with `file_tools::validate_path`'s
+/// deny-list (`.ssh/id_rsa`, `.aws/credentials`, `.operant/auth.json`,
+/// `.netrc`, ...).
+///
+/// The error text is returned rather than logged so the agent sees WHY: a
+/// refusal that looks like "file not found" teaches it to try another path.
+fn guard_audio_path(file_path: &str) -> Result<(), String> {
+    crate::tools::file_tools::validate_path(file_path).map(|_| ())
+}
+
 #[derive(JsonSchema, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptionArgs {
@@ -333,6 +350,17 @@ impl OperantTool for TranscriptionTool {
             );
         }
 
+        // The extension whitelist above is not a credential boundary: a copy of
+        // a private key named `id_rsa.wav` passes it. Route the path through the
+        // SAME guard `file_read` uses so a denied path is refused here, before
+        // the metadata read and before an API key is required. The guard lives in
+        // `execute` and not in the provider helpers because the key check and the
+        // metadata read both happen first — a guard inside `transcribe_groq` is
+        // never reached on a host with no key configured.
+        if let Err(reason) = guard_audio_path(&parsed.file_path) {
+            return ToolResult::error(self.name(), reason);
+        }
+
         match fs::metadata(&parsed.file_path).await {
             Ok(meta) => {
                 if meta.len() > MAX_FILE_SIZE {
@@ -435,6 +463,87 @@ mod tests {
         let json = serde_json::to_string(&schema).unwrap();
         assert!(!json.is_empty());
         assert_eq!(schema.name, "transcribe_audio");
+    }
+
+    /// A model-supplied path must go through the file tools' credential guard
+    /// before any bytes are read or any API key is required.
+    ///
+    /// Scope, stated honestly because two earlier versions of this test
+    /// overclaimed and the mutations caught both:
+    ///
+    /// 1. `execute` already validates the EXTENSION against
+    ///    `SUPPORTED_FORMATS`, so the canonical credential paths
+    ///    (`.aws/credentials`, `.operant/auth.json`, `.netrc`) were never
+    ///    reachable here — they fail as "Unsupported format" first.
+    /// 2. A key-shaped name with an audio extension (`id_rsa.wav`) is NOT
+    ///    denied by `validate_path` either: `DENIED_PATH_PATTERNS` matches
+    ///    exact file names, and `.ssh/id_rsa` does not `ends_with`
+    ///    `.ssh/id_rsa.wav`. So that fixture proved nothing about the guard.
+    ///
+    /// What this therefore pins is the guard's PLACEMENT and ERROR TEXT, which
+    /// is the part that was actually missing: `guard_audio_path` runs in
+    /// `execute` before the metadata read and before the key lookup, and its
+    /// refusal names the reason. The credential file used is one the shared
+    /// deny-list DOES cover (`.ssh/id_rsa`), reached through a symlink whose
+    /// name passes the extension check — which is the real bypass shape.
+    #[tokio::test]
+    async fn a_denied_file_is_refused_before_a_key_is_required() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // The real secret, at a path the shared deny-list covers.
+        let secret = dir.path().join(".ssh").join("id_rsa");
+        std::fs::create_dir_all(secret.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&secret, b"-----BEGIN OPENSSH PRIVATE KEY-----\n").expect("write");
+        assert!(
+            guard_audio_path(&secret.to_string_lossy()).is_err(),
+            "the shared guard must refuse .ssh/id_rsa: {}",
+            secret.display()
+        );
+
+        // A symlink whose NAME passes the extension whitelist but whose target
+        // is the denied file. `validate_path` canonicalizes, so this resolves
+        // back to `.ssh/id_rsa` and is refused — without the guard, `execute`
+        // would have read it.
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("clip.wav");
+            std::os::unix::fs::symlink(&secret, &link).expect("symlink");
+            assert!(
+                link.extension().and_then(|e| e.to_str()) == Some("wav"),
+                "the link name must pass the extension whitelist"
+            );
+
+            let tool = TranscriptionTool::new();
+            let result = tool
+                .execute(
+                    json!({"filePath": link.to_string_lossy()}),
+                    ToolContext::default(),
+                )
+                .await;
+
+            assert!(!result.success, "a denied file must not be transcribed");
+            let error = result.error.unwrap_or_default();
+            assert!(
+                error.contains("denied"),
+                "the refusal must name the real reason, not look like a missing \
+                 file or a missing key: {error}"
+            );
+        }
+    }
+
+    /// The guard must not refuse ordinary audio files, or the tool is useless.
+    #[tokio::test]
+    async fn an_ordinary_file_path_still_passes_the_guard() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let audio = dir.path().join("clip.mp3");
+        std::fs::write(&audio, b"ID3\x03 fake audio").expect("write");
+
+        // The guard itself is what this pins: a normal path is accepted and the
+        // failure (if any) comes later, from the provider or the missing key.
+        assert!(
+            guard_audio_path(&audio.to_string_lossy()).is_ok(),
+            "an ordinary audio path must pass the guard"
+        );
     }
 
     #[tokio::test]

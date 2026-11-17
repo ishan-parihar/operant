@@ -105,7 +105,17 @@ fn is_valid_url(url: &str) -> bool {
     }
 }
 
-/// Resolve a file path from various URL formats
+/// Resolve a file path from various URL formats.
+///
+/// The resolved path goes through the SAME guard `file_read` uses
+/// (`file_tools::validate_path`), so a credential file is refused here too.
+/// Before this, `resolve_file_path` only asked `path.exists() && path.is_file()`,
+/// and `execute` read the bytes straight off disk — so `vision_analyze
+/// image_url="file:///home/user/.ssh/id_rsa"` uploaded the private key to the
+/// vision provider. `transcribe_audio` had the identical hole for Groq/OpenAI.
+///
+/// The expansion happens BEFORE validation on purpose: `~` is not a path the
+/// deny-list can match, so validating first would let `~/.ssh/id_rsa` through.
 fn resolve_file_path(url: &str) -> Option<PathBuf> {
     // Handle file:// scheme
     let path_str = url.strip_prefix("file://").unwrap_or(url);
@@ -121,12 +131,12 @@ fn resolve_file_path(url: &str) -> Option<PathBuf> {
         path_str.to_string()
     };
 
-    let path = PathBuf::from(expanded);
-    if path.exists() && path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
+    // `validate_path` canonicalizes and rejects the deny-list plus traversal.
+    // It returns a String error that is deliberately dropped here: `None` is
+    // the existing contract for "not a usable local file", and `execute`
+    // already turns `None` into an actionable message that includes the input.
+    let path = crate::tools::file_tools::validate_path(&expanded).ok()?;
+    if path.is_file() { Some(path) } else { None }
 }
 
 /// Resize image bytes to fit within dimension and byte limits.
@@ -703,6 +713,47 @@ mod tests {
 
         // file:// scheme
         assert!(resolve_file_path("file:///nonexistent/path.jpg").is_none());
+    }
+
+    /// `vision_analyze` takes a MODEL-SUPPLIED URL and read whatever it
+    /// resolved, so `file:///home/user/.ssh/id_rsa` uploaded the private key to
+    /// the vision provider. The sibling `file_read` refuses these paths.
+    ///
+    /// Behavioural: it builds a REAL file at a denied path (a temp tree, not a
+    /// real secret) and asserts `resolve_file_path` refuses to return it. The
+    /// old code returned `Some(path)` because the file existed.
+    #[test]
+    fn a_credential_file_is_not_resolvable_as_an_image() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = dir.path().join(".ssh").join("id_ed25519");
+        std::fs::create_dir_all(key.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&key, b"-----BEGIN OPENSSH PRIVATE KEY-----\n").expect("write");
+        assert!(
+            key.is_file(),
+            "the file really exists, as it would on a host"
+        );
+
+        let as_plain_path = key.to_string_lossy().to_string();
+        assert!(
+            resolve_file_path(&as_plain_path).is_none(),
+            "a credential file must not resolve: {as_plain_path}"
+        );
+
+        // The `file://` form must be refused too, or the guard is trivially
+        // bypassed by changing the scheme.
+        let as_file_url = format!("file://{}", as_plain_path);
+        assert!(
+            resolve_file_path(&as_file_url).is_none(),
+            "a credential file must not resolve via file:// either: {as_file_url}"
+        );
+
+        // And an ordinary path must still resolve, or the tool is useless.
+        let ok = dir.path().join("photo.png");
+        std::fs::write(&ok, b"\x89PNG\r\n").expect("write");
+        assert!(
+            resolve_file_path(&ok.to_string_lossy()).is_some(),
+            "an ordinary image path must still resolve"
+        );
     }
 
     #[tokio::test]
