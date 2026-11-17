@@ -257,6 +257,41 @@ if [ -f "$DC" ]; then
 fi
 
 # =========================================================================
+# MEMORY: the legacy `agentmemory_*` config keys are a DELIBERATE compat shim.
+#
+# Why this is a gate and not a comment. `MemorySettings` carries four
+# `agentmemory_*` fields that no code reads: they exist only so an existing
+# `operant.toml` that still names them PARSES (the struct is
+# `deny_unknown_fields`, so removing a field makes such a config fail to load
+# outright -- a config that worked yesterday failing today) and so the operator
+# gets told the key is retired. That is a policy choice with a real cost in
+# both directions, and it was made silently once already: an audit asked for
+# "remove all legacy memory references" and 73 references stayed, with nothing
+# in the tree saying that was intentional. This block makes the choice
+# explicit and enforced.
+#
+# It does NOT decide for the operator. It fails when the shim and the prose
+# describing it DISAGREE -- someone removing the fields without updating the
+# comment, or editing the comment as if the fields were gone. Either half
+# alone is the defect; both together is a decision that was actually made.
+MC=crates/operant-core/src/config.rs
+if [ -f "$MC" ]; then
+  _fields=$(grep -cE '^    pub agentmemory_(url|secret|auto_spawn|version):' "$MC")
+  _caveat=$(grep -cF 'deny_unknown_fields makes removing a field a breaking change' "$MC")
+  if [ "$_fields" -ne 4 ]; then
+    say "SHIM-DRIFT $MC: found $_fields legacy agentmemory_* fields, expected 4"
+    say "            protects: the config-compat shim -- an existing operant.toml that names a retired key must still PARSE (introduced iter-2581)"
+    say "            if this removal is INTENTIONAL, it is a breaking config change: say so in docs/CHANGELOG.md and update the caveat below"
+    fail=1
+  fi
+  if [ "$_caveat" -eq 0 ]; then
+    say "MISSING-MARKER $MC: missing the compat caveat [deny_unknown_fields makes removing a field a breaking change]"
+    say "            protects: the reason the shim exists is recorded next to the shim -- without it the fields read as forgotten cruft (introduced iter-2581)"
+    fail=1
+  fi
+fi
+
+# =========================================================================
 if [ "$fail" -eq 0 ]; then
   say ""
   say "gates-present: every required marker present; no forbidden marker found"

@@ -2488,6 +2488,18 @@ pub struct MemorySettings {
     /// (retired) accepted, ignored. Without this field, an old
     /// operant.toml carrying `agentmemory_url` would fail the whole load
     /// under `deny_unknown_fields`. `legacy_warnings` names it unread.
+    ///
+    /// RETIRING THESE FOUR FIELDS IS A BREAKING CONFIG CHANGE, NOT A
+    /// CLEANUP. `MemorySettings` is `deny_unknown_fields`, so
+    /// deny_unknown_fields makes removing a field a breaking change: any
+    /// operant.toml that still names a retired key stops loading entirely,
+    /// and `operant config` cannot tell the operator why. Nothing reads these
+    /// fields; they exist only so that config keeps parsing and so
+    /// `legacy_warnings` can say the key is retired. Removing them is a
+    /// legitimate choice, but it must be a deliberate one recorded in
+    /// docs/CHANGELOG.md, not an accident of grepping for a dead name.
+    /// `scripts/check-gates-present.sh` fails if the field count and this
+    /// caveat ever disagree.
     pub agentmemory_url: Option<String>,
     /// (retired) accepted, ignored. Same `deny_unknown_fields` reason as
     /// `agentmemory_url`. A secret parked under a retired key is the
