@@ -17,6 +17,7 @@ here or the gate is red.
 | `TODO.md` | LIVE | the register: `Implemented` / `Pending` / `Review` | open defects (that is `docs/audit/2026-06-19-BUGS.md`) |
 | `docs/audit/2026-06-19-BUGS.md` (root) | LIVE | open findings and their fix state | rejected proposals (that is `docs/kb/CLOSED.md`) |
 | `docs/RUNBOOK.md` | LIVE | exact commands, environment traps, fleet procedure | the rules (that is `AGENTS.md`) |
+| `docs/CODEBASE-REALITY.md` | LIVE (dated measurement) | the measured shape of the codebase — crate sizes, LOC, test surface, ledger counts, and the structural problems an owner should know; every number carries the command that derives it | the rules (that is `AGENTS.md`), current state (that is `docs/handoff/STATE.md`), or open findings (that is `docs/audit/2026-06-19-BUGS.md`) |
 | `docs/kb/CLOSED.md` | APPEND-ONLY | what was tried and rejected — do not re-litigate | live findings |
 | `docs/kb/WORKLOG.md` | APPEND-ONLY | what happened, unit of work by unit of work | current state |
 | `docs/kb/feed.md` | APPEND-ONLY | cross-agent messages, claims, mentions | the workflow boards |
