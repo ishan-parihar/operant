@@ -449,11 +449,17 @@ These are the user's intentional design choices. Do not replace, remove, or
   require reimplementing Phonon's streaming flow-matching loop and Mimi decode
   loop over `ort`, for no size win at q8_0.
 - The checkpoint is NOT a crate dependency. `tools/phonon.rs` downloads a
-  revision-pinned GGUF into `~/.cache/phonon/gradium/phonon-31m-en/` on first
-  use; a warm cache never touches the network.
+  revision-pinned GGUF into `<operant home>/cache/phonon/gradium-phonon-31m-en-<rev>/`
+  (~`.operant/cache/phonon/...` by default) on first use; a warm cache never
+  touches the network. A pre-iter-2524 `~/.cache/phonon/gradium/phonon-31m-en`
+  tree is migrated on first use rather than re-downloading 65 MB.
 - Default voice: `default` (the checkpoint's own voice; more voices live in
   `gradium/phonon-voices`)
-- Config: `config.tts.provider = "phonon"` in `operant.example.toml`
+- Config: `config.tts.provider = "phonon"` in `operant.example.toml`. The
+  optional `voice` is provider-specific; omit it and each provider uses its own
+  default, because the literal string `"default"` is only a real voice name for
+  Phonon. `edge` is keyless but NOT local — it shells out to the `edge-tts`
+  CLI (`pip install edge-tts`), which talks to Microsoft's TTS service.
 - Do NOT switch to Edge TTS, OpenAI TTS, or any other provider as the default
 
 > **History (iter-2513):** this was Kokoro (`kokoro-tiny::TtsEngine`, voice

@@ -809,14 +809,25 @@ openai_model = "whisper-1"
 
 [tts]
 # provider: phonon (default, local, offline) | edge | elevenlabs | openai |
-#           minimax | mistral | gemini | xai | neutts | piper
+#           minimax | mistral | gemini | xai | neutts | kittentts | piper
 #
 # phonon is Gradium's phonon-31m-en: 41M params, Apache 2.0, ~65 MB GGUF,
 # streams on CPU at ~20x real time. The checkpoint downloads into
-# ~/.cache/phonon on first use; nothing is fetched at build time.
+# <operant home>/cache/phonon/gradium-phonon-31m-en-<rev>/ on first use
+# (i.e. ~/.operant/cache/phonon/... by default); nothing is fetched at build
+# time and a warm cache never touches the network.
+#
+# `voice` is optional. Omit it and each provider uses its OWN default: edge
+# en-US-AriaNeural, elevenlabs pNInz6obpgDQGcFmaJgB, openai alloy, minimax
+# female-shaonv, mistral c69964a6-ab8b-4f8a-9465-ec0925096ec8, gemini Kore,
+# xai eve, neutts neutral, kittentts Jasper, piper en_US-lessac-medium,
+# phonon `default`. The literal string "default" is only a voice name for
+# phonon, so it is not sent to the others.
+#
+# `edge` is keyless but NOT local: it shells out to the `edge-tts` CLI
+# (pip install edge-tts), which talks to Microsoft's TTS service.
 provider = "phonon"
 # voice = "default"   # provider-specific voice id; `phonon` uses "default"
-#                     # or a name from ~/.cache/phonon/gradium/phonon-31m-en
 enabled = false
 
 # ── Holon (docs/agentic-os/) — operant as the organization's runtime ─────

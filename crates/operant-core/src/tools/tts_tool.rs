@@ -1,18 +1,20 @@
 //! Text-to-Speech Tool with multiple provider support
 //!
-//! Supported providers:
-//! - Edge TTS (default, free, no API key): Microsoft Edge neural voices
-//! - ElevenLabs (premium): High-quality voices, needs ELEVENLABS_API_KEY
-//! - OpenAI TTS: Good quality, needs OPENAI_API_KEY
-//! - MiniMax TTS: High-quality with voice cloning, needs MINIMAX_API_KEY
-//! - Mistral (Voxtral TTS): Multilingual, needs MISTRAL_API_KEY
-//! - Google Gemini TTS: Controllable, 30 prebuilt voices, needs GEMINI_API_KEY
-//! - xAI TTS: Grok voices, needs XAI_API_KEY
-//! - NeuTTS (local, free): On-device TTS via neutts binary
-//! - KittenTTS (local, free): On-device 25MB model via kittentts
-//! - Piper (local, free): OHF-Voice/piper1-gpl neural VITS
-//! - Phonon (local, free, DEFAULT): Gradium phonon-31m-en, 41M params,
-//!   Apache 2.0, streaming, via the `ptts` runtime
+//! Supported providers (11 built-ins, dispatched by `BUILTIN_PROVIDERS`):
+//!   - edge (keyless, via the `edge-tts` CLI; NOT local — it calls Microsoft)
+//!   - elevenlabs (ELEVENLABS_API_KEY), openai (OPENAI_API_KEY),
+//!     minimax (MINIMAX_API_KEY), mistral (MISTRAL_API_KEY),
+//!     gemini (GEMINI_API_KEY), xai (XAI_API_KEY)
+//!   - neutts / kittentts / piper / phonon (local, no key; `phonon` is default)
+//!
+//! Voice handling: `voice` is optional. The schema default is the sentinel
+//! `"default"`, which is a real voice name ONLY for Phonon, so
+//! [`resolve_voice`] maps the sentinel (or an empty string) to the provider's
+//! own default rather than forwarding it to a provider that would reject it.
+//!
+//! Two invariants the tool tests hold:
+//!   - a SUCCESS carries decodable audio (`no_builtin_provider_reports_success_without_audio`)
+//!   - a provider that cannot be reached FAILS, never claims success silently
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -73,6 +75,52 @@ fn default_voice() -> String {
     "default".to_string()
 }
 
+/// The voice this provider uses when the caller named none.
+///
+/// `default_voice()` is the SCHEMA default, and it means "whatever this
+/// provider's own default is" — but only Phonon has a voice literally named
+/// `default`. Every other provider validates its voice id, so sending the
+/// sentinel through produced a hard API error on every turn that omitted
+/// `voice` (the overwhelmingly common case). Measured on `edge`:
+/// `ValueError: Invalid voice 'default'.`. Empty and `default` are the same
+/// request, so both resolve here rather than at eleven call sites.
+fn resolve_voice<'a>(requested: &'a str, provider_default: &'a str) -> &'a str {
+    if requested.is_empty() || requested == default_voice() {
+        provider_default
+    } else {
+        requested
+    }
+}
+
+/// Resolve how to invoke `edge-tts`, or `None` when no way to run it exists.
+///
+/// The package installs a `edge-tts` console script; when that is not on
+/// `PATH` but `python3` is, the module form (`python3 -m edge_tts`) still
+/// works, because the package may be installed for a python the script was
+/// never linked for. Returns the command plus any leading arguments, so the
+/// two forms are one call shape rather than two code paths.
+fn edge_tts_command() -> Option<(&'static str, &'static [&'static str])> {
+    if command_on_path("edge-tts") {
+        return Some(("edge-tts", &[]));
+    }
+    if command_on_path("python3") {
+        return Some(("python3", &["-m", "edge_tts"]));
+    }
+    None
+}
+
+/// Whether `name` resolves to a file on `PATH`.
+///
+/// This is a cheap probe (`is_file`), not a `--help` spawn: the old piper
+/// probe shelled out on every call, which costs a process for a question the
+/// filesystem answers.
+fn command_on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+}
+
 /// The built-in provider names this tool can dispatch to.
 ///
 /// One list, so the dispatch `match` below, the error message and
@@ -91,6 +139,16 @@ const BUILTIN_PROVIDERS: &[&str] = &[
     "piper",
     "phonon",
 ];
+
+/// The provider names this tool can dispatch to.
+///
+/// One exported list, so the wizard's menu (`cmd_setup::tts_provider_menu`)
+/// and the unknown-provider message cannot drift from the dispatch arms. A
+/// menu entry the tool cannot reach is a wizard that lies, and a tool
+/// provider the wizard omits is one the operator cannot select.
+pub fn builtin_providers() -> &'static [&'static str] {
+    BUILTIN_PROVIDERS
+}
 
 /// Map a configured provider name onto one this build can dispatch to.
 ///
@@ -293,28 +351,110 @@ impl TtsTool {
     }
 
     // =========================================================================
-    // Edge TTS (free, no API key)
+    // Edge TTS (free, no API key — the `edge-tts` CLI)
     // =========================================================================
+    /// Synthesize through Microsoft Edge's TTS service via the `edge-tts`
+    /// CLI (the `edge-tts` PyPI package). Keyless, but it is NOT local: the
+    /// binary talks to Microsoft's endpoint, so it needs network access even
+    /// though it needs no key.
+    ///
+    /// This was a stub until iter-2538: it returned `ToolResult::success` with
+    /// a message telling the operator to install the package, and NO audio —
+    /// a caller that asked for `edge` and got `success: true` had nothing to
+    /// play. Measured before the fix: `audio_b64_len=0` with `success=true`,
+    /// while the ten sibling providers all returned bytes. A tool that reports
+    /// success without producing its product is worse than one that errors,
+    /// because the agent moves on and the operator finds out at playback.
+    ///
+    /// The CLI shape is the same subprocess contract `piper_local` and
+    /// `kittentts_local` use: write a temp file, read the bytes back, delete.
+    /// `--no-progress` keeps the progress bar off stderr; a non-zero exit OR a
+    /// zero-length file is an error, because the package exits 0 on empty
+    /// text and leaves an empty file behind.
     async fn edge_tts(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() {
-            "en-US-AriaNeural"
-        } else {
-            &args.voice
+        let voice = resolve_voice(&args.voice, "en-US-AriaNeural");
+
+        let Some((binary, prefix_args)) = edge_tts_command() else {
+            return ToolResult::error(
+                "text_to_speech",
+                "Edge TTS not installed. Install it with: pip install edge-tts",
+            );
         };
 
-        // Edge TTS requires the edge-tts crate which is complex - we'll simulate with a message
-        // In production, you'd use the edge-tts Rust crate or call subprocess
-        ToolResult::success(
-            "text_to_speech",
-            json!({
-                "success": true,
-                "message": "Edge TTS requires 'edge-tts' Python package. Install with: pip install edge-tts",
-                "provider": "edge",
-                "voice": voice,
-                "format": "mp3",
-                "note": "Edge TTS is free but requires Python dependency"
-            }),
-        )
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join(format!("edge_tts_output_{}.mp3", std::process::id()));
+
+        // The text goes in as an ARGUMENT (`--text`), not through a shell: a
+        // subprocess is not a shell, so a quote in the text cannot escape the
+        // argument, and no caller-supplied string is ever interpolated into
+        // something a shell would parse.
+        let mut command = Command::new(binary);
+        command
+            .args(prefix_args)
+            .arg("--voice")
+            .arg(voice)
+            .arg("--text")
+            .arg(&args.text)
+            .arg("--write-media")
+            .arg(&output_path)
+            .arg("--no-progress");
+        let result = command.output();
+
+        match result {
+            Ok(output) if output.status.success() => {
+                // A zero exit is NOT proof of audio: the package exits 0 on
+                // empty input and leaves a zero-byte file. Only the bytes are.
+                match std::fs::metadata(&output_path) {
+                    Ok(meta) if meta.len() > 0 => match std::fs::read(&output_path) {
+                        Ok(audio_bytes) => {
+                            let _ = std::fs::remove_file(&output_path);
+                            let audio_base64 = base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &audio_bytes,
+                            );
+                            ToolResult::success(
+                                "text_to_speech",
+                                json!({
+                                    "success": true,
+                                    "audio": audio_base64,
+                                    "format": "mp3",
+                                    "provider": "edge",
+                                    "voice": voice
+                                }),
+                            )
+                        }
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&output_path);
+                            ToolResult::error(
+                                "text_to_speech",
+                                format!("Failed to read output: {}", e),
+                            )
+                        }
+                    },
+                    // Reached when the file is absent OR empty — including the
+                    // zero-byte file the CLI leaves on empty input.
+                    _ => {
+                        let _ = std::fs::remove_file(&output_path);
+                        ToolResult::error(
+                            "text_to_speech",
+                            "Edge TTS produced no audio (the edge-tts CLI exited 0 but wrote no media)",
+                        )
+                    }
+                }
+            }
+            Ok(output) => {
+                let _ = std::fs::remove_file(&output_path);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                ToolResult::error(
+                    "text_to_speech",
+                    format!("Edge TTS failed: {}", stderr.trim()),
+                )
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&output_path);
+                ToolResult::error("text_to_speech", format!("Failed to run edge-tts: {}", e))
+            }
+        }
     }
 
     // =========================================================================
@@ -326,11 +466,7 @@ impl TtsTool {
         }
 
         let model = args.model.as_deref().unwrap_or("eleven_multilingual_v2");
-        let voice_id = if args.voice.is_empty() {
-            "pNInz6obpgDQGcFmaJgB"
-        } else {
-            &args.voice
-        };
+        let voice_id = resolve_voice(&args.voice, "pNInz6obpgDQGcFmaJgB");
 
         let response = match self
             .client
@@ -392,11 +528,7 @@ impl TtsTool {
         }
 
         let model = args.model.as_deref().unwrap_or("gpt-4o-mini-tts");
-        let voice = if args.voice.is_empty() {
-            "alloy"
-        } else {
-            &args.voice
-        };
+        let voice = resolve_voice(&args.voice, "alloy");
 
         let response = match self
             .client
@@ -455,11 +587,7 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "MINIMAX_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() {
-            "female-shaonv"
-        } else {
-            &args.voice
-        };
+        let voice_id = resolve_voice(&args.voice, "female-shaonv");
 
         let response = match self
             .client
@@ -527,11 +655,7 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "MISTRAL_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() {
-            "c69964a6-ab8b-4f8a-9465-ec0925096ec8"
-        } else {
-            &args.voice
-        };
+        let voice_id = resolve_voice(&args.voice, "c69964a6-ab8b-4f8a-9465-ec0925096ec8");
 
         let response = match self
             .client
@@ -590,11 +714,7 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "GEMINI_API_KEY not set");
         }
 
-        let voice = if args.voice.is_empty() {
-            "Kore"
-        } else {
-            &args.voice
-        };
+        let voice = resolve_voice(&args.voice, "Kore");
 
         let response = match self
             .client
@@ -677,11 +797,7 @@ impl TtsTool {
             return ToolResult::error("text_to_speech", "XAI_API_KEY not set");
         }
 
-        let voice_id = if args.voice.is_empty() {
-            "eve"
-        } else {
-            &args.voice
-        };
+        let voice_id = resolve_voice(&args.voice, "eve");
 
         let response = match self
             .client
@@ -736,11 +852,7 @@ impl TtsTool {
     // NeuTTS (local, free - requires neutts binary)
     // =========================================================================
     async fn neutts_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() {
-            "neutral"
-        } else {
-            &args.voice
-        };
+        let voice = resolve_voice(&args.voice, "neutral");
         let model = args
             .model
             .as_deref()
@@ -809,11 +921,7 @@ impl TtsTool {
     // KittenTTS (local, free - requires kittentts Python package)
     // =========================================================================
     async fn kittentts_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() {
-            "Jasper"
-        } else {
-            &args.voice
-        };
+        let voice = resolve_voice(&args.voice, "Jasper");
         let model = args
             .model
             .as_deref()
@@ -882,11 +990,7 @@ except Exception as e:
     // Piper (local, free - requires piper binary)
     // =========================================================================
     async fn piper_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() {
-            "en_US-lessac-medium"
-        } else {
-            &args.voice
-        };
+        let voice = resolve_voice(&args.voice, "en_US-lessac-medium");
 
         // Check if piper is available
         let check = Command::new("piper").arg("--help").output();
@@ -959,11 +1063,7 @@ except Exception as e:
     /// errors as `Result`, so unlike the old `ort` binding there is no
     /// panic-on-load hazard to catch here.
     async fn phonon_local(&self, args: &TtsArgs) -> ToolResult {
-        let voice = if args.voice.is_empty() {
-            "default"
-        } else {
-            args.voice.as_str()
-        };
+        let voice = resolve_voice(&args.voice, "default");
 
         let mut engine_lock = self.phonon.lock().await;
         if engine_lock.is_none() {
@@ -1021,7 +1121,7 @@ impl OperantTool for TtsTool {
     }
 
     fn description(&self) -> &str {
-        "Convert text to speech using AI voice providers (Phonon [local, default], Edge, ElevenLabs, OpenAI, MiniMax, Mistral, Gemini, xAI, NeuTTS, KittenTTS, Piper)"
+        "Convert text to speech using AI voice providers (Phonon [local, default], Edge [keyless CLI], ElevenLabs, OpenAI, MiniMax, Mistral, Gemini, xAI, NeuTTS, KittenTTS, Piper). Omit voice for the provider's own default."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1083,6 +1183,66 @@ mod tests {
     #[test]
     fn test_default_voice() {
         assert_eq!(default_voice(), "default");
+    }
+
+    /// The schema default `voice = "default"` must not be sent to a provider
+    /// that has no voice by that name.
+    ///
+    /// `TtsArgs::voice` defaults to `"default"` (the SCHEMA sentinel), and
+    /// every provider used to pass it through verbatim whenever it was not
+    /// EMPTY. Only Phonon has a voice named `default`; `edge-tts` rejects it
+    /// outright (`ValueError: Invalid voice 'default'.`), and OpenAI /
+    /// ElevenLabs / Mistral / xAI reject any unknown voice id. Since an
+    /// omitted `voice` is the common case, every one of the ten non-Phonon
+    /// providers failed on the default call. Both spellings of "not chosen"
+    /// must resolve to the provider's own default.
+    #[test]
+    fn the_schema_default_voice_resolves_to_each_providers_own_default() {
+        assert_eq!(resolve_voice("", "alloy"), "alloy");
+        assert_eq!(resolve_voice("default", "alloy"), "alloy");
+        assert_eq!(
+            resolve_voice("default", "en-US-AriaNeural"),
+            "en-US-AriaNeural"
+        );
+        assert_eq!(resolve_voice("default", "default"), "default");
+        // A chosen voice is never rewritten.
+        assert_eq!(resolve_voice("nova", "alloy"), "nova");
+        assert_eq!(
+            resolve_voice("en-GB-SoniaNeural", "en-US-AriaNeural"),
+            "en-GB-SoniaNeural"
+        );
+    }
+
+    /// The invariant the ten cloud/local providers share and `edge` broke:
+    /// success carries decodable audio. Exercised here over every provider
+    /// this host can reach without credentials, so a provider that regresses
+    /// into a stub fails in the unit suite rather than in the operator's ear.
+    #[tokio::test]
+    async fn no_builtin_provider_reports_success_without_audio() {
+        let tool = TtsTool::new();
+        for provider in [
+            "edge",
+            "elevenlabs",
+            "openai",
+            "minimax",
+            "mistral",
+            "gemini",
+            "xai",
+            "neutts",
+            "kittentts",
+            "piper",
+            "phonon",
+        ] {
+            let result = tool
+                .execute(
+                    json!({"text": "Audit probe.", "provider": provider}),
+                    ToolContext::default(),
+                )
+                .await;
+            // An unreachable provider must fail. It must never succeed while
+            // carrying no audio — the exact defect this iteration fixed.
+            assert_success_carries_audio(&result);
+        }
     }
 
     #[test]
@@ -1183,5 +1343,145 @@ mod tests {
         assert_eq!(spec.sample_rate, 24_000);
         assert!((0.8..8.0).contains(&seconds), "duration {seconds}s");
         assert!(peak > 1_000, "silent output (peak {peak})");
+    }
+
+    // =====================================================================
+    // edge: the stub that reported success without audio (iter-2538)
+    // =====================================================================
+
+    /// The invariant every provider must hold, and the one `edge` broke until
+    /// iter-2538: a call that reports SUCCESS carries decodable audio.
+    ///
+    /// This is the assertion to keep if the edge body is ever rewritten. It
+    /// is a property of the RESULT, not of the implementation, so it does not
+    /// care how `edge` is dispatched.
+    fn assert_success_carries_audio(result: &ToolResult) {
+        // An ERROR result has empty content by construction
+        // (`ToolResult::error`), so the audio is read with `.ok()` rather than
+        // by unwrapping the parse.
+        let audio: String = serde_json::from_str::<serde_json::Value>(&result.content)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("audio"))
+            .and_then(|a| a.as_str())
+            .unwrap_or("")
+            .to_string();
+        if result.success {
+            assert!(
+                !audio.is_empty(),
+                "a successful text_to_speech must carry audio; content={:?} error={:?}",
+                result.content,
+                result.error
+            );
+            assert!(
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &audio).is_ok(),
+                "the audio a successful text_to_speech reports must be valid base64"
+            );
+        }
+    }
+
+    /// THE regression guard for the defect this iteration fixes.
+    ///
+    /// Before the fix, `provider = "edge"` returned `success: true` with
+    /// `audio` absent and `audio_b64_len = 0` — measured on the deployed
+    /// binary, against the ten sibling providers which all returned bytes.
+    /// A provider that cannot be reached must now FAIL, not claim success.
+    ///
+    /// The test is written to hold whether or not `edge-tts` is installed:
+    /// if it is installed the call synthesizes (and must carry audio); if it
+    /// is not, the call must error. Either way the forbidden state — success
+    /// with no audio — fails.
+    #[tokio::test]
+    async fn an_edge_call_cannot_report_success_without_audio() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "Audit probe, one two three.", "provider": "edge"}),
+                ToolContext::default(),
+            )
+            .await;
+
+        assert_success_carries_audio(&result);
+        if !result.success {
+            // The failure must say WHY, not be an empty error.
+            let error = result.error.clone().unwrap_or_default();
+            assert!(
+                !error.trim().is_empty(),
+                "a failed edge call must explain itself"
+            );
+        }
+    }
+
+    /// A missing `edge-tts` must produce the install hint, not a subprocess
+    /// error. PATH is emptied so this holds on any host: if the binary IS
+    /// installed here, this test would otherwise prove nothing.
+    ///
+    /// `serial_test` is required: `PATH` is process-global and every other
+    /// test in this binary that spawns a tool depends on it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn edge_without_the_cli_errors_with_the_install_hint() {
+        let tool = TtsTool::new();
+        let Some(original) = std::env::var_os("PATH") else {
+            return;
+        };
+        // SAFETY: the restore below is unconditional on every path after the
+        // `let-else` above, and `serial_test` keeps other tests out of `PATH`.
+        unsafe { std::env::set_var("PATH", "") };
+        let result = tool
+            .execute(
+                json!({"text": "Audit probe.", "provider": "edge"}),
+                ToolContext::default(),
+            )
+            .await;
+        unsafe { std::env::set_var("PATH", original) };
+
+        assert!(
+            !result.success,
+            "a missing CLI is not a successful synthesis"
+        );
+        let error = result.error.unwrap_or_default();
+        assert!(
+            error.contains("edge-tts"),
+            "the error must name the missing package: {error}"
+        );
+        assert!(
+            error.contains("pip install"),
+            "the error must say how to install it: {error}"
+        );
+    }
+
+    /// The live counterpart, for a host that HAS the package: prove the bytes
+    /// are real MP3, not an empty string. Run with
+    /// `cargo test -p operant-core edge_speaks -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs the edge-tts package (pip install edge-tts) and network access"]
+    async fn edge_speaks_through_the_tool() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "Operant audio check.", "provider": "edge"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "{:?}", result.error);
+        assert_success_carries_audio(&result);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        let audio = content["audio"].as_str().unwrap();
+        // A real MP3 for a five-word sentence is kilobytes, not bytes.
+        assert!(
+            audio.len() > 1_000,
+            "edge returned only {} base64 chars",
+            audio.len()
+        );
+        let mp3 =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio).unwrap();
+        // An MPEG frame sync is the cheapest proof it is audio: 0xFF then
+        // 0xE0-masked bits. An empty or HTML error page would not match.
+        assert!(
+            mp3.len() > 2 && mp3[0] == 0xFF && (mp3[1] & 0xE0) == 0xE0,
+            "edge output is not an MPEG frame: {:?}",
+            &mp3[..mp3.len().min(4)]
+        );
     }
 }

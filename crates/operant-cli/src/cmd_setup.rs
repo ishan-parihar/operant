@@ -995,6 +995,48 @@ pub async fn step_tools(config: &mut AppConfig, _reconfigure: bool) -> Result<()
     Ok(())
 }
 
+/// The TTS provider menu: one label per line, and the provider NAME that
+/// `AppConfig::tts.provider` must carry for that line.
+///
+/// Extracted (iter-2538) so a guard can compare it against the tool's own
+/// `BUILTIN_PROVIDERS`. The two lists had already drifted once: this menu
+/// offered `google-gemini`, which `resolve_provider_name` degrades to
+/// `phonon` with a warning — the wizard set a config value the runtime then
+/// refused — and it omitted `piper` and `kittentts` entirely. A menu that
+/// names a provider the build does not have is a wizard that lies.
+///
+/// The two returned lists are parallel by construction: element N of one
+/// describes element N of the other.
+fn tts_provider_menu() -> ([(&'static str, &'static str); 11], [&'static str; 11]) {
+    let options = [
+        ("Phonon", "Free local TTS (default), no API key needed"),
+        ("Edge TTS", "Free, keyless, via the edge-tts CLI"),
+        ("ElevenLabs", "High-quality cloud TTS, requires key"),
+        ("OpenAI", "OpenAI TTS models (gpt-4o-mini-tts)"),
+        ("xAI", "Grok TTS voices, requires key"),
+        ("Mistral", "Voxtral TTS, requires key"),
+        ("MiniMax", "MiniMax TTS voice synthesis, requires key"),
+        ("Google Gemini", "Google Gemini TTS, requires key"),
+        ("NeuTTS", "Local TTS via Neuphonic"),
+        ("KittenTTS", "Local TTS, 25MB model"),
+        ("Piper", "Local TTS via the piper binary"),
+    ];
+    let values = [
+        "phonon",
+        "edge",
+        "elevenlabs",
+        "openai",
+        "xai",
+        "mistral",
+        "minimax",
+        "gemini",
+        "neutts",
+        "kittentts",
+        "piper",
+    ];
+    (options, values)
+}
+
 /// Step 5: Text-to-Speech (TTS) configuration.
 async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
     print_page_header("Text-to-Speech (TTS) Configuration");
@@ -1004,30 +1046,7 @@ async fn step_tts(config: &mut AppConfig, _reconfigure: bool) -> Result<()> {
     let enabled = prompt_yes_no("Enable Text-to-Speech (TTS)?", config.tts.enabled)?;
 
     if enabled {
-        let tts_options = [
-            ("Edge TTS", "Free, local via browser-edge-tts"),
-            ("ElevenLabs", "High-quality cloud TTS, requires key"),
-            ("OpenAI", "OpenAI TTS models (tts-1, tts-1-hd)"),
-            ("xAI", "Grok TTS (if available through xAI)"),
-            ("Mistral", "Mistral TTS (if available)"),
-            ("Phonon", "Free local TTS (default), no API key needed"),
-            ("MiniMax", "MiniMax TTS voice synthesis"),
-            ("Google Gemini", "Google Gemini TTS"),
-            ("NeuTTS", "Local TTS via Neuphonic"),
-            ("KittenTTS", "Local TTS, auto-installable"),
-        ];
-        let tts_values = [
-            "edge",
-            "elevenlabs",
-            "openai",
-            "xai",
-            "mistral",
-            "phonon",
-            "minimax",
-            "google-gemini",
-            "neutts",
-            "kittentts",
-        ];
+        let (tts_options, tts_values) = tts_provider_menu();
 
         let current_idx = tts_values
             .iter()
@@ -1544,6 +1563,48 @@ mod tests {
 
     fn path_slot_guard() -> std::sync::MutexGuard<'static, ()> {
         PATH_SLOT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The wizard's provider menu must name exactly the providers the tool
+    /// can dispatch to, and nothing else.
+    ///
+    /// The menu and the dispatch are two lists that must agree. Before
+    /// iter-2538 they had drifted: the wizard offered `google-gemini`
+    /// (a name `resolve_provider_name` degrades to `phonon`), and omitted
+    /// `piper` and `kittentts` — so two of the eleven working providers were
+    /// unreachable from the wizard, and selecting the Gemini row silently
+    /// configured the Phonon default instead.
+    #[test]
+    fn the_setup_wizard_menus_every_builtin_and_no_phantom() {
+        let (options, values) = tts_provider_menu();
+        assert_eq!(
+            options.len(),
+            values.len(),
+            "labels and provider values must stay parallel"
+        );
+
+        let builtins = operant_core::tools::tts_tool::builtin_providers();
+        assert_eq!(
+            values.len(),
+            builtins.len(),
+            "the menu must offer every builtin exactly once: {:?}",
+            values
+        );
+        for name in values {
+            assert!(
+                builtins.contains(&name),
+                "the wizard offers {name:?}, which the tool cannot dispatch to"
+            );
+        }
+        for name in builtins {
+            assert!(
+                values.contains(&name),
+                "the wizard omits {name:?}, which the tool can dispatch to"
+            );
+        }
+        // The first row is the default, and `unwrap_or(0)` selects it for an
+        // unrecognised current provider — so it must be the real default.
+        assert_eq!(values[0], "phonon");
     }
 
     /// (plan 09, the setup wizard's turn) The wizard's persist must be
