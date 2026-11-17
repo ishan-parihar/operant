@@ -451,6 +451,8 @@ write. `adapt_buffer_for_emoji_preference`
 (`tui/operant_app/output_style.rs`) runs right after it and is the only
 place emoji width is normalised across every widget.
 
+Two modules feed the same loader, from different directions: `theme_bundled.rs` is the generated table of oh-my-pi's palettes (a palette NAME mapped to `role = "#rrggbb"` pairs, resolved here at generation time so `palette::parse_hex` only ever sees 3- or 6-digit hex), and `theme_files.rs` is the operator's `<config dir>/themes/<name>.toml` path — the same `[tui.colors]` shape with a name, reading `OPERANT_CONFIG_DIR` when set and falling back to the RESOLVED operant home so a profile's own themes are seen by the profile that switch names them.
+
 ## The two remaining contributors
 
 **`adapter_types/`** (18 files) is the adapter layer that predates the

@@ -165,6 +165,15 @@ per-million input/output costs; `cached_model_prices()` maps every cached row's
 id to its price pair. Both read the cache only and return empty when there is
 none — a missing cache is a miss, never an error.
 
+## Model picker and scope axis (`model_scope.rs`, `model_recent.rs`, `model_scope_nav.rs`, `role_cycle.rs`)
+
+The `/model` picker is driven by four pieces the page above deliberately does not otherwise name.
+
+- `model_scope.rs` is the sidebar's scope axis: recently used, the role slots, every configured model, and one entry per provider. It is the DATA half, so its `ModelScope` entries and row-selection functions can be read without a terminal; the layout lives with the picker.
+- `model_recent.rs` is the bounded `(model, when)` list the `Recent` scope ranks, appended on every applied model. It is a file rather than a database table because it is an MRU, not a claim about history.
+- `model_scope_nav.rs` is the `Ctrl+]` chord that walks the scope axis and the sidebar's selection in step with it, wrapping around the ends.
+- `role_cycle.rs` is the `Shift+Tab` chord that cycles the conversation model through the configured role models, skipping unavailable slots; it is the reason favourite-cycling moved to `Ctrl+Shift+N`, which is the sibling of `Ctrl+N`.
+
 ## Surfaces
 
 `/model` is handled in the TUI (`tui/app/commands.rs`) and over the gateway

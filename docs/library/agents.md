@@ -192,6 +192,14 @@ process cwd" or refuses. A caller that passed a different path used to get
 silence: the child ran wherever the process happened to be, so the parent
 believed it had isolated the child while the child edited the shared tree.
 
+## The identity switch (`agent_identity.rs`) and the subagent navigator (`subagent_nav.rs`, `subagent_navigator.rs`)
+
+Two surfaces carry the agent identity rather than the loop.
+
+- `agent_identity.rs` (`tui/app/`) is the session-scoped employee switch behind `Shift+Tab` and `/agent`. It sets the acting agent for THIS conversation only — the agent's bylaws seat and charter, and the `sessions.employee_id` binding — and writes nothing to the config, so two sessions in the same process keep their own seats and an operator instruction is never silently re-pointed across conversations.
+- `subagent_nav.rs` (`tui/app/`) is the App-side seam: it collects this session's own descendants outward from the current session id and mounts the navigator surface on them.
+- `subagent_navigator.rs` is the surface itself, listing the current session's children from the in-process registry plus the durable ledger. Sessions that share a swarm in the repo but were not spawned by this session are deliberately excluded — the hub shows what this session owns.
+
 ## The pane report (`herdr.rs` and `herdr_lifecycle.rs`)
 
 Herdr is a terminal workspace manager that shows which agent is running in

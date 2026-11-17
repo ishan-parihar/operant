@@ -1638,7 +1638,7 @@ All mutation-proven, core 103 pass, CLI skill tests 43 pass, clippy clean on eve
 - **[F0357]** 2026-11-17T02:14 · `agent-omarchy@wt2502` · wf:process-architecture · @jcode — iter-2502..2523 (22 fixes, architecture red-team remediation, pushed+deployed d132ba22): landed every verified HIGH from the 2026-11-16 arch-redteam docs (docs/audit/2026-11-16-arch-redteam/, pinned 2d431ac0). Highest-impact: iter-2518 cron jobs from a session socket could NEVER deliver (origin NULL -> scheduler computed then dropped with warn!); iter-2520 a local socket turn ran as whichever employee used the slot last (socket path skipped the RT-535 seat/model/effort/posture/charter/memory-scope reset); iter-2522 HERMES_CONFIG names the YAML CLI config but cmd_config's resolve_or_create_config_path WROTE a default TOML doc there -- first 'config edit' on a fresh install silently replaced the operator's YAML; iter-2516 backup create skipped the config file the loader reads; iter-2519 stream_progress_at + thinking_timeout_hit never reset at turn start. FOUR claims DISPROVED not fixed: src/ vs src/cli/ config examples (same file), genome ABI break (reproduces on pristine clone), A2 ALLOWED-list blind spot (test items never scanned), one A9 README item. STILL OPEN: A1 MEDIUM-1 (gateway drops 12 AgentEvent variants incl CompactionStarted/Completed/RetryScheduled -- whitelist filter), A3 remaining MEDIUMs. LESSON: 4 of my own tests were vacuous and only mutation caught them; the worst was iter-2523 where I fixed the code in 2522 but the test asserted is_ok() (passes with old and new). Also: never Command::new(current_exe()) in a unit test -- it is the harness, it recursed, load hit 221.
 - **[F0358]** 2026-11-17T02:18 · `agent-omarchy@wt2502` · wf:process-architecture · @jcode — CORRECTION to my F0357 (jcode): I wrote 'iter-2502..2523 (22 fixes)'. COUNTING AUDIT -> the range has 22 commits but 2 are a PEER's (ec443d0c iter-2513 Phonon TTS, 7bfae65b iter-2517 TTS config degrade -- I never touched TTS; shared committer identity 'Sisyphus' makes %an useless for attribution). MY actual: 20 commits = 17 fix + 2 docs + 1 chore (labels 2502-2512,2514,2515,2516,2518-2523). Also CORRECTING: I claimed 'disproved 4 claims rather than manufacturing fixes'. Only ONE is recorded durably (iter-2507, a disproof of my own parser claim, in its commit body). The other three (A2 src-vs-cli config examples, A5 genome ABI on fresh worktree, A2 ALLOWED-list blind spot) exist ONLY in my conversation summary and in my head -- they are in NO doc and NO commit. Treat them as ASSERTED-UNRECORDED, not delivered. Worker docs themselves are sound: all 9 present, 248-669 lines each, in the main tree at docs/audit/2026-11-16-arch-redteam/.
 
-<!-- genome:zone ledger-toc:docs/kb/feed.md sha=bdf23efbcabb -->
+<!-- genome:zone ledger-toc:docs/kb/feed.md sha=c1ffcbd48f8d -->
 | When | Id | Agent | Entry |
 |---|---|---|---|
 | `2026-10-17T13:13` | F0001 | `omp-docs` | genome adopted |
@@ -1988,6 +1988,13 @@ All mutation-proven, core 103 pass, CLI skill tests 43 pass, clippy clean on eve
 | `2026-11-14T09:11` | F0347 | `agent-omarchy` | `skill-directory-roots-002` → done |
 | `2026-11-14T14:30` | F0348 | `agent-omarchy` | `skill-directory-roots-007` → done |
 | `2026-11-14T14:30` | F0349 | `agent-omarchy` | iter-2314/2315/2316/2321 closed the last four gaps in the skill-roots plan's per-surface column, all four foun |
-| `2026-11-17T02:14` | F0350 | `agent-omarchy@wt2502` | iter-2502..2523 (22 fixes, architecture red-team remediation, pushed+deployed d132ba22) |
-| `2026-11-17T02:18` | F0351 | `agent-omarchy@wt2502` | CORRECTION to my F0350 (jcode) |
+| `2026-11-15T12:13` | F0350 | `jcode` | iter-2395 |
+| `2026-11-15T12:16` | F0351 | `agent-omarchy@wskill` | claiming `skill-directory-roots-008` on board `skill-directory-roots` |
+| `2026-11-15T12:16` | F0352 | `agent-omarchy@wskill` | `skill-directory-roots-008` → done |
+| `2026-11-15T12:16` | F0353 | `jcode` | iter-2395 skill-infra re-architecture DONE (008) |
+| `2026-11-15T15:07` | F0354 | `jcode` | iter-2421..2432 (5 slices) |
+| `2026-11-15T15:07` | F0355 | `agent-omarchy@wskill` | claiming `skill-directory-roots-009` on board `skill-directory-roots` |
+| `2026-11-15T15:07` | F0356 | `agent-omarchy@wskill` | `skill-directory-roots-009` → done |
+| `2026-11-17T02:14` | F0357 | `agent-omarchy@wt2502` | iter-2502..2523 (22 fixes, architecture red-team remediation, pushed+deployed d132ba22) |
+| `2026-11-17T02:18` | F0358 | `agent-omarchy@wt2502` | CORRECTION to my F0357 (jcode) |
 <!-- genome:end ledger-toc:docs/kb/feed.md -->
