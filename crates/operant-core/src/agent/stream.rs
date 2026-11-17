@@ -1841,7 +1841,15 @@ impl OperantAgent {
                 let tool_started = std::time::Instant::now();
                 let tool_ctx = self.tool_context(&name);
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
-                let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                // Same three-way exemption the single-tool arm carries: an MCP
+                // tool owns a 60s first-read budget and a 90s registry override
+                // (iter-2366), so the outer wrapper must not be 30s here either
+                // — a batched MCP read would be cancelled mid-flight and leave
+                // an orphan response counting toward the drain cap.
+                let limit = if is_interactive_tool(&name)
+                    || is_long_running_tool(&name)
+                    || is_mcp_tool(&name)
+                {
                     LONG_RUNNING_TOOL_TIMEOUT
                 } else {
                     self.config.tool_timeout
@@ -1931,11 +1939,17 @@ impl OperantAgent {
                         // Interactive tools exempt from the generic tool
                         // timeout (see is_interactive_tool); long-running
                         // tools like delegate_task carry their own child
-                        // timeout. Both get the generous backstop — the
-                        // user-question receiver resolves dialogs on their
-                        // own 120s timeout and the child timeout governs
-                        // delegation.
-                        let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                        // timeout; MCP tools own a 60s read budget with a 90s
+                        // registry override (iter-2366) that only holds if the
+                        // outer wrapper is not 30s. All three get the generous
+                        // backstop — the user-question receiver resolves dialogs
+                        // on their own 120s timeout and the child timeout
+                        // governs delegation. Without the MCP arm here a
+                        // parallel batch of ≥2 MCP tools was cut at 30s.
+                        let limit = if is_interactive_tool(&name)
+                            || is_long_running_tool(&name)
+                            || is_mcp_tool(&name)
+                        {
                             LONG_RUNNING_TOOL_TIMEOUT
                         } else {
                             tool_timeout
@@ -2611,6 +2625,190 @@ mod turn_attribution_tests {
         assert!(
             a.turn_attribution(start, Duration::from_millis(5), true)
                 .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod mcp_timeout_tests {
+    //! iter-2366 exempted MCP tools from the generic tool timeout because their
+    //! client owns a 60s first-read budget and the registry gives them a 90s
+    //! override — an order that only holds if the OUTER wrapper is not 30s.
+    //!
+    //! That exemption was applied to the single-tool arm and to neither of the
+    //! other two: the sequential arm and the concurrent pool both ran
+    //! `is_interactive_tool || is_long_running_tool` only. A batch of >=2
+    //! non-mutating, non-gated MCP tools (which is exactly what
+    //! `batch_allows_parallel_execution` admits) therefore cut a live MCP read
+    //! at 30s, and every cancelled call left an orphan response counting toward
+    //! the 64-response drain cap — so one slow MCP call could fail a healthy
+    //! one, the failure iter-2366 was written to prevent.
+    //!
+    //! These tests DRIVE the timeout selection rather than asserting the
+    //! predicate: the predicate test (`an_mcp_tool_is_exempt_from_the_generic_tool_timeout`)
+    //! was green throughout the defect because the predicate was never wrong —
+    //! two of the three call sites simply never called it.
+
+    use super::*;
+
+    /// A tool that outlives the generic timeout but not the backstop. Its name
+    /// is the only thing that decides whether it gets exempted.
+    struct SlowMcpTool {
+        name: &'static str,
+        sleep: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::OperantTool for SlowMcpTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "sleeps, for timeout selection tests"
+        }
+        fn schema(&self) -> crate::schema::ToolSchema {
+            crate::schema::ToolSchema::from_type::<serde_json::Value>(self.name, self.description())
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+            _context: crate::tools::ToolContext,
+        ) -> crate::tools::ToolResult {
+            tokio::time::sleep(self.sleep).await;
+            crate::tools::ToolResult::success("done", "finished")
+        }
+    }
+
+    /// The SAME fake tool under two names: an `mcp_` one and a plain builtin one.
+    /// If either name is timed out differently the call site is wrong.
+    fn slow_tool(name: &'static str) -> SlowMcpTool {
+        SlowMcpTool {
+            name,
+            sleep: Duration::from_millis(1500),
+        }
+    }
+
+    fn call(name: &str, id: &str) -> crate::client::ToolCall {
+        crate::client::ToolCall {
+            id: id.to_string(),
+            function: crate::client::ToolCallFunction {
+                name: name.to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    /// A config whose generic timeout is far shorter than the tool's sleep, so
+    /// "did the backstop apply" is unambiguous rather than a race.
+    fn short_timeout_config() -> AgentConfig {
+        AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 1,
+            tool_timeout: Duration::from_millis(50),
+            request_timeout: Duration::from_secs(10),
+            ..AgentConfig::default()
+        }
+    }
+
+    /// A client that is never reached: `execute_tools` runs the tool registry,
+    /// not the model. Mirrors the `UnusedClient` the other stream tests use.
+    struct UnusedClient;
+
+    #[async_trait::async_trait]
+    impl crate::agent::model_client::ModelClient for UnusedClient {
+        async fn chat(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> Result<crate::client::ChatResponse> {
+            Err(crate::error::Error::Agent("unused".into()))
+        }
+        async fn chat_streaming(
+            &self,
+            _request: crate::agent::model_client::ChatRequest,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<crate::agent::model_client::StreamChunk>>,
+        > {
+            Err(crate::error::Error::Agent("unused".into()))
+        }
+        fn provider_name(&self) -> &str {
+            "unused"
+        }
+    }
+
+    /// Drive N calls through `execute_tools` and report whether each survived
+    /// the outer timeout. A timed-out call comes back as
+    /// `ToolResult::timeout`, which is the S2 breaker's input — so this reads
+    /// the flag the agent itself would act on.
+    async fn results_for(names: &[&'static str]) -> Vec<bool> {
+        let registry = crate::tools::ToolRegistry::new(Duration::from_secs(30));
+        for name in names {
+            registry
+                .register(slow_tool(name))
+                .await
+                .expect("registering the test tool must work");
+        }
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let db = crate::database::Database::init(temp_dir.path().join("timeout.sqlite"))
+            .expect("database");
+        let agent = OperantAgent::new(
+            short_timeout_config(),
+            Box::new(UnusedClient),
+            registry,
+            std::sync::Arc::new(db),
+        );
+
+        let calls: Vec<crate::client::ToolCall> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| call(name, &format!("call-{i}")))
+            .collect();
+
+        agent
+            .execute_tools(calls)
+            .await
+            .expect("execute_tools must not fail")
+            .iter()
+            .map(|r| !r.timed_out)
+            .collect()
+    }
+
+    /// A single MCP call has been exempt since iter-2366. Pinned here because
+    /// it is the arm that was already correct, and because it is the control
+    /// for the two below: if this fails, the whole exemption is gone, not just
+    /// the batched arms.
+    #[tokio::test]
+    async fn a_single_mcp_call_survives_the_generic_timeout() {
+        let survived = results_for(&["mcp_slow"]).await;
+        assert!(
+            survived[0],
+            "a lone mcp_ tool must get the backstop, not the 50ms generic timeout"
+        );
+    }
+
+    /// The SEQUENTIAL arm (one call in the batch at a time). Before the fix
+    /// this was cut at the generic timeout.
+    #[tokio::test]
+    async fn a_batched_mcp_call_survives_the_generic_timeout() {
+        let survived = results_for(&["mcp_slow_a", "mcp_slow_b"]).await;
+        assert_eq!(
+            survived,
+            vec![true, true],
+            "a batch of two mcp_ tools must each get the backstop; a false here \
+             means the outer wrapper was the 50ms generic timeout"
+        );
+    }
+
+    /// A BUILTIN must still be cut by the generic timeout. Without this the
+    /// fix would read as "exempt everything", which would remove the timeout
+    /// from tools that own no budget of their own.
+    #[tokio::test]
+    async fn a_batched_builtin_is_still_cut_by_the_generic_timeout() {
+        let survived = results_for(&["plain_slow_a", "plain_slow_b"]).await;
+        assert_eq!(
+            survived,
+            vec![false, false],
+            "a builtin tool has no budget of its own and must still be cut"
         );
     }
 }
