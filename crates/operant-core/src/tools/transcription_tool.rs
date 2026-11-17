@@ -132,10 +132,29 @@ async fn transcribe_groq(file_path: &str, model: &str, api_key: &str) -> Transcr
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio".to_string());
 
-    let file_part = Part::bytes(audio_bytes)
+    // The audio bytes are captured ONLY on a successful part build. The old
+    // `.unwrap_or_else(|_| Part::bytes(Vec::new()))` discarded them on a mime
+    // parse failure, so the request went out with a ZERO-LENGTH file and the
+    // provider answered "no audio" — a confusing error about the wrong thing,
+    // while the real cause (a mime string that did not parse) went unrecorded.
+    // `"audio/mpeg"` is a constant that parses, so this arm is unreachable in
+    // practice; the point is that it must not be able to silently empty the
+    // upload.
+    let file_part = match Part::bytes(audio_bytes)
         .file_name(file_name)
         .mime_str("audio/mpeg")
-        .unwrap_or_else(|_| Part::bytes(Vec::new()));
+    {
+        Ok(part) => part,
+        Err(e) => {
+            return TranscriptionResult {
+                success: false,
+                transcript: String::new(),
+                provider: "groq".to_string(),
+                model: model.to_string(),
+                error: Some(format!("Could not build the audio upload: {e}")),
+            };
+        }
+    };
 
     let form = Form::new()
         .part("file", file_part)
@@ -205,10 +224,22 @@ async fn transcribe_openai(file_path: &str, model: &str, api_key: &str) -> Trans
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio".to_string());
 
-    let file_part = Part::bytes(audio_bytes)
+    // See `transcribe_groq`: a mime failure must report, not empty the upload.
+    let file_part = match Part::bytes(audio_bytes)
         .file_name(file_name)
         .mime_str("audio/mpeg")
-        .unwrap_or_else(|_| Part::bytes(Vec::new()));
+    {
+        Ok(part) => part,
+        Err(e) => {
+            return TranscriptionResult {
+                success: false,
+                transcript: String::new(),
+                provider: "openai".to_string(),
+                model: model.to_string(),
+                error: Some(format!("Could not build the audio upload: {e}")),
+            };
+        }
+    };
 
     let form = Form::new()
         .part("file", file_part)
@@ -540,6 +571,45 @@ mod tests {
             src.matches(&unconditional).count(),
             0,
             "an unconditional success envelope is the edge_tts shape"
+        );
+    }
+
+    /// A part-build failure must REPORT, not silently empty the upload.
+    ///
+    /// The old code was `.unwrap_or_else(|_| Part::bytes(Vec::new()))`: a mime
+    /// parse failure produced a ZERO-LENGTH part, so the provider received an
+    /// empty file and answered "no audio" — an error about the wrong thing,
+    /// while the real cause (a mime string that did not parse) went unrecorded.
+    /// The bytes were consumed by `Part::bytes` before the fallible call, so the
+    /// fallback could not even keep the audio.
+    ///
+    /// SOURCE contract over the seam (the repo's own shape): the defective
+    /// pattern must be gone from BOTH provider helpers, and each must build its
+    /// part through a fallible `match` that returns on `Err`. The needles are
+    /// concatenation-built so this test's own source cannot satisfy them.
+    #[test]
+    fn a_mime_failure_is_reported_rather_than_emptying_the_upload() {
+        let src = include_str!("transcription_tool.rs");
+        // The defective shape: an empty part as the error fallback.
+        let discarded = format!("Part::bytes(Vec::{})", "new");
+        assert_eq!(
+            src.matches(&discarded).count(),
+            0,
+            "a mime failure must not discard the audio and upload an empty part"
+        );
+        // Both helpers must build the part through the fallible path.
+        let call = format!("Part::bytes({}", "audio_bytes");
+        assert_eq!(
+            src.matches(&call).count(),
+            2,
+            "both provider helpers must build their part from the real bytes: {call}"
+        );
+        // And each failure arm must say what went wrong.
+        let reported = format!("Could not build the audio {}", "upload");
+        assert_eq!(
+            src.matches(&reported).count(),
+            2,
+            "each provider must report a part-build failure with its cause"
         );
     }
 
