@@ -171,7 +171,7 @@ CONFIG_KEYS = {
             "max_bytes", "owner_exempt", "owner_globs", "py_paths", "secrets", "root_files", "dir_suffixes",
             "dir_requires", "dir_globs", "stale_terms", "stale_exempt", "external_ok",
             "dir_name_patterns", "dir_name_exempt", "coverage_surfaces", "coverage_units", "doc_claims",
-            "library_pages",
+            "library_pages", "gates_present",
             "coverage_exempt", "coverage_label"},
     # `app` is the language-agnostic application/system-integrity declaration. A repo
     # writes what its toolchain IS (python, cargo, npm...) and genome runs the check
@@ -1643,6 +1643,7 @@ def lint_core(cfg: Cfg) -> list[str]:
     out += lint_outward(cfg)
     out += lint_doc_claims(cfg)
     out += lint_library_pages(cfg)
+    out += lint_gates_present(cfg)
     return out
 
 
@@ -1708,6 +1709,29 @@ def lint_library_pages(cfg: Cfg) -> list[str]:
         if not ln.startswith(bad) and "  " in ln and ln.split("  ")[0] not in ("library-check:",):
             out.append(f"E020 unknown failure signal from {script}: {ln.strip()}")
     return out
+
+
+def lint_gates_present(cfg: Cfg) -> list[str]:
+    """E021: a gate script no longer CONTAINS one of its checks.
+
+    A rebase onto a peer's reorganized tree silently drops same-region edits, and a
+    gate that loses a check still exits 0 -- so the loss is invisible. Proven twice
+    on 2026-11-17: iter-2551 (verify-library.sh reverted to a phantom-name allowlist)
+    and iter-2549 (check-doc-claims.sh lost its library tool-count block, then a wrong
+    count 106-vs-105 sat undetected). `scripts/check-gates-present.sh` asserts each
+    gate script still contains the semantic core of every check, so deletion fails
+    here instead of passing unnoticed. Like E019/E020 it RUNS the script rather than
+    reimplementing it, so the gate and the tool a human runs cannot disagree.
+    """
+    script = cfg.get("ops", "gates_present", "")
+    if not script:
+        return []
+    p = cfg.root / script
+    if not p.is_file():
+        return [f"E021 ops.gates_present names missing `{script}`"]
+    r = sh(cfg.root, "bash", script)
+    return [f"E021 {ln}" for ln in r.splitlines() if ln.startswith("MISSING-MARKER")
+            or ln.startswith("MISSING-GATE") or ln.startswith("FORBIDDEN-MARKER")]
 
 
 def lint_outward(cfg: Cfg) -> list[str]:

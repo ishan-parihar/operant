@@ -117,3 +117,13 @@ doc_claims = "scripts/check-doc-claims.sh"
 # "this page forgot to say what it owns" was only checkable by reading all 35
 # pages. The script is the authority, so the gate cannot drift from it.
 library_pages = "scripts/verify-library.sh"
+
+# The gates above are only gates while they still CONTAIN their checks. A rebase
+# onto a peer's reorganized tree silently drops same-region edits, and a gate that
+# loses a check still exits 0 -- proven twice: iter-2551 (verify-library.sh reverted
+# to a phantom-name allowlist) and iter-2549 (check-doc-claims.sh lost its
+# library tool-count block). This key names the guard that asserts each gate script
+# still contains the semantic core of every check, so deletion fails instead of
+# passing unnoticed. The guard lives in its own file so a rebase cannot drop the
+# guard and the thing it protects in one motion.
+gates_present = "scripts/check-gates-present.sh"

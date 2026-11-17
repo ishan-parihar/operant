@@ -144,6 +144,17 @@ run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 # nobody runs is a comment, so it is a step of the gate now.
 run_test "Doc claims (scripts/check-doc-claims.sh)" "bash scripts/check-doc-claims.sh 2>&1"
 
+# 4b-2. The gates above only stay gates while they still CONTAIN their checks.
+# A rebase onto a peer's reorganized tree silently drops same-region edits, and a
+# gate that loses a check still exits 0, so the loss is invisible -- proven twice
+# on 2026-11-17: iter-2551 (verify-library.sh reverted to a phantom-name allowlist)
+# and iter-2549 (check-doc-claims.sh lost its library tool-count block, then a wrong
+# count 106-vs-105 sat undetected). This guard asserts each gate script still
+# contains the semantic core of every check, so deletion fails the battery instead
+# of passing unnoticed. It lives in its own file so a rebase cannot drop the guard
+# and the thing it protects in one motion.
+run_test "Gate scripts still contain their checks (scripts/check-gates-present.sh)" "bash scripts/check-gates-present.sh 2>&1"
+
 # 4c. The config settings that nothing reads. The script's `--check` used to
 # exit non-zero whenever ANY candidate existed — i.e. always, for the 27
 # settings RT-136 accounted for — so it could never be a gate. It now
