@@ -257,6 +257,34 @@ else
   say "OK    TUI modules: $tui_actual"
 fi
 
+# --- TUI overlays ----------------------------------------------------------
+# `App::overlay_flags()` declares its own length in its return type
+# (`[(&'static str, bool); N]`), which the compiler enforces, so N is ground
+# truth and the prose number beside it is a claim that must agree.
+# It did not: AGENTS.md said 30 while the array held 29, from an overlay added
+# without updating the text. Nothing checked it until 2026-11-17.
+# All three numbers are DERIVED here rather than one compared to another,
+# because either side could be the stale one.
+overlay_decl=$(grep -oE 'overlay_flags\(&self\) -> \[\(&.static str, bool\); [0-9]+\]' \
+  crates/operant-cli/src/tui/app/commands.rs | grep -oE '[0-9]+' | head -1)
+overlay_entries=$(sed -n '/fn overlay_flags/,/^    }$/p' crates/operant-cli/src/tui/app/commands.rs | grep -cE '^\s*\(')
+overlay_doc=$(grep -oE 'overlay_flags\(\)` names \*\*[0-9]+\*\*' AGENTS.md | grep -oE '[0-9]+' | head -1)
+if [ -z "$overlay_decl" ] || [ "$overlay_entries" -eq 0 ] 2>/dev/null; then
+  say "DRIFT TUI overlays: could not derive the overlay count from commands.rs"
+  fail=1
+elif [ "$overlay_decl" != "$overlay_entries" ]; then
+  say "DRIFT TUI overlays: the array type says $overlay_decl but it holds $overlay_entries entries"
+  fail=1
+elif [ -z "$overlay_doc" ]; then
+  say "DRIFT TUI overlays: AGENTS.md states no countable overlay count"
+  fail=1
+elif [ "$overlay_doc" != "$overlay_decl" ]; then
+  say "DRIFT TUI overlays: AGENTS.md says $overlay_doc, the array holds $overlay_decl"
+  fail=1
+else
+  say "OK    TUI overlays: $overlay_decl (doc, type length and entries agree)"
+fi
+
 # --- cargo features named in AGENTS.md must exist --------------------------
 # A feature name in the document is a claim that the crate declares it. The
 # LifeOS claim was the counter-example: AGENTS.md said "the `lifeos` cargo
