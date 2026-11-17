@@ -315,21 +315,53 @@ pub fn merge_parked(raw: &str, parked: &toml::Value) -> Option<String> {
     let root = doc.as_table_mut()?;
     let parked = parked.as_table()?;
 
+    // The operator's own file WINS every collision. The sidecar exists to
+    // restore keys the current file does not carry (the downgrade case), not
+    // to overrule it. Nothing in production ever DELETES a sidecar -- only
+    // tests do -- so it is merged on every load forever; with `insert` it
+    // silently replaced a value the operator had since edited, and the older
+    // parked value won. MEASURED before this guard: raw says
+    // `model = "operator-current"`, sidecar says `sidecar-stale`, merged
+    // result was `sidecar-stale`.
+    //
+    // Reachable concretely: build A does not know `[agent] approval_mode` and
+    // parks it; the operator upgrades to a build that does know it and sets
+    // `approval_mode = "off"` in their own file; without this guard the value
+    // parked by the OLDER build is what takes effect, so the operator's edit
+    // does nothing and nothing reports it.
     for (dotted, value) in parked {
+        // A bare TOP-LEVEL key is wrapped by `split_unknown` as
+        // `__unknown_top_level__.<name>`, because an unwrapped bare key in a
+        // sidecar would collide with a SECTION of the same name. Split on the
+        // FIRST dot only: the remainder is the key, which may itself contain
+        // dots.
+        //
+        // This arm used to be unreachable. The wrapped key has TWO segments, so
+        // it fell into the `[section, leaf]` arm below and was restored as a
+        // nested `[__unknown_top_level__]` table instead of as the key it was
+        // -- the writer wrapped, the reader did not unwrap, and the downgrade
+        // restore silently produced a table no config reader looks at.
+        if let Some(rest) = dotted.strip_prefix("__unknown_top_level__.") {
+            root.entry(rest.to_string())
+                .or_insert_with(|| value.clone());
+            continue;
+        }
         let segments: Vec<&str> = dotted.split('.').collect();
         match segments.as_slice() {
             [leaf] => {
-                // `__unknown_top_level__.name` and a bare top-level key both
-                // land here; a bare key is a top-level config key.
-                let leaf = leaf.strip_prefix("__unknown_top_level__.").unwrap_or(leaf);
-                root.insert(leaf.to_string(), value.clone());
+                // A bare top-level key that was NOT wrapped. Kept for a sidecar
+                // written by a build without the wrapper.
+                root.entry(leaf.to_string())
+                    .or_insert_with(|| value.clone());
             }
             [section, leaf] => {
                 let entry = root
                     .entry(section.to_string())
                     .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
                 if let Some(table) = entry.as_table_mut() {
-                    table.insert(leaf.to_string(), value.clone());
+                    table
+                        .entry(leaf.to_string())
+                        .or_insert_with(|| value.clone());
                 }
             }
             _ => continue,
@@ -844,4 +876,120 @@ pub fn persist_healed(
         rows = healed.len(),
         "config healed and persisted"
     );
+}
+
+#[cfg(test)]
+mod merge_parked_tests {
+    use super::*;
+
+    /// The operator's own file wins a collision with a stale sidecar.
+    ///
+    /// Nothing in production ever DELETES a sidecar (only tests do), so it is
+    /// merged on every load forever. With `insert` the older parked value
+    /// silently replaced whatever the operator had since written, and nothing
+    /// reported it. MEASURED before the fix: raw said `model = "operator-current"`,
+    /// the sidecar said `sidecar-stale`, and the merge produced `sidecar-stale`.
+    #[test]
+    fn the_operators_own_value_wins_over_a_stale_sidecar() {
+        let raw = "[agent]\nmodel = \"operator-current\"\n";
+        let mut parked = toml::value::Table::new();
+        parked.insert(
+            "agent.model".to_string(),
+            toml::Value::String("sidecar-stale".into()),
+        );
+        let merged = merge_parked(raw, &toml::Value::Table(parked)).expect("merge renders");
+        let v: toml::Value = toml::from_str(&merged).expect("merged is valid toml");
+        assert_eq!(
+            v.get("agent")
+                .and_then(|a| a.get("model"))
+                .and_then(|m| m.as_str()),
+            Some("operator-current"),
+            "the operator's edited value must survive; a stale sidecar must not overrule it"
+        );
+    }
+
+    /// The downgrade case must still work: a key the operator's file does NOT
+    /// carry is restored from the sidecar. Without this the fix would be
+    /// "ignore the sidecar", which re-breaks iter-2364.
+    #[test]
+    fn a_key_absent_from_the_operator_file_is_still_restored() {
+        let raw = "[agent]\nmodel = \"operator-current\"\n";
+        let mut parked = toml::value::Table::new();
+        parked.insert("agent.max_iterations".to_string(), toml::Value::Integer(42));
+        let merged = merge_parked(raw, &toml::Value::Table(parked)).expect("merge renders");
+        let v: toml::Value = toml::from_str(&merged).expect("merged is valid toml");
+        let agent = v.get("agent").expect("agent section");
+        assert_eq!(
+            agent.get("model").and_then(|m| m.as_str()),
+            Some("operator-current"),
+            "the operator's own key is untouched"
+        );
+        assert_eq!(
+            agent.get("max_iterations").and_then(|m| m.as_integer()),
+            Some(42),
+            "a key the operator's file omits must be restored from the sidecar --              that is the whole point of the downgrade path (iter-2364)"
+        );
+    }
+
+    /// A parked BARE TOP-LEVEL key is restored as that key, not as a nested
+    /// table under a `__unknown_top_level__` section.
+    ///
+    /// Two defects meet here. `split_unknown` WRAPS a bare key as
+    /// `__unknown_top_level__.<name>` so it cannot collide with a section of
+    /// the same name; `merge_parked` is the reader that must unwrap it. It did
+    /// not -- the wrapped key has two segments, so it fell into the
+    /// `[section, leaf]` arm and came back as `[__unknown_top_level__]`, a
+    /// table no config reader consults. The writer wrapped and the reader did
+    /// not unwrap, so the downgrade restore lost the value in a place nothing
+    /// reads.
+    ///
+    /// This asserts the RESTORE, which is the behaviour that was broken; the
+    /// first draft of this test asserted only that the operator's value
+    /// survived and passed under BOTH implementations, so it proved nothing.
+    #[test]
+    fn a_parked_bare_top_level_key_is_restored_as_that_key() {
+        // The operator's file does NOT carry the key (that is the downgrade
+        // case), so the sidecar's wrapped form must put it back at the top.
+        let raw = "[agent]\nmodel = \"operator-current\"\n";
+        let mut parked = toml::value::Table::new();
+        parked.insert(
+            "__unknown_top_level__.theme".to_string(),
+            toml::Value::String("sidecar-dark".into()),
+        );
+        let merged = merge_parked(raw, &toml::Value::Table(parked)).expect("merge renders");
+        let v: toml::Value = toml::from_str(&merged).expect("merged is valid toml");
+        assert_eq!(
+            v.get("theme").and_then(|t| t.as_str()),
+            Some("sidecar-dark"),
+            "a bare parked key must come back as `theme`, not as a nested \
+             [__unknown_top_level__] table nothing reads. Got:\n{merged}"
+        );
+        assert!(
+            v.get("__unknown_top_level__").is_none(),
+            "the wrapper must be unwrapped, not emitted as a section: {merged}"
+        );
+    }
+
+    /// The operator's own BARE top-level value still wins over the wrapped
+    /// parked copy, so the precedence rule holds on this arm too.
+    #[test]
+    fn the_operators_bare_top_level_value_wins_over_a_stale_sidecar() {
+        let raw = "theme = \"operator-dark\"\n";
+        let mut parked = toml::value::Table::new();
+        parked.insert(
+            "__unknown_top_level__.theme".to_string(),
+            toml::Value::String("sidecar-light".into()),
+        );
+        let merged = merge_parked(raw, &toml::Value::Table(parked)).expect("merge renders");
+        let v: toml::Value = toml::from_str(&merged).expect("merged is valid toml");
+        assert_eq!(
+            v.get("theme").and_then(|t| t.as_str()),
+            Some("operator-dark"),
+            "the operator's edited value must survive on this arm too"
+        );
+        assert!(
+            v.get("__unknown_top_level__").is_none(),
+            "no wrapper section may appear: {merged}"
+        );
+    }
 }
