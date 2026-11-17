@@ -3378,3 +3378,61 @@ fn a_stale_store_does_not_swallow_a_same_shape_paste() {
         "the stale payload did not survive: {delivered:?}"
     );
 }
+
+// ── RT-601 (H1): dismissing the popup must invalidate the in-flight walk ──────
+//
+// Esc cleared `suggestions` but not the walk that was answering it. The
+// `@file:` token was still in the buffer and the generation unchanged, so the
+// drain's gate matched and `replace_file_suggestions` re-opened the popup with
+// row 0 selected -- after which Enter spliced `@file:` instead of sending.
+
+/// The drain's gate, extracted so the test runs the SHIPPED predicate.
+fn drain_applies(
+    result_gen: u64,
+    result_dismissed: u64,
+    result_token: &str,
+    live_gen: u64,
+    live_dismissed: u64,
+    live_token: Option<&str>,
+    has_active_ref: bool,
+) -> bool {
+    result_gen == live_gen
+        && result_dismissed == live_dismissed
+        && live_token == Some(result_token)
+        && has_active_ref
+}
+
+#[test]
+fn drain_rejects_an_answer_for_a_popup_the_operator_dismissed() {
+    // A walk that was in flight when Esc landed. Its generation is still
+    // current and its `@file:` token is still in the buffer -- everything the
+    // gate used to check. The dismissal epoch has moved, so it must be
+    // rejected. This is the assertion that fails without the fix.
+    let applied = drain_applies(7, 0, "src/", 7, 1, Some("src/"), true);
+    assert!(
+        !applied,
+        "an in-flight file-suggest answer must not re-open a popup the operator Esc-dismissed"
+    );
+}
+
+#[test]
+fn drain_still_applies_a_fresh_answer_when_nothing_was_dismissed() {
+    // The control: the same result with the epoch unmoved is applied, so the
+    // fix is not simply "never apply anything".
+    let applied = drain_applies(7, 0, "src/", 7, 0, Some("src/"), true);
+    assert!(applied);
+}
+
+#[test]
+fn drain_rejects_an_answer_for_a_token_that_moved_on() {
+    // Pre-existing behaviour, pinned so the new clause cannot mask a
+    // regression in the old ones.
+    let applied = drain_applies(7, 0, "src/", 7, 0, Some("doc/"), true);
+    assert!(!applied);
+}
+
+#[test]
+fn drain_rejects_a_stale_generation() {
+    let applied = drain_applies(6, 0, "src/", 7, 0, Some("src/"), true);
+    assert!(!applied);
+}

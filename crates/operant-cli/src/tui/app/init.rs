@@ -284,6 +284,7 @@ impl App {
             last_preview_max_scroll: Cell::new(0),
             file_suggest_rx: None,
             file_suggest_gen: 0,
+            file_suggest_dismissed: 0,
             file_suggest_inflight: false,
             file_suggest_queued: None,
             word_predictor,

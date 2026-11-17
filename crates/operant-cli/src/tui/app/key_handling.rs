@@ -1650,6 +1650,19 @@ impl App {
                     self.prompt_input.suggestion_index = None;
                     self.prompt_input.clear_ghost();
                     self.last_esc_at = None;
+                    // Dismissing the popup must also invalidate the WALK that
+                    // is still answering it. Clearing the rows is not enough:
+                    // the `@file:` token is still in the buffer, so the
+                    // drain's generation+token gate still matches and
+                    // `replace_file_suggestions` re-opens the popup with row 0
+                    // selected -- and Enter then splices `@file:` instead of
+                    // sending. Bumping the dismissal epoch makes every
+                    // in-flight answer stale, and dropping the receiver means
+                    // the result is never even examined.
+                    self.file_suggest_dismissed = self.file_suggest_dismissed.wrapping_add(1);
+                    self.file_suggest_rx = None;
+                    self.file_suggest_inflight = false;
+                    self.file_suggest_queued = None;
                     return false;
                 }
                 let now = std::time::Instant::now();

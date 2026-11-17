@@ -91,14 +91,23 @@ impl App {
         )
         .map(str::to_string);
         let applied = result.generation == self.file_suggest_gen
+            && result.dismissed == self.file_suggest_dismissed
             && live_token.as_deref() == Some(result.token.as_str())
             && self.prompt_input.has_active_file_ref();
         if applied {
             self.prompt_input
                 .replace_file_suggestions(result.suggestions);
         }
-        if let Some(job) = self.file_suggest_queued.take() {
-            self.spawn_file_suggest(job);
+        // Only hand off to the parked job when THIS answer was wanted. When the
+        // popup was dismissed (or the token moved on) a parked job is answering
+        // a question the operator already withdrew, and relaunching it would
+        // re-open the popup the Esc just closed.
+        if applied {
+            if let Some(job) = self.file_suggest_queued.take() {
+                self.spawn_file_suggest(job);
+            }
+        } else {
+            self.file_suggest_queued = None;
         }
         applied
     }

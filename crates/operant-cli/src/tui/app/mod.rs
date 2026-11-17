@@ -824,6 +824,17 @@ pub struct App {
         Option<tokio::sync::mpsc::Receiver<crate::tui::prompt_input::FileSuggestResult>>,
     /// Generation of the in-flight/last file-suggest job; bumps per spawn.
     pub file_suggest_gen: u64,
+    /// Bumped when the operator DISMISSES the completion popup (Esc).
+    ///
+    /// The generation counter alone cannot express dismissal: it proves the
+    /// job is the newest one SPAWNED, not that its answer is still WANTED. Esc
+    /// cleared `suggestions` but left the `@file:` token in the buffer and the
+    /// generation untouched, so the drain's gate still matched and
+    /// `replace_file_suggestions` re-opened the popup with row 0 selected
+    /// (`suggestion_index.unwrap_or(0)`) -- after which Enter spliced `@file:`
+    /// instead of sending. Dismissing has to invalidate the in-flight answer,
+    /// not just the rendered rows.
+    pub file_suggest_dismissed: u64,
     /// Whether a file-suggest job is currently on the blocking pool.
     pub file_suggest_inflight: bool,
     /// The newest request parked while another is in flight (single-flight

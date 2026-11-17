@@ -347,6 +347,7 @@ impl App {
         self.file_suggest_gen = self.file_suggest_gen.wrapping_add(1);
         let generation = self.file_suggest_gen;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let dismissed = self.file_suggest_dismissed;
         self.file_suggest_rx = Some(rx);
         tokio::task::spawn_blocking(move || {
             let deadline = std::time::Instant::now()
@@ -367,6 +368,7 @@ impl App {
                 generation,
                 token: job.token,
                 suggestions,
+                dismissed,
             });
         });
     }

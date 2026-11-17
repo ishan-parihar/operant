@@ -101,6 +101,11 @@ pub struct FileSuggestResult {
     pub generation: u64,
     pub token: String,
     pub suggestions: Vec<TypeaheadSuggestion>,
+    /// The popup-dismissal epoch at SPAWN time. The drain rejects the answer
+    /// when the epoch has moved on, which is how Esc invalidates a walk that is
+    /// still running: the operator dismissed the popup, so its answer is no
+    /// longer wanted even though the `@file:` token is still in the buffer.
+    pub dismissed: u64,
 }
 
 /// Map ranked walk entries to popup suggestions (M3). Values use the
