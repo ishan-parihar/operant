@@ -12,6 +12,11 @@
 /// `(dotted key, default, note)`, sorted by dotted key.
 pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
+        "advisor",
+        "crate::advisor::AdvisorConfig::default()",
+        "Always-on transcript watchdog (`[advisor]` section, omp `coding-agent/src/advisor/` parity). Distinct from MoA: MoA is a per-turn fan-out amplifier; the advisor is an incremental reviewer that notes concerns after each completed turn without joining the acting agent's context.",
+    ),
+    (
         "advisor.continue_severity",
         "<AdvisorConfig::default()>",
         "Lowest severity that wakes an idle primary for one continuation (omp `advisor.continueSeverity`, default `concern`). Notes below this stay HOST-VISIBLE CARDS and do NOT enter the model's context: the host renders them for the operator. An earlier version of this doc said a card \"rides the conversation into the model's context with the next user turn\" — that was false (the TUI pushes cards into a UI-only vector no agent-side code reads) and the module doc at the top of this file already records the correction. The generator copies this text into the operator-facing registry, so the wrong version was the one an operator actually read.",
@@ -70,6 +75,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "agent.advertised_skills_token_budget",
         "default_advertised_skills_token_budget()",
         "The token ceiling on the advertised-skills block in the frozen prefix. The block rides every request inside the system message, which is PROTECTED: it can never be evicted. Without a ceiling the installed skill count decides whether every turn can run at all — 99 skills cost ~7,000 tokens here, and a 500-skill install would put the protected floor above a 32,000-token window. The skills that fit are advertised; the rest are dropped and the drop is stated in the block. 0 (the default) means DERIVE it: one eighth of the resolved context window, floored at 4,000 tokens. It used to mean a flat 4,000, which is one eighth of a 32k window and a quarter of the 128k default -- so the catalogue a default install advertised was sized for a window four times smaller than the one it actually has.",
+    ),
+    (
+        "agent.approval_mode",
+        "default_approval_mode()",
+        "Approval mode for tool execution: \"smart\" (default, pattern-based), \"manual\" (prompt for every tool), or \"off\" (no checks). Documented in `docs/library/security.md` as an operator setting, but until this field existed `AgentConfig::from(&BehaviorSettings)` hardcoded the literal `\"smart\"` — the one field in that impl that was not threaded. Because `BehaviorSettings` carries `deny_unknown_fields`, writing `[agent] approval_mode = \"off\"` did not silently no-op: the loader parked the key in `<config>.unknown.toml` and printed \"names keys this operant build does not know\", so the operator was told the key was ignored. The blast-radius gate hangs off this value (`approval.rs`), so \"off\" really does disable it.",
     ),
     (
         "agent.context_budget_tokens",
@@ -237,6 +247,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Tool names exempt from the guardrail rungs (ping-pong / no-progress — `ToolGuardrailTracker::add_exempt_tools`, hermes `guardrail_exempt_tools` parity). Exact names or `*`/`?` globs (e.g. `\"read_*\"`). Empty by default: every tool is guarded. Flows to the tracker via `AgentConfig::guardrail_exempt_tools`.",
     ),
     (
+        "agent.loop_detection_enabled",
+        "true",
+        "Whether core's cross-iteration repetition circuit breaker (an identical tool-call streak, R35) and its warning nudge are active. Reachable from `operant.toml` as `[agent] loop_detection_enabled`. (iter-2462) `AgentConfig::loop_detection_enabled` documented itself as \"threaded from settings\" while `AgentConfig::from(&BehaviorSettings)` filled it with a literal `true` — the identical defect iter-1631 fixed for `show_turn_attribution` directly above, left in place next to the comment describing that fix. A flag that cannot be set is not a kill switch, it is documentation. Default ON, so an existing config behaves as before.",
+    ),
+    (
         "agent.max_consecutive_tool_only",
         "90",
         "Max consecutive tool-only iterations before force-answer kicks in. When the LLM calls tools N times in a row without producing text, the agent omits tools from the request to force a textual response. Set to 0 to disable (use max_iterations as the only limit).",
@@ -351,16 +366,6 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "true",
         "Whether the turn's four exclusive spans are aggregated and emitted on the post-turn `TurnEnd` seam (deepen row 3 / RT-209). Default on. Reachable from `operant.toml` as `[agent] show_turn_attribution`. iter-1631 added the field to `AgentConfig` and filled it with a literal `true`, which made the kill switch unreachable from configuration: every construction site set true, so no operator could turn it off. A flag that cannot be set is not a kill switch, it is documentation.",
     ),
-    (
-        "agent.loop_detection_enabled",
-        "true",
-        "Whether core's cross-iteration repetition circuit breaker (an identical tool-call streak, R35) and its warning nudge are active. Default on. Reachable from `operant.toml` as `[agent] loop_detection_enabled`. iter-2462 threaded it: `AgentConfig::from(&BehaviorSettings)` filled it with a literal `true` while the field's own doc claimed facades thread the operator's switch — the identical defect iter-1631 fixed for show_turn_attribution, one line above, left next to the comment describing that fix. Set false when a workflow legitimately repeats the same call.",
-    ),
-    (
-        "agent.approval_mode",
-        "smart",
-        "Tool-approval posture: `smart` (default, pattern-based checks), `manual` (prompt for every tool), or `off` (no checks at all, including the blast-radius gate). Documented in docs/library/security.md since before it was reachable: `From<&BehaviorSettings>` hardcoded the literal `smart` — the same unwired-switch defect iter-1631/2462 fixed for show_turn_attribution and loop_detection_enabled, two entries above. Because BehaviorSettings denies unknown fields, an operator's `[agent] approval_mode` was parked as unknown rather than silently ignored, so the loader did say so — but the key could not be set. Set `off` only on a host you control: it disables a safety guard.",
-    ),
     ("agent.stream", "true", "<no note>"),
     ("agent.system_prompt", "None", "<no note>"),
     ("agent.tool_progress", "ToolProgressMode::Auto", "<no note>"),
@@ -396,6 +401,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "autonomous.todo_path",
         "PathBuf::from(\"TODO.md\")",
+        "<no note>",
+    ),
+    (
+        "auxiliary_models",
+        "AuxiliaryModels::default()",
         "<no note>",
     ),
     (
@@ -623,6 +633,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "<AuxiliaryModelConfig::default()>",
         "A LABEL, not a route. Every auxiliary call goes through the single OpenAI-compatible client (`moa::slot_client`), which seeds from the primary `ClientConfig` and overrides only `base_url` and `api_key` — `ClientConfig` has no provider field at all. So setting `provider = \"anthropic\"` with no `base_url` silently uses the primary route and the primary credential. To move a slot to another host, set `base_url` (and `api_key` when it needs its own); the provider name is used only for the `[provider:model]` label in diagnostics.",
     ),
+    ("browser", "BrowserSettings::default()", "<no note>"),
     (
         "browser.provider",
         "\"sourcehound\".to_string()",
@@ -673,6 +684,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "\"yolo\".to_string()",
         "Default seat mode for operator-seated policy rows that do not name one (P3 consumer; see the struct docs).",
     ),
+    ("checkpoints", "CheckpointsSettings::default()", "<no note>"),
     (
         "checkpoints.base_dir",
         "None",
@@ -777,6 +789,16 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     ),
     ("client.timeout_secs", "60", "<no note>"),
     (
+        "command_allowlist",
+        "Vec::new()",
+        "Tool-approval allowlist patterns (hermes `command_allowlist` parity). Patterns match tool names exactly or via `*`/`?` globs (e.g. `\"file_*\"`). A matching tool skips the permission prompt in every session. `Always allow` choices made interactively are appended here (via the sidecar `approval_allowlist.json`) and honored across restarts.",
+    ),
+    (
+        "compression",
+        "crate::agent::evidence::EvidenceConfig::default()",
+        "`[compression]` — the evidence layer's tool-result compression. Off by default: the layer is a NO-OP at the tool-result chokepoint while `enabled` is false, so the section is behaviour-neutral until an operator opts in. `min_size` is the smallest result worth shaping (bytes), `shell` selects how shell results are handled, and `families` overrides the chain per subject family.",
+    ),
+    (
         "compression.enabled",
         "<EvidenceConfig::default()>",
         "Whether the layer compresses anything at all.",
@@ -795,6 +817,16 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "compression.shell",
         "<EvidenceConfig::default()>",
         "How shell results are compressed.",
+    ),
+    (
+        "config_path",
+        "None",
+        "The config file this config was LOADED from, recorded so a handler that edits the config writes back to the file the operator actually invoked rather than re-resolving a different default path. Not serialized: this is provenance, not configuration. A handler must never derive it by searching default paths again — that is how `operant -c pinned.toml context cli add git` came to write into the operator's live config instead of the pinned file.",
+    ),
+    (
+        "context_injection",
+        "ContextInjectionSettings::default()",
+        "DM/feed context injection (`[context_injection]`, gap 5 phase 1).",
     ),
     (
         "context_injection.dept_quota",
@@ -854,6 +886,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Ranking weights: recency + lexical affinity + author authority. (Thread participation is the design doc's fourth component; phase-1 items carry no thread refs, so it applies to zero until phase 2.)",
     ),
     (
+        "credential_pool",
+        "CredentialPoolSettings::default()",
+        "<no note>",
+    ),
+    (
         "credential_pool.enabled",
         "<CredentialPoolSettings::default()>",
         "Master switch — when false no credential pool is attached to agents.",
@@ -868,6 +905,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "<CredentialPoolSettings::default()>",
         "Global default selection strategy (fill_first|round_robin|random|least_used).",
     ),
+    ("database_path", "<AppConfig::default()>", "<no note>"),
     ("gateway.admins", "Vec::new()", "<no note>"),
     (
         "gateway.api_bind",
@@ -889,7 +927,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "gateway.max_concurrent_sessions",
         "Some(32)",
-        "Cap on concurrent gateway sessions (hermes `max_concurrent_sessions` parity). When reached, new sessions get a refusal reply while existing holders keep their slots. `None` = unlimited.",
+        "Cap on concurrent gateway sessions (hermes `max_concurrent_sessions` parity). When reached, new sessions get a refusal reply while existing holders keep their slots. (iter-2366) `None` is NOT reachable from a TOML file: TOML has no null, and `#[serde(default)]` on this struct materialises the `Default` impl, which is `Some(32)`. The \"unset means unlimited\" reading this field used to advertise was therefore wrong in the only place an operator writes it — an absent key is 32, not unlimited. `None` remains reachable from programmatic config (tests, embedders), where it does mean no cap.",
     ),
     (
         "gateway.session_retention_days",
@@ -943,6 +981,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     ),
     ("gateway.whatsapp_token", "None", "<no note>"),
     (
+        "harness",
+        "HarnessSettings::default()",
+        "Plan 016 / Phase 0 config surface for `operant-harness`. Dark-merged: `enabled` defaults to `false` and no provider is mounted unless the user opts in. Phase 2+ wires the kernel into the live `ToolRegistry` / `HookRunner` behind this flag.",
+    ),
+    (
         "harness.architecture_toml",
         "None",
         "Optional path to an `architecture.toml` (Phase 3). When unset, the kernel starts empty. The path is resolved relative to `~/.operant/` if relative.",
@@ -961,6 +1004,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "harness.watch_wasm",
         "false",
         "C2 — watch the plugin directory and hot-swap verified WASM providers into the kernel. Default `false`: the watcher is a permanent background poll (and every scan re-instantiates the module), so it must be an explicit opt-in rather than a surprise cost on every harness-enabled boot. Requires the plugin host to run in `SignatureMode::Strict` with trusted keys.",
+    ),
+    (
+        "holon",
+        "HolonSettings::default()",
+        "`[holon]` — org-mode surface (docs/agentic-os/, phase B+). Off by default: invariant 5, the personal agent is byte-identical.",
     ),
     (
         "holon.bin",
@@ -1003,6 +1051,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Employees the supervisor serves, e.g. [\"emp_01…\"]. Required when `supervise` is on.",
     ),
     (
+        "integrations",
+        "IntegrationsSettings::default()",
+        "`[integrations]` — the editor/pane integrations (Herdr, and the Omarchy agent menu). Both are optional; both are dark-merged.",
+    ),
+    (
         "integrations.herdr",
         "<IntegrationsSettings::default()>",
         "The Herdr pane integration (`[integrations.herdr]`).",
@@ -1011,6 +1064,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "integrations.herdr.enabled",
         "true }",
         "Report this Operant's lifecycle state (working / idle / blocked) and session identity to the Herdr pane that owns it. On by default: without it a Herdr pane running Operant looks like a plain terminal, which is what made Operant invisible in `herdr agent list`. Turn it off to keep Operant out of Herdr's sidebar entirely.",
+    ),
+    (
+        "keybindings",
+        "None",
+        "`[keybindings]` is parsed so the file still loads, then ignored: the TUI dispatch does not read overrides yet (RT-3). `load` warns once when set.",
     ),
     ("logging.format", "\"pretty\".to_string()", "<no note>"),
     ("logging.level", "\"info\".to_string()", "<no note>"),
@@ -1034,22 +1092,22 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "memory.agentmemory_auto_spawn",
         "None",
-        "(retired) agentmemory auto-spawn — accepted, ignored.",
+        "(retired) accepted, ignored. Same reason as `agentmemory_url`.",
     ),
     (
         "memory.agentmemory_secret",
         "None",
-        "(retired) agentmemory REST secret — accepted, ignored.",
+        "(retired) accepted, ignored. Same `deny_unknown_fields` reason as `agentmemory_url`. A secret parked under a retired key is the worst place for silence, so this is reported by `legacy_warnings`.",
     ),
     (
         "memory.agentmemory_url",
         "None",
-        "(retired) agentmemory server base URL — accepted, ignored.",
+        "(retired) accepted, ignored. Without this field, an old operant.toml carrying `agentmemory_url` would fail the whole load under `deny_unknown_fields`. `legacy_warnings` names it unread. RETIRING THESE FOUR FIELDS IS A BREAKING CONFIG CHANGE, NOT A CLEANUP. `MemorySettings` is `deny_unknown_fields`, so deny_unknown_fields makes removing a field a breaking change: any operant.toml that still names a retired key stops loading entirely, and `operant config` cannot tell the operator why. Nothing reads these fields; they exist only so that config keeps parsing and so `legacy_warnings` can say the key is retired. Removing them is a legitimate choice, but it must be a deliberate one recorded in docs/CHANGELOG.md, not an accident of grepping for a dead name. `scripts/check-gates-present.sh` fails if the field count and this caveat ever disagree.",
     ),
     (
         "memory.agentmemory_version",
         "None",
-        "(retired) npm version pin — accepted, ignored.",
+        "(retired) accepted, ignored. Same reason as `agentmemory_url`.",
     ),
     (
         "memory.audit_enabled",
@@ -1071,6 +1129,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "None",
         "(retired) `[memory] response_cache_enabled` — accepted, ignored.",
     ),
+    ("moa", "MoaSettings::default()", "<no note>"),
     (
         "moa.aggregator",
         "<MoaSettings::default()>",
@@ -1100,6 +1159,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "moa.timeout_secs",
         "<MoaSettings::default()>",
         "Per-call timeout in seconds for reference/aggregator calls (default 60).",
+    ),
+    (
+        "observability",
+        "operant_config::schema::ObservabilityConfig::default()",
+        "Observability backend selection (`[observability]`, schema parity, v6 outline row 5). The gateway mounts the observer this section selects on the cron scheduler and delivery sender loop — the CronDeliveryQueued/Parked/Reclaimed/Outcome quartet (iter-720). Default (`backend = \"none\"`) is the schema default: dark-merged, no observer, byte-identical behavior.",
     ),
     (
         "observability.backend",
@@ -1177,6 +1241,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Hex-encoded Ed25519 public keys of trusted plugin publishers. Required by both strict mode (tool bridge) and the kernel swap path (which always verifies — see `spawn_wasm_watcher`). Mirrors the schema world's `[plugins.security].trusted_publisher_keys`.",
     ),
     (
+        "providers",
+        "operant_config::providers::ProvidersConfig::default()",
+        "Provider profiles + ordered cross-provider fallback chain (`[providers]`, hermes `fallback_providers` parity). Consumed by the run path to build a [`crate::agent::provider_registry::ProviderRegistry`] so auth/billing failures can switch providers; same-provider model fallback is driven by `agent.fallback_models`.",
+    ),
+    (
         "providers.embedding_routes",
         "<ProvidersConfig::default()>",
         "Embedding routing rules — route `hint:<name>` to specific provider+model combos.",
@@ -1200,6 +1269,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "providers.models",
         "<ProvidersConfig::default()>",
         "Named model provider profiles keyed by id.",
+    ),
+    (
+        "proxy",
+        "Default::default()",
+        "Outbound HTTP proxy for provider and tool clients (`[proxy]`), applied at startup.",
     ),
     (
         "proxy.all_proxy",
@@ -1237,6 +1311,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "Service selectors used when scope = \"services\".",
     ),
     (
+        "recap",
+        "crate::recap::RecapConfig::default()",
+        "Idle-recap engine settings (`[recap]` section, omp `recap.*` parity). The idle WINDOW stays `agent.recap_idle_seconds` (its historical home); this section holds the recap MODEL slot — the omp `smol` role: a cheap, fast model for the side-channel status line instead of the primary.",
+    ),
+    (
         "recap.enabled",
         "<RecapConfig::default()>",
         "The on/off axis, IN THIS SECTION. RECAP's switch used to be `agent.recap_idle_seconds = 0` — a different section from the model and the instructions. An operator reading `[recap]` saw two knobs and no way to turn the engine off, and the live operator config on this host has no `[recap]` section at all, so recap ran on the PRIMARY model while the advisor beside it ran on `small-stack`. `None` (the default) means \"follow the idle window\", which is exactly the old behaviour: a non-zero window is on, a zero window is off. `Some(false)` turns it off regardless of the window; `Some(true)` with a zero window stays off, because there is no cadence to run on.",
@@ -1271,6 +1350,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "<AuxiliaryModelConfig::default()>",
         "A LABEL, not a route. Every auxiliary call goes through the single OpenAI-compatible client (`moa::slot_client`), which seeds from the primary `ClientConfig` and overrides only `base_url` and `api_key` — `ClientConfig` has no provider field at all. So setting `provider = \"anthropic\"` with no `base_url` silently uses the primary route and the primary credential. To move a slot to another host, set `base_url` (and `api_key` when it needs its own); the provider name is used only for the `[provider:model]` label in diagnostics.",
     ),
+    ("skills", "SkillsSettings::default()", "<no note>"),
     (
         "skills.autoload",
         "true",
@@ -1597,6 +1677,11 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
         "None",
         "(plan 2026-10-24 M5) Override of the engine's show threshold τ (default 0.15). Lower shows more ghosts, higher fewer.",
     ),
+    (
+        "version",
+        "Some(2)",
+        "Configuration format version. None = v0 (legacy, no version field).",
+    ),
     ("vision.api_key", "<VisionSettings::default()>", "<no note>"),
     (
         "vision.base_url",
@@ -1652,6 +1737,11 @@ pub enum Widget {
 }
 
 pub const SETTING_ROWS: &[SettingRow] = &[
+    SettingRow {
+        key: "advisor",
+        widget: Widget::None,
+        live: true,
+    },
     SettingRow {
         key: "advisor.continue_severity",
         widget: Widget::Cycle,
@@ -1711,6 +1801,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         key: "agent.advertised_skills_token_budget",
         widget: Widget::Number,
         live: true,
+    },
+    SettingRow {
+        key: "agent.approval_mode",
+        widget: Widget::Text,
+        live: false,
     },
     SettingRow {
         key: "agent.context_budget_tokens",
@@ -1878,6 +1973,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "agent.loop_detection_enabled",
+        widget: Widget::Bool,
+        live: true,
+    },
+    SettingRow {
         key: "agent.max_consecutive_tool_only",
         widget: Widget::Number,
         live: false,
@@ -2013,16 +2113,6 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
-        key: "agent.loop_detection_enabled",
-        widget: Widget::Bool,
-        live: true,
-    },
-    SettingRow {
-        key: "agent.approval_mode",
-        widget: Widget::Cycle,
-        live: true,
-    },
-    SettingRow {
         key: "agent.stream",
         widget: Widget::Bool,
         live: true,
@@ -2085,6 +2175,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "autonomous.todo_path",
         widget: Widget::Text,
+        live: true,
+    },
+    SettingRow {
+        key: "auxiliary_models",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -2313,6 +2408,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "browser",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "browser.provider",
         widget: Widget::Text,
         live: true,
@@ -2360,6 +2460,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "bylaws.unrestricted_default",
         widget: Widget::Text,
+        live: true,
+    },
+    SettingRow {
+        key: "checkpoints",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -2478,6 +2583,16 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "command_allowlist",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
+        key: "compression",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "compression.enabled",
         widget: Widget::Bool,
         live: true,
@@ -2495,6 +2610,16 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "compression.shell",
         widget: Widget::Cycle,
+        live: true,
+    },
+    SettingRow {
+        key: "config_path",
+        widget: Widget::Text,
+        live: true,
+    },
+    SettingRow {
+        key: "context_injection",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -2563,6 +2688,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "credential_pool",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "credential_pool.enabled",
         widget: Widget::Bool,
         live: true,
@@ -2574,6 +2704,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     },
     SettingRow {
         key: "credential_pool.strategy",
+        widget: Widget::Text,
+        live: true,
+    },
+    SettingRow {
+        key: "database_path",
         widget: Widget::Text,
         live: true,
     },
@@ -2728,6 +2863,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "harness",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "harness.architecture_toml",
         widget: Widget::Text,
         live: true,
@@ -2745,6 +2885,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "harness.watch_wasm",
         widget: Widget::Bool,
+        live: true,
+    },
+    SettingRow {
+        key: "holon",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -2788,6 +2933,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "integrations",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "integrations.herdr",
         widget: Widget::None,
         live: true,
@@ -2795,6 +2945,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "integrations.herdr.enabled",
         widget: Widget::Bool,
+        live: true,
+    },
+    SettingRow {
+        key: "keybindings",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -2893,6 +3048,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "moa",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "moa.aggregator",
         widget: Widget::None,
         live: true,
@@ -2921,6 +3081,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         key: "moa.timeout_secs",
         widget: Widget::Number,
         live: true,
+    },
+    SettingRow {
+        key: "observability",
+        widget: Widget::None,
+        live: false,
     },
     SettingRow {
         key: "observability.backend",
@@ -2998,6 +3163,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "providers",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "providers.embedding_routes",
         widget: Widget::None,
         live: true,
@@ -3019,6 +3189,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     },
     SettingRow {
         key: "providers.models",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
+        key: "proxy",
         widget: Widget::None,
         live: true,
     },
@@ -3058,6 +3233,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "recap",
+        widget: Widget::None,
+        live: true,
+    },
+    SettingRow {
         key: "recap.enabled",
         widget: Widget::Bool,
         live: true,
@@ -3090,6 +3270,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
     SettingRow {
         key: "recap.model.provider",
         widget: Widget::Text,
+        live: true,
+    },
+    SettingRow {
+        key: "skills",
+        widget: Widget::None,
         live: true,
     },
     SettingRow {
@@ -3563,6 +3748,11 @@ pub const SETTING_ROWS: &[SettingRow] = &[
         live: true,
     },
     SettingRow {
+        key: "version",
+        widget: Widget::Number,
+        live: true,
+    },
+    SettingRow {
         key: "vision.api_key",
         widget: Widget::Text,
         live: true,
@@ -3586,6 +3776,7 @@ pub const SETTING_ROWS: &[SettingRow] = &[
 
 /// Every dotted key this build accepts.
 pub const KNOWN_KEYS: &[&str] = &[
+    "advisor",
     "advisor.continue_severity",
     "advisor.enabled",
     "advisor.instructions",
@@ -3598,6 +3789,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "advisor.suppress_streak",
     "advisor.timeout_secs",
     "agent.advertised_skills_token_budget",
+    "agent.approval_mode",
     "agent.context_budget_tokens",
     "agent.context_compression",
     "agent.context_compression_summary_max_chars",
@@ -3631,6 +3823,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "agent.fallback_on_errors",
     "agent.guardian_llm",
     "agent.guardrail_exempt_tools",
+    "agent.loop_detection_enabled",
     "agent.max_consecutive_tool_only",
     "agent.max_healing_attempts",
     "agent.max_iterations",
@@ -3658,8 +3851,6 @@ pub const KNOWN_KEYS: &[&str] = &[
     "agent.session_reset",
     "agent.show_reasoning",
     "agent.show_turn_attribution",
-    "agent.loop_detection_enabled",
-    "agent.approval_mode",
     "agent.stream",
     "agent.system_prompt",
     "agent.tool_progress",
@@ -3673,6 +3864,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "autonomous.status_path",
     "autonomous.test_command",
     "autonomous.todo_path",
+    "auxiliary_models",
     "auxiliary_models.code_execution",
     "auxiliary_models.code_execution.api_key",
     "auxiliary_models.code_execution.base_url",
@@ -3718,6 +3910,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "auxiliary_models.web_extract.base_url",
     "auxiliary_models.web_extract.model",
     "auxiliary_models.web_extract.provider",
+    "browser",
     "browser.provider",
     "bylaws.budget",
     "bylaws.budget.basis",
@@ -3728,6 +3921,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "bylaws.session_summary_ttl_minutes",
     "bylaws.unattended_posture",
     "bylaws.unrestricted_default",
+    "checkpoints",
     "checkpoints.base_dir",
     "checkpoints.enabled",
     "checkpoints.max_file_size_mb",
@@ -3751,10 +3945,14 @@ pub const KNOWN_KEYS: &[&str] = &[
     "client.rate_limit.max_delay_secs",
     "client.rate_limit.max_retries",
     "client.timeout_secs",
+    "command_allowlist",
+    "compression",
     "compression.enabled",
     "compression.families",
     "compression.min_size",
     "compression.shell",
+    "config_path",
+    "context_injection",
     "context_injection.dept_quota",
     "context_injection.dm_quota",
     "context_injection.enabled",
@@ -3768,9 +3966,11 @@ pub const KNOWN_KEYS: &[&str] = &[
     "context_injection.weight_authority",
     "context_injection.weight_lexical",
     "context_injection.weight_recency",
+    "credential_pool",
     "credential_pool.enabled",
     "credential_pool.strategies",
     "credential_pool.strategy",
+    "database_path",
     "gateway.admins",
     "gateway.api_bind",
     "gateway.api_enabled",
@@ -3801,10 +4001,12 @@ pub const KNOWN_KEYS: &[&str] = &[
     "gateway.whatsapp_enabled",
     "gateway.whatsapp_phone_number_id",
     "gateway.whatsapp_token",
+    "harness",
     "harness.architecture_toml",
     "harness.enabled",
     "harness.max_active_providers",
     "harness.watch_wasm",
+    "holon",
     "holon.bin",
     "holon.clock",
     "holon.enabled",
@@ -3813,8 +4015,10 @@ pub const KNOWN_KEYS: &[&str] = &[
     "holon.notion_script",
     "holon.supervise",
     "holon.supervise_employees",
+    "integrations",
     "integrations.herdr",
     "integrations.herdr.enabled",
+    "keybindings",
     "logging.format",
     "logging.level",
     "logging.log_file",
@@ -3834,12 +4038,14 @@ pub const KNOWN_KEYS: &[&str] = &[
     "memory.enabled",
     "memory.provider",
     "memory.response_cache_enabled",
+    "moa",
     "moa.aggregator",
     "moa.enabled",
     "moa.max_tokens",
     "moa.references",
     "moa.temperature",
     "moa.timeout_secs",
+    "observability",
     "observability.backend",
     "observability.otel_endpoint",
     "observability.otel_headers",
@@ -3855,11 +4061,13 @@ pub const KNOWN_KEYS: &[&str] = &[
     "plugins.plugin_dirs",
     "plugins.signature_mode",
     "plugins.trusted_publisher_keys",
+    "providers",
     "providers.embedding_routes",
     "providers.fallback",
     "providers.fallback_chain",
     "providers.model_routes",
     "providers.models",
+    "proxy",
     "proxy.all_proxy",
     "proxy.enabled",
     "proxy.http_proxy",
@@ -3867,6 +4075,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "proxy.no_proxy",
     "proxy.scope",
     "proxy.services",
+    "recap",
     "recap.enabled",
     "recap.instructions",
     "recap.model",
@@ -3874,6 +4083,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "recap.model.base_url",
     "recap.model.model",
     "recap.model.provider",
+    "skills",
     "skills.autoload",
     "skills.extra_roots",
     "skills.inline_shell",
@@ -3968,6 +4178,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "tui.theme",
     "tui.word_completion",
     "tui.word_completion_threshold",
+    "version",
     "vision.api_key",
     "vision.base_url",
     "vision.model",

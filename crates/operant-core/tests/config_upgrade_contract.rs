@@ -155,3 +155,80 @@ fn the_heal_rows_are_renderable_for_a_log_line() {
     assert!(line.contains("gateway.max_concurrent_sessions"));
     assert!(line.contains("the cap bounds the active set"));
 }
+
+/// Every BARE top-level `AppConfig` field must be a key the loader knows.
+///
+/// The regression (found 2026-11-18 on the operator's own live install):
+/// `scripts/gen-config-registry.py` carried a HAND-WRITTEN
+/// `TOP_LEVEL_KEYS = ["terminal_backend"]` list of the fields that are keys in
+/// their own right rather than sections. It was correct when written and became
+/// a silent ratchet: every later top-level field was dropped from the registry,
+/// and `split_unknown` parks any top-level key with no registry row. So
+/// `version`, `database_path` and `command_allowlist` -- all real fields, all
+/// settable, all honoured by the struct -- were being written to
+/// `operant.unknown.toml` and the operator was told their valid config named
+/// "keys this operant build does not know".
+///
+/// The generator now DERIVES that list from `AppConfig` instead. This test is
+/// the independent check on the derivation: it reads the same struct the
+/// generator reads and fails if any bare field has no registry row. It is
+/// written against the generated registry rather than against the operator's
+/// file so it cannot pass by accident on a machine with a tidy config.
+#[test]
+fn every_bare_top_level_field_has_a_registry_row() {
+    // The registry is generated; if it is missing, say so rather than passing.
+    let registry = include_str!("../src/config_registry.rs");
+
+    // The fields this test pins by name. They are the ones that were silently
+    // dropped, plus one that always worked, so a future regression that removes
+    // the derivation entirely fails here rather than only in a diff.
+    for key in [
+        "version",
+        "database_path",
+        "command_allowlist",
+        "terminal_backend",
+    ] {
+        assert!(
+            registry.contains(&format!("\"{key}\"")),
+            "the bare top-level field `{key}` has no registry row, so the loader \
+             parks it as unknown even though `AppConfig` has it"
+        );
+    }
+
+    // A section must still be reachable through its own dotted prefix: the fix
+    // must not have replaced sections with their bare names.
+    for key in ["agent.model", "client.base_url", "tui.theme"] {
+        assert!(
+            registry.contains(&format!("\"{key}\"")),
+            "the nested key `{key}` lost its registry row"
+        );
+    }
+}
+
+/// An unknown key still parks, and a valid one does not.
+///
+/// The fix must not over-correct into accepting anything. This drives the real
+/// loader over a config that mixes one valid bare field with one key that does
+/// not exist anywhere, and asserts the valid one survives.
+#[test]
+fn a_valid_bare_field_is_not_parked_alongside_a_genuinely_unknown_key() {
+    let raw = "\
+version = 2
+database_path = \"/tmp/operant-contract-probe.db\"
+command_allowlist = [\"file_*\"]
+totally_not_a_real_key = 1
+";
+    let loaded = parse_config_str_without_recording(raw, Path::new("operant.toml"))
+        .expect("a config with one unknown key must still load");
+
+    assert_eq!(
+        loaded.version,
+        Some(2),
+        "`version` is a real AppConfig field and must be honoured, not parked"
+    );
+    assert_eq!(
+        loaded.command_allowlist,
+        vec!["file_*".to_string()],
+        "`command_allowlist` is a real AppConfig field and must be honoured"
+    );
+}

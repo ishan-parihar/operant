@@ -100,9 +100,72 @@ TOP_LEVEL_SECTIONS = [
 # Bare top-level keys: an `AppConfig` field whose type is a scalar or an enum,
 # not a settings struct, so it has no leaves to collect. It is still a key an
 # operator sets, and a missing entry is still a key `split_unknown` parks.
-# `terminal_backend` was the only one, and the iter-2357 audit caught it being
-# silently dropped for exactly that reason.
-TOP_LEVEL_KEYS = ["terminal_backend"]
+#
+# This was a HAND-WRITTEN allowlist (`["terminal_backend"]`), which is a
+# ratchet that only ever fails silently: every later top-level field is dropped
+# from the registry the moment it is added, and the loader then parks it as
+# "a key this operant build does not know" even though the struct has it.
+# MEASURED 2026-11-18 on the operator's own live install: `version`,
+# `database_path` and `command_allowlist` are all real `AppConfig` fields
+# (38 fields, confirmed by parsing the struct) and all three were being parked
+# into `operant.unknown.toml`, so the operator was told their valid config was
+# wrong. `terminal_backend` was the only entry because the list was written when
+# it was the only such field -- the iter-2357 audit that motivated this list
+# caught the SAME class of loss for `[proxy]`/`[providers]`/`[compression]`, so
+# this is a regression of a known defect, not a new one.
+#
+# The fix is to STOP maintaining a list. `bare_top_level_keys()` derives the
+# answer from `AppConfig` itself: a field is a bare key when its type is not one
+# of the section structs the registry already knows how to walk. Adding a field
+# then cannot silently drop it, and an unrecognised TYPE fails loudly here
+# instead of quietly producing a config that rejects a valid key.
+TOP_LEVEL_SECTION_TYPES = {
+    "ClientSettings",
+    "ProxyConfig",
+    "BehaviorSettings",
+    "AutonomousSettings",
+    "LoggingSettings",
+    "TuiSettings",
+    "McpSettings",
+    "SkillSettings",
+    "GatewaySettings",
+    "PluginSettings",
+    "ToolSettings",
+    "VisionSettings",
+    "EmbeddingSettings",
+    "MemorySettings",
+    "TtsSettings",
+    "SttSettings",
+    "ImageSettings",
+    "CompressionSettings",
+    "ObservabilitySettings",
+    "AdvisorSettings",
+    "CliSettings",
+    "PkSettings",
+    "ProvidersConfig",
+    "BylawsSettings",
+    "SocializationSettings",
+    "ContextSettings",
+    "CronSettings",
+    "KanbanSettings",
+    "OrgSettings",
+    "ApprovalSettings",
+}
+
+
+def bare_top_level_keys(app_src: str, app_lo: int, app_hi: int) -> list[str]:
+    """Every `AppConfig` field that is a BARE key rather than a section.
+
+    Derived from the struct, not hand-listed. A field whose type is one of
+    `TOP_LEVEL_SECTION_TYPES` has leaves collected through its section; anything
+    else is a key in its own right and MUST appear in the registry, because
+    `split_unknown` parks every top-level key the registry has no row for.
+    """
+    out = []
+    for field, ftype, _note in fields_of(app_src, app_lo, app_hi):
+        if bare_type(ftype) not in TOP_LEVEL_SECTION_TYPES:
+            out.append(field)
+    return out
 
 # Nested settings structs: the dotted prefix they live under, and the field
 # name that reaches them. `client.rate_limit` is the shape every operator
@@ -563,8 +626,12 @@ def main() -> int:
     if app_found:
         app_rel, app_lo, app_hi = app_found
         app_src = all_sources[app_rel]
+        # Derived from the struct, so a new top-level field cannot be silently
+        # dropped (that is the defect this replaced -- see the comment on
+        # `TOP_LEVEL_SECTION_TYPES`).
+        bare_keys = bare_top_level_keys(app_src, app_lo, app_hi)
         for field, ftype, note in fields_of(app_src, app_lo, app_hi):
-            if field not in TOP_LEVEL_KEYS:
+            if field not in bare_keys:
                 continue
             dmap = defaults.get("AppConfig", {})
             note = note or "<no note>"
