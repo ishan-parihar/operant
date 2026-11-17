@@ -68,22 +68,82 @@ done
 registered=$(python3 - <<'PY'
 import re, pathlib
 names = set()
-for p in pathlib.Path("crates/operant-core/src/tools").rglob("*.rs"):
+for p in pathlib.Path("crates/operant-core/src").rglob("*.rs"):
     t = p.read_text(errors="ignore")
     for m in re.finditer(r'fn name\(&self\)\s*->\s*&[^\{]*\{\s*"([a-z0-9_]+)"', t):
         names.add(m.group(1))
+    # Two shapes besides the trait method: a TOOL_NAME const, and the
+    # deferred-dispatch trio's TOOL_<X>_NAME consts (tool_search.rs declares
+    # TOOL_SEARCH_NAME / TOOL_DESCRIBE_NAME / TOOL_CALL_NAME and registers each
+    # through its own path). Missing the second shape would report three real
+    # tools as unregistered, which is the false-positive the verifier must not
+    # produce: a check that cries wolf on the good pages gets ignored.
     for m in re.finditer(r'const TOOL_NAME: &str = "([a-z0-9_]+)"', t):
         names.add(m.group(1))
+    for m in re.finditer(r'const TOOL_[A-Z_]*NAME: &str = "([a-z0-9_]+)"', t):
+        names.add(m.group(1))
+    # Cross-cutting name SETS the runtime itself dispatches on. A page that
+    # quotes NO_EFFECT_TOOL_NAMES is quoting a real list the guardrails read, so
+    # those names are registered even though no single tool struct owns them.
+    # Derived from the source, like everything else here.
+    for m in re.finditer(r'const NO_EFFECT_TOOL_NAMES[^=]*=\s*&\[(.*?)\];', t, re.S):
+        names |= set(re.findall(r'"([a-z0-9_]+)"', m.group(1)))
 print("\n".join(sorted(names)))
 PY
 )
-tool_shape='^(file_[a-z_]+|terminal|process|code_execution|web_[a-z_]+|browser[a-z_]*|accessibility_tree|memory_[a-z_]+|skills_list|skill_view|skill_manage|sop|cron|kanban|insights|session_search|verify_task|todo|learning_mutation|checkpoint|send_message|react|discord[a-z_]*|home_assistant|text_to_speech|transcription|vision_[a-z_]+|video_analysis|image_generation|http_request|datetime|timestamp|echo|env_probe|system_info|notification|approval|osv_check|config_manage|spotify_[a-z_]+|sub_agent|kernel_[a-z_]+|harness_[a-z_]+|aft_[a-z_]+|tool_search|tool_describe|tool_call|patch)$'
+# The SHAPE check is deliberately permissive and the SET check is exact: a name
+# must be registered somewhere (name() impl, TOOL_*_NAME const, the no-effect
+# table, or the alias table) AND look like a tool name. The previous version of
+# this line was a hand-written allowlist that itself contained names no module
+# registers (sub_agent, learning_mutation, home_assistant, transcription), so it
+# validated the wrong answer. RG-022: derive the set, never transcribe it.
+tool_shape='^[a-z][a-z0-9_]{2,60}$'
+# The alias layer is real and documented (`tools.rs::builtin_tool_aliases`): a
+# retired name still resolves, so a page citing it is describing behaviour, not
+# inventing a tool. Derived the same way as the registry, from the alias table,
+# so a typo'd alias fails exactly like a typo'd tool.
+aliases=$(python3 - <<'PY'
+import re, pathlib
+out = set()
+for p in pathlib.Path("crates/operant-core/src").rglob("*.rs"):
+    t = p.read_text(errors="ignore")
+    for m in re.finditer(r'builtin_tool_aliases', t):
+        # the table maps "retired" -> "live"; take the keys of the block that follows
+        seg = t[m.end():m.end() + 4000]
+        out |= set(re.findall(r'"([a-z0-9_]+)"\s*=>', seg))
+        out |= set(re.findall(r'\(\s*"([a-z0-9_]+)"\s*,', seg))
+print("\n".join(sorted(out)))
+PY
+)
+# The strongest claim a library page makes about a tool is a SECTION HEADING
+# named after it ("## `web_search` - the dispatch"), because that asserts the
+# tool exists and this page owns its contract. Checking every backticked token
+# would flag config keys, struct fields and locals, so the check is scoped to
+# headings and to the tool-name column of a registry table.
+# A heading can legitimately be named after a CONFIG VALUE rather than a tool
+# ("when its inject mode is `always_on`"). Those are derived from config.rs the
+# same way the tool names are, so the check never has to guess a value away.
+config_vals=$(cut -d'"' -f2 -s crates/operant-core/src/config.rs operant.example.toml \
+  | grep -E '^[a-z][a-z0-9_]{2,40}$' | sort -u)
+
+# Heading lines only. A heading that names a tool asserts that tool exists and
+# that this page owns its contract, so an unregistered name there is a real defect.
+# (An earlier version scanned every backticked token and reported config keys and
+# struct fields, which is a different and useless question.)
 for page in $pages; do
-  while IFS=: read -r n tok; do
-    name=${tok#"$BT"}; name=${name%"$BT"}
-    [[ $name =~ $tool_shape ]] || continue
-    grep -qx "$name" <<< "$registered" || say "UNKNOWN-TOOL $page:$n cites ${BT}${name}${BT}, which no tool module registers"
-  done < <(grep -n -o "${BT}[a-z][a-z0-9_]*${BT}" "$page" | sed "s/${BT}\$//")
+  headings=$(grep -n '^#\+ .*' "$page" | grep "${BT}" || true)
+  [ -n "$headings" ] || continue
+  while IFS= read -r line; do
+    n=${line%%:*}
+    for tok in $(grep -o "${BT}[a-z][a-z0-9_]*${BT}" <<< "$line" | tr -d "${BT}"); do
+      [[ $tok =~ $tool_shape ]] || continue
+      grep -qx "$tok" <<< "$registered" && continue
+      grep -qx "$tok" <<< "$aliases" && continue
+      grep -qx "$tok" <<< "$config_vals" && continue
+      say "UNKNOWN-TOOL $page:$n (heading) cites ${BT}${tok}${BT}, which no tool module registers"
+      fail=1
+    done
+  done <<< "$headings"
 done
 
 # --- 6. the coverage gate: no source file is nameless ----------------------
