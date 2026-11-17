@@ -6,7 +6,7 @@ recap, checkpoints.
 Not for: the gateway's channel-scoped session store
 ([gateway.md](gateway.md)), the memory engine ([memory.md](memory.md)).
 
-Source: `crates/operant-core/src/session/` (mod, autocompact),
+Source: `crates/operant-core/src/session/` (mod, autocompact, listing.rs),
 `crates/operant-core/src/session_interrupted.rs` (the exit marker),
 `crates/operant-core/src/agent/rewind.rs`,
 `crates/operant-core/src/active_sessions.rs`,
@@ -27,6 +27,20 @@ retargetable `session_id`. Every persistence site resolves its id through
 `OperantAgent::session_id`, so a host can retarget the agent to another
 session's history without rebuilding the agent — the session substrate
 (`session/mod.rs`) made that explicit instead of accidental.
+
+## One listing record for every surface (`session/listing.rs`)
+
+Plan v2 (2026-10-28): the TUI browser showed 5 fields, the CLI printed a
+different projection, and the gateway listed its own table — three shapes,
+three limits, one database (audit finding RT-A).
+`crates/operant-core/src/session/listing.rs` owns the ONE record
+(`SessionEntryV2`, with `RowStatus` and `RowKind`) and its loader
+(`Database::list_sessions_rich`), so the session hub, the CLI subcommands
+and the gateway's read-only API routes all render the same rows.
+
+`RowStatus::api_label` and `RowStatus::label` are the two renderings of that
+one status: the API's wire string and the operator's display string. Two
+methods, one enum, so a new state cannot get one label and miss the other.
 
 ## Branching
 

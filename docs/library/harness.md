@@ -57,17 +57,20 @@ operant. Existing call sites and tooling are byte-stable when
 
 ## Enable the harness
 
-Set `[harness].enabled = true` in `operant.config.toml`. The kernel
-boots with the configured `[harness].architecture_path`
-(default `architecture.toml`).
+Set `[harness].enabled = true` in `operant.toml` (`[tools.kernel].enabled`
+is the same switch, aliased). The kernel boots from the composition file
+named by `[harness].architecture_toml`, or the first of the four candidate
+names found when it is unset, with patches resolved from
+`~/.operant/patches` by default. See
+[Running the harness](#running-the-harness)
+below for the flags.
 
 ```toml
 [harness]
 enabled = true
-architecture_path = "architecture.toml"
-patch_paths = ["architecture.patch.toml"]
-mount_allowlist = ["core", "extra_prompt", "pool.relationship-intel"]
-audit = true
+architecture_toml = "~/.operant/architecture.toml"
+max_active_providers = 64
+watch_wasm = false
 ```
 
 ## Architecture files
@@ -155,6 +158,24 @@ unclassified access is rejected without an explicit approval token.
 The Builder's rejection of unhandled config-row / pool kinds is
 **intentional and tested** — it surfaces what's missing for the
 operator, not a bug.
+
+## Running the harness
+
+Adopt the kernel by setting `[harness] enabled = true` (its alias is
+`[tools.kernel] enabled`; either one turns it on). With
+`[harness] architecture_toml` unset, boot probes four candidate FILE
+NAMES in order: `architecture.toml` in the working directory, then under
+the operant home, then under `operant/`, then `architecture.toml.example`
+itself; set the key to name one explicitly. `[harness]
+max_active_providers` (default 64) caps what may be live, and
+`[harness] watch_wasm` opts into hot-swapping verified plugins. Then
+`operant architecture dump` prints the resolved tree (`--json`,
+`--watch-secs N`, `--live` for the booted kernel rather than the file),
+`operant architecture validate` builds it with a non-zero exit on error,
+and `operant architecture pool-import --path <_pool.yaml>` compiles a
+hermes pool manifest into rows. The model gets `harness_dump` always;
+`harness_mount` and `harness_unmount` need an approval grant naming that
+tool.
 
 ## What ships in R16 (this branch)
 

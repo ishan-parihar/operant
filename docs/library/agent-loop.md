@@ -11,7 +11,7 @@ stream, turn_finalizer, turn_retry_state, turn_rules, turn_context,
 error_classifier, fallback, iteration_budget, stream_retry_budget,
 turn_end_heuristics, message_safety, runtime_key, pooled_client,
 provider_registry, chat_provider, model_client, compress, historian,
-learning_graph).
+learning_graph), `crates/operant-core/src/interrupt.rs` (cancellation).
 
 The platform contract the loop is ported against is
 `crates/operant-api/src/runtime_traits.rs` — the `RuntimeAdapter` trait that
@@ -73,6 +73,23 @@ salvaged: an actionable error result rather than a dead turn.
 (`run.rs:4952-4975`, and again after a compaction at `compress.rs:540-547`)
 re-establish the invariant a strict API enforces: every tool result has its
 call, every call has its results, no orphan messages, no thinking-only turn.
+
+## Cancellation (`interrupt.rs`)
+
+One flag carries a cancel from whoever asked for it to whatever is running.
+`interrupt.rs` is deliberately not a channel: `InterruptFlag` wraps an
+`Arc<AtomicBool>`, so a clone is a handle to the SAME flag and can be moved
+into a spawned task, a tool batch, or the TUI's `agent_interrupt` cell.
+
+- `trigger` / `reset` / `is_triggered` are the whole write side.
+- `check(msg)` returns `Err(Interrupted)` when the flag is set, which is how
+  a long tool or a sub-loop turns a cancel into a typed error instead of
+  finishing its work.
+- `wait_for_interrupt(timeout)` polls every 50 ms and answers "did the
+  operator stop this?" without failing; it is what makes a five-minute
+  retry wait end the moment the user stops the turn.
+- `wait_triggered()` is the no-timeout form, for racing a tool-batch drain
+  against a cancel in a `select!`.
 
 ## Empty responses and turn rules (`agent/turn_rules.rs`)
 

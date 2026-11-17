@@ -63,7 +63,7 @@ call_pattern = "await extract_text(path)"
 
 - `import`/`callable` are bound via `kernel.bind_skill(import, callable)` into every session's globals on first use (ImportError is captured as `_<callable>_import_error`).
 - `call_pattern` is surfaced in the volatile `[continual harness]` suffix as `executable skills:  - pdf-extract: await extract_text(path)  # from my_pdf_lib::extract_text`.
-- Audit: `audit.rs` warns when a `SKILL.toml` contains `[reference]` but the allowlist is empty or `pyskill.enabled` is false — the reference will be ignored at injection time.
+- Audit: when a `SKILL.toml` contains `[reference]` but the allowlist is empty or `pyskill.enabled` is false, the reference is ignored at injection time. The warning lives inline in `kernel/mod.rs` (the `pyskill` wiring), not in a separate audit module.
 - Security: `allowed_imports` is deny-by-default (`[]`). Supports exact (`"my_pkg"`) and prefix (`"my_pkg.*"`) globs, plus `*`/`?` wildcards. No auto-authoring in 016 — only hand-curated references.
 
 ## Replaces / complements / untouched

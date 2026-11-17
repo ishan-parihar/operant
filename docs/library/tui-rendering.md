@@ -540,7 +540,7 @@ loops), `config.rs` (`Settings`, `Theme`, `PermissionMode`,
 `InnerConfig`), `auth.rs` (`AuthStore`), `codex_oauth.rs`, `cost.rs`
 (`CostTracker`), `free_catalog.rs` + `model_registry.rs` (the model
 metadata surface — no compiled-in list; the default comes from the
-models.dev cache), `output_styles.rs` (the `/output-style` choices),
+models.dev cache), `output_style.rs` (the `/output-style` choices),
 `git_utils.rs` (branch/status/commit probes via `git(1)`),
 `import_config.rs`, `items.rs`, `provider_id.rs`, `spinner.rs`,
 `types.rs` (`Message`, `Role`, `ContentBlock`, `ToolResultContent` — the

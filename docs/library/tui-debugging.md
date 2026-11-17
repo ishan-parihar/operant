@@ -480,6 +480,22 @@ commands, permission/user-question/model-fetch/session events, frames, and
 errors. `--output` dumps this log as JSON; each entry has a `kind` tag and a
 timestamp. Set `OPERANT_TUI_EVENT_LOG=<path>` to dump the ring on exit.
 
+## Using the TUI debug tools
+
+The loop is: reproduce headlessly, assert, then confirm in a real
+terminal. Start with `operant tui debug simulate --keys '<enter>'
+--mouse '<left,10,10><drag,15,10>' --dump-screen out.txt` to see the
+final frame, `--assert "overlays.help_overlay == true"` for a state
+assertion, and `--assert-screen "contains:Commands"` when the question
+is what actually painted. `--agent-script <file>` drives a scripted
+turn. For a mid-stream defect, `--frame-per-event --capture-dir DIR`
+writes every painted frame; `--baseline FILE` gates against a golden
+(`--accept-baseline` writes it). A pinned credential matters, or the
+first-run connect dialog swallows your keys. Then confirm with
+`scripts/tui-capture.sh --keys '/help' --enter --wait-text 'Commands'
+--out baseline/chat.help.txt`, the only path that exercises raw mode,
+mouse capture and real image rendering.
+
 ## Scenario regression tests
 
 The dialog open/close regression pack lives in

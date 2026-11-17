@@ -84,6 +84,22 @@ A re-dispatched background delegation with the same `request_key` returns the
 existing handle instead of starting a second child (iter-2360). Without a key,
 losing the handle and re-dispatching ran the work twice.
 
+## Using the delegation tool
+
+There is no operator command: delegation is the model calling the
+registered `delegate_task` tool. Ask for a focused second opinion and
+it goes single (one synchronous child); pass `tasks=[...]` for swarm
+mode, or `background=true` for async dispatch, in which case the
+parent gets a handle immediately and polls with
+`delegate_task(query="<id>")`. A re-dispatch carrying the same
+`request_key` returns the existing handle instead of starting a
+second child. The budgets live in the YAML CLI config
+(`HERMES_CONFIG`, default `<home>/config.yaml`) under `delegation`:
+`max_iterations` (50), `max_concurrent_children` (3), `max_spawn_depth`
+(2), `orchestrator_enabled` (true) and `max_global_workers` (6, the
+spend ceiling). `/subagents` opens this session's descendant tree in
+the TUI.
+
 ## Intention
 
 Delegation exists because one context cannot hold ten explorations: the
