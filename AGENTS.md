@@ -464,16 +464,19 @@ These are the user's intentional design choices. Do not replace, remove, or
 
 ### Memory
 - **Default: memory-wire** (`memory_wire.rs`) — in-process memory engine
-  (cargo git-dependency, branch `main`) replacing agentmemory; `retain` /
-  `recall` over the `memory_wire` sync API with `catch_unwind` degrading
-  to a memory miss instead of killing the turn
+  (cargo git-dependency, branch `main`); `retain` / `recall` over the
+  `memory_wire` sync API with `catch_unwind` degrading to a memory miss
+  instead of killing the turn
 - `MemoryWireProvider` implements the `MemoryProvider` trait; degrades gracefully
   (empty prefetch / no-op sync) instead of failing the loop
-- `BuiltinProvider` (file-backed MEMORY.md/USER.md) is the zero-dependency fallback
-- All legacy providers (TDG, Hindsight, RetainDb, Mem0, LocalVector, agentmemory)
-  were REMOVED; unknown provider names silently downgrade to builtin
-  (see `build_memory_provider`)
-- Config: `config.memory.provider = "memory-wire"` (default) | `"builtin"`
+- memory-wire is the ONLY engine. All legacy providers (agentmemory, tdg,
+  hindsight, retaindb, mem0, local-vector) and the file-backed
+  `BuiltinProvider` were REMOVED. `build_memory_provider` ignores its
+  `provider_name` argument and always builds memory-wire; any value other
+  than the canonical `"memory-wire"` (or the empty default) emits a
+  one-line warning telling the operator to remove the key
+- Config: `config.memory.provider = "memory-wire"` (default; any other value
+  warns and routes here)
 
 ### Browser & Web Tools
 - **Default: sourcehound** — `sourcehound` binary driven over its MCP server
@@ -1294,7 +1297,7 @@ MUST know before touching the render layer:
 - Hook system: `AgentStart`/`AgentEnd` events wired into `run()` (iter-61/62)
 - Error recovery: 24-class `ClassifiedError` with `should_compress`/`should_fallback` (iter-61)
 - `sync_turn`: auto memory write-back after each turn — memory-wire
-  `retain` (was agentmemory `/agentmemory/remember` pre-integration)
+  `retain`
 - Credential rotation: `CredentialPool` with `PooledCredential` + OAuth refresh (iter-66)
 - MCP sampling/elicitation: server-initiated request handlers in stdio (iter-66)
 - MCP SSE transport: `McpSseClient` with background reader + oneshot routing (iter-68)
@@ -1303,9 +1306,10 @@ MUST know before touching the render layer:
 - `MemoryWireProvider` (in-process `memory_wire` crate, `catch_unwind` boundary)
 - `recall_with_weights` retrieval in `prefetch`; `sync_turn` → `retain`
   (agent loop auto-calls after each turn)
-- `BuiltinProvider` fallback (file-backed MEMORY.md/USER.md)
-- Legacy providers (TDG/Hindsight/RetainDb/Mem0/LocalVector/agentmemory)
-  removed — unknown provider names downgrade to builtin silently
+- memory-wire is the only engine; all legacy providers (agentmemory, tdg,
+  hindsight, retaindb, mem0, local-vector) and the file-backed
+  `BuiltinProvider` were removed — any provider name the config carries
+  still routes to memory-wire
 
 ### Context Management
 - Tiered eviction (T3→T2→T1 oldest-first, iter-37/38)

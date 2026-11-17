@@ -552,7 +552,7 @@ impl TuiApp {
                 // materialize MCP tools mid-session via sync_tools_to_registry.
                 self.app.core_tool_registry = Some(agent.registry());
                 // Handle to the agent's memory provider so the /mcp reconnect
-                // task can ensure the agentmemory backend is up before
+                // task can ensure the memory backend is up before
                 // connecting its MCP server (fast reconnect).
                 self.app.core_memory_provider = agent.memory_provider();
                 // RT-206: the anchor for Ctrl+B's `CurrentBranch` filter comes from
@@ -1638,7 +1638,7 @@ impl TuiApp {
             // materialize MCP tools mid-session via sync_tools_to_registry.
             self.app.core_tool_registry = Some(agent.registry());
             // Handle to the agent's memory provider so the /mcp reconnect
-            // task can ensure the agentmemory backend is up before
+            // task can ensure the memory backend is up before
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
             // RT-206: the same seeding the interactive path does — the

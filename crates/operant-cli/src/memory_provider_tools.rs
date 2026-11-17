@@ -1,12 +1,11 @@
 //! Register the memory provider's own tool schemas (`memory_smart_search`,
 //! `memory_save`, ...) into the `ToolRegistry` — hermes-plugin parity.
 //!
-//! The agentmemory MCP server is injected as a **deferred** server (it is
-//! not auto-connected at startup, so an operant invocation never spawns
-//! `npx @agentmemory/mcp` unless the user actually connects it). These
-//! provider-backed tools keep the memory surface available to the model
-//! without the MCP server, exactly like the hermes-agent plugin registers
-//! its memory tools independently of the optional MCP server.
+//! The provider is built in-process and advertises its own tool surface
+//! over the [`MemoryProvider::tool_schemas`] hook; this module wires
+//! each advertised schema into the live `ToolRegistry` so the model
+//! sees the same memory tools the hermes-agent plugin registers,
+//! without spawning any subprocess.
 
 use std::sync::Arc;
 

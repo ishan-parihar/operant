@@ -35,8 +35,7 @@ than a short accurate one. Add a config section by adding a type under
 
 ## Module map
 
-- `lib.rs` -- crate root, `#![deny(missing_docs)]`, the default
-  `DEFAULT_AGENTMEMORY_VERSION` pin, and the config loaders.
+- `lib.rs` -- crate root, `#![deny(missing_docs)]`.
 - `policy.rs` -- the security policy types (approval modes, tool policy).
 - `providers.rs` -- the `[providers]` section types.
 - `schema/` -- the configuration schema, one file per domain: `core`,
@@ -48,9 +47,6 @@ than a short accurate one. Add a config section by adding a type under
 - Cargo features: `default = ["schema-export"]`, which enables `schemars`.
   (`voice-wake` was an empty flag that gated nothing; removed with the
   dead-feature sweep.)
-- `DEFAULT_AGENTMEMORY_VERSION` (`src/lib.rs`) is the pinned `@agentmemory`
-  package version. It is overridable with `[memory] agentmemory_version` or
-  the `AGENTMEMORY_VERSION` environment variable.
 
 ## Limitations
 

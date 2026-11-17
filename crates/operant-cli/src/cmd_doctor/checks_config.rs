@@ -663,6 +663,9 @@ pub async fn check_context_window(
 /// The suffix rule covers every one of those and the next field someone adds:
 /// a key whose name ends in `_key`, `_token`, `_secret` or `_password` (or IS
 /// one of `api_key`, `token`, `secret`, `password`) carries a credential.
+/// A parked `agentmemory_secret` still matches the rule, which is what we
+/// want: the value is unused by the engine, but it is still a secret on disk
+/// and the operator must be told it is there.
 ///
 /// Deliberately about the NAME only, so `telegram_enabled` and `search_url`
 /// never match, and so a future `*_api_key` is covered the day it lands.
@@ -691,8 +694,8 @@ fn is_secret_key_name(key: &str) -> bool {
 /// the operator's question is "is a live value sitting in this file", and a
 /// value that parses to `None` was never written. The scan also sees a key
 /// inside a section the running build ignores, which is exactly where a stale
-/// secret hides (`[memory] agentmemory_secret` is retired, still accepted, and
-/// still a secret on disk).
+/// secret hides (a retired `[memory] agentmemory_secret` is still a secret
+/// on disk and must still be reported).
 ///
 /// Values are never returned — only names — because doctor's output is pasted
 /// into issues and bug reports.

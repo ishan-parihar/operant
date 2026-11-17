@@ -1395,8 +1395,7 @@ pub(crate) async fn build_registry(
         operant_os::tools::register_all(&registry).await;
     }
 
-    // Memory provider tools (agentmemory_*) are registered via the MCP
-    // server path (config.mcp.servers → agentmemory) and/or the agent's
+    // Memory provider tools are registered via the agent's
     // MemoryProvider hook — see load_memory_manager / create_runtime_agent.
 
     // Register AFT (Agent File Tools) if enabled in config.
@@ -1638,9 +1637,9 @@ pub(crate) async fn build_registry(
     }
 
     if config.mcp.autoload {
-        // Deferred servers (e.g. the injected agentmemory server) are NOT
-        // connected here — they would spawn `npx @agentmemory/mcp` on every
-        // invocation. They stay connectable on demand via `operant mcp`.
+        // Deferred servers are NOT connected here — they would spawn
+        // their subprocess on every invocation. They stay connectable
+        // on demand via `operant mcp`.
         for server in config
             .mcp
             .servers
@@ -1741,8 +1740,8 @@ struct AgentCore {
     registry: ToolRegistry,
     agent_config: AgentConfig,
     memory_manager: MemoryManager,
-    /// Long-term memory provider (agentmemory/builtin). Attached to the
-    /// agent so sync_turn/prefetch/session hooks actually fire — this was
+    /// Long-term memory provider. Attached to the agent so
+    /// sync_turn/prefetch/session hooks actually fire — this was
     /// previously built-and-dropped (see docs/AUDIT_2026-08-02.md F1).
     memory_provider: Option<Arc<dyn MemoryProvider>>,
     skill_manager: SkillManager,
@@ -1857,8 +1856,9 @@ async fn build_agent_core_with_memory(
 
     // Hermes-plugin parity: register the memory provider's own tool schemas
     // (memory_smart_search, memory_save, ...) directly in the registry. The
-    // injected agentmemory MCP server is deferred (lazy), so these keep the
-    // memory surface available to the model without spawning npx at startup.
+    // provider advertises its tools over MemoryProvider::tool_schemas, so
+    // the model sees the same memory surface the hermes plugin exposes,
+    // without spawning any subprocess.
     if let Some(provider) = &memory_provider {
         memory_provider_tools::register_provider_tools(&registry, provider.clone()).await;
     }
@@ -2931,11 +2931,12 @@ pub(crate) async fn load_memory_manager(
     // the adapter used to pin `[memory] provider = "builtin"`, which this
     // loader treats as legacy no-op → no provider ever existed (that is why
     // six live Holon runs left no bank anywhere); the pin's removal left
-    // `enabled = true` + the `agentmemory` default, which WOULD open one
-    // memory-wire bank in the shared adapter HERMES_HOME — every employee
-    // sharing it, and the gateway's cron agent's lessons beside org work.
-    // Gated before construction so not even the sqlite file appears.
-    // Personal mode keeps its provider (a design preference — unchanged).
+    // `enabled = true` + a non-canonical provider value, which the loader
+    // still routes to memory-wire and WOULD open one memory-wire bank in
+    // the shared adapter HERMES_HOME — every employee sharing it, and the
+    // gateway's cron agent's lessons beside org work. Gated before
+    // construction so not even the sqlite file appears. Personal mode
+    // keeps its provider (a design preference — unchanged).
     if operant_core::platform::is_holon_run() {
         return Ok((MemoryManager::with_storage_dir(storage_dir), None));
     }

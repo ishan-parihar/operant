@@ -79,8 +79,8 @@ async fn handle_list(config: &AppConfig, _platform: Option<String>) -> Result<()
     )
     .await?;
 
-    // Hermes-plugin parity: surface the active memory provider's own tools
-    // (memory_smart_search / memory_save for agentmemory) so `operant tools
+    // Hermes-plugin parity: surface the active memory provider's own
+    // tools (memory_smart_search / memory_save, ...) so `operant tools
     // list` reflects the exact agent-visible toolset (the run path registers
     // these in build_agent_core; here we mirror that for the listing).
     if config.memory.enabled

@@ -568,8 +568,7 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 enabled = false
 # deferred = true   # skip the eager autoload connect at startup; connect on
-#                   # demand via `operant mcp` (the injected agentmemory server
-#                   # is deferred by default)
+#                   # demand via `operant mcp`
 [mcp.servers.env]
 # EXAMPLE_ROOT = "C:/workspace"
 
@@ -825,10 +824,10 @@ enabled = false
 # supervisor) is inert in personal mode, byte-identical to mainline.
 [memory]
 # (plan 11C3) memory-wire is the only memory engine, in-process:
-# retain/recall over a bank-isolated sqlite store. The old provider
-# choices (agentmemory, builtin) are accepted-with-warning in existing
-# configs and ignored; existing MEMORY.md/USER.md files are imported once
-# on the first start after the upgrade (renamed *.imported).
+# retain/recall over a bank-isolated sqlite store. Any other provider
+# value in an existing config is accepted-with-warning and routed to
+# memory-wire; existing MEMORY.md/USER.md files are imported once on the
+# first start after the upgrade (renamed *.imported).
 provider = "memory-wire"
 enabled = true
 # RT-190 (operator ruling, option c — documented boundary): this engine is

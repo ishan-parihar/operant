@@ -567,7 +567,7 @@ pub struct App {
     /// renders without requiring a keystroke.
     pub mcp_reconnect_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     /// Handle to the agent's long-term memory provider so the /mcp reconnect
-    /// task can ensure the agentmemory backend is up before connecting its
+    /// task can ensure the memory backend is up before connecting its
     /// MCP server — fast reconnect instead of a cold-backend wait.
     /// (iter-326 — native agent-memory lifecycle management.)
     pub core_memory_provider:
@@ -1513,7 +1513,7 @@ impl App {
 
     /// Spawn the /mcp reconnect task: re-add all enabled servers by
     /// transport (HTTP/streamable-HTTP via `add_server`, stdio via
-    /// `add_stdio_server`), warm the agentmemory backend first so its MCP
+    /// `add_stdio_server`), warm the memory backend first so its MCP
     /// initialize handshake completes in <1s, sync the live `ToolRegistry`,
     /// and report a rich completion message through `mcp_reconnect_rx` —
     /// drained every frame (tick-based status drain), so it renders

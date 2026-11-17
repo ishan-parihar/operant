@@ -1029,27 +1029,27 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "memory.agentmemory_auto_spawn",
         "None",
-        "(retired, plan 08) agentmemory auto-spawn — accepted, ignored.",
+        "(retired) agentmemory auto-spawn — accepted, ignored.",
     ),
     (
         "memory.agentmemory_secret",
         "None",
-        "(retired, plan 08) agentmemory REST secret — accepted, ignored.",
+        "(retired) agentmemory REST secret — accepted, ignored.",
     ),
     (
         "memory.agentmemory_url",
         "None",
-        "(retired, plan 08) agentmemory server base URL — accepted, ignored.",
+        "(retired) agentmemory server base URL — accepted, ignored.",
     ),
     (
         "memory.agentmemory_version",
         "None",
-        "(retired, plan 08) npm version pin — accepted, ignored.",
+        "(retired) npm version pin — accepted, ignored.",
     ),
     (
         "memory.audit_enabled",
         "None",
-        "(retired, memory-factory era) `[memory] audit_enabled` — accepted, ignored. Without this field, `deny_unknown_fields` failed the whole config load.",
+        "(retired) `[memory] audit_enabled` — accepted, ignored. Without this field, `deny_unknown_fields` failed the whole config load.",
     ),
     (
         "memory.enabled",
@@ -1064,7 +1064,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     (
         "memory.response_cache_enabled",
         "None",
-        "(retired, memory-factory era) `[memory] response_cache_enabled` — accepted, ignored.",
+        "(retired) `[memory] response_cache_enabled` — accepted, ignored.",
     ),
     (
         "moa.aggregator",

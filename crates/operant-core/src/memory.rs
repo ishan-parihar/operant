@@ -798,10 +798,10 @@ impl MemoryManager {
 // (iter-148: uuid_simple deleted — use uuid::Uuid::new_v4() instead,
 // already in deps. Was a hand-rolled time-based pseudo-UUID.)
 
-/// Returns the active memory provider name from config (`"agentmemory"`,
-/// `"builtin"`, or `"disabled"` when memory is turned off). Other provider
-/// names that were removed will be silently downgraded to `"builtin"` by
-/// `build_memory_provider`.
+/// Returns the active memory provider name from config (the
+/// `config.memory.provider` value, or `"disabled"` when memory is turned
+/// off). memory-wire is the only engine; any other spelling is accepted
+/// and warns but still routes to memory-wire (see `build_memory_provider`).
 pub fn resolve_memory_provider() -> String {
     use crate::config::runtime_config;
     let cfg = runtime_config();

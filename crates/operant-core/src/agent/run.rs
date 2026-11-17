@@ -4670,7 +4670,7 @@ impl OperantAgent {
             // prepend them as a user context block so the downstream
             // compression/decay preserves what the memory provider still
             // considers important. Mirrors hermes-agent's plugin behavior
-            // (insert `[agentmemory context before compaction]` at index 0).
+            // (insert a context block at index 0).
             if let Some(provider) = &self.memory_provider {
                 let insights = provider.on_pre_compress(&messages);
                 if !insights.is_empty() {

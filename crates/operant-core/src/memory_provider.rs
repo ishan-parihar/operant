@@ -1,21 +1,12 @@
 //! Memory provider system for Operant-RS.
 //!
-//! The active provider is selected by `config.memory.provider`:
-//!
-//! | Value         | Backend                                                           |
-//! |---------------|-------------------------------------------------------------------|
-//! | `"agentmemory"` (also `"memory_wire"` / `"memory-wire"`) | In-process hybrid semantic memory via the `memory_wire` crate |
-//! | `"builtin"`   | File-backed MEMORY.md / USER.md (zero-dependency fallback)        |
-//! | other         | Silently falls back to `"builtin"`                                |
-//!
-//! The provider name `"agentmemory"` is retained for config compatibility: it
-//! is served by the in-process [`crate::memory_wire::MemoryWireProvider`]. The
-//! agentmemory REST server, its `npx` auto-spawn, and its deferred MCP server
-//! were removed — two live engines is how double-engine conflicts start.
-//!
-//! Old provider names (`"tdg"`, `"hindsight"`, `"retaindb"`, `"mem0"`,
-//! `"local-vector"`) were removed — configs that still reference them are
-//! silently downgraded to `"builtin"`.
+//! memory-wire is the ONLY memory engine (`crate::memory_wire::MemoryWireProvider`,
+//! backed by the `memory_wire` crate). The `config.memory.provider` string
+//! selects nothing any more — it is accepted so existing configs keep loading
+//! and any value other than the canonical `"memory-wire"` (or the empty
+//! default) emits a one-line stderr warning telling the operator to remove
+//! the key. The string still routes every name to the same in-process
+//! engine, so an old config keeps working without an engine change.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -378,17 +369,16 @@ pub trait MemoryProvider: Send + Sync {
 // Factory
 // ---------------------------------------------------------------------------
 
-/// Construct the memory provider from the config `provider` string.
+/// Construct the memory provider for this session.
 ///
-/// The `"agentmemory"` provider name is the historical default. It is now
-/// served by the in-process [`crate::memory_wire::MemoryWireProvider`] — the
-/// agentmemory REST server, its `npx` auto-spawn, and its deferred MCP server
-/// were removed, and `"memory_wire"` / `"memory-wire"` are accepted as explicit
-/// aliases. All unrecognized provider names (including the removed
-/// `"tdg"`, `"hindsight"`, `"retaindb"`, `"mem0"`, `"local-vector"`) fall
-/// back to `BuiltinProvider` (file-backed MEMORY.md / USER.md) — the agent
-/// stays functional with a degraded memory backend rather than dying on
-/// startup.
+/// (plan 11C3) memory-wire is the ONLY provider: the `provider_name`
+/// argument is accepted so existing configs keep loading and any value
+/// other than `"memory-wire"` (or the empty default) warns once. Every
+/// name — aliases, historical spellings, and unknown values alike —
+/// routes to the same in-process [`crate::memory_wire::MemoryWireProvider`].
+/// On its init failure there is no fallback: memory degrades to
+/// [`NoopProvider`] (every operation a miss) so the agent's
+/// degrade-don't-die contract never kills the turn.
 pub fn build_memory_provider(
     provider_name: &str,
     storage_dir: std::path::PathBuf,
@@ -396,10 +386,9 @@ pub fn build_memory_provider(
     // (plan 11C3) memory-wire is the ONLY provider. The name argument is
     // accepted so existing configs keep loading; anything other than the
     // memory-wire family warns once. Only the canonical `memory-wire` (and
-    // the empty default) are silent: every other spelling — including the
-    // retired `agentmemory` historical default, `memory`/`memory_wire`, and
-    // the legacy `builtin` selection the user's own config may still carry —
-    // warns, because the operator needs to know the key is no longer read.
+    // the empty default) are silent: every other spelling — including an
+    // old alias or a value the user's config carries — warns, because the
+    // operator needs to know the key is no longer read.
     if !matches!(provider_name, "memory-wire" | "") {
         eprintln!(
             "warning: [memory] provider = {provider_name:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml."
@@ -476,13 +465,13 @@ mod tests {
         );
     }
 
-    // The agentmemory name (and its memory_wire aliases) must route to the
-    // in-process MemoryWireProvider, not to BuiltinProvider. Uses a real temp
+    // Every spelling the config may still carry — including old aliases —
+    // must route to the in-process MemoryWireProvider. Uses a real temp
     // dir because the provider opens a file-backed SQLite store on construct.
     #[test]
-    fn test_agentmemory_and_aliases_build_the_memory_wire_provider() {
+    fn test_every_provider_name_routes_to_memory_wire() {
         let dir = tempfile::tempdir().expect("tempdir");
-        for name in ["agentmemory", "memory_wire", "memory-wire"] {
+        for name in ["agentmemory", "memory_wire", "memory-wire", "quux"] {
             let p = build_memory_provider(name, dir.path().to_path_buf());
             assert_eq!(
                 p.name(),

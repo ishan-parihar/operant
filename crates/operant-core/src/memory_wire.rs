@@ -1,16 +1,14 @@
 //! memory-wire provider — in-process semantic memory via the `memory_wire` crate.
 //!
-//! memory-wire (<https://github.com/ishan-parihar/memory-wire>) is a Rust memory
-//! infrastructure crate that fuses Hindsight-style `retain`/`recall`/`reflect`
-//! with agentmemory-style hybrid retrieval (BM25 + token-overlap, RRF-fused). We
-//! embed it as an **in-process library** (a cargo git-dependency), not a
-//! subprocess: the library exposes `recall_with_weights`, `retain_tagged`, and
+//! memory-wire (<https://github.com/ishan-parihar/memory-wire>) is a Rust
+//! memory infrastructure crate providing hybrid retrieval (BM25 +
+//! token-overlap, RRF-fused) over a bank-isolated SQLite store. We embed it
+//! as an **in-process library** (a cargo git-dependency), not a subprocess:
+//! the library exposes `recall_with_weights`, `retain_tagged`, and
 //! `retain_doc`, none of which the crate's HTTP surface offers.
 //!
 //! This provider implements the [`crate::memory_provider::MemoryProvider`]
-//! trait against `memory_wire::api::MemoryService` — the local replacement for
-//! the agentmemory REST integration it supersedes (see `docs/INTEGRATION-PLAN.md`
-//! §3):
+//! trait against `memory_wire::api::MemoryService`.
 //!
 //! | Method / hook        | memory-wire call                                |
 //! |----------------------|-------------------------------------------------|
@@ -145,9 +143,9 @@ pub fn bank_for(scope: &MemoryScope) -> String {
     }
 }
 
-/// Characters retained from the user turn in `sync_turn`. Mirrors the previous
-/// agentmemory integration's truncation, kept on our side so the stored memory
-/// is bounded regardless of what memory-wire does internally.
+/// Characters retained from the user turn in `sync_turn`. Kept on our side
+/// so the stored memory is bounded regardless of what memory-wire does
+/// internally.
 const USER_TURN_CHARS: usize = 500;
 /// Characters retained from the assistant turn in `sync_turn`.
 const ASSISTANT_TURN_CHARS: usize = 2000;

@@ -382,9 +382,9 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "spotify_playlists",
         "spotify_albums",
         "spotify_library",
-        // Memory provider tools (agentmemory_*, tdg_*) are NOT in
-        // builtin_tool_names — they're registered conditionally when the
-        // matching memory provider is active. Including them here would
+        // Memory provider tools are NOT in builtin_tool_names —
+        // they're registered conditionally from the active memory
+        // provider's own tool_schemas. Including them here would
         // make the test_register_all_builtin_tools count wrong.
     ]
     .into_iter()

@@ -35,12 +35,12 @@
 //! only ever receives the prefix), "history grew" can never be mistaken
 //! for "cache missed".
 //!
-//! Stability caveat, stated plainly: under the default `agentmemory`
-//! provider the first system message embeds a live `/agentmemory/context`
-//! response, so the on-wire prefix does change when the memory store
-//! changes. The tracker will report `Miss` then — which is a **true**
-//! statement about the bytes, and simultaneously a real cache-efficiency
-//! finding. It is not a false positive.
+//! Stability caveat, stated plainly: under any memory-wire provider the
+//! first system message embeds a live `recall` response, so the on-wire
+//! prefix does change when the memory store changes. The tracker will
+//! report `Miss` then — which is a **true** statement about the bytes,
+//! and simultaneously a real cache-efficiency finding. It is not a
+//! false positive.
 //!
 //! ## 2. Server-side monitoring seam ([`ServerCacheMonitor`])
 //!

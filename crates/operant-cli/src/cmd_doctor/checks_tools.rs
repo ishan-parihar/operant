@@ -733,19 +733,20 @@ pub fn run_platform_checks(
     // read it from the TOML file or fall back to env vars.
     let memory_provider = detect_memory_provider(config);
 
-    // memory-wire is the ONLY engine (plan 11C3): every other spelling in an
-    // old config is accepted by the parser — `deny_unknown_fields` means the
-    // retired `[memory] agentmemory_*` keys must keep parsing — and then
-    // routed to the same in-process provider. The honest check is therefore
-    // "is memory actually attached", never "is this provider's API key set":
-    // no external memory provider exists, so probing for a removed engine's
-    // credential would send the operator to set a key nothing reads, and a red
-    // failure on it would fail the install for an engine not compiled in.
+    // memory-wire is the ONLY engine (plan 11C3): every other spelling
+    // in an old config is accepted by the parser — `deny_unknown_fields`
+    // means a retired `[memory] agentmemory_*` key must keep parsing —
+    // and then routed to the same in-process provider. The honest check
+    // is therefore "is memory actually attached", never "is this
+    // provider's API key set": no external memory provider exists, so
+    // probing for a removed engine's credential would send the operator
+    // to set a key nothing reads, and a red failure on it would fail
+    // the install for an engine not compiled in.
     //
     // `builtin` and `disabled` are the two names that leave memory DEAD
     // (`load_memory_manager` attaches no provider, so memory_store/search
-    // answer "No memory backend attached") — the core doctor flags them for
-    // the same reason, and this surface must agree, not soften them.
+    // answer "No memory backend attached") — the core doctor flags them
+    // for the same reason, and this surface must agree, not soften them.
     match memory_provider.as_deref() {
         None | Some("") | Some("memory-wire") | Some("memory_wire") | Some("memory") => {
             check_ok(
@@ -764,10 +765,9 @@ pub fn run_platform_checks(
             );
         }
         Some(legacy) => {
-            // Any other retired spelling (agentmemory, tdg, hindsight,
-            // retaindb, mem0, local-vector, honcho, ...). It parses, then
-            // routes to the same in-process engine — memory still works — so
-            // the only actionable advice is removing the stale key.
+            // Any other retired spelling. It parses, then routes to the
+            // same in-process engine — memory still works — so the only
+            // actionable advice is removing the stale key.
             check_warn(
                 &format!("provider = {legacy:?} is retired"),
                 "(memory-wire is the only engine now — remove the [memory] provider key)",
@@ -1406,9 +1406,9 @@ mod memory_provider_surface_tests {
             .expect("the source always precedes its test module");
 
         // The dead per-provider API-key probes must be gone: they instruct
-        // setting MEM0_API_KEY / HONCHO_API_KEY, keys nothing reads. The
-        // category table is the second place they hid (an "optional upgrade"
-        // row claiming those keys upgrade the memory category).
+        // setting keys nothing reads. The category table is the second
+        // place they hid (an "optional upgrade" row claiming those keys
+        // upgrade the memory category).
         for dead in ["MEM0_API_KEY", "HONCHO_API_KEY", "operant memory setup"] {
             assert!(
                 !source.contains(dead),
@@ -1416,15 +1416,15 @@ mod memory_provider_surface_tests {
             );
         }
 
-        // And the match must not carry per-name arms that pretend those
-        // providers are selectable.
+        // And the match must not carry per-name arms that pretend any
+        // retired provider name is selectable.
         assert!(
             !source.contains("Some(\"mem0\")"),
-            "doctor still matches mem0 as a live provider arm"
+            "doctor still matches a retired provider name as a live arm"
         );
         assert!(
             !source.contains("Some(\"honcho\")"),
-            "doctor still matches honcho as a live provider arm"
+            "doctor still matches a retired provider name as a live arm"
         );
     }
 

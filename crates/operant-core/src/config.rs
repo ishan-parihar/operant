@@ -1585,9 +1585,9 @@ pub struct McpServerConfig {
     pub enabled: bool,
     /// Connect lazily: skip the eager autoload connect at agent startup.
     /// The server stays available on demand via `operant mcp` / the MCP
-    /// tooling. Used for the injected agentmemory server so an operant
-    /// invocation never spawns `npx @agentmemory/mcp` unless the user
-    /// actually connects it (hermes lazy-MCP parity).
+    /// tooling. A deferred server never auto-spawns its subprocess on
+    /// every invocation — the operator's choice to connect is what does
+    /// that.
     pub deferred: bool,
 }
 
@@ -2450,12 +2450,13 @@ impl Default for TtsSettings {
 
 /// Memory provider configuration.
 ///
-/// (plan 08) memory-wire is the one engine (in-process, ~/.operant/
+/// (plan 11C3) memory-wire is the one engine (in-process, ~/.operant/
 /// memory_wire.sqlite). The `provider` key is accepted so existing files
-/// keep loading; anything but the memory-wire family is ignored with a
-/// one-line warning. The retired agentmemory keys stay accepted the same
-/// way — `deny_unknown_fields` is on, and a config that parsed yesterday
-/// must parse today.
+/// keep loading; anything but the canonical `"memory-wire"` (or empty
+/// default) is ignored with a one-line warning. The historical
+/// `agentmemory_*` keys below stay accepted for the same reason —
+/// `deny_unknown_fields` is on, and a config that parsed yesterday must
+/// parse today; each is reported unread by `legacy_warnings`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
@@ -2463,39 +2464,42 @@ pub struct MemorySettings {
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
-    /// (retired, plan 08) agentmemory server base URL — accepted, ignored.
+    /// (retired) accepted, ignored. Without this field, an old
+    /// operant.toml carrying `agentmemory_url` would fail the whole load
+    /// under `deny_unknown_fields`. `legacy_warnings` names it unread.
     pub agentmemory_url: Option<String>,
-    /// (retired, plan 08) agentmemory REST secret — accepted, ignored.
+    /// (retired) accepted, ignored. Same `deny_unknown_fields` reason as
+    /// `agentmemory_url`. A secret parked under a retired key is the
+    /// worst place for silence, so this is reported by `legacy_warnings`.
     pub agentmemory_secret: Option<String>,
-    /// (retired, plan 08) agentmemory auto-spawn — accepted, ignored.
+    /// (retired) accepted, ignored. Same reason as `agentmemory_url`.
     pub agentmemory_auto_spawn: Option<bool>,
-    /// (retired, plan 08) npm version pin — accepted, ignored.
+    /// (retired) accepted, ignored. Same reason as `agentmemory_url`.
     pub agentmemory_version: Option<String>,
-    /// (retired, memory-factory era) `[memory] audit_enabled` — accepted, ignored.
+    /// (retired) `[memory] audit_enabled` — accepted, ignored.
     /// Without this field, `deny_unknown_fields` failed the whole config load.
     pub audit_enabled: Option<bool>,
-    /// (retired, memory-factory era) `[memory] response_cache_enabled` — accepted, ignored.
+    /// (retired) `[memory] response_cache_enabled` — accepted, ignored.
     pub response_cache_enabled: Option<bool>,
 }
 
 impl MemorySettings {
-    /// (plan 08) the retired-key warning contract: DEFAULTS ARE SILENT.
+    /// (plan 11C3) the retired-key warning contract: DEFAULTS ARE SILENT.
     /// A warning fires only for a value the file actually carries (the
     /// deserialized struct cannot tell "present" from "defaulted", so the
-    /// retired keys default to `None`/`Some(false)` — the loud legacy
-    /// default `Some(true)` is gone and every clean start is quiet).
+    /// retired keys default to `None`/`Some(false)` — a clean start is
+    /// quiet and every non-canonical value warns once).
     pub fn warn_legacy_keys(&self) {
         for line in self.legacy_warnings() {
             eprintln!("{line}");
         }
     }
 
-    /// (plan 08) the warning contract as data — defaults ARE SILENT. A
+    /// (plan 11C3) the warning contract as data — defaults ARE SILENT. A
     /// warning fires only for a value the file actually carries; the
     /// deserialized struct cannot tell "present" from "defaulted", so
-    /// the retired agentmemory keys default to `None` — the loud legacy
-    /// default `Some(true)` is gone and every clean start is quiet. The
-    /// test pins this: `MemorySettings::default().legacy_warnings()` is
+    /// the retired keys default to `None` — every clean start is quiet.
+    /// The test pins this: `MemorySettings::default().legacy_warnings()` is
     /// empty.
     pub fn legacy_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -6550,18 +6554,16 @@ wonderful_unknown_key = 42
         assert!(text.contains("expected"));
     }
 
-    // (plan 08) agentmemory_version_pins_package_specs deleted with the
-    // spec fns and the seeding — the agentmemory era is over.
+    // (plan 08) deleted with the agentmemory seeding: the
+    // agentmemory_version_pins_package_specs test, the
+    // ensure_default_mcp_servers_injects_agentmemory_when_provider_active
+    // test, the ensure_default_mcp_servers_respects_custom_url_and_existing_server
+    // test and the ensure_default_mcp_servers_noop_for_builtin_provider
+    // test. The spec fns and the seeding they covered are gone.
 
-    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_injects_agentmemory_when_provider_active
-
-    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_respects_custom_url_and_existing_server
-
-    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_noop_for_builtin_provider
-
-    /// (plan 08) DEFAULTS ARE SILENT: a clean start must not print the
-    /// legacy-key warnings. Pre-plan-08 the DEFAULT provider was
-    /// "agentmemory" (not in the allowed list) and auto_spawn defaulted
+    /// (plan 11C3) DEFAULTS ARE SILENT: a clean start must not print the
+    /// legacy-key warnings. Pre-plan-08 the DEFAULT provider was a
+    /// historical alias (not in the allowed list) and auto_spawn defaulted
     /// to Some(true), so every single start warned — the audit's
     /// "seen on every start" finding.
     #[test]
@@ -6645,10 +6647,9 @@ wonderful_unknown_key = 42
             );
         }
 
-        // Every other spelling warns — including the ones that used to pass
-        // silently, and the retired `agentmemory` (the historical default),
-        // which got NO warning here while `tdg` did: an operator carrying the
-        // old default never learned it was retired.
+        // Every other spelling warns — including the aliases that used
+        // to pass silently and the old default the operator's config may
+        // still carry.
         for name in ["memory", "memory_wire", "agentmemory", "builtin", "tdg"] {
             let s = MemorySettings {
                 provider: name.to_string(),

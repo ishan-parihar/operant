@@ -93,7 +93,7 @@ tar = "0.4"
 tempfile = { workspace = true }
 image = { workspace = true }
 
-# Baked-in engines (not subprocess): memory-wire replaces agentmemory.
+# Baked-in engines (not subprocess): memory-wire is the only memory engine.
 # sourcehound_mcp HELD OUT — see below.
 #
 # memory-wire tracks `main` — user-ordered persistent-latest. Every build

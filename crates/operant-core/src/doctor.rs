@@ -963,8 +963,12 @@ mod tests {
         );
 
         let mut config = AppConfig::default();
-        config.memory.provider = "tdg".to_string();
-        assert!(diagnose(&config).iter().any(|r| r.message.contains("tdg")));
+        config.memory.provider = "memory_v2".to_string();
+        assert!(
+            diagnose(&config)
+                .iter()
+                .any(|r| r.message.contains("memory_v2"))
+        );
 
         let mut config = AppConfig::default();
         config.memory.enabled = false;

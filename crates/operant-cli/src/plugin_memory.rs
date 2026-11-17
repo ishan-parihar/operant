@@ -3,7 +3,7 @@
 //! Consumes `operant-plugins`' `PluginCapability::Memory`: a WASM plugin
 //! declaring the `memory` capability can back the core `MemoryProvider`
 //! trait, exactly like hermes-agent's `plugins/memory/<name>` directory
-//! plugins (mem0, honcho, hindsight, ...) plug into `MemoryManager`.
+//! plugins plug into `MemoryManager`.
 //!
 //! ## WASM ABI
 //!
