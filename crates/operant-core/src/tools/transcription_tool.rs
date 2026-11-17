@@ -351,8 +351,48 @@ impl OperantTool for TranscriptionTool {
             }
         };
 
-        ToolResult::success(self.name(), result)
+        transcription_envelope(self.name(), result)
     }
+}
+
+/// The tool envelope for a finished provider call: the PROVIDER's own verdict
+/// decides it, not a constant.
+///
+/// `transcribe_groq` / `transcribe_openai` report an API error, an empty
+/// response and a network fault IN BAND — a `TranscriptionResult` with
+/// `success: false` plus an `error` string. This call site used to wrap every
+/// outcome in `ToolResult::success`, so the envelope read `success: true` with
+/// `error: None` while the payload said the opposite.
+///
+/// That is the edge_tts shape (iter-2547), and it blinded every guard that
+/// reads the envelope rather than the payload:
+///
+/// - `consecutive_failed_iters` in the agent loop never incremented, so a model
+///   retrying a transcription that fails every time never reached the
+///   degenerate-loop breaker;
+/// - the tool guardrail (`agent/stream.rs`) scored the batch as successful
+///   progress, so a narration claiming progress was believed;
+/// - the observer recorded `success: true`;
+/// - no `AgentEvent::ToolError` reached the transcript.
+///
+/// A free function rather than an inline branch so the rule is testable without
+/// a network call: the provider helpers are private and their failure paths all
+/// require I/O.
+fn transcription_envelope(
+    tool_call_id: &str,
+    result: TranscriptionResult,
+) -> ToolResult {
+    if result.success {
+        return ToolResult::success(tool_call_id, result);
+    }
+    // `ToolResult::error` sets `error` and empties `content`, so the
+    // provider's own text (status code + response body) has to be carried into
+    // `error` — it is the only account of WHY it failed, and a model cannot
+    // retry intelligently against a bare "Error".
+    let reason = result
+        .error
+        .unwrap_or_else(|| "transcription failed with no error text".to_string());
+    ToolResult::error(tool_call_id, reason)
 }
 
 #[cfg(test)]
@@ -403,6 +443,104 @@ mod tests {
         config.tools.stt.groq_model = String::new();
         let config = Some(config);
         assert_eq!(resolve_groq_model(&config, ""), GROQ_DEFAULT_MODEL);
+    }
+
+    fn a_failed_result(success: bool, error: Option<&str>) -> TranscriptionResult {
+        TranscriptionResult {
+            success,
+            transcript: String::new(),
+            provider: "groq".to_string(),
+            model: "whisper-large-v3-turbo".to_string(),
+            error: error.map(str::to_string),
+        }
+    }
+
+    /// THE CONTRACT: a provider failure must not arrive at the caller as a
+    /// success.
+    ///
+    /// Every pre-fix outcome — an API error, an empty response body, a network
+    /// fault — produced `ToolResult { success: true, error: None }` while the
+    /// payload it wrapped said `success: false`.
+    ///
+    /// That blinded every guard that reads the envelope rather than the
+    /// payload: `consecutive_failed_iters` in the agent loop never incremented,
+    /// so a model retrying a permanently-failing transcription never reached
+    /// the degenerate-loop breaker; the tool guardrail scored the batch as
+    /// successful progress; the observer recorded `success: true`; and no
+    /// `ToolError` reached the transcript.
+    #[test]
+    fn a_failed_transcription_is_not_reported_as_a_success() {
+        let envelope = transcription_envelope(
+            "call-1",
+            a_failed_result(false, Some("Groq API error (429): rate limited")),
+        );
+        assert!(
+            !envelope.success,
+            "a transcription that produced no text must not arrive as a success \
+             (the edge_tts shape, iter-2547)"
+        );
+        // The error field is what the agent loop, the observer and the
+        // transcript read; it must carry the provider's reason, not be empty.
+        assert_eq!(
+            envelope.error.as_deref(),
+            Some("Groq API error (429): rate limited"),
+            "the provider's own reason must reach the caller"
+        );
+    }
+
+    /// A failure with no error text still fails, and still says something:
+    /// `ToolResult::error` with an empty string would leave the model with
+    /// nothing to act on.
+    #[test]
+    fn a_failed_transcription_without_error_text_still_says_so() {
+        let envelope = transcription_envelope("call-2", a_failed_result(false, None));
+        assert!(!envelope.success, "no text was produced, so it failed");
+        let reason = envelope.error.unwrap_or_default();
+        assert!(
+            !reason.is_empty(),
+            "a failure must not carry an empty reason"
+        );
+    }
+
+    /// The SUCCESS arm is unaffected: a result whose provider flag is true
+    /// still travels as a success. Without this, "always return an error"
+    /// would satisfy the test above.
+    #[test]
+    fn a_successful_transcription_still_reports_success() {
+        let mut result = a_failed_result(true, None);
+        result.transcript = "hello".to_string();
+        let envelope = transcription_envelope("call-3", result);
+        assert!(
+            envelope.success,
+            "a successful transcription must still report success"
+        );
+        assert!(
+            envelope.error.is_none(),
+            "a success carries no error"
+        );
+    }
+
+    /// SOURCE contract over the call site: `execute` must route through the
+    /// shared envelope rule. Without this, the helper could be correct while
+    /// the production path kept the unconditional `ToolResult::success` — the
+    /// iter-2528 lesson (a helper test cannot see the call site).
+    #[test]
+    fn execute_routes_through_the_shared_envelope() {
+        let src = include_str!("transcription_tool.rs");
+        let call = format!("transcription_{}(self.name(), result)", "envelope");
+        assert_eq!(
+            src.matches(&call).count(),
+            1,
+            "`execute` must build its result through the shared envelope rule, \
+             exactly once: {call}"
+        );
+        // And the defective shape must not survive anywhere in the file.
+        let unconditional = format!("ToolResult::{}(self.name(), result)", "success");
+        assert_eq!(
+            src.matches(&unconditional).count(),
+            0,
+            "an unconditional success envelope is the edge_tts shape"
+        );
     }
 
     #[tokio::test]
