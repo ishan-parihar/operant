@@ -75,9 +75,9 @@ into code or docs without re-deriving (RG-008 / RG-010 / RG-011).
 | TUI entry | alt-screen by default; `terminal_scroll_mode` config (default false) | `tui/app/mod.rs` (`enter_alt_screen`, `terminal_scroll_mode`), `ui_viewport.rs:422` |
 | Turn state enum | `Idle/Sending/Thinking/Streaming/RunningTool/WaitingForApproval/WaitingForNetwork/Compacting` | `tui/app/enums.rs` `TurnState` (line ~186) |
 | Existing HITL | `clarify` tool → `user_question.rs` oneshot → TUI `ask_user_dialog` / gateway choice prompt | `crates/operant-core/src/user_question.rs`, `tools/clarify_tool.rs`, `gateway_runner.rs` PENDING_USER_QUESTIONS |
-| Gateway HITL timeout | 120 s oneshot, then "(no reply received within 120s — timeout)" | `gateway_runner.rs` pending_uq receiver (~7440) |
+| Gateway HITL timeout | 120 s oneshot, then "(no reply received within 120s — timeout)" | `gateway_runner.rs` pending_uq receiver (~4027) |
 | Telegram callback data cap | 64 bytes; index-based `choice:<idx>` / `approval:<a>` / `skill:<idx>` today | `gateway/telegram.rs` `send_choice_prompt`, `handle_callback_update` |
-| TUI callback surfaces | approval buttons (Approve/Deny), choice buttons, skill picker | `gateway/telegram.rs` inline_keyboard sites (~649/741/800/871) |
+| TUI callback surfaces | approval buttons (Approve/Deny), choice buttons, skill picker (TELEGRAM, not TUI — corrected iter-2612) | `gateway/telegram.rs` inline_keyboard sites (~649/741/800/871) |
 | Image crate | `image = 0.25` (default-features=false, features jpeg/png/gif/webp) ALREADY a dep of operant-core AND operant-cli | `Cargo.toml` `[workspace.dependencies]`; `Cargo.lock` |
 | PNG crate | `png 0.18.1` in lock (transitive via image) | `Cargo.lock` |
 | No resvg/tiny-skia/usvg/cosmic-text/fontdb/ab_glyph | 0 entries | `rg -c '^name = "..."$' Cargo.lock` per crate |
@@ -128,16 +128,25 @@ Rules (enforced by unit tests, not comments):
    node. The TUI maps tones→ANSI palette; the PNG maps tones→high-contrast RGB.
 3. `Provenance::AgentSynthesis` on any node makes the renderer append a
    `[unverified]` badge — unit test asserts it cannot be suppressed.
-4. Layout must be **lossless below 72 cols for interactive nodes**: a test drives
+4. The recursive `WidgetNode` tree is depth-bounded (`MAX_SURFACE_DEPTH = 8`)
+   and node-count-bounded (`MAX_SURFACE_NODES = 200`) at deserialization and
+   again in `validate_surface`; an over-deep/over-wide op is refused with a
+   typed reason (bounds the per-tool JSON Schema the providers see).
+5. Layout must be **lossless below 72 cols for interactive nodes**: a test drives
    `WidgetNode::measure(width)` and asserts `ui_request_input` rows never
    ellipsize command/file args at 60 and 55 cols (the red-team §A3 safety hole).
 
 ### M2 — Two tools, not nine (`operant-core`, `tools/builtin.rs` + `tools/ui_tool.rs`)
 
 Exactly two new tools (red-team §D3; 55→57 registered; ~96→~98 schemas —
-still under the deferral budget, and both new tools are declared
-`#[serde(default)] deferred = true`-eligible in `ToolSettings` so an operator
-can shrink the wire cost with `operant tools defer ui_render_surface`):
+deferrable behind `tool_search` so the wire cost is operator-controlled: they
+ship eager by default and an operator shrinks the budget with `operant tools
+defer ui_render_surface` (the `ToolSettings::deferred_tools` state file the
+registry reads at `tools.rs:586` — NOT a per-tool serde flag; the plan's
+earlier `#[serde(default)] deferred = true` phrasing was wrong and is
+corrected here per review F3). The recursive 19-variant `WidgetNode` schema is
+deep; `validate_surface` bounds its serialized depth (see M1) so the per-tool
+schema cannot blow provider recursion limits):
 
 | Tool | Args | Returns |
 |---|---|---|
@@ -146,7 +155,11 @@ can shrink the wire cost with `operant tools defer ui_render_surface`):
 
 `ui_render_surface` never suspends: it writes its IR into the transcript as an
 emitted row (via the same AgentEvent channel the TUI already drains). It is the
-"show a table / chart / diff / metrics" surface.
+"show a table / chart / diff / metrics" surface. The emission contract is
+explicit (review F18): the op rides a dedicated `AgentEvent` surface variant
+(plus a `database.db` session-transcript block so a reloaded session re-renders
+the card instead of dumping raw JSON into a text stream); `gateway_runner.rs`
+collects emitted SurfaceOps for `OutgoingMessage.attachments`.
 `ui_request_input` suspends (M3). The two cover the OpenBot gallery split without
 adding `ui_show_table` / `ui_show_metrics` / `ui_show_chart` / `ui_show_diff` /
 `ui_show_kanban` / `ui_ask_approval` / `ui_ask_choice` / `ui_ask_form` as separate
@@ -172,22 +185,40 @@ invent a parallel `PendingSurfaceAction` table.
   + numbered options and returns the selected index (`ask_user_dialog.rs`
   `confirm()` / `select_by_number()`). Extend the dialog (one new field: the
   surface's `to_plain_fallback()` header) rather than adding a second dialog.
+  Measured key precedence (`key_handling.rs`): the permission arm (~158) runs
+  FIRST, the ask-user arm (~199) second — so a choice card opened while a
+  permission dialog is up waits its turn, and Esc on the ask-user dialog
+  dismisses the question instead of denying an approval. `kind: approval` must
+  NOT reuse this path:
+  it routes through `approval.rs`'s `ApprovalMode` + the permission dialog
+  (`permission_request` / `handle_permission_key`), which owns the y/Y/p/n
+  semantics. `kind: form` is NOT supported on the TUI in v1 (the dialog has no
+  field widgets): form cards are a gateway-only stretch; the TUI refuses a
+  form op with `to_plain_fallback()` text and a `ui_request_input(kind:
+  choice)` follow-up. Telegram forms degrade to a conversational question
+  (send_choice_prompt-style numbered options; free-text answers via the next
+  plain message) — never a fake form.
 - **Durability gap, accepted and documented:** clarify's oneshot dies on restart
-  (in-memory `PENDING_USER_QUESTIONS`, `gateway_runner.rs` ~7340). This plan
-  inherits that limit for v1 — an in-flight `ui_request_input` that loses its
-  oneshot returns the timeout string, same as clarify does today. Closing it
-  (persisted `PendingSurfaceAction` + CAS) is **out of scope for v1** and filed
-  as a BUGS.md row (RT-598) owned by this plan's successor; the audit's §A1
-  scenario is therefore DOCUMENTED, not fixed, here. Reason: the 120 s oneshot
-  with timeout covers the common think-time (a user taps within 2 min), and a
-  durable-queue + resume-the-ReAct-loop system is a much larger change than the
-  surface IR itself.
+  (in-memory `PENDING_USER_QUESTIONS`, `gateway_runner.rs` ~2181/4027). This plan
+  inherits that limit for v1. The honest failure (review F11): on a process
+  restart the oneshot map AND the Tokio turn are gone — no timeout string is
+  returned to the model; the turn is orphaned mid-tool-call and outstanding
+  Telegram buttons fail on click. The 120 s timeout string only fires while the
+  process stays up. Closing it (persisted `PendingSurfaceAction` + CAS) is
+  **out of scope for v1** and filed as a BUGS.md row (RT-598) owned by this
+  plan's successor; the audit's §A1 scenario is therefore DOCUMENTED, not fixed,
+  here. Reason: the 120 s oneshot with timeout covers the common think-time (a
+  user taps within 2 min), and a durable-queue + resume-the-ReAct-loop system
+  is a much larger change than the surface IR itself.
 
 ### M4 — Governance gate (`operant-core`, `src/ui/gate.rs`)
 
-One function, consulted inside the tool interceptor seam (tools.rs `ToolInterceptEvent`,
-registerable via `ToolRegistry::register_tool_interceptor` — already used by WASM
-observers, gap G6):
+One function, called from the surface EMISSION and the `ui_request_input`
+dispatch path — NOT from the ToolRegistry interceptor seam (review F8): a
+pre-execute interceptor runs before `SurfaceOp` exists, and a post-execute
+interceptor runs after `ui_render_surface` already emitted its AgentEvent and
+after `ui_request_input` already suspended and displayed the card. The seam
+call is: `ui_tool.rs` builds the op, calls `validate_surface`, then emits:
 
 ```
 fn validate_surface(op: &SurfaceOp, caps: &SurfaceCapabilities, ctx: &UiContext)
@@ -199,62 +230,103 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
    default true, mirroring `ToolSettings` conventions; added to
    `operant.example.toml` in the same change per AGENTS.md rule).
 2. **Capability match** — `SurfaceCapabilities { inline_widgets, native_buttons,
-   modals, images, max_image_bytes }` injected per-turn from the transport
-   (TUI = full; Telegram/Slack = images+native buttons; SMS/WhatsApp = text
-   fallback only). NOT a binary TUI-vs-gateway fork (red-team §A2); the struct is
-   built from the calling transport.
+   modals, images, max_image_bytes }` built per-turn from the transport and
+   injected through `<turn_context>` on the latest user message (B-LAW prompt-
+   cache rule: the frozen system prefix must not carry per-turn volatile
+   state). TUI = full; Telegram = images+native buttons (the ONLY image+button
+   adapter); Discord/Slack/WhatsApp/Email/SMS = text fallback only (Slack is
+   OUTBOUND-ONLY — see M6; Discord receives but has no inline keyboard in this
+   tree); SMS = text only. `is_group_chat || is_channel_post` incoming ⇒
+   `caps.images = false` (the PNG preview stays DM-only by CAPABILITY, not by
+   rewriting nodes inside the op — review F9).
 3. **Secret scrub** — walk every string leaf through `redact_sensitive_text`
-   BEFORE the op is emitted (red-team §A4: the pixels leave the box via
-   Telegram/Slack; the scrubber already exists and is the one used by
-   `agent/message_safety.rs` + `gateway/telegram.rs`).
-4. **Group-channel policy** — on `is_group_chat` incoming messages, `CodeDiff`
-   and raw workspace-table nodes are auto-replaced with their
-   `to_plain_fallback()` (text) — the PNG preview stays DM-only (red-team §A4).
+   BEFORE layout (red-team §A4). Two measured limits the plan acknowledges
+   (review F8): the scrubber is regex MASKING, not fail-closed DLP refusal, and
+   a leaf-wise walk misses secrets split across sibling cells (half a token in
+   two `Table` cells) — so the gate ALSO scrubs the serialized fallback text,
+   and `[v] view raw JSON` shows the post-scrub op, never the pre-scrub one.
+4. **Group-channel policy** — on `is_group_chat || is_channel_post`, images are
+   refused by capability (2), so no op-level node rewriting is needed; the
+   `to_plain_fallback()` text is what ships.
 5. **Audit row** — `tracing` event `ui.rendered` / `ui.refused` (tool_name,
-   surface_id, initiator, refusal_reason). The existing `turn_attribution.rs`
-   carries the initiator (TUI operator / gateway user / cron / autonomous).
+   surface_id, initiator, refusal_reason). The initiator (TUI operator /
+   gateway user / cron / autonomous) rides the op's `Provenance` field set by
+   the calling seam — `turn_attribution.rs` exists in the tree but is not
+   load-bearing for v1.
 
 ### M5 — TUI renderer (`operant-cli`, new `tui/operant_ui/ui_surface.rs`)
 
 - Read-only nodes (`Table`, `BarChart`, `Progress`, `CodeDiff`, `StatusTimeline`,
   `Badge`, `Text`, `Divider`, `Card`, `Tabs`, `List`, `KeyValueGrid`) map to
   `ratatui::Widget`s rendered INSIDE the existing scrollback path
-  (`operant_ui::ui_prepare::display_messages` / `app/scroll_emit.rs`), not a new
-  overlay. Re-layout on `Event::Resize` (the existing viewport already does this
-  in `ui_viewport.rs`).
+  (`operant_model/adapter.rs::display_messages` feeding
+  `operant_ui/ui_prepare.rs`, then `app/scroll_emit.rs` in terminal_scroll_mode
+  or the alt-screen viewport otherwise), not a new overlay. Re-layout on
+  `Event::Resize` (the existing viewport already does this in
+  `ui_viewport.rs`); `terminal_scroll_mode = true` keeps the inline viewport —
+  surfaces re-render at the new width on the next frame but the scrollback
+  emitter's append-only watermark does NOT retroactively re-wrap (documented
+  limit, not a bug).
 - Interactive nodes (`Button`, `ChoicePicker`, `TextField`, `Confirm`, `Modal`)
   reuse the **existing overlay stack**: `modal_layout` (`overlays/layout.rs:134`)
   + `ask_user_dialog.rs`'s frame primitives. A new `ui_surface_dialog` mirrors
   `ask_user_dialog` (question header + focus ring over fields). Key bindings
   follow the repo's `keybindings/report.rs` registry (Tab/Shift-Tab fields,
   Enter submit, Esc cancel — NOT bare-Esc=Deny; the red-team §A3 collision
-  guard). `TurnState::WaitingForApproval` already exists for the suspend
-  display; no new enum variant.
+  guard). The suspend state: `ask_user_dialog` does NOT set
+  `TurnState::WaitingForApproval` today (measured: `channel_drains.rs` opens the
+  dialog without touching turn state, and `tui_state_impl.rs:481` renders
+  WaitingForApproval as `RunningTool("permission")` status text — reusing it
+  would show approval chrome for a choice card). So v1 adds ONE new variant,
+  `TurnState::WaitingForSurface` (enums.rs), rendered as
+  `RunningTool("surface")`, dispatched by the dialog's own key block (the
+  `ui_surface_dialog` arms in `key_handling.rs`, placed after the permission
+  arm so approvals keep precedence). This corrects the plan's earlier "no new
+  enum variant" claim (review F19: verified — WaitingForApproval IS approval-
+  specific).
 - The `[v] view raw JSON` toggle is a `key_input_dialog` variant (already a
   dialog), reachable from every `ui_request_input` card below 72 cols.
 
 ### M6 — Gateway PNG snapshotter + native actions (`operant-core/src/gateway`)
 
-- `SurfaceSnapshotRenderer` trait (`async fn render_png(&self, surface,
-  RenderOptions) -> Result<Vec<u8>>`) with ONE impl: `CellBufferRenderer` built
-  on the `image` crate (M-mine). The `TestBackend` half of the red-team Option B
-  is the buffer SOURCE; the `image` crate is the PIXEL TARGET. No resvg, no
+- **Crate-direction resolution (review F4, the plan's hardest correction):**
+  `ratatui` is a dependency of operant-cli ONLY (`rg 'ratatui' crates/operant-core/Cargo.toml`
+  → empty; `crates/operant-cli/Cargo.toml` → present). operant-core CANNOT
+  reuse T2's `ratatui::Widget` renderer. v1 injects the layout from the CLI
+  side: `gateway_runner.rs` (operant-cli) owns a `SurfaceLayoutFn` callback
+  (a `fn(&WidgetNode, width) -> Vec<StyledCell>`) built from the TUI's widget
+  mapper; the gateway core consumes the resulting cell grid, never ratatui.
+  The `SurfaceSnapshotRenderer` trait (`async fn render_png(&self, surface,
+  RenderOptions) -> Result<Vec<u8>>`) and `CellBufferRenderer` (cell grid →
+  `image::RgbaImage`) live in operant-core; the `TestBackend` buffer is the
+  cell SOURCE and the `image` crate is the PIXEL TARGET. No resvg, no
   cosmic-text, no fontdb.
 - **Embedded font**: one permissive 5x7 bitmap font via `include_bytes!` (a
   ~3 KB binary in `gateway/`); `operant doctor` gains a check that the font
-  bytes are present and non-empty (red-team §A7 — blank `□□□` boxes in
-  minimal containers). No system-font dependency, ever.
-- **Telegram**: upload once via `sendPhoto` (new method on
-  `TelegramAdapter`, sibling of the existing `send_choice_prompt`) + caption =
-  `to_plain_fallback()`. Native buttons: `InlineKeyboardMarkup` with
-  `callback_data = op:<12-byte-id>:<16-byte-HMAC>` (32 B ≤ 64 B cap). The
-  existing `handle_callback_update` gains a fourth family (`op:`) that:
-  (a) verifies `HMAC(gateway_secret, surface_id || action_id || user_id ||
-  chat_id || message_id)` (red-team §A5) using the `hmac`+`sha2` crates ALREADY
-  in the tree, (b) checks `sender_id == expected_external_user_id`, (c)
-  synthesizes the equivalent inbound message (same pattern as
-  `approval_message_from_callback` / `choice_message_from_callback`), (d) edits
-  the prompt to strip the keyboard on success.
+  bytes are present and non-empty. Coverage is HONEST (review F13): ~95–256
+  glyphs, so box-drawing (`─│┌┐└┘├┤┬┴┼`) and block elements (`█▓▒░`) MUST be
+  rendered GEOMETRICALLY (lines/rects drawn as pixels, never glyph lookups),
+  and any non-ASCII text (CJK, emoji) falls back to `□` per cell with a
+  one-line note in the caption. `unicode-width 0.2` (already in tree) drives
+  cell width. `operant doctor`'s font check is a PRESENCE check only — the
+  real assertion is G3(d)'s rendered-glyph test.
+- **Telegram**: upload once via `sendPhoto` (new method on `TelegramAdapter`,
+  sibling of the existing `send_choice_prompt`; verified ABSENT today —
+  `rg sendPhoto crates/operant-core/src/gateway/telegram.rs` → 0 hits) +
+  caption = `to_plain_fallback()`. PNGs are integer-upscaled 2× or 3× before
+  upload so Telegram's JPEG recompression cannot blur 1-px 5x7 strokes;
+  `sendDocument` is the fallback when upscaling is insufficient. Native
+  buttons: `InlineKeyboardMarkup` with
+  `callback_data = op:<b64url(12B-id)>:<b64url(16B-HMAC)>` — 43 B ≤ 64 B cap
+  (review F7: raw 32 B is impossible; Telegram callback_data is UTF-8 text).
+  The HMAC binds `surface_id || action_id || expected_user_id || chat_id`
+  — NOT `message_id`, which Telegram assigns only AFTER sendPhoto returns
+  (review F7, causal fix): the pending entry records `message_id` post-send,
+  and `handle_callback_update` verifies `callback.message.message_id`
+  against it. The `hmac`+`sha2` crates are ALREADY in the tree (0.12.1/0.10.9).
+  The signing key is `[gateway] webhooks_secret` (ALREADY a config field,
+  `config.rs:1973`, consumed by the webhook adapter — reused, not a second
+  secret), provisioned under the operant home via the one-resolver rule.
 - **Slack**: OUTBOUND-ONLY today (no Socket Mode; `slack.rs` `start()` logs and
   returns). v1 covers Telegram only; Slack `files.uploadV2` + Block Kit is a
   stretch goal gated on the gateway receiving Slack inbound at all. Recorded so
@@ -264,10 +336,14 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
   HITL pause, ONE `editMessageMedia`/`editMessageText` on resolve. Never
   re-upload on a debounce (red-team §A6 — 429 storms). The
   `OutgoingMessage` struct (`gateway/types.rs`) gains one `#[serde(default)]
-  attachments: Vec<SurfaceAttachment>` field; every existing construction site
-  (21 in `gateway/mod.rs`, plus adapters) keeps compiling via `..Default::default()`
-  semantics (audit: only `mod.rs`'s 21 + 8 adapter sites use
-  `OutgoingMessage::new` / struct literals — mechanical).
+  attachments: Vec<SurfaceAttachment>` field. Compilation impact, measured
+  (review F16 corrected the plan here): there are NO struct literals outside
+  `types.rs` itself (2 hits, both the definition) — every one of the 79
+  construction sites across the workspace uses `OutgoingMessage::new(..)`
+  (`rg -c 'OutgoingMessage::new' crates/` → 79) — so adding the field with a
+  `Default` impl on the struct plus one line in `new()` keeps ALL of them
+  compiling mechanically. `#[serde(default)]` alone would NOT have (it affects
+  serde only, not Rust initializers).
 
 ## Gates / success criteria
 
@@ -277,7 +353,7 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
 |---|---|---|
 | G1 | `cargo test -p operant-core ui::` green: (a) DLP scrub leaves no `sk-`/`ghp_`/`BEGIN PRIVATE KEY`/`postgres://` in any leaf after render (feed known secrets, assert masked); (b) `SemanticTone` is the only color path (compile-time: no `Color` field exists); (c) `AgentSynthesis` renders the `[unverified]` badge; (d) `measure()` at 55/60 cols never truncates `ui_request_input` args | break (a) → test red |
 | G2 | `cargo test -p operant-cli --bin operant tui::operant_ui::ui_surface` green: 120x40 and 55x24 snapshots render a `ui_request_input` with zero arg truncation; `[v]` raw toggle shows full JSON | break measure() → red |
-| G3 | `cargo test -p operant-core gateway::` green: (a) forged/wrong-user `op:` callback rejected by HMAC (mutate one byte of expected user id → rejected); (b) callback_data ≤ 64 B; (c) 1 upload + 1 edit per turn under simulated streaming (count `sendPhoto` calls); (d) PNG byte-length > threshold (catches missing-font blank output) | break HMAC verify → red |
+| G3 | `cargo test -p operant-core gateway::` green: (a) forged/wrong-user `op:` callback rejected by HMAC (mutate one byte of expected user id → rejected); (b) callback_data ≤ 64 B (UTF-8 bytes, base64url); (c) 1 upload + 1 edit per turn under simulated streaming (count `sendPhoto` calls); (d) PNG renders every box-drawing/block cell as the correct GEOMETRIC pattern (decode the PNG, assert border pixels present at expected coordinates) and every non-ASCII cell as the □ fallback — catches both the missing-font blank output and the tofu-box regression | break HMAC verify → red |
 | G4 | `bash scripts/check-gates-present.sh` still lists every new test (the self-test gate that catches "gate script silently emptied") | delete a test → red |
 | G5 | `./scripts/check.sh check -p operant-core --lib` + `cargo clippy -p operant-core --all-targets -- -D warnings` + `cargo fmt --all --check` clean | n/a |
 | G6 | `rg -c 'name = "resvg"|name = "tiny-skia"|name = "cosmic-text"' Cargo.lock` prints `0` (no rasterizer crate added) | add dep → red |
@@ -289,7 +365,8 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
 - New tools on the wire: +2 (deferrable).
 - New DB tables: 0 (clarify oneshot reused; durable queue deferred to successor,
   RT-598).
-- New config section: 1 (`[ui]`, one boolean, default true).
+- New config section: 1 (`[ui]`, one boolean, default true) + the existing
+  `[gateway] webhooks_secret` reused as the callback HMAC key (no new secret).
 - Estimated new LOC: ~1,200 (IR 300 + gate 200 + TUI renderer 250 + gateway
   rasterizer 250 + tool glue 200), excluding tests.
 - Rasterizer deps avoided: resvg, tiny-skia, usvg, cosmic-text, fontdb,
@@ -297,13 +374,24 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
 
 ## Tranches (each = one iteration = one gate)
 
-- **T1** — `src/ui/mod.rs` IR + `ui/gate.rs` + `tools/ui_tool.rs` two tools +
-  config `[ui]` + example.toml + G1/G5/G6. (operant-core)
-- **T2** — `tui/operant_ui/ui_surface.rs` + dialog reuse + `[v]` toggle + G2.
-  (operant-cli)
-- **T3** — `gateway/` `CellBufferRenderer` + embedded font + `sendPhoto` +
-  `op:` callback family + `OutgoingMessage` attachments field + doctor font
-  check + G3. (operant-core)
+Sliced VERTICALLY where the review (F14/F17) showed horizontal slicing does not
+ship: each tranche must leave the tree compiling and net-positive.
+
+- **T1** — `src/ui/mod.rs` IR + `ui/gate.rs` + `tools/ui_tool.rs`
+  (`ui_render_surface` read-only only) + config `[ui]` + example.toml +
+  `AgentEvent` surface variant + `display_messages` scrollback render of
+  read-only nodes + G1/G5/G6. Ship together: the IR without a renderer is
+  dead weight; the renderer without the IR is unbuildable. (operant-core +
+  the cli-side render arm.)
+- **T2** — `ui_request_input` (choice only) + `ask_user_dialog` header field +
+  `TurnState::WaitingForSurface` + `ui_surface_dialog` (choice) + `[v]` toggle
+  + G2. (operant-cli; the tool lands in the same iteration it becomes
+  reachable.)
+- **T3** — `gateway/` `CellBufferRenderer` + embedded font + geometric
+  box-drawing + `sendPhoto` + `op:` callback family (b64url HMAC over
+  surface_id/action_id/user_id/chat_id, message_id verified post-send) +
+  `OutgoingMessage` attachments + doctor font check + G3. (operant-core +
+  `gateway_runner.rs` layout injection.)
 - **T4** — BUGS.md RT-598 (durable HITL queue) filed; Slack upload stretch;
   `docs/library/ui.md` library page + INDEX row + `genome lint` green.
 - NOT in v1: WASM custom widgets / Draft-Published registry (red-team §D2 cut;
@@ -311,7 +399,9 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
   is enough for a plugin to return a `WidgetNode` in its tool result), resvg
   card renderer, `ui_render_surface` TOON streaming hydration at 30 fps (the
   composer's ghost-text engine is unrelated; TOON rows stream as the tool result
-  arrives, same as every other tool).
+  arrives, same as every other tool), TUI form cards (`kind: form` refused
+  TUI-side, gateway-only stretch), `ui_request_input(kind: approval)` (routes
+  through the existing permission dialog, not a surface card).
 
 ## Resume here
 
