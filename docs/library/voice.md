@@ -83,7 +83,10 @@ revision-pinned
 GGUF checkpoint (`gradium/phonon-31m-en`, ~65 MB q8_0) cached under
 `~/.operant/cache/phonon/<repo>-<rev>/` (the one home owns it; a
 pre-iter-2524 `~/.cache/phonon/gradium/phonon-31m-en` tree is migrated on
-first use). It replaced Kokoro (ONNX Runtime, `af_sky`) in iter-2513. This is
+first use and then **removed** — the migration copies so a half-migrated
+install cannot lose its only good copy, and the old tree is deleted only once
+every file is verified complete at the new location, so no install is left
+paying for the 65 MB twice). It replaced Kokoro (ONNX Runtime, `af_sky`) in iter-2513. This is
 an operator design choice — do not switch the default away from Phonon.
 
 | provider | key / dependency | default voice | default model | output |

@@ -144,7 +144,9 @@ pub fn cache_dir() -> Option<PathBuf> {
     )))
 }
 
-/// The pre-iter-2524 cache location, read only to migrate an existing tree.
+/// The pre-iter-2524 cache location, read to migrate an existing tree and
+/// retired once it has nothing left to give. It is never written to: the live
+/// cache is [`cache_dir`], under the operant home.
 fn legacy_cache_dir() -> Option<PathBuf> {
     let base = dirs::cache_dir().or_else(dirs::home_dir)?;
     Some(base.join("phonon").join(repo_name()))
@@ -287,12 +289,126 @@ fn migrate_legacy_cache(dir: &Path) -> Result<(), String> {
         let to = dir.join(file);
         std::fs::copy(&from, &to).map_err(|e| format!("migrate {file}: {e}"))?;
     }
+    retire_legacy_cache(dir, &old);
     Ok(())
+}
+
+/// Remove the pre-iter-2524 cache tree once nothing is left to migrate.
+///
+/// The migration copies rather than moves, so before this an install that had
+/// ever run the old build kept a SECOND complete copy of the checkpoint: two
+/// trees of ~65 MB each, one of them outside the operant home that iter-2527
+/// consolidated. The copy is deliberate -- a half-migrated install must not
+/// lose the only good copy -- so the deletion has to be earned: it happens
+/// only when EVERY file is already complete at the new location, which is
+/// exactly the condition under which the old tree is pure duplication.
+///
+/// Any failure here is swallowed on purpose. A cache that could not be tidied
+/// is a wasted 65 MB, not a broken install; the synthesis path must not fail
+/// because a best-effort cleanup did.
+fn retire_legacy_cache(dir: &Path, old: &Path) {
+    let all_present = MODEL_FILES.iter().all(|f| file_is_complete(dir, f));
+    if !all_present {
+        return;
+    }
+    // `legacy_cache_dir` is `~/.cache/phonon/gradium/phonon-31m-en`; remove
+    // that per-repo tree, but never a path that is not recognisably one -- a
+    // mis-derived home must not turn into a recursive delete of something
+    // else. `repo_name()` carries a `/` (`gradium/phonon-31m-en`), so the
+    // final component to compare is its LAST segment, not the whole string:
+    // comparing the whole thing would never match and the cleanup would be
+    // silently dead.
+    let repo_leaf = repo_name().rsplit('/').next().unwrap_or(repo_name());
+    if old.file_name().and_then(|n| n.to_str()) != Some(repo_leaf) {
+        return;
+    }
+    if let Err(e) = std::fs::remove_dir_all(old) {
+        tracing::debug!(
+            path = %old.display(),
+            error = %e,
+            "could not retire the legacy phonon cache tree"
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A temp dir standing in for the cache, with the four pinned files written
+    /// at their expected sizes. Nothing in these tests touches the real
+    /// `~/.cache` or `~/.operant`: every path is built under `tempfile`'s dir.
+    fn seeded_cache() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for (file, size) in MODEL_FILE_SIZES {
+            std::fs::write(tmp.path().join(file), vec![0u8; *size as usize])
+                .expect("seed model file");
+        }
+        tmp
+    }
+
+    /// The duplication this closes: a complete legacy tree next to a complete
+    /// new one is 65 MB of nothing, and before this iteration the old tree was never
+    /// removed.
+    #[test]
+    fn a_fully_migrated_legacy_tree_is_retired() {
+        let new = seeded_cache();
+        let old = tempfile::tempdir().expect("legacy tempdir");
+        let legacy = old.path().join(repo_name());
+        std::fs::create_dir_all(&legacy).expect("legacy repo dir");
+        std::fs::write(legacy.join("stale-marker"), b"leftover").expect("marker");
+
+        retire_legacy_cache(new.path(), &legacy);
+
+        assert!(
+            !legacy.exists(),
+            "a legacy tree whose files are all present at the new location must be removed"
+        );
+    }
+
+    /// The safety property: the old tree is the ONLY copy of a file the new
+    /// cache is missing, so deleting it would destroy the checkpoint and force
+    /// a 65 MB re-download -- or worse, leave the install with nothing.
+    #[test]
+    fn an_incomplete_new_cache_keeps_the_legacy_tree() {
+        let new = tempfile::tempdir().expect("new tempdir");
+        // Deliberately incomplete: only one of four files, and truncated.
+        std::fs::write(new.path().join("config.json"), vec![0u8; 10]).expect("truncated config");
+
+        let old = tempfile::tempdir().expect("legacy tempdir");
+        let legacy = old.path().join(repo_name());
+        std::fs::create_dir_all(&legacy).expect("legacy repo dir");
+        std::fs::write(legacy.join("model.q8.gguf"), b"the only copy").expect("gguf");
+
+        retire_legacy_cache(new.path(), &legacy);
+
+        assert!(
+            legacy.exists(),
+            "an incomplete new cache must never lose the legacy tree"
+        );
+        assert!(
+            legacy.join("model.q8.gguf").exists(),
+            "the only copy of the weights must survive"
+        );
+    }
+
+    /// A mis-derived home must not turn into a recursive delete of an unrelated
+    /// directory. The guard is that the final component names the repo.
+    #[test]
+    fn an_unrecognisable_legacy_path_is_left_alone() {
+        let new = seeded_cache();
+        let bystander = tempfile::tempdir().expect("bystander tempdir");
+        let unrelated = bystander.path().join("definitely-not-the-repo");
+        std::fs::create_dir_all(&unrelated).expect("unrelated dir");
+        std::fs::write(unrelated.join("keep-me"), b"important").expect("file");
+
+        retire_legacy_cache(new.path(), &unrelated);
+
+        assert!(
+            unrelated.join("keep-me").exists(),
+            "a path that does not name the model repo must not be deleted"
+        );
+    }
 
     #[test]
     fn cache_dir_is_under_the_operant_home_with_the_revision() {
