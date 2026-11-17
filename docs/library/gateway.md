@@ -10,7 +10,8 @@ Not for: the agent loop behind a gateway turn
 
 Source: `crates/operant-core/src/gateway/` (mod, telegram.rs,
 discord.rs, slack.rs, whatsapp.rs, email.rs, sms.rs, webhook.rs,
-webhook_subscriptions, admin, lifecycle, dispatch_breaker, types),
+webhook_subscriptions, admin.rs, lifecycle.rs, status.rs,
+dispatch_breaker, types),
 `crates/operant-core/src/gateway_session.rs`,
 `crates/operant-core/src/gateway_pipeline.rs` (hooks),
 `crates/operant-core/src/gateway_markdown.rs`,
@@ -117,6 +118,45 @@ One public function `markdown_to_telegram_html` converting model
 markdown to Telegram-compatible HTML; the WhatsApp asterisk dialect is
 shared (`asterisk_dialect`, iter-341) — one dialect owner per platform
 family instead of per-adapter hand-rolls.
+
+## Lifecycle primitives (`lifecycle.rs`)
+
+`gateway/lifecycle.rs` is the per-session serialization layer, ported from
+hermes's `turn_lease.py`, `session_stall.py`, `drain_control.py`,
+`delivery_ledger.py` and `mirror.py`:
+
+- **`TurnLease`** — only one in-flight turn may run per session key, so two
+  rapid messages to one conversation can never interleave two agent runs.
+  `try_acquire` returns a guard that releases on drop.
+- **`SessionStallTracker`** — records when each session's turn started, so a
+  turn that never finished is visible rather than merely absent.
+- **`DeliveryLedger`** — the 500-entry record of outbound sends.
+- **`classify_turn_error`** — maps an error string to a `TurnExitReason`.
+
+## The daemon's state file (`status.rs`)
+
+The delivery ledger and the queue-wait stats live in RAM, so they die with
+the process: after a restart "how many replies failed?" and "how many turns
+waited behind another chat?" were unanswerable, and the only evidence of a
+bad run was the journal (RT-523). `gateway/status.rs` writes ONE small JSON
+file into the operant home on every turn end and on shutdown —
+`gateway.status.json`, holding `deliveries`, `failed_deliveries`,
+`queue_waits`, `queue_wait_total_ms`, `queue_wait_worst_ms` and
+`agent_slots`.
+
+It is a STATUS file, not a log: it is overwritten, never appended, and
+carries `updated_at` so a reader that finds it stale can say so. The path
+resolves through the one home resolver (`HERMES_HOME` → the sticky profile
+→ `~/.operant`).
+
+## Admin commands (`admin.rs`) — UNWIRED
+
+`gateway/admin.rs` holds `handle_admin_command` (sessions, channels,
+broadcast, shutdown, help), extracted verbatim from `gateway/mod.rs`. **No
+production path routes an admin command here** (RT-333): every caller is in
+this crate's test module, so nothing an operator types reaches this handler.
+The per-arm behavior is real and tested; wiring the dispatch is a product
+decision, not a bug fix.
 
 ## Commands + subscriptions
 

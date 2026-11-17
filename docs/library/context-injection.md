@@ -159,6 +159,22 @@ memory retain. See [memory.md](memory.md).
 over the tool event feed; explicitly NOT an injection (display-only,
 listed here so nobody mistakes it for one).
 
+## Configuring what shapes a turn
+
+Everything here is off or cheap by default, so turning a modality on
+is a config edit. `[moa] enabled = true` plus `references` and
+`aggregator` enables the per-turn fan-out (the in-loop switch is
+`operant run --moa`). `[advisor] enabled = true` starts the
+transcript watchdog, with `[advisor.model]`, `continue_severity` and
+`timeout_secs` beside it. Recap runs on `agent.recap_idle_seconds`
+and takes its model slot from `[recap.model]`. Ponytail is
+`[agent.ponytail]` (`enabled`, `default_level`, `inject`), and
+`/ponytail [lite|full|ultra|off]` overrides it for the process
+without touching the file. Skills come from `/skills`, `/skill
+<name>` and `operant skills list|inspect`; context files are just
+`AGENTS.md` / `CLAUDE.md` in the workspace; `@file:` and `@folder:`
+references expand at submit. Cost per modality is in the table below.
+
 ## Cost discipline
 
 | Modality | LLM calls | Lands in | Fires |

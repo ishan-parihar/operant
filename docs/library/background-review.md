@@ -58,6 +58,21 @@ through the write-provenance machinery:
 - The **skill nudge counter** in the agent loop — nudges toward creating
   a skill when a repeated pattern is detected.
 
+## Configuring the background review
+
+Two cadences decide how often it runs, both in `[agent]`:
+`memory_nudge_interval` (turns between memory reviews, default 10) and
+`creation_nudge_interval` (iterations between skill nudges, default
+10). Setting either to `0` disables that lane outright. To move the
+review off your main route, give it its own model slot in
+`[auxiliary_models.memory]` with `model`, `base_url` and `api_key`:
+all three form one route contract, so a model-only slot rides the
+primary client while a pinned endpoint or credential gets a dedicated
+client and counts as a cold route. What the review is allowed to
+touch is not configurable from `operant.toml`: the skill lane may
+write only what it read, and the memory lane refuses writes by
+design (AD-020), reporting candidates for a foreground turn instead.
+
 ## Intention
 
 Self-improvement has to be post-turn and off the hot path: doing it inside

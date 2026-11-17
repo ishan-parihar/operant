@@ -35,6 +35,24 @@ for page in $pages; do
   done < <(grep -n -o "${BT}crates/[A-Za-z0-9_./-]*${BT}" "$page" | sed "s/${BT}\$//")
 done
 
+# --- 1b. every backticked BARE .rs token names a real file ------------------
+# A bare `foo.rs` in prose reads as a citation, and MEASURED on 2026-11-17 it is
+# not always one: a fleet writer pluralised `output_style.rs` and invented an
+# `audit.rs` that never existed. Both read as fact. The check is deliberately
+# NAME-based against the whole tree (a stem can sit in any directory), and prose
+# that legitimately names a file from ANOTHER project (`ported from codex
+# chat_composer.rs`) or a file that no longer exists (`retrieval.rs ... was
+# not ported`) is allowed one explicit hedge word on the same line.
+hedge='ported|upstream|codex|jcode|hermes|not ported|deleted|removed|former|iter-[0-9]+'
+for page in $pages; do
+  while IFS=: read -r n tok; do
+    t=${tok#"$BT"}; t=${t%"$BT"}
+    ln=$(sed -n "$((n>1?n-1:n)),$((n+2))p" "$page")
+    printf '%s' "$ln" | grep -qiE "$hedge" && continue
+    find crates -name "$t" | grep -q . || { say "PHANTOM-TOKEN $page:$n cites ${BT}${t}${BT}, which matches no file"; fail=1; }
+  done < <(grep -n -o "${BT}[a-z0-9_]*\.rs${BT}" "$page" | sed "s/${BT}\$//")
+done
+
 # --- 2. every mechanism page declares what it owns and what it does not ----
 for page in $pages; do
   grep -q '^Source:'  "$page" || { say "NO-SOURCE  $page has no Source: header (STANDARD.md requires one)"; fail=1; }

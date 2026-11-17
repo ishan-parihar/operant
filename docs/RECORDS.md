@@ -1,4 +1,4 @@
-<!-- genome:zone records sha=d6a48d6ad416 -->
+<!-- genome:zone records sha=ab4703079b97 -->
 **Decisions** (44)
 
 | ID | Title | Status | Description |
@@ -72,7 +72,7 @@
 | RG-021 | a live repro that cannot reach its provider proves nothing about the feature | High | a live repro that cannot reach its provider proves nothing about the feature |
 | RG-022 | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) | High | A library page that nothing checks is coverage nobody has: the genome gains a reverse coverage gate (E311) |
 | RG-023 | a library contract no gate runs is a contract nobody has | High | a library contract no gate runs is a contract nobody has |
-| RG-024 | source comment cites a doc deleted without a tombstone | High | source comment cites a doc deleted without a tombstone |
+| RG-024 | source comment cites a doc deleted without a tombstone | Medium | a Rust comment points at a design doc that was deleted, so a reader following the pointer hits nothing |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=2a03e30bd9bd -->
