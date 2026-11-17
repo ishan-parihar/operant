@@ -1977,6 +1977,17 @@ def files_of_units(cfg: Cfg, globs_: list[str]) -> list[str]:
     return sorted(out)
 
 
+def cites(body: str, rel: str, name: str) -> bool:
+    """Does this page REALLY cite the unit? A full repo path, or the module
+    token as its own word. Deliberately not a bare substring: `space` is an
+    English word, so `space in body` passes for a page that never mentions
+    `space.rs`. Measured 2026-11-17: 267 of 926 units passed that way."""
+    if rel in body:
+        return True
+    token = name + ".rs"
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])", body) is not None
+
+
 def lint_coverage(cfg: Cfg) -> list[str]:
     """E311: every code unit is named by at least one doc in `ops.coverage_surfaces`.
 
@@ -2028,9 +2039,15 @@ def lint_coverage(cfg: Cfg) -> list[str]:
             continue
         if is_archived(cfg, rel):
             continue
-        if not any(name in body for body in docs.values()):
-            out.append(f"E311 {rel} is named by no {label} page — document it or add it to "
-                       f"ops.coverage_exempt with the reason")
+        # 2026-11-17 iter-2556: a BARE STEM is not a citation. The original
+        # check was `name in body`, so `space.rs` passed because "space" is an
+        # English word and `parse.rs` passed because "parse" appears in prose --
+        # MEASURED: 267 of 926 units passed that way, on coincidence. A citation
+        # is now the full repo path, or the module token as its own backticked
+        # word (`gateway_session.rs`), which is what a reader would search for.
+        if not any(cites(body, rel, name) for body in docs.values()):
+            out.append(f"E311 {rel} is named by no {label} page — cite its path or "
+                       f"`{name}.rs`, or add it to ops.coverage_exempt with the reason")
     return out
 
 
