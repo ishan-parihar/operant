@@ -3937,7 +3937,7 @@ impl GatewayMessageHandler {
         // conversation back to the store, so no other chat loses context.
         slot.agent.set_session_id(session_id.clone());
 
-        // (iter-2581) A command-scoped turn must not inherit the slot's last
+        // (iter-2582) A command-scoped turn must not inherit the slot's last
         // cron origin. Slots are hash-assigned across session keys
         // (`index_for`), so several chats share one agent; the channel and
         // socket turn paths each stamp the origin at turn start, but this path

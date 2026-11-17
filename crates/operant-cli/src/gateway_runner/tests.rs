@@ -4423,7 +4423,7 @@ fn the_socket_turn_entry_resets_the_slot_before_it_runs() {
     );
 }
 
-/// (iter-2581) A command-scoped turn must not inherit the slot's last cron
+/// (iter-2582) A command-scoped turn must not inherit the slot's last cron
 /// origin.
 ///
 /// Slots are hash-assigned across session keys (`AgentSlots::index_for`), so
