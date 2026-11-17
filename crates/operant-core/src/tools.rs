@@ -68,9 +68,6 @@ pub mod tool_backend_helpers;
 pub mod tool_search;
 pub mod tool_state;
 pub mod transcription_tool;
-pub mod tts_command_provider;
-pub mod tts_provider;
-pub mod tts_registry;
 pub mod tts_tool;
 pub mod verification_tool;
 pub mod video_analysis_tool;
@@ -128,9 +125,6 @@ pub use spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use transcription_tool::TranscriptionTool;
-pub use tts_command_provider::CommandProvider;
-pub use tts_provider::{AudioFormat, TtsError, TtsProvider};
-pub use tts_registry::TtsPluginRegistry;
 // The store is file-backed and its data is the operator's, so a non-agent
 // reader (the TUI's todo band) must be able to ask for it directly instead of
 // waiting to observe a tool result — see `todo_tool::todo_list_for_session`.

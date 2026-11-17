@@ -21,18 +21,13 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::debug;
 
 use crate::config::runtime_config;
 use crate::schema::ToolSchema;
 use crate::tools::phonon;
-use crate::tools::tts_command_provider::CommandProvider;
-use crate::tools::tts_provider::{AudioFormat, TtsProvider};
-use crate::tools::tts_registry::TtsPluginRegistry;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 pub struct TtsTool {
@@ -48,8 +43,6 @@ pub struct TtsTool {
     /// behind a `tokio::Mutex` and every synthesis borrows it mutably. This is
     /// the local, offline default voice — it replaces the old Kokoro engine.
     phonon: Arc<Mutex<Option<phonon::PhononSynth>>>,
-    plugin_registry: Arc<TtsPluginRegistry>,
-    command_providers: Arc<Mutex<HashMap<String, CommandProvider>>>,
 }
 
 #[derive(JsonSchema, Deserialize)]
@@ -246,24 +239,7 @@ impl TtsTool {
                 .unwrap_or_default(),
             xai_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
             phonon: Arc::new(Mutex::new(None)),
-            plugin_registry: Arc::new(TtsPluginRegistry::new()),
-            command_providers: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    pub fn with_plugin_registry(registry: Arc<TtsPluginRegistry>) -> Self {
-        let mut tool = Self::new();
-        tool.plugin_registry = registry;
-        tool
-    }
-
-    pub async fn register_command_provider(&self, name: String, provider: CommandProvider) {
-        let mut providers = self.command_providers.lock().await;
-        providers.insert(name, provider);
-    }
-
-    pub async fn get_plugin_registry(&self) -> Arc<TtsPluginRegistry> {
-        self.plugin_registry.clone()
     }
 
     async fn generate_speech(&self, args: &TtsArgs) -> ToolResult {
@@ -272,112 +248,6 @@ impl TtsTool {
         }
 
         let provider = args.provider.as_str();
-
-        // Command providers win over plugins (config is more local than plugin install)
-        {
-            let providers = self.command_providers.lock().await;
-            if let Some(cmd_provider) = providers.get(provider) {
-                debug!(provider = %provider, "Dispatching to command provider");
-                let temp_dir = std::env::temp_dir();
-                let output_path =
-                    temp_dir.join(format!("tts_output.{}", cmd_provider.output_format()));
-                match cmd_provider
-                    .synthesize(
-                        &args.text,
-                        output_path.to_str().unwrap_or("/tmp/tts_output.mp3"),
-                        Some(&args.voice),
-                        args.model.as_deref(),
-                        AudioFormat::Mp3,
-                    )
-                    .await
-                {
-                    Ok(result) => {
-                        let audio_bytes = match std::fs::read(&result.output_path) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                return ToolResult::error(
-                                    "text_to_speech",
-                                    format!("Failed to read output: {}", e),
-                                );
-                            }
-                        };
-                        let audio_base64 = base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &audio_bytes,
-                        );
-                        let _ = std::fs::remove_file(&result.output_path);
-                        return ToolResult::success(
-                            "text_to_speech",
-                            json!({
-                                "success": true,
-                                "audio": audio_base64,
-                                "format": result.format.to_string(),
-                                "provider": provider,
-                                "voice": args.voice
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        return ToolResult::error(
-                            "text_to_speech",
-                            format!("Command provider failed: {}", e),
-                        );
-                    }
-                }
-            }
-        }
-
-        // Plugin-registered providers (dispatched when name is not a built-in)
-        if !TtsPluginRegistry::is_builtin(provider)
-            && let Some(plugin) = self.plugin_registry.get_provider(provider).await
-        {
-            debug!(provider = %provider, "Dispatching to plugin provider");
-            let temp_dir = std::env::temp_dir();
-            let output_path = temp_dir.join("tts_plugin_output.mp3");
-            match plugin
-                .synthesize(
-                    &args.text,
-                    output_path.to_str().unwrap_or("/tmp/tts_plugin_output.mp3"),
-                    Some(&args.voice),
-                    args.model.as_deref(),
-                    AudioFormat::Mp3,
-                )
-                .await
-            {
-                Ok(result) => {
-                    let audio_bytes = match std::fs::read(&result.output_path) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            return ToolResult::error(
-                                "text_to_speech",
-                                format!("Failed to read output: {}", e),
-                            );
-                        }
-                    };
-                    let audio_base64 = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &audio_bytes,
-                    );
-                    let _ = std::fs::remove_file(&result.output_path);
-                    return ToolResult::success(
-                        "text_to_speech",
-                        json!({
-                            "success": true,
-                            "audio": audio_base64,
-                            "format": result.format.to_string(),
-                            "provider": provider,
-                            "voice": args.voice
-                        }),
-                    );
-                }
-                Err(e) => {
-                    return ToolResult::error(
-                        "text_to_speech",
-                        format!("Plugin provider failed: {}", e),
-                    );
-                }
-            }
-        }
 
         // Built-in providers
         match provider {
@@ -395,7 +265,7 @@ impl TtsTool {
             _ => ToolResult::error(
                 "text_to_speech",
                 format!(
-                    "Unknown provider: {}. Available: {} or registered command/plugin providers",
+                    "Unknown provider: {}. Available: {}",
                     args.provider,
                     BUILTIN_PROVIDERS.join(", ")
                 ),
@@ -1765,5 +1635,65 @@ mod tests {
                 "a GOOGLE_API_KEY from `operant auth add google` must be visible                  to the gemini TTS provider, got: {err}"
             );
         }
+    }
+    /// The TTS dispatch is ONE tier: the eleven built-in match arms.
+    /// (RT-599, iter-2609)
+    ///
+    /// Two further tiers were removed because they were unreachable AND
+    /// contradicted AD-005 §5 ("do not add ... TTS ... registration until a
+    /// concrete plugin needs one"). The danger was not the 546 dead lines --
+    /// it was the NEXT editor wiring `register_command_provider` to config
+    /// and shipping an unsandboxed shell surface, because that tier's
+    /// `command_template` is substituted with no escaping. This guard fails
+    /// the build if the seam is reintroduced, so the removal is a decision
+    /// the tree enforces rather than one a comment records.
+    ///
+    /// Structural on purpose. A behavioural test cannot see this: with the
+    /// seam wired but never populated, every dispatch behaves identically,
+    /// which is exactly how it stayed hidden for five months.
+    #[test]
+    fn the_tts_dispatch_has_no_plugin_or_command_tier() {
+        // Scan the PRODUCTION half only. `include_str!` reads this whole
+        // file, which carries these identifiers as literals in the assert
+        // below -- so scanning the raw string makes the guard match itself
+        // and fail on a clean tree (measured: it did exactly that on the
+        // first draft). Everything before the test module is production.
+        let src = include_str!("tts_tool.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
+
+        // The two tiers, by the identifiers that only they used.
+        for dead in [
+            "plugin_registry",
+            "command_providers",
+            "register_command_provider",
+            "with_plugin_registry",
+            "TtsPluginRegistry",
+            "CommandProvider",
+        ] {
+            assert!(
+                !production.contains(dead),
+                "the dead TTS plugin/command seam is back: found `{dead}` in the production half of tts_tool.rs. AD-005 section 5 says no TTS registration without a                  concrete consumer. If a plugin genuinely needs it now, that is a new                  design with an explicit sandbox decision, not a restore."
+            );
+        }
+
+        // The three modules are gone from the module tree, not merely
+        // unreferenced from it. A `mod` declaration with the file deleted
+        // fails to compile; a re-export pointing at a deleted module does too.
+        // So this asserts what a reader would otherwise have to trust: the
+        // seam is out of the crate's surface, not orphaned inside it.
+        let mods = include_str!("../tools.rs");
+        for module in ["tts_command_provider", "tts_provider", "tts_registry"] {
+            assert!(
+                !mods.contains(module),
+                "`{module}` is back in the tools module tree; RT-599 removed                 it as an unreachable seam that contradicted AD-005 section 5"
+            );
+        }
+
+        // And the live list is still the eleven built-ins the arms dispatch to.
+        assert_eq!(
+            BUILTIN_PROVIDERS.len(),
+            11,
+            "the built-in provider list changed; re-derive the doc claim in                  docs/library/voice.md and the wizard menu"
+        );
     }
 }

@@ -7527,8 +7527,29 @@ pub async fn start_gateway(
                                     // ── 1. Dialog interception (never queued) ────────────────
                                     // `true` = handled here (no agent turn); `false` = turn.
                                     let handled: anyhow::Result<bool> = async {
-                                        // ── 1. Admin allowlist ────────────────────────────────
-                                        if !admins.is_empty() && !admins.contains(&msg.user_id) {
+                                        // ── 1. Admin allowlist ────────────────────
+                                        // Two exemptions, both REQUIRED for the gate to be
+                                        // correct rather than merely strict:
+                                        //
+                                        // 1. `msg.authenticated` — a signature-verified webhook
+                                        //    event is the operator's own external service, not "a
+                                        //    user". Without it every webhook event was refused
+                                        //    with "You are not authorized" in ANY deployment that
+                                        //    configures `admins`, which is every real one. This is
+                                        //    the fix core's gate got at mod.rs:726 (iter-1132);
+                                        //    the CLI path never received it, so RT-140 was only
+                                        //    half-closed.
+                                        //
+                                        // 2. `msg.is_channel_post` — a Telegram channel post has
+                                        //    no human sender to authorize. Refusing it did not just
+                                        //    drop the message: the refusal below is SENT TO THE
+                                        //    CHANNEL, so a channel post from an unconfigured chat
+                                        //    made the bot publicly post "You are not authorized".
+                                        if !msg.authenticated
+                                            && !msg.is_channel_post
+                                            && !admins.is_empty()
+                                            && !admins.contains(&msg.user_id)
+                                        {
                                             tracing::warn!(
                                                 "Message from unauthorized user {} on {} rejected",
                                                 msg.user_id,
@@ -9670,5 +9691,77 @@ mod unbound_scope_tests {
             stranger,
             bank_for(&unbound_scope_for(&admins, "telegram", "other"))
         );
+    }
+}
+
+#[cfg(test)]
+mod admin_gate_tests {
+    //! The CLI admin gate is the LAST line of defence before a stranger's
+    //! message reaches the agent, and it had two holes that core's gate
+    //! (`gateway/mod.rs:726`) already closed. Both are invisible to a test that
+    //! calls `route_message` directly (which is how iter-1132 certified RT-140
+    //! while the CLI path stayed broken), so these pin the SEMANTICS the gate
+    //! condition encodes rather than an end-to-end turn.
+
+    /// The exact predicate the CLI gate evaluates, extracted so the test runs
+    /// the SHIPPED condition rather than a copy of it. If you change the gate,
+    /// change this too, and the divergence shows up as a failing test instead of
+    /// a silently different rule.
+    fn admin_gate_refuses(msg: &super::IncomingMessage, admins: &[String]) -> bool {
+        !msg.authenticated
+            && !msg.is_channel_post
+            && !admins.is_empty()
+            && !admins.contains(&msg.user_id)
+    }
+
+    fn msg(user_id: &str, authenticated: bool, is_channel_post: bool) -> super::IncomingMessage {
+        super::IncomingMessage {
+            platform: "telegram".into(),
+            user_id: user_id.into(),
+            username: user_id.into(),
+            channel_id: "c1".into(),
+            content: "hi".into(),
+            raw: serde_json::Value::Null,
+            timestamp: 0,
+            is_group_chat: false,
+            is_channel_post,
+            thread_id: None,
+            media_urls: Vec::new(),
+            deliver_to: None,
+            deliver_only: false,
+            authenticated,
+        }
+    }
+
+    #[test]
+    fn authenticated_webhook_event_is_not_refused() {
+        // RT-140: a signature-verified webhook carries user_id="webhook". With
+        // an admin allowlist configured (every real deployment) the un-exempted
+        // gate refused it, so the gateway's own /approve reply never landed.
+        let m = msg("webhook", true, false);
+        assert!(!admin_gate_refuses(&m, &["owner".into()]));
+    }
+
+    #[test]
+    fn channel_post_is_not_refused() {
+        // A Telegram channel post has no human sender. Refusing it did not drop
+        // it silently: the refusal is sent to the channel, so the bot publicly
+        // announced "You are not authorized" into the channel.
+        let m = msg("telegram", false, true);
+        assert!(!admin_gate_refuses(&m, &["owner".into()]));
+    }
+
+    #[test]
+    fn a_real_stranger_is_still_refused() {
+        // The exemptions must not become a hole: an unauthenticated, non-post
+        // message from a non-admin is still refused.
+        let m = msg("stranger", false, false);
+        assert!(admin_gate_refuses(&m, &["owner".into()]));
+    }
+
+    #[test]
+    fn an_unconfigured_allowlist_refuses_nobody() {
+        let m = msg("stranger", false, false);
+        assert!(!admin_gate_refuses(&m, &[]));
     }
 }

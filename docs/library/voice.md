@@ -38,15 +38,29 @@ a fresh design, not a restore.
 
 ## `text_to_speech` — the dispatch
 
-`TtsTool::generate_speech` resolves the provider in three tiers, then
-dispatches:
+`TtsTool::generate_speech` dispatches the provider name to the
+**eleven built-in match arms**, and to nothing else.
 
-1. **Command providers** (a `HashMap<String, CommandProvider>` on the
-   tool) win over everything, because config is more local than a plugin
-   install.
-2. **Plugin providers** from `TtsPluginRegistry`, reached when the name
-   is not a built-in (`TtsPluginRegistry::is_builtin`).
-3. **The eleven built-in match arms.**
+There is deliberately ONE dispatch tier. Two more were removed in
+`iter-2609` (RT-599): a `HashMap<String, CommandProvider>` checked
+before the built-ins, and a `TtsPluginRegistry` consulted for
+non-built-in names. Both had been unreachable since they were added --
+`register_command_provider` and `with_plugin_registry` have never had a
+caller in any commit, so neither map was ever populated and neither
+lookup could ever fire.
+
+They were not a neutral spare part. AD-005 section 5 says explicitly:
+"Do not add image, video, TTS, web-search, or platform registration
+until a concrete plugin needs one. Operant has no consumer for them
+today." The command tier's `command_template` is substituted into a
+shell with no escaping, so wiring it to config would have opened an
+unsandboxed shell surface -- a peer audit
+(`docs/audit/2026-11-16-operant-architecture-red-team/B-tools-and-guardrails.md:286`)
+flagged exactly that. Deleting the seam is what keeps AD-005 true.
+
+If a plugin ever needs to register a TTS provider, that is a new build
+against a new design with an explicit sandbox decision -- not a
+restore.
 
 The tool's registered name is `text_to_speech` (`TtsTool::name()`), and
 its two arguments carry the config defaults: `provider` defaults to the
