@@ -7,6 +7,32 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::platform;
 
+// ---------------------------------------------------------------------------
+// Sub-modules. iter-2625 split the leaf settings types out of this god-file
+// (7,309 -> ~7,180 lines and falling). Each sub-module is a pure move: the
+// type, its doc comments and its `Default` impl live there verbatim.
+//
+// The re-exports below are what keep this split invisible to callers -- there
+// are 244 `crate::config::X` references in this crate and 102 external ones,
+// and none of them change. A new type belongs in a sub-module, not here; this
+// file keeps `AppConfig`, `LoadedConfig` and the load/parse entry points.
+// ---------------------------------------------------------------------------
+mod code_execution;
+mod docker_terminal;
+mod http_tool;
+mod logging;
+mod ssh_terminal;
+mod stt;
+mod vision;
+
+pub use code_execution::CodeExecutionSettings;
+pub use docker_terminal::DockerTerminalSettings;
+pub use http_tool::HttpToolSettings;
+pub use logging::LoggingSettings;
+pub use ssh_terminal::SshTerminalSettings;
+pub use stt::SttSettings;
+pub use vision::VisionSettings;
+
 // Re-export the `[providers]` section types so consumers (CLI run path) can
 // name provider profiles without depending on operant-config directly.
 pub use operant_config::providers::ProvidersConfig;
@@ -1422,32 +1448,6 @@ impl Default for AutonomousSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct LoggingSettings {
-    pub level: String,
-    pub format: String,
-    pub log_file: Option<String>,
-    pub with_target: bool,
-    pub with_thread_ids: bool,
-    pub with_file: bool,
-    pub with_line_number: bool,
-}
-
-impl Default for LoggingSettings {
-    fn default() -> Self {
-        Self {
-            level: "info".to_string(),
-            format: "pretty".to_string(),
-            log_file: None,
-            with_target: false,
-            with_thread_ids: false,
-            with_file: false,
-            with_line_number: false,
-        }
-    }
-}
-
 /// `[tui]`. `show_iterations`, `landing_title`, `prompt_placeholder`,
 /// `compact_width` and `medium_width` are accepted but unread (RT-136): the
 /// render layer consults none of them. `refresh_rate_ms` is unread for the
@@ -2431,26 +2431,6 @@ impl Default for ToolSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct SttSettings {
-    pub groq_api_key: Option<String>,
-    pub openai_api_key: Option<String>,
-    pub groq_model: String,
-    pub openai_model: String,
-}
-
-impl Default for SttSettings {
-    fn default() -> Self {
-        Self {
-            groq_api_key: None,
-            openai_api_key: None,
-            groq_model: "whisper-large-v3-turbo".to_string(),
-            openai_model: "whisper-1".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 pub struct TtsSettings {
     /// TTS provider: phonon|edge|elevenlabs|openai|minimax|mistral|gemini|xai|neutts|kittentts|piper
     pub provider: String,
@@ -2638,16 +2618,6 @@ impl Default for BrowserSettings {
             provider: "sourcehound".to_string(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[derive(Default)]
-pub struct VisionSettings {
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2845,18 +2815,6 @@ impl Default for WebToolSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct HttpToolSettings {
-    pub timeout_secs: u64,
-}
-
-impl Default for HttpToolSettings {
-    fn default() -> Self {
-        Self { timeout_secs: 30 }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 pub struct TerminalSettings {
     pub max_timeout_secs: u64,
     pub max_output_bytes: usize,
@@ -2871,65 +2829,6 @@ impl Default for TerminalSettings {
             max_output_bytes: 1_000_000,
             docker: DockerTerminalSettings::default(),
             ssh: SshTerminalSettings::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct DockerTerminalSettings {
-    pub image: Option<String>,
-    pub volumes: Vec<String>,
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    pub cpu: f64,
-    pub memory_mb: u64,
-}
-
-impl Default for DockerTerminalSettings {
-    fn default() -> Self {
-        Self {
-            image: Some("nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
-            volumes: Vec::new(),
-            env: std::collections::HashMap::new(),
-            cpu: 1.0,
-            memory_mb: 5120,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct SshTerminalSettings {
-    pub host: Option<String>,
-    pub user: Option<String>,
-    pub port: u16,
-    pub key_path: Option<String>,
-}
-
-impl Default for SshTerminalSettings {
-    fn default() -> Self {
-        Self {
-            host: None,
-            user: None,
-            port: 22,
-            key_path: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct CodeExecutionSettings {
-    pub default_timeout_secs: u64,
-    pub max_timeout_secs: u64,
-}
-
-impl Default for CodeExecutionSettings {
-    fn default() -> Self {
-        Self {
-            default_timeout_secs: 60,
-            max_timeout_secs: 300,
         }
     }
 }
