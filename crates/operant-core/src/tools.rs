@@ -509,14 +509,51 @@ impl ToolExecutor {
         context: ToolContext,
     ) -> ToolResult {
         let effective = self.timeout_for(&tool_name);
-        let result = timeout(effective, tool.execute(normalize_arg_keys(args), context)).await;
+        // A panicking tool must cost the TOOL, not the TURN.
+        //
+        // `tool.execute()` is an async fn awaited INLINE on the agent's own
+        // task (stream.rs polls it through `select!` / `buffer_unordered`),
+        // so a panic inside one unwinds the whole agent turn: the operator
+        // loses the turn, every other tool in the batch, and any in-flight
+        // work. There was no `catch_unwind` anywhere on this path.
+        //
+        // The containment is a task boundary, not `catch_unwind`: an async
+        // panic cannot be caught in the caller's frame, and the tool future is
+        // `!UnwindSafe` across its await points anyway. `tokio::spawn` gives a
+        // real boundary whose `JoinError::is_panic` is the signal, and spawning
+        // (unlike select! on the inline future) is what actually isolates the
+        // unwind.
+        // Clone the Arc INTO the task so the future owns its receiver (the
+        // trait's `&self` would otherwise borrow our local for the spawn's
+        // lifetime, which is `'static`).
+        let task_tool = tool.clone();
+        let spawned = tokio::spawn(async move {
+            task_tool.execute(normalize_arg_keys(args), context).await
+        });
+        let result = timeout(effective, spawned).await;
 
         match result {
-            Ok(mut result) => {
+            Ok(Ok(mut result)) => {
                 // Ensure the result has the correct tool_call_id and name
                 result.tool_call_id = tool_call_id;
                 result.name = tool_name;
                 result
+            }
+            Ok(Err(join_err)) if join_err.is_panic() => {
+                warn!(tool = %tool_name, "Tool panicked; returning an error result");
+                ToolResult::error_with_name(
+                    &tool_name,
+                    &tool_call_id,
+                    format!("tool '{tool_name}' panicked during execution"),
+                )
+            }
+            Ok(Err(join_err)) => {
+                warn!(tool = %tool_name, error = %join_err, "Tool task failed");
+                ToolResult::error_with_name(
+                    &tool_name,
+                    &tool_call_id,
+                    format!("tool '{tool_name}' failed to run"),
+                )
             }
             Err(_) => {
                 warn!(tool = %tool_name, timeout = ?effective, "Tool execution timed out");
