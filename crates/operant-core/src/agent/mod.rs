@@ -782,6 +782,18 @@ pub struct OperantAgent {
     /// gateway runs agents concurrently and a global would let one turn
     /// overwrite another's delivery target.
     cron_origin: Arc<std::sync::RwLock<Option<crate::tools::cron_tool::CronOrigin>>>,
+    /// Which transport this agent serves: "tui", "telegram", "discord",
+    /// "gateway", or None for a headless/one-shot run.
+    ///
+    /// Read by the surface tools to pick `SurfaceCapabilities` that match the
+    /// transport actually drawing the card (plan 2026-11-18 M4). Before this
+    /// existed both tools hardcoded `SurfaceCapabilities::tui()`, so a gateway
+    /// turn was validated against the TUI's full capability set and the
+    /// capability gate answered a question nobody asked. Fail-CLOSED: a
+    /// transport that is not the TUI gets `text_only`, so a card degrades to
+    /// its plain fallback rather than claiming a widget the transport cannot
+    /// draw.
+    transport: Arc<std::sync::RwLock<Option<String>>>,
     /// The bound employee's charter (org-layer system prompt), appended to
     /// the frozen prefix by [`Self::build_frozen_prefix`]. Set together with
     /// `seat_id` by the gateway turn so prompt-cache stability holds: the

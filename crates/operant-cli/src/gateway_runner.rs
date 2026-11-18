@@ -794,6 +794,70 @@ type PendingUserQuestion = (tokio::sync::oneshot::Sender<String>, Option<Vec<Str
 type PendingUserQuestions =
     std::sync::Mutex<Option<Arc<Mutex<HashMap<String, PendingUserQuestion>>>>>;
 
+/// One `ui_request_input` card waiting on an answer (plan 2026-11-18, M3).
+///
+/// Separate from [`PendingUserQuestion`] because the payload differs: a surface
+/// answers with STRUCTURED JSON (`{"kind":"choice","choice_id":...}`) rather
+/// than a bare String, because two choices may share a label and the model asked
+/// by id. Folding both into one map would make every existing clarify reader
+/// learn which shape it was holding.
+pub(crate) struct PendingSurfaceQuestion {
+    /// Where the structured answer goes.
+    pub(crate) reply_tx: tokio::sync::oneshot::Sender<serde_json::Value>,
+    /// The choice ids in the order the labels were shown, so an index reply
+    /// (a button tap, or a number typed by hand) resolves to the id the model
+    /// asked for. `None` for a non-choice widget.
+    pub(crate) choice_ids: Option<Vec<String>>,
+}
+
+/// Pending surface-question entries, keyed by `platform:channel_id`.
+pub(crate) type PendingSurfaceQuestions =
+    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, PendingSurfaceQuestion>>>>>;
+
+/// Global store of pending surface questions. The surface receiver publishes its
+/// map here so the intercept sites find it without threading a second parameter
+/// through both of them.
+pub static PENDING_SURFACE_QUESTIONS: OnceLock<PendingSurfaceQuestions> = OnceLock::new();
+
+/// The answer a surface gets when nobody could answer it.
+///
+/// The tool treats a dismissed prompt as a normal outcome ("user dismissed"), so
+/// every dead end in the receiver resolves to this rather than dropping the
+/// oneshot: a dropped oneshot is indistinguishable from a wedged turn.
+pub(crate) fn dismissed_surface_reply() -> serde_json::Value {
+    serde_json::json!({ "kind": "text", "value": "", "dismissed": true })
+}
+
+/// Resolve a surface reply from the operator's text, given the choice ids that
+/// were offered.
+///
+/// A 1-based number (a button tap's index, or a digit typed by hand) or a
+/// matching label maps to that choice's id; anything else is free text. This is
+/// the gateway twin of `channel_drains::surface_reply_for` in the TUI: the two
+/// hosts must answer with the SAME shape, because the tool parses one format
+/// and does not know which host asked.
+pub(crate) fn surface_reply_from_text(
+    choice_ids: Option<&[String]>,
+    labels: Option<&[String]>,
+    text: &str,
+) -> serde_json::Value {
+    let trimmed = text.trim();
+    if let Some(ids) = choice_ids {
+        if let Ok(n) = trimmed.parse::<usize>()
+            && n >= 1
+            && n <= ids.len()
+        {
+            return serde_json::json!({ "kind": "choice", "choice_id": ids[n - 1] });
+        }
+        if let Some(labels) = labels
+            && let Some(idx) = labels.iter().position(|l| l == trimmed)
+        {
+            return serde_json::json!({ "kind": "choice", "choice_id": ids[idx] });
+        }
+    }
+    serde_json::json!({ "kind": "text", "value": trimmed })
+}
+
 /// Global store of pending permission requests, keyed by channel_id.
 pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
 
@@ -2397,6 +2461,7 @@ pub fn set_plan_mode(platform: &str, channel_id: &str, enabled: bool) {
 fn init_pending_permissions() {
     PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
     PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
+    PENDING_SURFACE_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
 }
 
 /// Store the shared pending-permission map into the global.
@@ -4369,6 +4434,49 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
+        // ── Pending ui_request_input card ────────────────────────────────
+        // A plain-text reply while a surface card is pending resolves it, in
+        // the STRUCTURED shape the tool parses. Checked AFTER the clarify block
+        // so a clarify question keeps its own precedence, and BEFORE the agent
+        // sees the message, so the reply never queues behind the turn that
+        // spawned the card (which would deadlock until the 120 s timeout).
+        if !message.content.trim_start().starts_with('/') {
+            let channel_key = format!("{}:{}", message.platform, message.channel_id);
+            let pending_surface = {
+                let global = crate::gateway_runner::PENDING_SURFACE_QUESTIONS.get();
+                global
+                    .and_then(|g| g.lock().ok())
+                    .and_then(|mut guard| guard.take())
+            };
+            if let Some(pending_map) = pending_surface {
+                let resolved = { pending_map.lock().await.remove(&channel_key) };
+                if let Some(pending) = resolved {
+                    let reply = crate::gateway_runner::surface_reply_from_text(
+                        pending.choice_ids.as_deref(),
+                        None,
+                        &message.content,
+                    );
+                    tracing::info!(
+                        channel = %channel_key,
+                        kind = %reply["kind"],
+                        "Routing message as a surface-card reply (intercepted)"
+                    );
+                    let _ = pending.reply_tx.send(reply);
+                }
+                // Restore the map for the next card.
+                if let Some(g) = crate::gateway_runner::PENDING_SURFACE_QUESTIONS.get()
+                    && let Ok(mut guard) = g.lock()
+                {
+                    *guard = Some(pending_map);
+                }
+                return Ok(OutgoingMessage::new(
+                    message.channel_id.clone(),
+                    "\u{2705} Reply received \u{2014} resuming...",
+                )
+                .no_markdown());
+            }
+        }
+
         // Build session key: per-user for DMs, per-channel for groups, and
         // thread-aware so each Telegram forum topic / Discord thread gets its
         // own conversation — a new topic starts a FRESH session instead of
@@ -4519,6 +4627,15 @@ impl MessageHandler for GatewayMessageHandler {
         let needs_reload = self
             .bind_slot_to_session(self.slots.slot_for(&session_key), &session_id, "gateway")
             .await;
+        // Which transport will DRAW a surface card this turn. The surface tools
+        // read it off the agent to pick `SurfaceCapabilities` (plan M4): the
+        // gateway is text-only until T3 adds PNG + native buttons, so claiming
+        // the TUI's set here would let a card pass a capability check the
+        // transport cannot satisfy.
+        self.slots
+            .slot_for(&session_key)
+            .agent
+            .set_transport(Some(message.platform.to_string()));
         // The timestamp a failed turn's explanation is written with. It was
         // computed beside the session binding before that moved into the
         // shared helper, so the stamp stays here where it is read.
@@ -5828,6 +5945,17 @@ pub async fn start_gateway(
         mpsc::unbounded_channel::<operant_core::user_question::UserQuestionRequest>();
     let _ = operant_core::user_question::set_user_question_sender(uq_tx);
 
+    // The same channel for `ui_request_input` (plan 2026-11-18, M3). Without
+    // this the surface tool finds no host and answers "no interactive surface
+    // is attached" on EVERY gateway turn — the tool looked shipped while being
+    // unreachable from the transport most operators actually use. It was the
+    // iter-98 bug one layer up, so it gets the same shape: register here,
+    // drain below, resolve through the same `pending_uq` map the message
+    // handler already intercepts, so a card costs no second reply path.
+    let (surface_tx, mut surface_rx) =
+        mpsc::unbounded_channel::<operant_core::ui::request::SurfaceRequest>();
+    let _ = operant_core::ui::request::set_surface_request_sender(surface_tx);
+
     // BUGS.md D-5 — build the memory pair ONCE for the whole gateway
     // process and thread the SAME pair into BOTH agent builds below (the
     // gateway agent and cron's). Every `build_agent_core` invocation used
@@ -7031,7 +7159,7 @@ pub async fn start_gateway(
                     // shows. Not dropped: a card the operator never sees is
                     // worse than a plain-text one.
                     let text = operant_core::ui::plain::render_plain(
-                        &op.root_widget(),
+                        &op.widgets_column(),
                         100,
                         operant_core::ui::plain::RenderProvenance::from_synthesized(
                             op.is_synthesized(),
@@ -7525,6 +7653,136 @@ pub async fn start_gateway(
             }
         }
         tracing::warn!("User question receiver exited (uq_rx closed)");
+    });
+
+    // ── Surface request receiver (`ui_request_input`, plan M3) ──────────────
+    //
+    // The card goes out as a plain-text question with numbered options: the
+    // same degrade path `clarify` uses on a transport with no interactive
+    // components, and honest on all of them until T3 adds native buttons.
+    //
+    // The reply is resolved by the SAME intercept the clarify reply uses —
+    // same channel key, same handler arm, same "resume" acknowledgement — so a
+    // card costs no second reply path. The map itself is separate, because the
+    // payload shape differs (structured JSON, not a bare String); see
+    // [`PendingSurfaceQuestion`].
+    let gw_for_surface = gw.clone();
+    let current_channel_for_surface = current_channel.clone();
+    let session_channels_for_surface = session_channels.clone();
+    let pending_surface: Arc<Mutex<HashMap<String, PendingSurfaceQuestion>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    // A second global, because the intercept sites are reached from the message
+    // handler (sync) and the dispatch task (async) and the clarify map holds a
+    // DIFFERENT payload shape (a oneshot of String). Sharing one map would mean
+    // every existing clarify reader has to learn to distinguish the two.
+    if let Some(global_surface) = PENDING_SURFACE_QUESTIONS.get()
+        && let Ok(mut guard) = global_surface.lock()
+    {
+        *guard = Some(pending_surface.clone());
+    }
+    let pending_surface_for_task = pending_surface.clone();
+    tokio::spawn(async move {
+        tracing::info!("Surface request receiver started");
+        while let Some(req) = surface_rx.recv().await {
+            // Resolve to the chat that ASKED, exactly as the clarify receiver
+            // does: the request carries `session_id`, and falling back to the
+            // slot channel would deliver session A's card to whichever chat ran
+            // a turn last (iter-2528 H-3).
+            let pinned = match req.session_id.as_deref() {
+                Some(id) if !id.is_empty() => {
+                    session_channels_for_surface.lock().await.get(id).cloned()
+                }
+                _ => None,
+            };
+            let slot_channel = current_channel_for_surface.lock().await.clone();
+            let channel_info =
+                resolve_turn_channel(req.session_id.as_deref(), pinned, slot_channel);
+
+            let Some((platform, channel_id, thread_id)) = channel_info.as_ref() else {
+                // Nobody can answer, so say so NOW. Silence would leave the
+                // turn waiting on a reply that can never arrive.
+                tracing::warn!(
+                    surface = %req.surface_id,
+                    "surface request dropped: no active channel for this session"
+                );
+                let _ = req.reply_tx.send(dismissed_surface_reply());
+                continue;
+            };
+
+            let channel_key = format!("{platform}:{channel_id}");
+            let labels: Vec<String> = match &req.body {
+                operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => {
+                    choices.iter().map(|c| c.label.clone()).collect()
+                }
+                _ => Vec::new(),
+            };
+            let card = operant_core::ui::plain::render_plain(
+                &req.op.widgets_column(),
+                operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+                operant_core::ui::plain::RenderProvenance::from_synthesized(
+                    req.op.is_synthesized(),
+                ),
+            );
+            let body = if labels.is_empty() {
+                format!("\u{1f5f3}\u{fe0f} {card}")
+            } else {
+                format!(
+                    "\u{1f5f3}\u{fe0f} {card}\n\n{}",
+                    labels
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| format!("{}. {l}", i + 1))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            };
+            let msg = OutgoingMessage::new(channel_id, &body)
+                .no_markdown()
+                .with_thread_id(*thread_id);
+            if let Err(e) = gw_for_surface.send_to_platform(platform, msg).await {
+                // A card that could not be delivered resolves the turn now, so
+                // it fails with a stated reason instead of hanging.
+                tracing::warn!(
+                    platform = %platform,
+                    error = %e,
+                    "could not deliver a surface card to the user"
+                );
+                let _ = req.reply_tx.send(dismissed_surface_reply());
+                continue;
+            }
+
+            pending_surface_for_task.lock().await.insert(
+                channel_key.clone(),
+                PendingSurfaceQuestion {
+                    reply_tx: req.reply_tx,
+                    choice_ids: match &req.body {
+                        operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => {
+                            Some(choices.iter().map(|c| c.id.clone()).collect())
+                        }
+                        _ => None,
+                    },
+                },
+            );
+
+            // The same 120 s think-time budget `clarify` gives an operator.
+            let pending_for_timeout = pending_surface_for_task.clone();
+            let timeout_key = channel_key.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                if pending_for_timeout
+                    .lock()
+                    .await
+                    .remove(&timeout_key)
+                    .is_some()
+                {
+                    tracing::warn!(
+                        channel = %timeout_key,
+                        "surface request timed out - answering dismissed"
+                    );
+                }
+            });
+        }
+        tracing::warn!("Surface request receiver exited (surface_rx closed)");
     });
 
     let app_config_clone = app_config.clone();

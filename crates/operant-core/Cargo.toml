@@ -46,6 +46,9 @@ serde_json = { workspace = true }
 schemars = { workspace = true }
 toml = { workspace = true }
 serde_yaml = "0.9"
+# Display-column width for the surface plain renderer (plan 2026-11-18, G1d).
+# Already in the lock via operant-cli, so this adds no new crate to the build.
+unicode-width = { workspace = true }
 
 # Provider profiles + cross-provider fallback chain ([providers] section)
 operant-config = { path = "../operant-config" }

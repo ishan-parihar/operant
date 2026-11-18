@@ -32,6 +32,16 @@ use crate::ui::SurfaceOp;
 pub struct SurfaceRequest {
     /// The surface this request belongs to (its `surface_id`).
     pub surface_id: String,
+    /// Which session asked, so a multi-chat host (the gateway) resolves the
+    /// card to the chat that raised it rather than to whichever chat ran a
+    /// turn last. `None` in a process with no session concept (the one-shot
+    /// CLI) and in the TUI, which is a single session by construction.
+    ///
+    /// Read exactly the way `user_question::UserQuestionRequest::session_id`
+    /// is read: the iter-2528 H-3 fix threaded it through `clarify` after a
+    /// question raised in session A was delivered to the wrong chat, leaving
+    /// A's turn blocked on an answer nobody was shown.
+    pub session_id: Option<String>,
     /// One-line header: what the model is asking for.
     pub question: String,
     /// The widget the host should render (a `choice_picker`/`confirm`/
@@ -166,6 +176,7 @@ pub(crate) mod tests {
         };
         SurfaceRequest {
             surface_id: "s1".to_string(),
+            session_id: Some("gw_test".to_string()),
             question: "Pick one".to_string(),
             body,
             op,

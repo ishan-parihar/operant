@@ -960,6 +960,29 @@ impl OperantAgent {
         }
     }
 
+    /// Which transport this agent is serving ("tui", "telegram", ...), or
+    /// `None` for a headless/one-shot run.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    pub fn transport(&self) -> Option<String> {
+        self.transport
+            .read()
+            .expect("transport RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// Set the transport. Called by the TUI run loop and by the gateway at the
+    /// start of a turn, for the same reason `set_cron_origin` is: the value
+    /// rides the AGENT so concurrent chats cannot overwrite each other's
+    /// capability set.
+    pub fn set_transport(&self, transport: Option<impl Into<String>>) {
+        if let Ok(mut guard) = self.transport.write() {
+            *guard = transport.map(Into::into);
+        }
+    }
+
     pub fn set_seat_id(&self, seat_id: impl Into<String>) {
         let new_id = seat_id.into();
         tracing::debug!(seat_id = %new_id, "Agent bylaws seat set at runtime");

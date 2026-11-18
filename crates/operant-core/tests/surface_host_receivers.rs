@@ -1,20 +1,24 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! `ui_request_input` reaches a real host ONLY in the TUI.
+//! `ui_request_input` reaches a real host in the TUI AND in the gateway, and
+//! every host that registers a sender must also DRAIN it.
 //!
-//! `SURFACE_REPLY_TIMEOUT` (300 s) is the whole bound on a surface prompt, and
-//! the comment at its definition used to claim it was merely an outer backstop
-//! "because the host's own dialog has its own timeout (the gateway's receiver
-//! runs on the 120s question timeout, `clarify`'s rule)". There is no such
-//! receiver. Exactly one production caller registers one —
-//! `tui/adapter_types/tui_app.rs` — and the gateway registers none, so on the
-//! gateway path `try_send_surface_request` returns `None` and the tool fails
-//! fast with "no interactive surface is attached" instead of ever awaiting.
+//! This guard started as the mirror of a wrong comment. `SURFACE_REPLY_TIMEOUT`
+//! (300 s) claimed to be an outer backstop "because the host's own dialog has
+//! its own timeout (the gateway's receiver runs on the 120s question timeout,
+//! `clarify`'s rule)". There was no such receiver: exactly one production caller
+//! registered one, `tui/adapter_types/tui_app.rs`, so on a gateway deployment
+//! `try_send_surface_request` returned `None` and `ui_request_input` failed fast
+//! with "no interactive surface is attached" on EVERY turn -- the tool looked
+//! shipped while being unreachable from the transport most operators use. That
+//! is the iter-98 `clarify` bug (gateway never called set_user_question_sender,
+//! so clarify hung forever) one layer up.
 //!
-//! This guard exists so the asymmetry cannot silently become false in the other
-//! direction. If someone adds a gateway surface receiver, the 120 s claim stops
-//! being a lie and this test fails, forcing the comment (and the timeout's
-//! rationale) to be revisited in the same change rather than years later.
+//! iter-2640 registered the gateway's receiver, which makes the 120 s claim
+//! true and this a general invariant rather than a TUI-only asymmetry: a host
+//! that registers without draining is a turn that waits on an answer nobody
+//! will ever send. The test now checks each registration has a `recv()` beside
+//! it, so the next host cannot repeat the pattern.
 
 use operant_core::OperantTool;
 use std::path::{Path, PathBuf};
@@ -96,7 +100,7 @@ fn without_test_modules(source: &str) -> String {
 }
 
 #[test]
-fn surface_request_sender_is_registered_only_by_the_tui() {
+fn every_surface_request_sender_is_also_drained_by_its_host() {
     let root = workspace_root();
     let crates = root.join("crates");
     let mut registrants = Vec::new();
@@ -139,21 +143,38 @@ fn surface_request_sender_is_registered_only_by_the_tui() {
          to an error even in the interactive session it was built for. Found: {registrants:?}"
     );
 
-    let outside_tui: Vec<&String> = registrants
+    // iter-2640: the gateway NOW registers one. `ui_request_input` used to fail
+    // on every gateway turn with "no interactive surface is attached" while
+    // looking shipped, because `set_surface_request_sender` had a single caller
+    // and it was the TUI's. That was the iter-98 `clarify` bug one layer up.
+    //
+    // So the invariant is no longer "the TUI only". It is: every registered host
+    // must ALSO drain what it registers, or the tool blocks on a channel nobody
+    // reads. This guard therefore pairs each registration site with a receiver
+    // in the same file, and fails when a host registers without one.
+    let gateway = registrants
         .iter()
-        .filter(|site| !site.starts_with("operant-cli/src/tui/"))
-        .collect();
-
+        .find(|site| site.starts_with("operant-cli/src/gateway_runner.rs"));
     assert!(
-        outside_tui.is_empty(),
-        "`ui_tool.rs`'s `SURFACE_REPLY_TIMEOUT` documents that the gateway registers \
-         no surface receiver and that the 300 s await is therefore the ONLY bound. These \
-         sites contradict that: {outside_tui:?}. Update the comment at its definition (and \
-         decide whether 300 s is still the right timeout) in this same change."
+        gateway.is_some(),
+        "the gateway must register a surface receiver, or `ui_request_input` degrades \
+         to an error on every gateway turn. Found: {registrants:?}"
+    );
+
+    // The companion half: a registration with no `recv()` beside it is a turn
+    // that waits on an answer nobody will ever send.
+    let gateway_source =
+        std::fs::read_to_string(workspace_root().join("crates/operant-cli/src/gateway_runner.rs"))
+            .expect("the gateway runner is readable");
+    assert!(
+        gateway_source.contains("surface_rx.recv()"),
+        "the gateway registers a surface sender, so it must also drain the \
+         receiver (`surface_rx.recv()`); otherwise a card blocks its turn until \
+         the timeout."
     );
 }
 
-/// The behavioural half of the same guard, asserted where it is
+/// The behavioural half of the hostless guard, asserted where it is
 /// determinable.
 ///
 /// With no host registered the tool must FAIL FAST, not sit on the 300 s
@@ -179,7 +200,12 @@ fn the_tool_returns_a_hostless_error_when_no_host_is_registered() {
             "question": "Pick one",
             "choices": [{"id": "a", "label": "A"}],
         }),
-        operant_core::tools::ToolContext::default(),
+        // A TUI transport on purpose. Since iter-2640 the capability gate runs
+        // BEFORE the host check, so a context with no transport is `text_only`
+        // and refuses the `choice_picker` for being unrenderable -- a correct
+        // refusal, but a different one. Declaring the transport isolates the
+        // hostless path this test is about.
+        operant_core::tools::ToolContext::default().with_metadata("transport", "tui"),
     ));
 
     assert!(

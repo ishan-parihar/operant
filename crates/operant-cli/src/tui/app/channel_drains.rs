@@ -394,9 +394,16 @@ impl App {
         let Some(ref mut rx) = self.surface_request_rx else {
             return false;
         };
+        // A card already on screen owns the dialog's single `reply_tx` slot.
+        // Taking a second request here would OVERWRITE that slot, drop the first
+        // oneshot, and leave the first turn blocked forever — the failure is
+        // silent because the first card simply stops being answerable.
+        if self.ask_user_dialog.visible {
+            return false;
+        }
         if let Ok(req) = rx.try_recv() {
             let header = operant_core::ui::plain::render_plain(
-                &req.op.root_widget(),
+                &req.op.widgets_column(),
                 operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
                 operant_core::ui::plain::RenderProvenance::from_synthesized(
                     req.op.is_synthesized(),
@@ -443,6 +450,13 @@ impl App {
         let Some(ref mut rx) = self.user_question_rx else {
             return false;
         };
+        // Same guard as `drain_surface_requests`: one dialog, one `reply_tx` slot.
+        // Without it a clarify question arriving while a surface card is up (or
+        // a second clarify question) silently overwrites the first and wedges
+        // that turn.
+        if self.ask_user_dialog.visible {
+            return false;
+        }
         if let Ok(req) = rx.try_recv() {
             self.debug_hub
                 .publish(crate::tui::debug::TuiEvent::UserQuestion {

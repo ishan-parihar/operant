@@ -3,7 +3,7 @@
 Dated-frozen: published `2026-11-18`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
-**STATUS: PLANNED (not started).** Nothing below has been built. Every file, symbol
+**STATUS: T1 SHIPPED (iter-2638); T2 partial; T3/T4 NOT STARTED.** The IR, the gate, the plain renderer, the two tools, the request channel, the TUI card row and the gateway text delivery are live. The TUI widget renderer, the `[v]` toggle, the PNG snapshotter and native buttons are not. See "Amendments made while building" for where the build departed from the text below. Every file, symbol
 and count in this document was read from the working tree on 2026-11-18
 (`git rev-parse --short HEAD` at write time: derive it, per RG-008 — do not copy a
 number from this page). Where a claim is an inference from the CopilotKit/OpenBot
@@ -344,6 +344,52 @@ Checks, in order (audit-fail-closed: every failure refuses with a typed reason):
   `Default` impl on the struct plus one line in `new()` keeps ALL of them
   compiling mechanically. `#[serde(default)]` alone would NOT have (it affects
   serde only, not Rust initializers).
+
+## Amendments made while building (recorded here, not in the chat log)
+
+These are the points where the shipped tranche T1 differs from the text above.
+Each is a correction to THIS document, because a plan that changes is a new plan
+and the next agent must not re-derive a claim this one already disproved.
+
+1. **T1b shipped as part of T1, one iteration (iter-2638).** The text above
+   slices `ui_render_surface` into T1 and `ui_request_input` into T2. Both
+   landed together because T1's own M3 already specifies the request channel and
+   the dialog header, so splitting them would have shipped a half-reachable HITL
+   path. T2's remaining scope is the TUI card WIDGET renderer and the `[v]`
+   toggle.
+
+2. **The 19-variant `WidgetNode` JSON schema was NOT written, and must not be.**
+   M2's table implies a per-tool schema. `WidgetNode` derives no `JsonSchema` and
+   none is hand-written: the body is parsed through `WidgetNode`'s own
+   `Deserialize` inside the tool. A schema for a recursive enum would be a
+   second copy of the vocabulary M1's rules forbid, and it would reject a widget
+   the IR supports the moment a variant is added. `check_depth_and_count` bounds
+   the tree, which is what the schema was for.
+
+3. **The `SurfaceRequest` channel is a SECOND channel beside `user_question`,
+   and that is correct.** M3 says "do not invent a parallel mechanism" meaning
+   do not invent a parallel PENDING QUEUE or a second DB table. It does NOT mean
+   reuse the `UserQuestionRequest` struct: that one carries a `String` reply,
+   and a surface must answer with structured JSON (`choice_id`, not a label),
+   because two choices can share a label. The reply is resolved by the SAME
+   intercept site, with the SAME channel key and the SAME "resuming..."
+   acknowledgement, so a card costs no second reply PATH.
+
+4. **The capability gate needs a transport that reaches the tool.** M4 item 2
+   says capabilities are injected through `<turn_context>`. That injection is
+   not how this tree passes per-turn facts to tools: the established seam is
+   `ToolContext.metadata`, populated by the single producer
+   `agent/stream.rs::tool_context`. The agent now carries a `transport` field
+   (the same shape as `cron_origin`), both hosts set it, and the tools read it.
+   A `SurfaceCapabilities::for_transport` resolver maps an unknown or absent
+   transport to `text_only` — fail-closed.
+
+5. **`ui_request_input` is DELIVERY-ONLY on the gateway until T3.** The receiver
+   sends a numbered plain-text card and resolves a text or number reply. There
+   are no inline buttons yet because `sendPhoto`/callback HMAC are T3.
+
+6. **The 120 s durability limit M3 accepts is unchanged**, and `RT-598` remains
+   the owner of the durable queue.
 
 ## Gates / success criteria
 

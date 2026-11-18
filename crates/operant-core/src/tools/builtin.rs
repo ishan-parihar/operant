@@ -454,18 +454,30 @@ mod tests {
 
         let count = registry.len().await;
         // register_builtin_tools registers everything in builtin_tool_names
-        // EXCEPT delegate_task (only in _with_sub_agent variant) AND
+        // EXCEPT delegate_task AND the two surface tools (all three are only in
+        // the _with_sub_agent variant, because the render tool needs the event
+        // channel and that variant is the only one holding it) AND
         // mcp_management (conditionally registered only when mcp_manager is Some),
         // PLUS the three tool_search bridge tools (always registered).
-        // So: registry.len() + 2 == builtin_tool_names().len() + 3.
+        // So: registry.len() + 4 == builtin_tool_names().len() + 3.
+        //
+        // MEASURED 2026-11-18 (iter-2639): the constant was +2 while
+        // builtin_tool_names() carried 67 names and this test drove the PLAIN
+        // variant, so adding `ui_render_surface` + `ui_request_input` to the
+        // names list moved only the right side. The assertion is the guard that
+        // catches that drift, which is why it is a count and not a comment.
         assert_eq!(
-            count + 2,
+            count + 4,
             builtin_tool_names().len() + 3,
-            "registry has {} tools, names list has {}; the difference should be 1 (bridge tools minus delegate_task + mcp_management)",
+            "registry has {} tools, names list has {}; the difference should be 1 (bridge tools minus delegate_task + the surface tools + mcp_management)",
             count,
             builtin_tool_names().len()
         );
         assert!(!registry.contains("delegate_to_sub_agent").await);
+        // The surface tools are advertised by name and reachable in the loop
+        // only through the sub-agent variant, exactly like delegate_task.
+        assert!(!registry.contains("ui_render_surface").await);
+        assert!(!registry.contains("ui_request_input").await);
     }
 
     #[tokio::test]

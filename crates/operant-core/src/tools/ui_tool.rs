@@ -44,16 +44,20 @@ use crate::ui::{Provenance, SurfaceCapabilities, SurfaceOp, WidgetNode};
 /// How long the request-input tool waits for a host UI answer before
 /// degrading.
 ///
-/// This is the ONLY timeout in a hostless deployment, not a backstop for a
-/// longer one. Exactly one production caller registers a surface receiver
-/// (`crates/operant-cli/src/tui/adapter_types/tui_app.rs`); the gateway does
-/// not, and `operant run` is hostless by design. So on those paths
-/// `try_send_surface_request` returns `None` and the tool fails fast with
-/// "no interactive surface is attached" -- it never reaches this await at all.
-/// Only the TUI reaches it, and the `ask_user_dialog` it opens carries no
-/// timeout of its own. `surface_request_sender_is_registered_only_by_the_tui`
-/// pins that asymmetry: if this comment's "120s" claim is ever made true, that
-/// guard must be updated in the same change.
+/// There are TWO hosts now, and each bounds a hung prompt in its own way:
+///
+///   * the TUI drains into `ask_user_dialog`, which carries NO timeout of its
+///     own -- so THIS is the only bound on that path, and it is what stops a
+///     prompt the operator walked away from wedging the turn forever;
+///   * the gateway receiver runs a 120 s timer and answers "dismissed" when it
+///     fires, so on that path this 300 s is the outer backstop it was always
+///     documented as. It was NOT before iter-2640: the gateway registered no
+///     receiver at all, so `try_send_surface_request` returned `None` and the
+///     tool failed fast without ever reaching this await.
+///
+/// `operant run` is hostless by design and still takes the fail-fast path.
+/// `surface_host_receivers.rs` pins the host set: a new host must be added
+/// there, next to whatever bound it gives its own prompts.
 const SURFACE_REPLY_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -311,6 +315,18 @@ fn cell_to_string(value: &Value) -> String {
     }
 }
 
+/// The capability set for the transport that will DRAW the card.
+///
+/// Read from the turn's `ToolContext` metadata, which `tool_context` fills from
+/// the agent's transport. Both surface tools used to call
+/// `SurfaceCapabilities::tui()` directly, so a gateway turn was validated
+/// against the TUI's set and the capability gate was decorative: it answered
+/// "can this transport draw a table?" with "yes" on a transport that draws
+/// plain text. An absent key is a headless run and gets `text_only`.
+fn capabilities_for(context: &ToolContext) -> SurfaceCapabilities {
+    SurfaceCapabilities::for_transport(context.get("transport"))
+}
+
 /// The body of a render op: the widget tree, as the IR spells it.
 ///
 /// Deserialized as a [`serde_json::Value`] and parsed through the real
@@ -373,7 +389,7 @@ impl OperantTool for UiRenderSurfaceTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: RenderSurfaceArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
@@ -416,8 +432,9 @@ impl OperantTool for UiRenderSurfaceTool {
         };
 
         // The gate. Fail-closed: every refusal is a typed rule the model can
-        // act on, never a silent drop.
-        let caps = SurfaceCapabilities::tui();
+        // act on, never a silent drop. The capabilities are the DRAWING
+        // transport's, read off the turn, not an assumed TUI.
+        let caps = capabilities_for(&context);
         let config = crate::config::runtime_config();
         if let Err(refusal) = gate::validate_surface(&mut op, &caps, &config) {
             return ToolResult::error(
@@ -431,7 +448,7 @@ impl OperantTool for UiRenderSurfaceTool {
         // `[unverified]` itself — the caller does not add it.
         let provenance_flag = RenderProvenance::from_synthesized(op.is_synthesized());
         let fallback = plain::render_plain(
-            &op.root_widget(),
+            &op.widgets_column(),
             plain::FALLBACK_MODEL_WIDTH,
             provenance_flag,
         );
@@ -442,16 +459,22 @@ impl OperantTool for UiRenderSurfaceTool {
         // fallback below is what keeps the model informed.
         emit_surface_rendered(&self.event_tx, &op);
 
-        // The result: the op (structured, for the host to re-render from)
-        // plus the plain fallback (for the model). Scrub the serialized
-        // fallback too — a secret split across two table cells is invisible
-        // to the leaf walk (gate.rs M4).
+        // The result: the op (structured, for a host or a reloaded session to
+        // re-render from) plus the plain fallback (what the model reads).
+        //
+        // The op is included because the emitted `AgentEvent` is a LIVE signal:
+        // a session reloaded after this card renders does not replay it, so
+        // without the op here the reloaded transcript has the plain text and no
+        // way back to the card (plan review F18). Scrubbing the SERIALIZED
+        // fallback too catches a secret split across two table cells, which the
+        // leaf walk in `gate::validate_surface` cannot see (gate.rs M4).
         let fallback = crate::redaction::redact_sensitive_text(&fallback);
         ToolResult::success(
             "ui_render_surface",
             serde_json::json!({
                 "surface_id": op.surface_id(),
                 "fallback": fallback,
+                "op": &op,
             }),
         )
     }
@@ -520,7 +543,7 @@ impl OperantTool for UiRequestInputTool {
 
         // The gate runs BEFORE any host sees the card: a refusal is returned
         // to the model and the host is never disturbed.
-        let caps = SurfaceCapabilities::tui();
+        let caps = capabilities_for(&context);
         let config = crate::config::runtime_config();
         if let Err(refusal) = gate::validate_surface(&mut op, &caps, &config) {
             return ToolResult::error(
@@ -548,6 +571,11 @@ impl OperantTool for UiRequestInputTool {
         };
         let request = SurfaceRequest {
             surface_id: op.surface_id().to_string(),
+            // The host needs to know WHICH chat asked: the gateway serves many
+            // sessions from one process, and a card delivered to the wrong one
+            // leaves the asking turn blocked on an answer nobody was shown
+            // (the iter-2528 H-3 failure, for `clarify`).
+            session_id: context.resolved_session_id().map(str::to_string),
             question,
             body: match &op {
                 SurfaceOp::CreateSurface { body, .. } => body.clone(),
@@ -690,7 +718,7 @@ mod tests {
                     "columns": [{"header": "k"}],
                     "rows": [{"cells": ["v"]}],
                 })),
-                ToolContext::default(),
+                ToolContext::default().with_metadata("transport", "tui"),
             )
             .await;
         assert!(result.success, "{}", result.error.unwrap_or_default());
@@ -718,7 +746,7 @@ mod tests {
                         {"name": "pear", "qty": "7"},
                     ],
                 })),
-                ToolContext::default(),
+                ToolContext::default().with_metadata("transport", "tui"),
             )
             .await;
         assert!(result.success, "{}", result.error.unwrap_or_default());
@@ -733,7 +761,7 @@ mod tests {
         let result = tool
             .execute(
                 render_args(json!({"node": "divider"})),
-                ToolContext::default(),
+                ToolContext::default().with_metadata("transport", "tui"),
             )
             .await;
         assert!(!result.success, "the gate must refuse a disabled surface");
@@ -762,7 +790,7 @@ mod tests {
                     "node": "column",
                     "children": children,
                 })),
-                ToolContext::default(),
+                ToolContext::default().with_metadata("transport", "tui"),
             )
             .await;
         assert!(!result.success, "an over-wide tree must be refused");
@@ -805,7 +833,7 @@ mod tests {
                         {"id": "b", "label": "B"},
                     ],
                 }),
-                ToolContext::default(),
+                ToolContext::default().with_metadata("transport", "tui"),
             )
             .await
         });
@@ -826,7 +854,9 @@ mod tests {
     #[tokio::test]
     async fn request_refuses_unattended() {
         let tool = UiRequestInputTool;
-        let context = ToolContext::default().with_metadata("unattended", "true");
+        let context = ToolContext::default()
+            .with_metadata("transport", "tui")
+            .with_metadata("unattended", "true");
         let result = tool
             .execute(
                 json!({

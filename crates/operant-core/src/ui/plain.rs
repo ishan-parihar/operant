@@ -127,8 +127,15 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Display columns, not chars.
+///
+/// `s.chars().count()` counts a CJK glyph as 1 when it occupies 2 terminal
+/// columns, so every table padded against it mis-aligned and every row wrapped
+/// against it overran the width the plan promised (G1d: `ui_request_input` rows
+/// must never ellipsize their args at 60 or 55 cols). The plan already shipped
+/// `unicode-width` in the tree for exactly this; it was not called here.
 fn char_len(s: &str) -> usize {
-    s.chars().count()
+    unicode_width::UnicodeWidthStr::width(s)
 }
 
 fn push_indented(out: &mut String, text: &str, indent: usize, width: usize) {
@@ -573,16 +580,27 @@ fn render_table(
     }
 }
 
-/// Truncate to at most `n` chars, with an ellipsis when it cut.
+/// Truncate to at most `n` DISPLAY COLUMNS, with an ellipsis when it cut.
+///
+/// Column-budgeted, not char-budgeted, for the same reason `char_len` is: a
+/// 3-char CJK header is 6 columns wide, so a char budget lets a table cell
+/// overrun the column the width math already reserved for it.
 fn truncate_chars(s: &str, n: usize) -> String {
-    let count = s.chars().count();
-    if count <= n {
+    if char_len(s) <= n {
         return s.to_string();
     }
     if n <= 1 {
         return "…".to_string();
     }
-    let mut out: String = s.chars().take(n - 1).collect();
+    // Keep the longest prefix that fits WITH the ellipsis, so the result is
+    // never over budget no matter how wide the glyphs are.
+    let mut out = String::new();
+    for ch in s.chars() {
+        if char_len(&out) + char_len(&ch.to_string()) + 1 > n {
+            break;
+        }
+        out.push(ch);
+    }
     out.push('…');
     out
 }
@@ -770,10 +788,56 @@ mod tests {
         for width in [30usize, 55, 72, 100] {
             let text = render_plain(&node, width, RenderProvenance::Verified);
             for line in text.lines() {
+                // DISPLAY COLUMNS, not chars: a CJK glyph is 1 char and 2
+                // columns, so a char-count assertion passes on a row that
+                // visibly overruns. This test was the wrong measure until
+                // G1d was audited.
                 assert!(
-                    line.chars().count() <= width + 4,
-                    "width {width}: {} chars in {line:?}",
-                    line.chars().count()
+                    char_len(line) <= width + 4,
+                    "width {width}: {} columns in {line:?}",
+                    char_len(line)
+                );
+            }
+        }
+    }
+
+    /// G1(d): an interactive card's ARGS must never ellipsize at 60 or 55 cols.
+    ///
+    /// The red-team safety hole this closes: a `ui_request_input` that shows
+    /// `Edit /home/some/very/long/path/...` truncated to `Edit /home/so…` is a
+    /// card the operator cannot safely answer, because the thing they are
+    /// approving is not the thing on screen. Measure the card at the two widths
+    /// the plan names and assert every option's label survives whole.
+    #[test]
+    fn interactive_card_args_survive_at_the_narrow_widths() {
+        // CJK on purpose: the failure the old char-count assertion hid.
+        let card = WidgetNode::ChoicePicker {
+            question: "Apply this patch?".to_string(),
+            choices: vec![
+                crate::ui::ChoiceOption {
+                    id: "a".into(),
+                    label: "写入 /home/ishanp/项目/配置文件.toml".into(),
+                    description: None,
+                },
+                crate::ui::ChoiceOption {
+                    id: "b".into(),
+                    label: "skip".into(),
+                    description: None,
+                },
+            ],
+        };
+        for width in [55usize, 60] {
+            let text = render_plain(&card, width, RenderProvenance::Verified);
+            assert!(
+                text.contains("写入"),
+                "width {width}: a CJK label must survive whole, got {text:?}"
+            );
+            // The label's columns must be inside the budget the card was given.
+            for line in text.lines() {
+                assert!(
+                    char_len(line) <= width + 4,
+                    "width {width}: {} columns in {line:?}",
+                    char_len(line)
                 );
             }
         }

@@ -56,7 +56,12 @@ impl OperantAgent {
             // `origin_platform`/`origin_chat_id` as NULL and `deliver =
             // "local"`, and the scheduler's `deliver_result` logged "No
             // delivery target" and discarded the result.
-            .with_cron_origin(self.cron_origin());
+            .with_cron_origin(self.cron_origin())
+            // The transport that will DRAW a surface card, so the surface tools
+            // validate against real capabilities rather than assuming a TUI
+            // (plan M4). Absent for a headless run, which then gets
+            // `text_only` and a plain fallback.
+            .with_metadata("transport", self.transport().unwrap_or_default());
         if self.unattended {
             ctx = ctx.with_metadata("unattended", "true");
         }

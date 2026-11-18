@@ -683,6 +683,14 @@ impl TuiApp {
             let _ = operant_core::ui::request::set_surface_request_sender(sr_tx);
             self.app.surface_request_rx = Some(sr_rx);
 
+            // This agent draws to a terminal, so its surface cards may use the
+            // full capability set (plan M4). Without this the surface tools see
+            // no transport and fail closed to `text_only`, refusing the widgets
+            // the TUI can actually render.
+            if let Some(agent) = agent.as_ref() {
+                agent.set_transport(Some("tui"));
+            }
+
             // Attach the MCP manager + file-history + current-turn counter to the
             // App. Without these, /mcp always shows "Disconnected" for every
             // server, /changes always shows "No changes", the "iter N" status

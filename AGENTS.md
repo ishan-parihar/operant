@@ -676,14 +676,25 @@ These are the user's intentional design choices. Do not replace, remove, or
   complete set of messaging surfaces.
 
 ### Native Tool Integrations
-- **Generative UI (iter-2638, plan 2026-11-18)**: the Surface IR + the governance
-  gate + the plain renderer (`crates/operant-core/src/ui/`) and TWO in-loop tools
-  (`tools/ui_tool.rs`): `ui_render_surface` and `ui_request_input`. Both are
-  registered in `builtin_tool_names()` and gated on `[ui] generative_enabled`
-  inside the tool (review F8: a pre-execute interceptor cannot refuse on
-  semantics, because it runs before the `SurfaceOp` is parsed). The TUI card
-  renderer and the PNG mapper are T2 / M4; the plain form ships now so a refused
-  card is never silently dropped.
+- **Generative UI (iters 2638 + 2640, plan 2026-11-18)**: the Surface IR + the
+  governance gate + the plain renderer (`crates/operant-core/src/ui/`) and TWO
+  in-loop tools (`tools/ui_tool.rs`): `ui_render_surface` and
+  `ui_request_input`. Both are registered in `builtin_tool_names()` and gated on
+  `[ui] generative_enabled` inside the tool (review F8: a pre-execute interceptor
+  cannot refuse on semantics, because it runs before the `SurfaceOp` is parsed).
+  - **Both hosts drain the request channel.** The TUI drains into
+    `ask_user_dialog`; the gateway drains into a receiver task that sends a
+    numbered plain-text card. A host that registers a sender and does not drain
+    it wedges the turn on an answer nobody will send -- that was the state until
+    iter-2640, and `crates/operant-core/tests/surface_host_receivers.rs` is the
+    guard (it also pins that a second card cannot overwrite a live dialog's
+    single reply slot).
+  - **Capabilities come from the transport, not a constant.** `SurfaceCapabilities`
+    is resolved per turn from the agent's `transport` field (set by the TUI and
+    the gateway), defaulting to `text_only` when absent. Never call
+    `SurfaceCapabilities::tui()` from a tool: that is the bug iter-2640 fixed.
+  - The TUI card WIDGET renderer and the PNG mapper are T2 / M4; the plain form
+    ships now so a refused card is never silently dropped.
 - **AFT (Agent File Tools)**: 20 IDE-grade coding tools via subprocess
   (`aft_bridge.rs` + `aft_tools.rs`)
   - Auto-downloads from GitHub releases, auto-updates

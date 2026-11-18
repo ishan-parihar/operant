@@ -650,7 +650,7 @@ impl App {
                 // this arm renders and never re-checks: re-validating here
                 // would mean the gate's verdict depends on which host drew it.
                 let text = operant_core::ui::plain::render_plain(
-                    &op.root_widget(),
+                    &op.widgets_column(),
                     operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
                     operant_core::ui::plain::RenderProvenance::from_synthesized(
                         op.is_synthesized(),

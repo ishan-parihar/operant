@@ -19039,7 +19039,7 @@ fn a_rendered_surface_lands_as_a_row_carrying_the_unverified_badge() {
     // Drive the same code path the drain uses: build the plain text and push
     // the annotation the event arm pushes.
     let text = operant_core::ui::plain::render_plain(
-        &op.root_widget(),
+        &op.widgets_column(),
         operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
         operant_core::ui::plain::RenderProvenance::from_synthesized(op.is_synthesized()),
     );
@@ -19081,7 +19081,7 @@ fn the_surface_card_and_the_tool_row_are_separate_rows() {
         },
     };
     let text = operant_core::ui::plain::render_plain(
-        &op.root_widget(),
+        &op.widgets_column(),
         operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
         operant_core::ui::plain::RenderProvenance::from_synthesized(op.is_synthesized()),
     );
@@ -19103,5 +19103,91 @@ fn the_surface_card_and_the_tool_row_are_separate_rows() {
         !card.content.contains("[unverified]"),
         "tool-verified content must not claim to be unverified: {:?}",
         card.content
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// One dialog, one reply slot
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A queued surface request, built the way the tool builds one.
+fn surface_request_for_test(
+    surface_id: &str,
+    reply_tx: tokio::sync::oneshot::Sender<serde_json::Value>,
+) -> operant_core::ui::request::SurfaceRequest {
+    let body = operant_core::ui::WidgetNode::Confirm {
+        question: "Continue?".to_string(),
+        default: false,
+    };
+    let op = operant_core::ui::SurfaceOp::CreateSurface {
+        surface_id: surface_id.to_string(),
+        intent: "confirm".to_string(),
+        provenance: operant_core::ui::Provenance::AgentSynthesis,
+        body: body.clone(),
+    };
+    operant_core::ui::request::SurfaceRequest {
+        surface_id: surface_id.to_string(),
+        session_id: Some("tui_test".to_string()),
+        question: "Continue?".to_string(),
+        body,
+        op,
+        reply_tx,
+    }
+}
+
+/// A card arriving while the dialog is ALREADY open must be left in the channel,
+/// not taken.
+///
+/// `open_with_header` stores the reply oneshot in a single `Option` slot, so
+/// taking a second request overwrites that slot, drops the first oneshot, and
+/// wedges the first turn with no error anywhere: the card simply stops being
+/// answerable. The drain is the only place that can decline, so the guard lives
+/// there and this pins it.
+#[tokio::test]
+async fn a_second_surface_request_waits_while_the_dialog_is_open() {
+    let mut app = make_app();
+
+    // No dialog yet: the first card is taken and opens the dialog.
+    let (first_tx, mut first_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.surface_request_rx = Some(first_rx);
+    let (first_reply_tx, first_reply_rx) = tokio::sync::oneshot::channel();
+    first_tx
+        .send(surface_request_for_test("s1", first_reply_tx))
+        .expect("the first request is queued");
+    assert!(
+        app.drain_surface_requests(),
+        "with no dialog open the first card must be taken"
+    );
+    assert!(
+        app.ask_user_dialog.visible,
+        "the first card must have opened the dialog"
+    );
+
+    // A second card arrives while that dialog is still up.
+    let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.surface_request_rx = Some(second_rx);
+    let (second_reply_tx, _second_reply_rx) = tokio::sync::oneshot::channel();
+    second_tx
+        .send(surface_request_for_test("s2", second_reply_tx))
+        .expect("the second request is queued");
+    assert!(
+        !app.drain_surface_requests(),
+        "a second card must NOT be taken while the dialog is open"
+    );
+
+    // Dismissing the dialog frees the slot, and the queued card then runs.
+    app.ask_user_dialog.dismiss();
+    assert!(
+        app.drain_surface_requests(),
+        "once the dialog is dismissed the queued card must be taken"
+    );
+
+    // The first card's oneshot was NOT dropped by the second card: the sender
+    // still resolves. `dismiss()` sent an empty answer through it, which is the
+    // dialog's "nobody answered" signal — a dropped sender would instead make
+    // the tool report a dismissed prompt indistinguishable from a lost turn.
+    assert!(
+        first_reply_rx.await.is_ok(),
+        "the first card's oneshot must still be resolvable after the second card arrives"
     );
 }

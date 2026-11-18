@@ -136,6 +136,27 @@ impl SurfaceCapabilities {
         }
     }
 
+    /// The capability set for a named transport, fail-closed.
+    ///
+    /// The plan's M4 rule: capabilities are built per-turn from the transport
+    /// that will DRAW the card, not assumed. Both surface tools called
+    /// `SurfaceCapabilities::tui()` unconditionally, which meant a gateway turn
+    /// was validated against the TUI's full set and the capability gate answered
+    /// a question nobody asked: `inline_widgets: true` on a transport that can
+    /// only show text.
+    ///
+    /// Anything not the TUI is `text_only`, so an unknown or missing transport
+    /// degrades to the plain fallback rather than claiming a widget nobody can
+    /// render. Telegram DM keeps its own constructor: it is the one adapter with
+    /// images and native buttons, and `telegram.rs` is where that is enforced.
+    pub fn for_transport(transport: Option<&str>) -> Self {
+        match transport {
+            Some("tui") => Self::tui(),
+            Some("telegram") => Self::telegram_dm(),
+            _ => Self::text_only(),
+        }
+    }
+
     /// Render the capability set as the short string [`UiRefusal::UnsupportedNode`]
     /// carries.
     pub fn describe(self) -> String {
@@ -1007,20 +1028,35 @@ impl WidgetNode {
 }
 
 impl SurfaceOp {
-    /// The op's root widget, for a renderer that draws one tree.
+    /// Every widget this op carries, as one tree a renderer can draw.
     ///
-    /// An op with no widgets (a `SealSurface`) renders as a [`WidgetNode::Divider`]:
-    /// a visible rule rather than an empty string, so a host that draws "the
-    /// surface" still draws SOMETHING and the model's fallback is never blank.
+    /// Wraps in a [`WidgetNode::Column`] when there is more than one, because
+    /// rendering only the FIRST widget is what this exists to prevent: that
+    /// silently drops every widget after the first. It was harmless while the
+    /// surface tools could build nothing but `CreateSurface` (one `body`) and
+    /// wrong the moment they could, since `UpdateComponents { components }`
+    /// carries a `Vec`.
+    ///
+    /// An op with no widgets (a `SealSurface`) renders as a
+    /// [`WidgetNode::Divider`]: a visible rule rather than an empty string, so a
+    /// host that draws "the surface" still draws SOMETHING and the model's
+    /// fallback is never blank.
+    ///
     /// One implementation because two hosts (the TUI's event arm and the
     /// gateway's text fallback) both need the same answer, and a second copy is
     /// how they would come to disagree.
-    pub fn root_widget(&self) -> WidgetNode {
-        self.widgets()
-            .into_iter()
-            .next()
-            .cloned()
-            .unwrap_or(WidgetNode::Divider)
+    ///
+    /// A single widget is returned unwrapped, so the common case's layout is
+    /// unchanged; only a genuine multi-widget op pays for the `Column`.
+    pub fn widgets_column(&self) -> WidgetNode {
+        let mut widgets = self.widgets();
+        match widgets.len() {
+            0 => WidgetNode::Divider,
+            1 => widgets.remove(0).clone(),
+            _ => WidgetNode::Column {
+                children: widgets.into_iter().cloned().collect(),
+            },
+        }
     }
 }
 
@@ -1155,6 +1191,56 @@ mod tests {
         assert!(leaves.contains(&"one"));
         assert!(leaves.contains(&"answer"));
         assert!(leaves.contains(&"42"));
+    }
+
+    /// A multi-widget op must render EVERY widget, not just the first.
+    ///
+    /// `UpdateComponents` carries a `Vec`, so a renderer that reached for the
+    /// first widget would drop the rest with no error anywhere. This pins the
+    /// wrap so the drop cannot come back.
+    #[test]
+    fn a_multi_widget_op_renders_every_widget() {
+        let op = SurfaceOp::UpdateComponents {
+            surface_id: "s1".into(),
+            components: vec![
+                WidgetNode::Text {
+                    text: "first".into(),
+                    tone: SemanticTone::Default,
+                    mono: false,
+                },
+                WidgetNode::Text {
+                    text: "second".into(),
+                    tone: SemanticTone::Default,
+                    mono: false,
+                },
+                WidgetNode::Text {
+                    text: "third".into(),
+                    tone: SemanticTone::Default,
+                    mono: false,
+                },
+            ],
+        };
+        match op.widgets_column() {
+            WidgetNode::Column { children } => {
+                assert_eq!(children.len(), 3, "every widget must be carried");
+            }
+            other => panic!("a 3-widget op must wrap in a Column, got {other:?}"),
+        }
+    }
+
+    /// A single-widget op is NOT wrapped: the common case keeps its layout.
+    #[test]
+    fn a_single_widget_op_is_not_wrapped() {
+        let op = SurfaceOp::CreateSurface {
+            surface_id: "s1".into(),
+            intent: "t".into(),
+            provenance: Provenance::AgentSynthesis,
+            body: WidgetNode::Divider,
+        };
+        assert!(
+            matches!(op.widgets_column(), WidgetNode::Divider),
+            "one widget must be returned unwrapped"
+        );
     }
 
     #[test]
