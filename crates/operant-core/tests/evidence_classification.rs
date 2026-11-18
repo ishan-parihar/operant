@@ -378,3 +378,60 @@ fn a_family_without_payload_keys_compresses_the_whole_document() {
     assert_eq!(plan.segments[0].path, "");
     assert_eq!(plan.segments[0].text, content);
 }
+
+/// The two tools whose names were wrong in the classifier table, checked
+/// against the name each tool actually reports.
+///
+/// iter-2636 (lion P-3a). `classify.rs` listed `notification` and `tts`. The
+/// registered names are `notify` (tools/notification_tool.rs:26) and
+/// `text_to_speech` (tools/tts_tool.rs:277) -- the table named two tools that do
+/// not exist and omitted the two that do.
+///
+/// The consequence is not cosmetic. `classify()` returns `None` for an unknown
+/// name, and `evidence::compress` maps `None` to `Compressed::unchanged`
+/// (evidence/mod.rs:195-198), so every result from `notify` and
+/// `text_to_speech` bypassed the compression layer entirely.
+///
+/// Why this test does not simply iterate `builtin_tool_names()`: that list
+/// carried the same phantom pair, so iterating it compares the table against a
+/// list that agrees with it and the check is a tautology -- green while the real
+/// tools are unclassified. That is the defect this replaces. The names below are
+/// the ones the tools themselves report, so a rename upstream breaks this test
+/// rather than passing silently.
+#[test]
+fn the_renamed_notification_and_tts_tools_still_classify() {
+    // The name each tool reports from its own `fn name()`, not a guess.
+    for (tool, reported_name) in [
+        ("notification_tool", "notify"),
+        ("tts_tool", "text_to_speech"),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/tools")
+            .join(format!("{tool}.rs"));
+        let source =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{tool}.rs is readable: {e}"));
+        assert!(
+            source.contains(&format!("\"{reported_name}\"")),
+            "{tool}.rs no longer reports `{reported_name}` -- this test's premise \
+             is stale, update it to the name the tool reports now"
+        );
+
+        assert!(
+            classify(reported_name, "").is_some(),
+            "tool `{reported_name}` (registered by {tool}.rs) does not classify, so \
+             its results bypass compression entirely (evidence::compress maps \
+             classify()==None to Compressed::unchanged)"
+        );
+    }
+
+    // The phantom aliases are kept so an older payload still classifies. They are
+    // not what the registry serves, so nothing here depends on them -- but if
+    // they are removed the table must still cover the real names above.
+    for phantom in ["notification", "tts"] {
+        assert!(
+            classify(phantom, "").is_some(),
+            "`{phantom}` was dropped from the table; harmless if intended, but \
+             check it was not removed together with the real names"
+        );
+    }
+}

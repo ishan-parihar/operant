@@ -97,6 +97,15 @@ pub fn subject_for(tool_name: &str) -> Option<Subject> {
         | "mcp_management"
         | "memory_save"
         | "memory_store"
+        // iter-2636: these were `notification` and `tts`, which are registered
+        // NOWHERE. The real names are `notify` (tools/notification_tool.rs:26)
+        // and `text_to_speech` (tools/tts_tool.rs:277). classify() returns None
+        // for an unknown tool, and `evidence::compress` turns None into
+        // `Compressed::unchanged` (evidence/mod.rs:195-198) -- so every result
+        // from both tools bypassed the compression layer entirely. The phantom
+        // aliases are kept so an older name still classifies.
+        | "notify"
+        | "text_to_speech"
         | "notification"
         | "osv_check"
         | "session_insights"
