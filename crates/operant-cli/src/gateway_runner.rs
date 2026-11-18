@@ -5987,11 +5987,7 @@ pub async fn start_gateway(
     // org mode). The approver is resolution-only now — an interactive
     // approval or denial resolves the in-flight ask; there is no grant
     // to mint and no durable row to record.
-    let org_db = app_config
-        .database_path
-        .parent()
-        .map(|p| p.join("operant_kanban.db"))
-        .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
+    let org_db = operant_core::org::org_sibling_kanban_path(&app_config.database_path);
     let seat_policy_store = Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
         org_db.clone(),
     )?);

@@ -26,7 +26,7 @@ use crate::config::BudgetSettings;
 use crate::error::{Error, Result};
 use chrono::Datelike;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// The override row. `None` fields inherit `[bylaws].budget`.
@@ -155,10 +155,7 @@ impl SeatBudgetDb {
     pub fn init_org_sibling(app_db_path: &Path) -> Result<Self> {
         // The org-sibling rule inlined (the same rule
         // `org::context_injection::ContextInjectionDb::open` follows).
-        let org_sibling = app_db_path
-            .parent()
-            .map(|p| p.join("operant_kanban.db"))
-            .unwrap_or_else(|| PathBuf::from("operant_kanban.db"));
+        let org_sibling = crate::org::org_sibling_kanban_path(app_db_path);
         let db = Self::init(&org_sibling)?;
         db.migrate_from_app_db(app_db_path);
         Ok(db)

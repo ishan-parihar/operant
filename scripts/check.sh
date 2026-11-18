@@ -35,6 +35,18 @@ cd "$DIR/.."
 # check build on an unreachable upstream — the lock stays at its last-good
 # rev. A breaking upstream release fails the build loudly until pinned. See
 # crates/operant-core/Cargo.toml.
+#
+# A caller's `--offline` MUST reach the sync (iter-2642): the build.sh guard reads
+# only its own `--offline`/`MEMORY_WIRE_NO_SYNC`, and this script used to forward
+# `--offline` to cargo alone — so every "offline" gate check ran
+# `cargo update -p memory-wire`, touched the network, and rewrote the tracked
+# Cargo.lock under concurrent turns' in-flight checks. `scripts/test-compile-gate.sh`
+# calls this script with `--offline` unconditionally, so it was the loudest one.
+for arg in "$@"; do
+    case "$arg" in
+        --offline) export MEMORY_WIRE_NO_SYNC=1 ;;
+    esac
+done
 "$DIR/build.sh" --sync-only
 
 # `doc` is a shortcut for the rustdoc gate, not a passthrough: ci.yml:140 runs

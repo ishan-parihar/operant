@@ -495,11 +495,7 @@ fn provision_cron_seat(
         .map_err(|e| anyhow::anyhow!("invalid --seat-mode '{mode_raw}': {e}"))?;
     // the org-sibling rule: the policy store lives in operant_kanban.db
     // beside the app db (the pre-G+1 convention, kept for personal seats)
-    let org_db = config
-        .database_path
-        .parent()
-        .map(|p| p.join("operant_kanban.db"))
-        .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
+    let org_db = operant_core::org::org_sibling_kanban_path(&config.database_path);
     let policies = SeatPolicyDb::init(org_db).context("Failed to open the seat policy store")?;
     policies
         .upsert(

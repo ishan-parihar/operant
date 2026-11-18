@@ -773,6 +773,17 @@ def o_src(root: Path) -> tuple[list[str], str]:
                 out.append(d)
     cargo = root / "Cargo.toml"
     if cargo.is_file():
+        # A WORKSPACE root declares no `name`; its members are the source. Reading only
+        # `name` here reported the operant workspace's sources as the conventional `crates/`
+        # dir (true by luck) while `o_wiring` then treated a 20-file frontend subfolder as
+        # "the local module set" and emitted 30 edges between i18n files as the repo's
+        # internal wiring. A workspace is read from its members, never from a name it does not have.
+        members = re.search(r'^\s*members\s*=\s*\[([^\]]*)\]', read(cargo), re.M | re.S)
+        if members:
+            for m in re.findall(r'"([^"]+)"', members.group(1)):
+                if (root / m).is_dir() and m not in out:
+                    out.append(m)
+            return out, ""
         n = re.search(r'^\s*(?:name|path)\s*=\s*"([^"]+)"', read(cargo), re.M)
         if n and (root / n.group(1)).is_dir() and n.group(1) not in out:
             out.append(n.group(1))
@@ -800,10 +811,12 @@ def o_size(root: Path, src: list[str]) -> list[tuple[str, int]]:
     return sorted(n.items(), key=lambda kv: -kv[1])
 
 
-def o_gate(root: Path) -> str:
+def o_gate(root: Path, cfg: Cfg | None = None) -> str:
     m = re.search(r'^\s*gate\s*=\s*"([^"]+)"', read(root / "genome.toml"), re.M)  # the KB's own setting first
     if m:
         return m.group(1)
+    if cfg is not None and cfg.get("outline", "gate"):
+        return str(cfg.get("outline", "gate"))
     return next((g for f, g in (("Cargo.toml", "cargo test --locked"), ("pyproject.toml", "pytest -q"),
                                 ("package.json", "npm test"), ("go.mod", "go test ./..."))
                  if (root / f).is_file()), "not derivable")
@@ -834,7 +847,7 @@ def o_wiring(root: Path, src: list[str]) -> list[tuple[str, str]]:
     base = src[0]
     top = root / base
     local = {p.stem for p in top.glob("*.py")} | {p.stem for p in top.glob("*.rs")} | {p.stem for p in top.glob("*.ts")}
-    edges: set[tuple[str, str]] = set()
+    edges: dict[tuple[str, str], str] = {}
     for p in top.rglob("*"):
         if not p.is_file() or p.suffix not in (".py", ".rs", ".ts") or p.name.startswith("__"):
             continue
@@ -849,6 +862,45 @@ def o_wiring(root: Path, src: list[str]) -> list[tuple[str, str]]:
         for m in re.finditer(r'from\s+["\']\./([\w./-]+)["\']', t):  # ts relative
             edges.add((f"{base}/{p.stem}", f"{base}/{m.group(1).removesuffix('.js')}"))
     return sorted(edges)
+
+
+def o_crate_edges(root: Path, src: list[str]) -> list[tuple[str, str, str]]:
+    """Manifest-declared workspace edges (crate A -> crate B, " (optional)" marker).
+
+    A workspace's internal wiring is a fact its MEMBERS declare: each member names the
+    siblings it depends on. (`o_wiring` walks ONE tree for `use`/`import` lines, which
+    for a multi-crate workspace answers a different question and, before this, answered
+    it about a frontend subfolder.) Resolution is by crate NAME through
+    `[workspace.dependencies]`/member `[dependencies]`, so a renamed directory cannot
+    silently break the row: an unresolvable path dep is skipped, never guessed.
+    """
+    def crate_name(path: str) -> str:
+        m = re.search(r'^\s*name\s*=\s*"([^"]+)"', read(root / path / "Cargo.toml"), re.M)
+        return m.group(1) if m else Path(path).name
+    names = {crate_name(s): s for s in src}
+    edges: dict[tuple[str, str], str] = {}
+    for s in src:
+        text = read(root / s / "Cargo.toml")
+        for block in re.findall(r'^\[dependencies\](.*?)(?:^\[[a-z]|\Z)', text, re.M | re.S):
+            for line in block.splitlines():
+                m = re.match(r'\s*([A-Za-z0-9_-]+)(\.workspace\s*=\s*true|\s*=\s*(.*))', line)
+                if not m or m.group(1) not in names or names[m.group(1)] == s:
+                    continue
+                spec = m.group(2) + (m.group(3) or "")
+                # THREE declaration forms live in this tree: `x = { path = ".." }`,
+                # `x = { workspace = true }` and the bare dotted `x.workspace = true`.
+                # The workspace-inherited two are resolved through the root's
+                # `[workspace.dependencies]`, so a member cannot claim an edge the
+                # root does not define. Reading only the first form dropped four of
+                # the seven edges, including the only one into the plugin host.
+                inherited = 'workspace = true' in spec
+                if 'path' in spec or (inherited and re.search(
+                        rf'^\s*{re.escape(m.group(1))}\s*=\s*\{{[^}}]*path', read(root / "Cargo.toml"), re.M)):
+                    key = (f"{s}/", f"{names[m.group(1)]}/")
+                    # An optional dep is wired only when its feature is on; the row
+                    # says so rather than reading as unconditional.
+                    edges[key] = " (optional)" if 'optional = true' in spec else ""
+    return [(a, b, mark) for (a, b), mark in sorted(edges.items())]
 
 
 def outline_body(cfg: Cfg) -> str:
@@ -866,6 +918,7 @@ def outline_body(cfg: Cfg) -> str:
     src, entry = o_src(r)
     deps = o_deps(r)
     edges = o_wiring(r, src)
+    crate_edges = o_crate_edges(r, src) if len(src) > 1 else []
     L = ["**Generated by `genome outline` from the tree — facts only.** The shape these "
          "facts describe, and the order to read it in, is [docs/OUTLINE.md](docs/OUTLINE.md); "
          "re-emit with `genome outline`.", "",
@@ -876,12 +929,37 @@ def outline_body(cfg: Cfg) -> str:
          "### Size — files under the source dirs, excluding build output and vendored code", "",
          "| language | files |", "|---|---|"]
     L += [f"| {l} | {n} |" for l, n in o_size(r, src)] or ["| — | none found |"]
+    gate = o_gate(r, cfg)
     L += ["", f"### Gate — `{cfg.paths['agents']}` declares it, or it is probed from the manifest", "",
-          "```", o_gate(r), "```", ""]
-    L += ["### Dependencies — direct, from the manifests", "", "| package |", "|---|"]
-    L += [f"| `{d}` |" for d in deps] or ["| none declared |"]
+          "```", gate, "```", ""]
+    # A fact with no source is printed, never omitted and never guessed (the module's
+    # one rule). "none declared" was a CLAIM that the manifest declares no dependencies;
+    # it was printed for a `[workspace.dependencies]` table holding tokio, reqwest, serde
+    # and clap, because the probe reads only a bare `[dependencies]` table at the root.
+    L += ["### Dependencies — direct, from the manifests", "",
+          "| package |", "|---|"]
+    if deps:
+        L += [f"| `{d}` |" for d in deps]
+    elif (r / "Cargo.toml").is_file():
+        L += ["| not derivable — a workspace root declares its deps under "
+              "`[workspace.dependencies]`, which this probe does not read |"]
+    else:
+        L += ["| none declared |"]
     L += ["", "### Wiring — one row per internal import edge", "", "| from | to |", "|---|---|"]
-    L += [f"| `{a}` | `{b}` |" for a, b in edges] or ["| — | no internal edges |"]
+    if edges:
+        L += [f"| `{a}` | `{b}` |" for a, b in edges]
+    elif crate_edges:
+        L += [f"| `{a}` | `{b}`{opt} |" for a, b, opt in crate_edges]
+        L += ["", "Scope: manifest-declared edges between workspace members (crate → "
+              "crate). The `use`-line walker reads one tree and is not reported for a "
+              "multi-member workspace, where the manifests are the fact."]
+    elif len(src) > 1:
+        # Several source dirs with no edges is not "no imports": the walker reads ONE
+        # tree, so it reports the fact it measured and the trees it did not.
+        L += [f"| not derivable — the walker reads `{src[0]}/` only; "
+              "`" + "`, `".join(d + "/" for d in src[1:]) + "` was not scanned |"]
+    else:
+        L += ["| — | no internal edges |"]
     return "\n".join(L) + "\n"
 
 

@@ -29,6 +29,31 @@ pub mod seat_policy;
 pub mod seat_policy_db;
 pub mod worklog;
 
+/// The org-sibling store: `operant_kanban.db` beside the app database.
+///
+/// ONE owner for the rule the seat policy, seat budgets, context injection
+/// and the gateway each used to inline (iter-2643). Every copy carried
+/// `database_path.parent().unwrap_or_else(PathBuf::from("operant_kanban.db"))`,
+/// which is not a fallback to the operant home but to the PROCESS WORKING
+/// DIRECTORY: a relative `database_path` there made two concurrent turns
+/// started from different directories open different, usually absent,
+/// stores, so the budget/policy gate read no rows and admitted everything
+/// while the writer wrote elsewhere. A relative path now resolves against the
+/// one home (`platform::operant_home`), never against the CWD.
+pub fn org_sibling_kanban_path(database_path: &std::path::Path) -> std::path::PathBuf {
+    // `parent()` of a bare file name is `Some("")` — an EMPTY path, not `None`
+    // — so the fallback never fired and `"database.db"` became the RELATIVE
+    // `"operant_kanban.db"`. MEASURED by this function's own test: the first
+    // version of this helper shipped with that bug. A parent that names no
+    // directory is treated as no parent.
+    let sibling = database_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::platform::operant_home);
+    sibling.join("operant_kanban.db")
+}
+
 // ── Refusal recorder (audit O-17, W3) ─────────────────────────────────
 //
 // In a Holon run, a policy refusal is not an interactive ask: the
@@ -281,6 +306,62 @@ mod rt422_tests {
             prod.matches(not_matching).count(),
             1,
             "the commands note must state that the conventions differ"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// (iter-2643) The rail used to fall back to the PROCESS CWD. A relative
+    /// `database_path` therefore resolved `<cwd>/operant_kanban.db`, so two
+    /// turns started from different directories opened different, usually
+    /// absent, policy stores — the budget gate read no rows and admitted
+    /// everything the writer had just denied.
+    ///
+    /// The invariant asserted is the resolved PATH, never an absolute-ness
+    /// claim about `operant_home()` itself: the resolver is the same one the
+    /// rest of the code uses, and pinning it to its own return value would be
+    /// the self-asserting test that `is_interactive_tool`'s guard is.
+    #[test]
+    #[serial_test::serial]
+    fn a_relative_database_path_resolves_against_the_home_never_the_cwd() {
+        let _guard = crate::platform::test_env_lock_blocking();
+        let original = std::env::var("OPERANT_HOME").ok();
+        let home = std::env::temp_dir().join(format!("org-sibling-{}", std::process::id()));
+        // $OPERANT_HOME is the PRIMARY name; HERMES_HOME is its legacy fallback
+        // and loses to it, so a test that sets only HERMES_HOME measures the
+        // developer's shell instead of its own expectation.
+        // SAFETY: test-only env mutation under the serial env guard.
+        unsafe { std::env::set_var("OPERANT_HOME", &home) };
+        let resolved = org_sibling_kanban_path(Path::new("database.db"));
+        let cwd_sibling = std::env::current_dir()
+            .map(|d| d.join("operant_kanban.db"))
+            .unwrap_or_default();
+        match original {
+            Some(val) => unsafe { std::env::set_var("OPERANT_HOME", val) },
+            None => unsafe { std::env::remove_var("OPERANT_HOME") },
+        }
+        assert_eq!(
+            resolved,
+            home.join("operant_kanban.db"),
+            "a relative database path must resolve beside the HOME db, not the CWD"
+        );
+        assert_ne!(
+            resolved, cwd_sibling,
+            "the rail must never produce the working directory's sibling"
+        );
+    }
+
+    /// A `database_path` with a parent keeps the sibling rule: the kanban store
+    /// sits BESIDE the app db, whatever directory that is.
+    #[test]
+    fn an_absolute_database_path_keeps_its_own_directory() {
+        assert_eq!(
+            org_sibling_kanban_path(Path::new("/srv/operant/database.db")),
+            PathBuf::from("/srv/operant/operant_kanban.db")
         );
     }
 }

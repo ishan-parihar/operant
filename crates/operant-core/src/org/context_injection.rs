@@ -286,10 +286,7 @@ impl ContextInjector {
     ) -> Result<Self> {
         // G+1: the org-sibling rule inlined (worklog_db retired): the
         // context tables live in operant_kanban.db beside the app db.
-        let org_sibling = database_path
-            .parent()
-            .map(|p| p.join("operant_kanban.db"))
-            .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
+        let org_sibling = crate::org::org_sibling_kanban_path(database_path);
         let conn = Connection::open(&org_sibling)
             .map_err(|e| Error::Agent(format!("context injection: open: {e}")))?;
         conn.execute_batch(CONTEXT_WATERMARKS_SCHEMA)
