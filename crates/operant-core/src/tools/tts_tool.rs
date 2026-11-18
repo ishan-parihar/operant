@@ -61,7 +61,18 @@ pub struct TtsArgs {
 }
 
 fn default_provider() -> String {
-    "phonon".to_string()
+    default_provider_name().to_string()
+}
+
+/// The built-in provider name this build dispatches to when the config names
+/// nothing usable.
+///
+/// Public because a caller that must REWRITE a retired config value needs the
+/// same answer the dispatch uses. A second hardcoded `"phonon"` in the CLI
+/// would drift the moment the default moves, and the migration would then
+/// quietly write a name that is not the default.
+pub fn default_provider_name() -> &'static str {
+    "phonon"
 }
 
 fn default_voice() -> String {

@@ -34,6 +34,15 @@ pub enum ConfigSubcommand {
         /// Actually perform the migration.
         #[arg(long)]
         apply: bool,
+        /// Migrate THIS file instead of the resolved default.
+        ///
+        /// `-c/--config` is a global flag, but `handle_migrate` resolved its own
+        /// path and ignored it, so `operant -c other.toml config migrate`
+        /// silently migrated the operator's REAL config while appearing to
+        /// target the other one (RT-601). The global flag already names this;
+        /// the subcommand mirrors it so the intent is visible in `--help`.
+        #[arg(short = 'c', long = "config", value_name = "CONFIG")]
+        config: Option<PathBuf>,
     },
     /// List and restore the saved copies of the config file.
     Backups {
@@ -84,7 +93,7 @@ pub async fn handle_config_command(config: &AppConfig, cmd: ConfigSubcommand) ->
         ConfigSubcommand::Check => handle_check(config).await,
         ConfigSubcommand::Edit => handle_edit(),
         ConfigSubcommand::EnvPath => handle_env_path(),
-        ConfigSubcommand::Migrate { apply } => handle_migrate(apply),
+        ConfigSubcommand::Migrate { apply, config } => handle_migrate(apply, config),
         ConfigSubcommand::Backups { action } => handle_backups(action),
         ConfigSubcommand::Describe { section, json } => handle_describe(config, section, json),
         ConfigSubcommand::Notes { key } => handle_notes(&key),
@@ -515,14 +524,58 @@ fn handle_backups(action: BackupAction) -> Result<()> {
     }
 }
 
-fn handle_migrate(apply: bool) -> Result<()> {
+/// The `(from, to)` rewrite a retired `[tts] provider` needs, if any.
+///
+/// Returns `None` when the provider is absent, already current, or merely
+/// unknown. That last case matters: a TYPO must not be silently rewritten,
+/// because guessing the operator's intent is how `openai-tts` would become
+/// `openai` and speak with someone else's credentials. Only names operant
+/// itself shipped and then removed are migrated.
+fn retired_tts_provider_rewrite(config_path: &std::path::Path) -> Result<Option<(String, String)>> {
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read config file '{}'", config_path.display()))?;
+    let doc: toml::Value = content
+        .parse()
+        .with_context(|| format!("Config file '{}' is not valid TOML", config_path.display()))?;
+
+    let Some(provider) = doc
+        .get("tts")
+        .and_then(|t| t.get("provider"))
+        .and_then(|v| v.as_str())
+    else {
+        return Ok(None);
+    };
+
+    // The only provider this project has ever retired. iter-2513 replaced
+    // Kokoro with Phonon; `resolve_provider_name` has degraded the old name
+    // ever since, which kept it invisible.
+    let replacement = match provider {
+        "kokoro" => operant_core::tools::tts_tool::default_provider_name(),
+        _ => return Ok(None),
+    };
+
+    if replacement == provider {
+        return Ok(None);
+    }
+    Ok(Some((provider.to_string(), replacement.to_string())))
+}
+
+fn handle_migrate(apply: bool, explicit: Option<PathBuf>) -> Result<()> {
     // (A8-cli-surface MEDIUM-2) `HERMES_CONFIG` names the YAML CLI config, not
     // this TOML one. Migrating "the config" must mean the TOML config the
     // loader reads, or `config migrate` would rewrite a different file than
     // the one the agent loads.
-    let config_path = operant_core::config::default_config_paths()
-        .into_iter()
-        .find(|p| p.exists())
+    //
+    // An explicit path wins (RT-601). Without this the function silently
+    // migrated the resolved default while the operator believed `-c` had
+    // redirected it -- the worst failure shape for a command that REWRITES a
+    // file, because the operator cannot see which file changed.
+    let config_path = explicit
+        .or_else(|| {
+            operant_core::config::default_config_paths()
+                .into_iter()
+                .find(|p| p.exists())
+        })
         .unwrap_or_else(|| PathBuf::from("operant.toml"));
 
     println!("Config migration check");
@@ -552,12 +605,47 @@ fn handle_migrate(apply: bool) -> Result<()> {
     println!("Config file: {}", config_path.display());
     println!("Detected version: {:?}", current_version.unwrap_or(0));
 
+    // A RETIRED provider name is a config that keeps working while saying
+    // something false. `resolve_provider_name` degrades `kokoro` to the default
+    // at runtime (iter-2525), so the tool never errors -- which is exactly why
+    // the dead name survived in operator configs for five months (RT-600). The
+    // doctor warns about it now (iter-2592), but a warning asks the operator to
+    // hand-edit a file; migrating is the same fix without the homework.
+    //
+    // This is deliberately a VALUE migration, not a version bump: it must run
+    // whether or not the file already carries `version = 2`, so it is checked
+    // independently below rather than folded into the v0->v1->v2 ladder.
+    let retired = retired_tts_provider_rewrite(&config_path)?;
+
     println!();
     println!("Available migrations:");
     println!("  v0 -> v1: Initial version field addition");
     println!("  v1 -> v2: MCP server configuration restructure");
+    if let Some((from, to)) = &retired {
+        println!("  tts.provider: retired '{from}' -> '{to}'");
+    }
 
     let target_version = 2;
+
+    // Apply the retired-provider rewrite on its own, outside the version ladder:
+    // an operator already at v2 still needs it, and folding it into a version
+    // bump would skip exactly the installs most likely to carry the dead name.
+    if let Some((from, to)) = &retired {
+        if apply {
+            // The surgical writer keeps comments and snapshots the pre-migration
+            // bytes; the old body re-serialized and dropped every comment.
+            operant_core::config::persist_config_key_at(&config_path, "tts.provider", to)
+                .with_context(|| {
+                    format!("Failed to migrate tts.provider '{}' -> '{}'", from, to)
+                })?;
+            println!("  Applied: tts.provider '{}' -> '{}'.", from, to);
+        } else {
+            println!(
+                "  Run with --apply to rewrite tts.provider '{}' -> '{}'.",
+                from, to
+            );
+        }
+    }
 
     if let Some(v) = current_version {
         if v >= target_version {
@@ -614,6 +702,100 @@ fn handle_migrate(apply: bool) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    /// `config migrate -c FILE` migrates FILE, not the resolved default. (RT-601)
+    ///
+    /// `-c` is a global flag, and `handle_migrate` used to resolve its own path
+    /// and ignore it -- so the command silently rewrote the operator's REAL
+    /// config while appearing to target the named file. For a command whose
+    /// whole job is rewriting a file, "it changed a different one than you
+    /// asked for" is the worst failure shape: nothing errors, and the operator
+    /// has no way to see which file moved.
+    #[test]
+    fn migrate_honours_an_explicit_config_path() {
+        let dir = std::env::temp_dir().join(format!("rt601-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+
+        // A file that WOULD need the retired-provider rewrite.
+        let target = dir.join("explicit.toml");
+        std::fs::write(&target, "version = 2\n\n[tts]\nprovider = \"kokoro\"\n")
+            .expect("write explicit config");
+
+        // Dry run must NAME the explicit file and report the pending rewrite.
+        handle_migrate(false, Some(target.clone())).expect("dry run on explicit path");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read explicit config"),
+            "version = 2\n\n[tts]\nprovider = \"kokoro\"\n",
+            "a dry run must not modify the file"
+        );
+
+        // Apply must rewrite the EXPLICIT file.
+        handle_migrate(true, Some(target.clone())).expect("apply on explicit path");
+        let after = std::fs::read_to_string(&target).expect("read explicit config");
+        assert!(
+            after.contains("phonon") && !after.contains("kokoro"),
+            "the explicit config must be the one migrated, got: {after}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A retired `[tts] provider` is rewritten; a TYPO is not. (RT-600)
+    ///
+    /// The distinction is the whole point. `resolve_provider_name` already
+    /// degrades any unknown name to the default at runtime, so the tool works
+    /// either way -- which is why the retired `kokoro` survived in operator
+    /// configs for five months after iter-2513 removed it (RT-600). Migrating
+    /// only the name operant itself shipped and then retired keeps the fix
+    /// honest: rewriting `openai-tts` to `openai` would guess the operator's
+    /// intent and speak with someone else's credentials.
+    #[test]
+    fn a_retired_tts_provider_is_rewritten_and_a_typo_is_not() {
+        let dir = std::env::temp_dir().join(format!("rt600-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("operant.toml");
+
+        // The retired name operant shipped until iter-2513.
+        std::fs::write(&path, "[tts]\nprovider = \"kokoro\"\nenabled = false\n")
+            .expect("write kokoro config");
+        let (from, to) = retired_tts_provider_rewrite(&path)
+            .expect("read kokoro config")
+            .expect("kokoro MUST be reported as needing a rewrite");
+        assert_eq!(from, "kokoro");
+        assert_eq!(
+            to,
+            operant_core::tools::tts_tool::default_provider_name(),
+            "the migration must write the SAME default the dispatch uses, not a second hardcoded name"
+        );
+
+        // A typo is the operator's to fix. Silently rewriting it is how
+        // `openai-tts` becomes `openai`.
+        std::fs::write(&path, "[tts]\nprovider = \"openai-tts\"\n").expect("write typo config");
+        assert!(
+            retired_tts_provider_rewrite(&path)
+                .expect("read typo config")
+                .is_none(),
+            "a typo must be left alone for the operator to correct"
+        );
+
+        // Already current: nothing to do.
+        std::fs::write(&path, "[tts]\nprovider = \"phonon\"\n").expect("write phonon config");
+        assert!(
+            retired_tts_provider_rewrite(&path)
+                .expect("read phonon config")
+                .is_none()
+        );
+
+        // No [tts] block at all: nothing to do (and must not panic).
+        std::fs::write(&path, "[agent]\nmodel = \"x\"\n").expect("write bare config");
+        assert!(
+            retired_tts_provider_rewrite(&path)
+                .expect("read bare config")
+                .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn config_subcommand_show_does_not_panic() {
