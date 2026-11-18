@@ -147,6 +147,42 @@ systemctl --user restart operant-gateway
 # and verify the RUNNING process actually executes the new binary:
 md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
 # (it must equal the md5 of the deployed path, not merely "some binary exists")
+# RE-CHECK THE TIP AFTER THE BUILD, NOT JUST BEFORE (2026-11-18, iter-2615,
+# MEASURED twice in one session). A release build takes 16-20 min on this box,
+# and the fleet commits DURING it. Observed: the tree was `3418d8ba` when the
+# build started and `e9b7dcbb` (three peer iterations ahead) when it finished,
+# so the artifact on disk was a build of a tree that no longer existed -- and
+# deploying it would have silently reverted three peers' landed fixes, because
+# `cp` + restart happily installs whatever is in target/release. The pre-build
+# `git rev-parse --short HEAD origin/main` check above is NECESSARY BUT NOT
+# SUFFICIENT: it can only confirm the tree at t=0, and the artifact is from
+# t=0 while the deploy is at t=20min. So re-run it AFTER the build:
+#   git fetch origin && git rev-parse --short HEAD origin/main
+# If the shas no longer match, the artifact is stale BY CONSTRUCTION -- rebuild
+# (do not deploy, and do not assume `--version` will catch it: the version
+# string is identical across iterations, so Case B detection does NOT fire on
+# this class). MEASURED md5 of a mid-flight build vs a clean rebuild differ.
+#
+# ISOLATE A PEER'S UNCOMMITTED WIP BEFORE A RELEASE BUILD (same day, MEASURED).
+# A shared tree can hold a peer's half-finished edit that DOES NOT COMPILE. This
+# box's tree carried a `tools.rs` panic-containment edit mid-fix, and the release
+# build failed with `error[E0597]: task_tool does not live long enough` at
+# `tools.rs:527` -- a defect in THEIR uncommitted work, not in yours. The
+# sanctioned move: `cp` their file aside (never `git checkout --` it away --
+# that is destroying a peer's WIP, rule 2), `git checkout --` YOUR copy of that
+# one path, build, then `cp` their file back. The tree must be clean-and-committed
+# for the build to mean anything, and "clean" here means "no peer WIP either".
+#
+# A SHARED-TREE `git add` CAN SWEAT IN A PEER'S DIRTY FILE (same day, MEASURED).
+# Staging explicit paths is still the rule and still right, but on a busy tree an
+# explicit `git add <paths>` was followed by a commit that ALSO contained a
+# peer's uncommitted `gateway_runner.rs` edit (an admin-allowlist fix) -- an
+# index race, not a mis-stage. Nothing was lost (it landed on origin, so it is
+# recoverable), but it is MISATTRIBUTED: it now reads as part of your subject.
+# Two habits that cost nothing: (a) `git diff --cached --name-status` and READ it
+# before committing, and (b) after committing, `git show --stat HEAD` and confirm
+# every path is one you meant to touch. If a peer's file is in there, say so in
+# the commit body AND on the feed (`genome post`) so they can claim it.
 ```
 
 ### R&D Protocol — Deploy After Every Push
@@ -159,6 +195,42 @@ md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
 > an assumed convention. See step 7 above for the measured deploy sequence.
 >
 > Docs-only iterations (AGENTS.md, README, CHANGELOG) skip the build step.
+
+### The file tools and bash can resolve DIFFERENT trees (2026-11-18, iter-2615)
+
+MEASURED, and the single most expensive trap of that session. In a linked
+worktree (`/home/ishanp/wt2502`), `bash` correctly operated on that worktree,
+while the `edit` / `apply_patch` tools resolved the same path to the MAIN
+worktree (`/home/ishanp/Documents/github/my-projects/agentic-harness/operant`).
+Every edit reported success and showed a correct-looking diff, and none of it
+appeared in the worktree `bash` was building. Symptom: `grep` in bash says 0
+occurrences, `git diff --stat` is empty, the file mtime never changes -- while
+the edit tool insists it wrote 104 lines. This reads exactly like "a peer
+reverted me", and that is the wrong diagnosis.
+
+Two tells, in order of cost:
+
+1. **A second worktree's file has your content.** `grep -c <your-marker>` across
+   every `AGENTS.md` on the box found it in the main tree, not the linked one.
+2. **`git -C <main-tree> status` is dirty with edits you did not make there.**
+
+Confirm which tree each tool means before trusting either:
+
+```bash
+pwd -P                                        # what bash thinks
+git worktree list                             # every tree and its path
+grep -c '<your-unique-marker>' <path>/AGENTS.md   # did the write land?
+```
+
+Recovery when it happens: copy the edited file out of the tree the file tool
+wrote to, `git -C <that-tree> checkout -- <file>` to leave the peer's tree
+clean, then copy it into the worktree bash is actually working in. Do NOT
+leave the edits in the main tree -- it is a shared tree and that is how a
+misplaced edit becomes a peer's mystery diff.
+
+Mitigation while working in a linked worktree: **prefer `bash` heredocs and
+`python3` for edits, and verify every write with a `grep` in the same command.**
+A write that is not confirmed by a read in the same shell is not done.
 
 ### Iteration Numbering
 
@@ -491,6 +563,32 @@ These are the user's intentional design choices. Do not replace, remove, or
   Phonon. `edge` is keyless but NOT local — it shells out to the `edge-tts`
   CLI (`pip install edge-tts`), which talks to Microsoft's TTS service.
 - Do NOT switch to Edge TTS, OpenAI TTS, or any other provider as the default
+
+- **The engine working and the default WORKING are two different facts; check
+  both.** MEASURED 2026-11-18 (iter-2615): this host's `[tts]` was
+  `provider = "kokoro"` (a name removed in iter-2513) with `enabled = false`,
+  while the Phonon checkpoint sat complete in
+  `<home>/cache/phonon/gradium/phonon-31m-en-92741c5b07d0/` (4 files, all four
+  sizes matching `MODEL_FILE_SIZES` exactly) and the engine synthesized real
+  audio on demand -- `phonon_speaks_through_the_tool_with_the_cached_model`
+  measured **1.92 s at 24 kHz, peak 20757** (non-silent). So "TTS is broken"
+  was false and "TTS works" was also false: the ENGINE was fine and the
+  DEFAULT was not, because the config named a retired provider and the switch
+  was off. When asked to "make sure X works", verify the layer the operator
+  experiences (the default path), not only the layer that is easy to test
+  (the engine). `operant doctor` reports the two states separately for exactly
+  this reason (iter-2592): `provider "kokoro" is not a known TTS provider`
+  and `disabled -- the phonon model is downloaded` are different findings with
+  different fixes, and a stale `[tts]` block produces BOTH at once.
+- **`[tts] enabled` gates the operator-facing surfaces, not the dispatch.**
+  MEASURED: the flag is read by `cmd_doctor/checks_tools.rs`,
+  `cmd_setup.rs` and `post_setup.rs` -- it is NOT consulted by
+  `TtsTool::execute`. The `tts` tool stays registered in `builtin.rs`
+  regardless, and an unknown provider degrades through
+  `resolve_provider_name` to `default_provider()`. So `enabled = false` does
+  not make the tool return early; it makes the setup/doctor surfaces report
+  the feature as off. Do not "fix" a disabled TTS by looking for a guard in
+  the dispatch path -- there is none to find.
 
 > **History (iter-2513):** this was Kokoro (`kokoro-tiny::TtsEngine`, voice
 > `af_sky`, `kokoro-v1.0.onnx` + `voices-v1.0.bin` from GitHub). Kokoro is
