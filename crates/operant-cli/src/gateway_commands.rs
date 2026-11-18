@@ -327,7 +327,12 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         aliases: &["tasks"],
         category: "Session",
         args_hint: "",
-        admin_only: false,
+        // iter-2632: process-wide state, admin-only like restart/pause/platform.
+        // The handler prints every active session's id, platform and user id, so
+        // a non-admin caller could enumerate other users' sessions -- which is
+        // also the input the `/resume` ownership gate (iter-2621) exists to
+        // protect. Listing them to everyone defeated the gate one command later.
+        admin_only: true,
     },
     CommandDef {
         name: "subagents",
@@ -335,7 +340,9 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         aliases: &["subagent"],
         category: "Session",
         args_hint: "",
-        admin_only: false,
+        // iter-2632: same reasoning as `agents` -- the goals and result snippets
+        // belong to whatever session dispatched them, not to every caller.
+        admin_only: true,
     },
     CommandDef {
         name: "todos",
@@ -4358,6 +4365,42 @@ mod subagents_command_tests {
 
     fn ctx(cfg: &AppConfig) -> CommandContext<'_> {
         CommandContext::new(None, cfg, true, "op-1", "telegram", "chan-1")
+    }
+
+    /// iter-2632: `/agents` and `/subagents` report PROCESS-WIDE state, so a
+    /// non-admin caller must be refused.
+    ///
+    /// The `/agents` handler prints every active session's id, platform and user
+    /// id (gateway_commands.rs:1924-1938), and `/subagents` prints every
+    /// delegation's goal and result snippet. Neither is scoped to the caller, so
+    /// an admin_only:false flag handed one channel user a map of everyone else's
+    /// sessions -- including the session ids that the `/resume` ownership gate
+    /// (iter-2621) exists to protect. Listing them to anyone is the same leak one
+    /// command later.
+    ///
+    /// Mutation proof: flip either flag back to `false` and this test goes RED.
+    #[test]
+    fn process_wide_listing_commands_are_admin_only() {
+        let cfg = AppConfig::default();
+        let non_admin = CommandContext::new(None, &cfg, false, "op-1", "telegram", "chan-1");
+
+        for name in ["agents", "subagents"] {
+            let resp = handle_command(name, "", &non_admin)
+                .unwrap_or_else(|| panic!("`/{name}` returned None for a non-admin caller"));
+            assert!(
+                resp.contains("only available to admins"),
+                "`/{name}` answered a non-admin caller with {resp:?}; it reports \
+                 process-wide sessions, so it must be admin-only"
+            );
+        }
+
+        // Sanity: the admin path still works, so the gate is the only thing
+        // refusing -- the commands are not simply broken for everyone.
+        let admin = ctx(&cfg);
+        assert!(
+            handle_command("agents", "", &admin).is_some(),
+            "`/agents` must still answer an admin"
+        );
     }
 
     /// `/todos` must read the bucket the AGENT writes, and the agent's key is
