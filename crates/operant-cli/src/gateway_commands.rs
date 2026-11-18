@@ -1680,6 +1680,43 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                         )
                     }
                     Ok(stored) => {
+                        // (RED-TEAM HIGH) `/resume` is `admin_only: false`, so the id
+                        // arrives from anyone the gateway will talk to. Without an
+                        // ownership gate the caller pins THEIR chat to a STRANGER's
+                        // session id and the next turn rehydrates that stranger's
+                        // transcript into the model's context — a cross-user
+                        // transcript disclosure reachable from any DM. The pin is
+                        // per-session_key, so the damage is contained to the caller's
+                        // own conversation, but the leak is real: the transcript of
+                        // the victim's session is replayed into the caller's turn.
+                        //
+                        // Admins are exempt (they already hold every session); a
+                        // non-admin may only resume a session that names THEIR OWN
+                        // `platform_user_id` on THEIR platform. A session with no
+                        // recorded owner (a legacy row, or one the store could not
+                        // attribute) is REFUSED rather than admitted — the safe
+                        // direction for a disclosure gate.
+                        let owner = ctx
+                            .gateway
+                            .and_then(|g| g.get_persistent_sessions())
+                            .and_then(|store| store.get_session(&stored.session_id));
+                        let owned_by_caller = owner.as_ref().is_some_and(|s| {
+                            s.platform == ctx.platform && s.platform_user_id == ctx.user_id
+                        });
+                        if !ctx.is_admin && !owned_by_caller {
+                            tracing::warn!(
+                                platform = ctx.platform,
+                                channel = ctx.channel_id,
+                                user = ctx.user_id,
+                                requested = %stored.session_id,
+                                "Gateway /resume: refused a cross-session resume (the caller does not own the requested session)"
+                            );
+                            return Some(format!(
+                                "❌ Session `{}` belongs to another user — you can only resume your own sessions.\n\
+                                 Session IDs come from `operant sessions list`.",
+                                stored.session_id
+                            ));
+                        }
                         pins.set(ctx.session_key, &stored.session_id);
                         // GW-6: persisted too, so a restart keeps the resumed transcript.
                         persist_conversation(ctx, &stored.session_id);
@@ -4171,6 +4208,129 @@ mod tests {
             "a complete listing must not claim to be truncated: {rendered}"
         );
         assert!(rendered.contains("1."), "the row carries its 1-based index");
+    }
+
+    // RED-TEAM HIGH regression: `/resume <id>` is `admin_only: false`, so the
+    // id arrives from anyone the gateway will talk to. Without an ownership
+    // gate the caller pins THEIR chat to a STRANGER's session and the next
+    // turn rehydrates that stranger's transcript into the model's context — a
+    // cross-user transcript disclosure reachable from any DM.
+    //
+    // MUTATION PROOF: deleting the `owned_by_caller` check in the `Ok(stored)`
+    // arm of "resume" makes `non_admin_cannot_resume_a_foreign_session` FAIL,
+    // because the pin then succeeds against a session the caller does not own.
+    // The companion `admin_may_resume_any_session` proves the gate is not a
+    // blanket refusal (an admin must still be able to resume any session).
+    #[test]
+    fn non_admin_cannot_resume_a_foreign_session() {
+        use operant_core::gateway::{Gateway, GatewayConfig};
+        use operant_core::gateway_session::PersistentSessionStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("temp operant home");
+        let db_path = dir.path().join("database.db");
+        let db = operant_core::database::Database::init(db_path.clone()).expect("db");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // The VICTIM's session, owned by another user, carrying a real
+        // transcript (so the honesty gate passes and the pin WOULD fire
+        // without the ownership check).
+        const VICTIM: &str = "gw_victim_9f3a";
+        db.save_session(VICTIM, Some("victim private"), "gateway", &now, &now)
+            .unwrap();
+        db.save_message(VICTIM, "user", "my bank password is hunter2", &now)
+            .unwrap();
+
+        // The store row that attributes the victim session to its owner.
+        let store = Arc::new(
+            PersistentSessionStore::open(db_path.to_str().expect("path"))
+                .expect("persistent session store"),
+        );
+        store
+            .create_session("telegram", "victim-user", "victim-chan")
+            .expect("victim session row");
+
+        let gw =
+            Gateway::new(GatewayConfig::default()).with_persistent_sessions(Arc::clone(&store));
+
+        // The CALLER: a non-admin, different user, on the same platform.
+        let pins = Arc::new(crate::gateway_runner::SessionPins::default());
+        let mut cfg = AppConfig::default();
+        // Point the honesty gate (`open_stored_transcript`) at the SAME temp DB
+        // the victim transcript lives in — otherwise it reads the default home
+        // and reports "no stored conversation" before the ownership gate runs.
+        cfg.database_path = db_path.clone();
+        let ctx = CommandContext::new(
+            Some(&gw),
+            &cfg,
+            false,
+            "attacker",
+            "telegram",
+            "attacker-chan",
+        )
+        .with_session_pins(Some(Arc::clone(&pins)))
+        .with_session_key("telegram:attacker-chan:attacker");
+
+        let reply = handle_command("resume", VICTIM, &ctx).expect("/resume must be handled");
+
+        // The pin must NOT be set: the caller cannot re-point their chat at a
+        // stranger's transcript.
+        assert!(
+            pins.get("telegram:attacker-chan:attacker").is_none(),
+            "a non-admin must not pin a session they do not own"
+        );
+        assert!(
+            reply.contains("belongs to another user"),
+            "the refusal must name the ownership reason: {reply}"
+        );
+    }
+
+    #[test]
+    fn admin_may_resume_any_session() {
+        use operant_core::gateway::{Gateway, GatewayConfig};
+        use operant_core::gateway_session::PersistentSessionStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("temp operant home");
+        let db_path = dir.path().join("database.db");
+        let db = operant_core::database::Database::init(db_path.clone()).expect("db");
+        let now = chrono::Utc::now().to_rfc3339();
+
+        const VICTIM: &str = "gw_victim_admin_7c1d";
+        db.save_session(VICTIM, Some("victim private"), "gateway", &now, &now)
+            .unwrap();
+        db.save_message(VICTIM, "user", "secret", &now).unwrap();
+
+        let store = Arc::new(
+            PersistentSessionStore::open(db_path.to_str().expect("path"))
+                .expect("persistent session store"),
+        );
+        store
+            .create_session("telegram", "victim-user", "victim-chan")
+            .expect("victim session row");
+
+        let gw =
+            Gateway::new(GatewayConfig::default()).with_persistent_sessions(Arc::clone(&store));
+
+        // The caller IS an admin: the ownership gate is exempt.
+        let pins = Arc::new(crate::gateway_runner::SessionPins::default());
+        let mut cfg = AppConfig::default();
+        // Same temp DB the victim transcript lives in (see the non-admin test).
+        cfg.database_path = db_path.clone();
+        let ctx = CommandContext::new(Some(&gw), &cfg, true, "admin", "telegram", "admin-chan")
+            .with_session_pins(Some(Arc::clone(&pins)))
+            .with_session_key("telegram:admin-chan:admin");
+
+        let reply = handle_command("resume", VICTIM, &ctx).expect("/resume must be handled");
+
+        assert!(
+            pins.get("telegram:admin-chan:admin").as_deref() == Some(VICTIM),
+            "an admin must still be able to resume any session"
+        );
+        assert!(
+            reply.contains("Continuing session"),
+            "the admin reply must confirm the resume: {reply}"
+        );
     }
 }
 
