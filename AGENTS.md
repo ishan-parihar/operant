@@ -232,6 +232,29 @@ Mitigation while working in a linked worktree: **prefer `bash` heredocs and
 `python3` for edits, and verify every write with a `grep` in the same command.**
 A write that is not confirmed by a read in the same shell is not done.
 
+### A linked worktree's HEAD is DETACHED -- push `HEAD:main`, not `main` (2026-11-18)
+
+MEASURED: `git worktree list` shows a linked worktree as `(detached HEAD)`, and
+`git symbolic-ref -q HEAD` confirms it. In that state the local `main` ref is
+NOT yours -- it sits wherever it was last set (here: `0bc1581e`, three
+iterations stale). So `git push origin main` pushes that stale ref and is
+correctly rejected as non-fast-forward, *even though your commit's parent IS
+origin/main and the push should trivially fast-forward*. Three identical
+rejections with a clean `git merge-base --is-ancestor origin/main HEAD` is the
+signature: the push is not describing your commit at all.
+
+```bash
+git symbolic-ref -q HEAD || echo DETACHED   # confirm
+git rev-parse --short main HEAD             # if these differ, `push main` is wrong
+git push origin HEAD:main                   # the correct form
+git ls-remote origin main                   # verify by content, not by exit code
+```
+
+Verify with `ls-remote` (or `git rev-parse origin/main` after a fetch) rather
+than trusting the push's own output -- this session saw a push report
+`[rejected]` while the remote tip in fact equalled the local HEAD, because a
+concurrent attempt had landed. The remote ref is the only authority.
+
 ### Iteration Numbering
 
 - Find the current iteration number from **`origin/main`, never local history**:
