@@ -17,7 +17,9 @@ as "the unified persistence seam", `kernel-sidecar` health checks inside
 a second setup wizard, a second detector and a second state store on top of
 mechanisms that already exist and already work. This audit re-measures every
 claim against the code, so the plan
-(`docs/plans/2026-11-18-operant-onboarding-as-a-first-class-subsystem.md`) is
+(`docs/archive/2026-11-18-operant-onboarding-as-a-first-class-subsystem.md`; the
+live successor is
+`docs/plans/2026-11-18-operant-onboarding-v2-live-state-and-first-task.md`) is
 built on what is there rather than on what was described.
 
 **Method.** `agentgrep` for structure, `rg`/`sed` for the cited lines, and
