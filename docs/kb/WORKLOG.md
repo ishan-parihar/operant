@@ -1633,3 +1633,43 @@ race-free by hand; that is what it is. The mitigation that DID work this
 session is the isolated-worktree cherry-pick, which decouples "commit" from
 "the shared tree's HEAD" and removes the peer's `git reset` from the critical
 path.
+
+## 2026-11-18 — arch-redteam landing summary (coordinator)
+
+Eight verified, mutation-proven fixes landed from the 2-orchestrator /
+12-lane red-team fleet. Every one was verified against source BEFORE editing,
+and every one ships a regression test that FAILS when the fix is reverted.
+
+| iter | sha | finding | defect |
+|---|---|---|---|
+| 2609 | 37f91733 | own sweep | 4 byte-slice panics on operator free text (cron/kanban/main/gateway) |
+| 2610 | (peer commit, see below) | G-1 + G-3 | CLI admin gate lacked `authenticated` and `is_channel_post` exemptions |
+| 2611 | b953fab3 | dove H1 | Esc cleared the popup but not the walk, which re-opened it with row 0 selected |
+| 2613 | e9b7dcbb | dove H2 | queued/steered message kept its pasted image; warning named a later turn |
+| 2614 | 953c1e30 | CORE-H1 | a panicking tool unwound the whole agent turn |
+| 2616 | d9ba2791 | CORE-H8 | MCP OAuth CSRF state mismatch warned and continued |
+| 2618 | 1cc275c3 | eagle M4 | `/export <path>` wrote an arbitrary path from an `admin_only: false` channel command |
+
+### CORE-H5 was a false alarm — do not re-open
+
+CORE-H5 claimed the seat `Deny` verdict was unenforced on the headless path
+(`agent/stream.rs:1570`). Verified at source and it is NOT a defect:
+`SeatDecision::Deny` is the FIRST arm of the seat match (stream.rs:1570) and
+both of its branches end in `early_results[idx] = Some(ToolResult::error(..));
+continue;` — the Holon branch and the plain branch. `guardian_approved` and the
+allowlist are later `else if` arms (1598+), so a Deny always wins over them.
+`seat` itself is `Some` whenever a `seat_authority` and (`seat_id()` or
+`session_id()`) exist, and `seat_id` falls back to `session_id`. The finding
+appears to have read the `permission_tx` arm as skipping the seat check; it
+does not. Recorded as a disproof so nobody re-derives it.
+
+### The iter-2610 attribution gap
+
+My G-1/G-3 fix landed inside a PEER's commit (`3418d8ba`, the TTS-seam
+refactor). The fix is correct and present in origin/main, verified by
+`git show origin/main:crates/operant-cli/src/gateway_runner.rs | grep -c
+msg.is_channel_post` → 3 and 4/4 admin_gate_tests passing. What is missing is
+the ATTRIBUTION: that commit's message does not mention it. Cause: I had green
+tests and then went to read a peer's report instead of staging. In a shared
+tree, uncommitted verified work is not yours yet. Stage the moment tests go
+green.
