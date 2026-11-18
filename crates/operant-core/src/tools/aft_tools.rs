@@ -616,6 +616,34 @@ pub struct AftApplyPatchTool {
     pool: Arc<AftBridgePool>,
 }
 
+/// Every path a patch body touches, in patch order, read from the per-file
+/// headers the AFT patch grammar embeds.
+///
+/// iter-2637 (lion). This parse lived INLINE inside
+/// `AftApplyPatchTool::execute` (`:642-656`), so exactly one caller knew how to
+/// read a patch body -- and the memory-write mirror in `agent/run.rs` was not
+/// that caller. It reads `args["path"]` / `args["file_path"]`, neither of which
+/// exists on this tool (`AftApplyPatchArgs` is `{patch: String}` only), so a
+/// multi-file patch touching MEMORY.md produced zero notifications. One helper,
+/// two callers, so the path list cannot diverge between the gate and the mirror.
+///
+/// Collects rather than short-circuits: the caller that needs first-failure
+/// semantics (`execute`'s `guard_aft_write` loop) returns on its own error, and
+/// the caller that needs the whole list (the mirror) gets it.
+pub(crate) fn aft_patch_paths(patch: &str) -> Vec<&str> {
+    patch
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("*** Update File: ")
+                .or_else(|| trimmed.strip_prefix("*** Add File: "))
+                .or_else(|| trimmed.strip_prefix("*** Delete File: "))
+                .map(str::trim)
+        })
+        .collect()
+}
+
 #[derive(JsonSchema, Deserialize)]
 struct AftApplyPatchArgs {
     patch: String,
@@ -642,15 +670,11 @@ impl OperantTool for AftApplyPatchTool {
         // The patch body embeds per-file headers (`*** Update/Add/Delete
         // File: <path>`) — validate every touched path through the same
         // safety gate so a patch can't reach credential files either.
-        for line in args.patch.lines() {
-            let trimmed = line.trim();
-            let path = trimmed
-                .strip_prefix("*** Update File: ")
-                .or_else(|| trimmed.strip_prefix("*** Add File: "))
-                .or_else(|| trimmed.strip_prefix("*** Delete File: "));
-            if let Some(path) = path
-                && let Err(err) = guard_aft_write("aft_apply_patch", path.trim())
-            {
+        // iter-2637: the parse is `aft_patch_paths`, shared with the memory-write
+        // mirror in `agent/run.rs`. It used to be inline here, which left the
+        // mirror unable to see the paths at all.
+        for path in aft_patch_paths(&args.patch) {
+            if let Err(err) = guard_aft_write("aft_apply_patch", path) {
                 return err;
             }
         }

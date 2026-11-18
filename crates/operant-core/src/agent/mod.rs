@@ -1192,6 +1192,63 @@ pub(crate) fn is_file_mutation_tool(name: &str) -> bool {
     )
 }
 
+/// The `action` the memory-write mirror reports.
+///
+/// iter-2637 (lion). This is a const rather than an inline literal because the
+/// value is a CROSS-MODULE CONTRACT: `memory_wire::on_memory_write` retains only
+/// `"add" | "update"` and drops everything else on its first line, while the
+/// caller has a tool name in hand (`file_write`, `aft_write`, `patch`). The bug
+/// this replaces was the caller passing `&result.name` -- a tool name -- as the
+/// action, so every mirrored write was discarded and the mirror reported success.
+///
+/// A test CANNOT catch that by asserting on the filter alone: a test that calls
+/// `on_memory_write("file_write", ..)` and expects a drop passes whether or not
+/// the caller is fixed, because it never asks what the caller passes. Measured
+/// during this iteration -- that exact test went GREEN with the bug reintroduced.
+/// The detector has to start from THIS value, which is why it is nameable:
+/// `memory_mirror_action_is_accepted_by_the_provider` drives it through the real
+/// provider and asserts the content survives.
+pub(crate) const MEMORY_MIRROR_ACTION: &str = "update";
+
+/// The memory file a completed mutation tool call touched, if it touched one at all.
+///
+/// iter-2637 (lion). The memory-write mirror needs a PATH, and not every mutation
+/// tool carries one in the same key:
+///
+///   * `file_write` / `aft_write` / `patch` / ... -> `path` or `file_path`
+///   * `aft_apply_patch` -> NEITHER. Its args are `{patch: String}` and the paths
+///     live in `*** Update File:` headers. The guard in `tools/aft_tools.rs` already
+///     parses those (via [`crate::tools::aft_tools::aft_patch_paths`]); the mirror
+///     did not, so a multi-file patch touching MEMORY.md notified nobody.
+///
+/// Returns at most ONE path -- the first memory file the patch touches -- because
+/// `on_memory_write` ignores its `target` and retains `content`, so N calls would
+/// insert N rows for one write. Everything else (non-memory paths, unparseable
+/// args) returns `None` and nothing is mirrored.
+pub(crate) fn mirror_target_path(name: &str, args: &serde_json::Value) -> Option<String> {
+    let is_memory = |path: &str| {
+        path.ends_with("MEMORY.md")
+            || path.ends_with("USER.md")
+            || path.contains("/MEMORY.")
+            || path.contains("/USER.")
+    };
+
+    if name == "aft_apply_patch" {
+        let patch = args.get("patch").and_then(|v| v.as_str()).unwrap_or("");
+        return crate::tools::aft_tools::aft_patch_paths(patch)
+            .into_iter()
+            .find(|p| is_memory(p))
+            .map(|p| p.to_string());
+    }
+
+    let path = args
+        .get("path")
+        .or_else(|| args.get("file_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    is_memory(path).then(|| path.to_string())
+}
+
 /// Whether this tool goes through the interactive permission gate. The gate
 /// is already sequential (phase 1), but the *effect* of an approved call
 /// still lands in the concurrent pool — so a batch containing one is
@@ -5235,6 +5292,64 @@ mod tests {
                  treated as a file mutation"
             );
         }
+    }
+
+    /// iter-2637 (lion): the memory-write mirror needs a PATH, and `aft_apply_patch`
+    /// does not carry one in `path` / `file_path` -- its args are `{patch: String}`
+    /// and the paths live in `*** Update File:` headers.
+    ///
+    /// This is the load-bearing detector for the path half. It calls the REAL
+    /// `mirror_target_path`, so reverting the mirror to `path`/`file_path` only
+    /// makes the `aft_apply_patch` case return `None` and fails here.
+    #[test]
+    fn aft_patch_touching_memory_md_resolves_a_mirror_target() {
+        let patch = "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** Update File: MEMORY.md\n@@\n-a\n+b\n*** End Patch";
+        let args = serde_json::json!({ "patch": patch });
+
+        assert_eq!(
+            mirror_target_path("aft_apply_patch", &args),
+            Some("MEMORY.md".to_string()),
+            "a patch touching MEMORY.md must resolve it as the mirror target"
+        );
+
+        // A patch touching no memory file mirrors nothing.
+        let plain = serde_json::json!({ "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch" });
+        assert_eq!(mirror_target_path("aft_apply_patch", &plain), None);
+
+        // The other tools still resolve through path / file_path.
+        assert_eq!(
+            mirror_target_path(
+                "file_write",
+                &serde_json::json!({ "path": "notes/MEMORY.md", "content": "x" })
+            ),
+            Some("notes/MEMORY.md".to_string())
+        );
+        assert_eq!(
+            mirror_target_path(
+                "aft_write",
+                &serde_json::json!({ "file_path": "USER.md", "content": "x" })
+            ),
+            Some("USER.md".to_string())
+        );
+
+        // Non-memory writes are not mirrored.
+        assert_eq!(
+            mirror_target_path(
+                "file_write",
+                &serde_json::json!({ "path": "src/lib.rs", "content": "x" })
+            ),
+            None
+        );
+
+        // One notify per patch, never one per touched path: a 3-file patch that
+        // touches MEMORY.md once yields exactly one target.
+        let multi = serde_json::json!({
+            "patch": "*** Begin Patch\n*** Add File: a.rs\n*** Add File: MEMORY.md\n*** Add File: b.rs\n*** End Patch"
+        });
+        assert_eq!(
+            mirror_target_path("aft_apply_patch", &multi),
+            Some("MEMORY.md".to_string())
+        );
     }
 
     #[test]

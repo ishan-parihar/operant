@@ -1386,6 +1386,39 @@ mod tests {
         assert!(recalled.contains("rotates monthly"), "got {recalled:?}");
     }
 
+    /// iter-2637 (lion): the action the mirror reports must be one the provider
+    /// actually retains.
+    ///
+    /// THIS is the detector for the action half, and it is deliberately written
+    /// against `MEMORY_MIRROR_ACTION` rather than against a literal. The bug was
+    /// the caller passing a TOOL NAME (`&result.name`) as the action; the provider
+    /// drops anything that is not `add`/`update`, so every mirrored write was
+    /// discarded on the provider's first line, silently, with the mirror reporting
+    /// success.
+    ///
+    /// Reverting the const to a tool name -- or to any string the provider does
+    /// not keep -- makes the recall below come back empty and fails here. A test
+    /// that instead asserts "on_memory_write drops tool names" does NOT catch it:
+    /// that is the filter's contract, true either way, and measured during this
+    /// iteration it went GREEN with the bug fully reintroduced.
+    #[tokio::test]
+    async fn memory_mirror_action_is_accepted_by_the_provider() {
+        let p = in_memory_provider();
+        p.on_memory_write(
+            crate::agent::MEMORY_MIRROR_ACTION,
+            "MEMORY.md",
+            "the deploy runbook lives at ops/runbook.md",
+        );
+        let recalled = p.prefetch("deploy runbook").await;
+        assert!(
+            recalled.contains("ops/runbook.md"),
+            "MEMORY_MIRROR_ACTION = {:?} is not retained by the provider, so the \
+             mirror in agent/run.rs writes into a filter that drops it -- the exact \
+             iter-2637 defect. Got recall: {recalled:?}",
+            crate::agent::MEMORY_MIRROR_ACTION
+        );
+    }
+
     #[tokio::test]
     async fn on_memory_write_ignores_delete() {
         let p = in_memory_provider();

@@ -3558,25 +3558,39 @@ impl OperantAgent {
                         // exposes `file_write`, `aft_write` and `patch`. Only `patch`
                         // matched, so mirroring was DEAD for the tool the model actually
                         // uses and MEMORY.md / USER.md edits never reached memory-wire.
+                        //
+                        // iter-2637 (lion) fixed the SECOND half, without which none of
+                        // the above mattered. Two bugs, one dead path:
+                        //
+                        //   1. THE ACTION WAS A TOOL NAME. This call passed
+                        //      `&result.name` -- `file_write`, `aft_write` -- as the
+                        //      ACTION argument. The consumer keeps only `"add" | "update"`
+                        //      (memory_wire.rs:893-898) and drops everything else on the
+                        //      first line. None of the tool names is ever `add` or
+                        //      `update`, so EVERY mirrored write was discarded. iter-2630
+                        //      repaired the predicate and its test asserted only
+                        //      `is_file_mutation_tool("file_write")` -- a predicate check,
+                        //      never invoking the mirror. Green on a dead path.
+                        //   2. `aft_apply_patch` HAS NO `path` / `file_path`. Its args are
+                        //      `{patch: String}`; the paths live in `*** Update File:`
+                        //      headers. One call can touch N files including MEMORY.md.
+                        //
+                        // Both halves must land together: the action alone is inert for
+                        // `aft_apply_patch` (no path), and the path fix alone is inert
+                        // for everything (wrong action).
                         if result.success
                             && is_file_mutation_tool(&result.name)
                             && let Some(args_str) = call_args.get(&result.tool_call_id)
                             && let Ok(args_val) =
                                 serde_json::from_str::<serde_json::Value>(args_str)
+                            && let Some(path) = mirror_target_path(&result.name, &args_val)
                         {
-                            let path = args_val
-                                .get("path")
-                                .or_else(|| args_val.get("file_path"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            // Only mirror writes to memory-related files
-                            let is_memory = path.ends_with("MEMORY.md")
-                                || path.ends_with("USER.md")
-                                || path.contains("/MEMORY.")
-                                || path.contains("/USER.");
-                            if is_memory {
-                                self.notify_memory_write(&result.name, path, &result.content);
-                            }
+                            // "update", NOT the tool name. MEMORY.md and USER.md are
+                            // long-lived documents the agent amends, and `on_memory_write`
+                            // ignores its `target` and retains `content`, so the COUNT of
+                            // calls is what would multiply rows -- hence one call, and
+                            // `mirror_target_path` returns at most one path.
+                            self.notify_memory_write(MEMORY_MIRROR_ACTION, &path, &result.content);
                         }
 
                         // ── Delegation observation (hermes parity) ────────
