@@ -211,3 +211,94 @@ fn a_restored_session_does_not_show_a_poke_as_the_operators_own_message() {
         app.messages
     );
 }
+
+// ---------------------------------------------------------------------------
+// RED-TEAM H-1 (cli-tui lane, iter-2628)
+//
+// A transcript rebuild replaces every row, but neither the selection nor copy
+// mode was reset. Both are POSITIONAL / MODAL state over rows that no longer
+// exist:
+//
+//   * the selection is stored in CONTENT-SPACE line indices `(col, line)`, so
+//     after a `/clear` or `/new` a drag or `y` copies whatever now occupies
+//     those row numbers -- text the operator never picked;
+//   * copy mode is a thread-local only the keyboard gate can clear, so leaving
+//     it armed swallows the composer's keys for a mode entered over a
+//     transcript that is gone.
+//
+// `apply_conversation_to_display` is the single choke point: it has exactly two
+// production callers (`rebuild_display_from_agent`, which serves /clear, /new,
+// /undo and rewind, and the session-switch rebuild), so fixing it here fixes
+// all five paths at once.
+// ---------------------------------------------------------------------------
+
+/// The defect: a rebuild leaves copy mode armed and the selection pointing at
+/// content-space lines of the transcript that was just discarded.
+#[test]
+fn redteam_transcript_rebuild_resets_copy_mode_and_the_selection() {
+    let mut app = super::tests::make_app();
+    app.add_message(
+        crate::tui::adapter_types::types::Role::User,
+        "old session first line".to_string(),
+    );
+    app.add_message(
+        crate::tui::adapter_types::types::Role::Assistant,
+        "old session second line".to_string(),
+    );
+
+    // Arm the two pieces of positional/modal state over the CURRENT transcript.
+    app.selection_anchor = Some((0, 0));
+    app.selection_focus = Some((10, 1));
+    *app.selection_text.borrow_mut() = "old session".to_string();
+    app.enter_copy_mode();
+    assert!(
+        app.copy_mode_active(),
+        "copy mode must be armed for this test"
+    );
+
+    // /clear, /new, /resume or a rewind: the transcript is replaced.
+    session_display::apply_conversation_to_display(&mut app, Vec::new());
+
+    assert!(
+        !app.copy_mode_active(),
+        "copy mode is still armed over a transcript that no longer exists, so \
+         the composer's keys are still swallowed by it"
+    );
+    assert!(
+        app.selection_anchor.is_none() && app.selection_focus.is_none(),
+        "the selection still names content-space lines {:?}..{:?} of a cleared \
+         transcript, so a drag or `y` copies whatever now occupies those rows",
+        app.selection_anchor,
+        app.selection_focus
+    );
+    assert!(
+        app.selection_text.borrow().is_empty(),
+        "the copied text outlived the transcript it was taken from: {:?}",
+        app.selection_text.borrow()
+    );
+}
+
+/// The control: copy mode entered and exited WITHOUT a rebuild still restores
+/// its snapshot, so the assertions above are about the rebuild's missing
+/// teardown and not about `exit_copy_mode` failing to clean up.
+#[test]
+fn redteam_copy_mode_exit_alone_still_restores_its_snapshot() {
+    let mut app = super::tests::make_app();
+    app.selection_anchor = Some((3, 7));
+    app.selection_focus = Some((9, 11));
+    *app.selection_text.borrow_mut() = "picked text".to_string();
+
+    app.enter_copy_mode();
+    // Move the selection while in copy mode; exit must put the SNAPSHOT back.
+    app.selection_anchor = Some((100, 100));
+    app.exit_copy_mode();
+
+    assert!(!app.copy_mode_active());
+    assert_eq!(
+        app.selection_anchor,
+        Some((3, 7)),
+        "exit_copy_mode restores the anchor it snapshotted at entry"
+    );
+    assert_eq!(app.selection_focus, Some((9, 11)));
+    assert_eq!(&*app.selection_text.borrow(), "picked text");
+}

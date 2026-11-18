@@ -27,6 +27,26 @@ use operant_core::client::{Message as CoreMessage, Role as CoreRole};
 ///   asked for it, and the matching tool RESULT fills that row's output
 ///   (the live `ToolStart`/`ToolComplete` pair produces the same row).
 pub(crate) fn apply_conversation_to_display(app: &mut App, conv: Vec<CoreMessage>) {
+    // A rebuild replaces every row, so anything that refers to POSITIONS in
+    // the old transcript must go with it. Two pieces of state survive the
+    // rebuild otherwise, and both were reachable from a keypress:
+    //
+    //   * the SELECTION, stored in CONTENT-SPACE line indices `(col, line)`.
+    //     Left armed across a `/clear` or `/new`, a drag or `y` copies whatever
+    //     now occupies those row numbers -- text the operator never picked.
+    //   * COPY MODE, a thread-local only the keyboard gate can clear. Left
+    //     armed, the composer's keys are still swallowed by a mode the
+    //     operator entered over a transcript that no longer exists.
+    //
+    // ORDER IS LOAD-BEARING: `exit_copy_mode` RESTORES `selection_anchor`,
+    // `selection_focus` and `selection_text` from the snapshot it took at
+    // `enter_copy_mode` (mouse.rs:290-297). Clearing the selection FIRST would
+    // be silently undone by the very next line. Exit first, then clear.
+    if app.copy_mode_active() {
+        app.exit_copy_mode();
+    }
+    app.clear_selection();
+
     app.messages.clear();
     app.clear_tool_blocks();
 
