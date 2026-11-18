@@ -42,7 +42,20 @@ fn unseen_changelog_entries() -> Vec<String> {
 /// `replay·cli↑·srv↑·web` = 29 columns at width 30, so a 5-column floor
 /// overflows by 4 while the pre-change literal `operant` overflowed by 6).
 /// The badges' own overflow is pre-existing; the floor would have added to it.
-fn head_title_width(status_items: &[&str], w: usize, is_canary: bool) -> usize {
+///
+/// `acting_seat` is part of the SAME trailing tail -- it is appended right
+/// after the badges (see the ` · {seat}` span below) -- so it has to be
+/// budgeted here too. Omitting it meant the title claimed the seat's columns
+/// and the row overflowed the pane by exactly the seat's width whenever the
+/// badge baseline happened to fit. Deliberately NO floor for the seat either:
+/// iter-2401 tried a floor for the badges and reverted it for the reason above,
+/// and a second floor would reintroduce that overflow.
+fn head_title_width(
+    status_items: &[&str],
+    acting_seat: Option<&str>,
+    w: usize,
+    is_canary: bool,
+) -> usize {
     let badges: usize = status_items.iter().map(|i| i.chars().count()).sum();
     let tail = if status_items.is_empty() {
         0
@@ -54,7 +67,15 @@ fn head_title_width(status_items: &[&str], w: usize, is_canary: bool) -> usize {
     } else {
         0
     };
-    w.saturating_sub(tail + self_dev)
+    // The seat span is `" · {seat}"` -- the same 3-column separator the badges
+    // use, then the seat's own width. It is part of the trailing tail, so it
+    // comes off the title's budget. `saturating_sub` below is the floor: a tail
+    // wider than the pane leaves the title ZERO room (the product name wins),
+    // which is the documented behaviour rather than an overflow.
+    let seat = acting_seat
+        .map(|s| 3 + s.chars().count())
+        .unwrap_or_default();
+    w.saturating_sub(tail + self_dev + seat)
 }
 
 /// Truncate to `max` chars; appends one ellipsis when the text did not fit.
@@ -665,7 +686,7 @@ fn build_persistent_header_with_auth(
     // clipped mid-word at the border — the same rule the composer's textarea
     // rect learned at 28 columns.
     {
-        let title_room = head_title_width(&status_items, w, is_canary);
+        let title_room = head_title_width(&status_items, acting_seat.as_deref(), w, is_canary);
         let head = if session_title.is_empty() || title_room == 0 {
             // No title, or a badge row that already fills the pane: the
             // product name beats a title cut to nothing.
@@ -1773,6 +1794,92 @@ mod tests {
         assert_eq!(
             format_model_name("claude-opus-4-6", "OpenRouter"),
             "Claude Opus"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RED-TEAM H-2 (cli-tui lane, iter-2629)
+//
+// The first header line budgets the title with `head_title_width`, which counts
+// the trailing STATUS BADGES. The acting-seat span (` · {seat}`) is appended
+// right after them (see the seat span in `head_line_spans`), so it consumes
+// columns from the SAME row -- but it was not in the budget. The title therefore
+// claimed the seat's columns and the row overflowed the pane by exactly the
+// seat's width whenever the badge baseline happened to fit.
+//
+// This module is deliberately SEPARATE from the `#[cfg(any())]` module above:
+// that one is disabled pending a rewrite (see the note on it), and these tests
+// are about a live pure function, so they belong in a module that actually runs.
+// `head_title_width` is the defect site and takes its inputs directly, so the
+// tests need no `App`, no terminal and no provider.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod head_title_width_tests {
+    use super::head_title_width;
+
+    /// The seat's rendered span is `" · {seat}"`, i.e. the same 3-column
+    /// separator the badges use plus the seat's own width. This mirrors the
+    /// `format!(" · {}", seat)` the renderer pushes.
+    fn seat_cost(seat: &str) -> usize {
+        3 + seat.chars().count()
+    }
+
+    /// THE DEFECT: an acting seat must reduce the title's budget by its own
+    /// rendered width, or the row overflows by that much.
+    ///
+    /// Scoped to a width where the badge baseline fits (40 columns is wider
+    /// than any realistic badge tail), so the overflow is attributable to the
+    /// seat and not to the pre-existing badge overflow documented at
+    /// `head_title_width`'s own doc comment.
+    #[test]
+    fn the_acting_seat_is_budgeted_out_of_the_title_width() {
+        let badges = ["replay", "cli\u{2191}"];
+        let width = 40usize;
+
+        let without_seat = head_title_width(&badges, None, width, false);
+        let seat = "premiere";
+        let with_seat = head_title_width(&badges, Some(seat), width, false);
+
+        assert_eq!(
+            without_seat - with_seat,
+            seat_cost(seat),
+            "the seat must cost the title exactly its rendered width ({} columns), \
+             got {without_seat} without vs {with_seat} with",
+            seat_cost(seat)
+        );
+    }
+
+    /// The control: with no acting seat the budget must be UNCHANGED. This is
+    /// what rules out a fix that simply shaves a constant off every header.
+    #[test]
+    fn no_acting_seat_leaves_the_badge_only_budget_alone() {
+        let badges = ["replay", "cli\u{2191}"];
+        let width = 40usize;
+
+        let budget = head_title_width(&badges, None, width, false);
+        let expected =
+            width - (badges.iter().map(|b| b.chars().count()).sum::<usize>() + badges.len() * 3);
+        assert_eq!(
+            budget, expected,
+            "with no seat the budget is the badge tail alone ({expected})"
+        );
+    }
+
+    /// A tail (badges + seat) wider than the pane must leave ZERO room rather
+    /// than underflow. This is the documented "product name wins" behaviour, and
+    /// it is why the subtraction is `saturating_sub` and NOT a floor: iter-2401
+    /// tried a floor for the badges and reverted it because it pushed the row
+    /// past the pane.
+    #[test]
+    fn a_tail_wider_than_the_pane_leaves_no_room_and_does_not_underflow() {
+        let badges = ["replay", "cli\u{2191}", "srv\u{2191}", "web"];
+        let seat = "a-very-long-acting-seat-name";
+
+        let budget = head_title_width(&badges, Some(seat), 20, false);
+        assert_eq!(
+            budget, 0,
+            "a tail wider than 20 columns must leave the title nothing, not wrap"
         );
     }
 }
