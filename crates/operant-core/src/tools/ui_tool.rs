@@ -42,9 +42,18 @@ use crate::ui::request::{self, SurfaceRequest};
 use crate::ui::{Provenance, SurfaceCapabilities, SurfaceOp, WidgetNode};
 
 /// How long the request-input tool waits for a host UI answer before
-/// degrading. The host's own dialog has its own timeout (the gateway's
-/// receiver runs on the 120s question timeout, `clarify`'s rule); this is
-/// only the outer backstop so a lost oneshot cannot wedge the tool forever.
+/// degrading.
+///
+/// This is the ONLY timeout in a hostless deployment, not a backstop for a
+/// longer one. Exactly one production caller registers a surface receiver
+/// (`crates/operant-cli/src/tui/adapter_types/tui_app.rs`); the gateway does
+/// not, and `operant run` is hostless by design. So on those paths
+/// `try_send_surface_request` returns `None` and the tool fails fast with
+/// "no interactive surface is attached" -- it never reaches this await at all.
+/// Only the TUI reaches it, and the `ask_user_dialog` it opens carries no
+/// timeout of its own. `surface_request_sender_is_registered_only_by_the_tui`
+/// pins that asymmetry: if this comment's "120s" claim is ever made true, that
+/// guard must be updated in the same change.
 const SURFACE_REPLY_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -559,9 +568,12 @@ impl OperantTool for UiRequestInputTool {
             );
         };
 
-        // Await the answer with an outer backstop. The host's own dialog
-        // owns the real timeout (the gateway receiver runs on 120s); this
-        // only stops a lost oneshot from wedging the tool forever.
+        // Await the answer. The 300s timeout is the only bound: the only
+        // host that reaches this await is the TUI, whose `ask_user_dialog`
+        // carries no timeout of its own, so a lost oneshot would otherwise
+        // wedge the turn forever. It is NOT a backstop for some longer
+        // dialog timeout -- see `SURFACE_REPLY_TIMEOUT`, which
+        // `tests/surface_host_receivers.rs` guards.
         let answer = match tokio::time::timeout(SURFACE_REPLY_TIMEOUT, reply_rx).await {
             Ok(Ok(value)) => value,
             Ok(Err(_)) => {
