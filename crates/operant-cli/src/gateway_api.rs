@@ -509,7 +509,7 @@ mod tests {
             // Header NAMES only. The values carry `Authorization: Bearer <token>`,
             // so dumping the map wrote the live credential into the logs on every
             // proxied request.
-            let header_names: Vec<&str> = headers.keys().map(|n| n.as_str()).collect();
+            let header_names: Vec<&str> = headers.iter().map(|(n, _)| *n).collect();
             tracing::debug!(host = %host, header_names = ?header_names, "proxy request");
             let mut request =
                 format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
