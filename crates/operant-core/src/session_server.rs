@@ -329,19 +329,33 @@ mod tests {
         let path = dir.path().join("session.sock");
         let handler = Arc::new(CountingHandler::default());
         let server = tokio::spawn(run_session_socket(handler, path.clone()));
-        for _ in 0..200 {
-            if path.exists() {
-                break;
+        // Poll for the MODE, not for existence. `UnixListener::bind` creates the
+        // node the instant it succeeds, and `tighten_socket_permissions` runs
+        // AFTER the bind in a `spawn_blocking` task -- so waiting only for
+        // `path.exists()` returns as soon as the file appears, while the chmod may
+        // not have landed. Under a permissive umask (0022 here) that reads 0644 and
+        // fails, which is a race in this test and not a hole in the gate: production
+        // refuses to serve when the tighten fails, so a world-readable socket never
+        // reaches an accept loop. Reproduced 2026-11-18 (iter-2634 verification).
+        let mut mode = None;
+        for _ in 0..300 {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                let m = meta.permissions().mode() & 0o777;
+                if m == 0o600 {
+                    mode = Some(m);
+                    break;
+                }
+                mode = Some(m);
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(path.exists(), "the server must bind its socket");
-        let mode = std::fs::metadata(&path)
-            .expect("the socket metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "a socket carrying the agent must be 0600");
+        assert!(mode.is_some(), "the server must bind its socket");
+        assert_eq!(
+            mode,
+            Some(0o600),
+            "a socket carrying the agent must be 0600 (last observed {:?})",
+            mode
+        );
         server.abort();
     }
 
