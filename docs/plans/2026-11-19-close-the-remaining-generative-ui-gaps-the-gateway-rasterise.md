@@ -1,0 +1,220 @@
+# close the remaining generative-UI gaps: the gateway rasteriser, the callback seam, and the durable HITL queue
+
+Dated-frozen: published `2026-11-19`. A plan that changes is a new plan (or declare it
+in genome.toml `core.living_plans` and keep a `Resume here` section).
+
+**STATUS: PLANNED (outline, not started).** Nothing below has been built. Every
+claim was read from `origin/main` @ `452b9d26` on 2026-11-19; the survey it rests
+on is `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-survey.md`
+(dated-frozen, verified reads), and the predecessor plan is
+`docs/plans/2026-11-18-composable-generative-ui-surface-ir-for-the-tui-and-the-gate.md`
+(declared living: T1/T2/T3-gateway-half landed, T3-rasteriser and T4 open).
+
+This is an OUTLINE, not a build order to be followed blindly. Its job is to fix
+the four decisions below BEFORE code, because three of them are cases where the
+predecessor plan's own text cannot ship as written.
+
+## Contents
+
+- [What is actually left](#what-is-actually-left)
+- [The four decisions this outline exists to make](#the-four-decisions-this-outline-exists-to-make)
+- [Mechanism](#mechanism)
+- [Gates / success criteria](#gates--success-criteria)
+- [Tranches](#tranches)
+- [Cost](#cost)
+- [Explicitly out of scope](#explicitly-out-of-scope)
+
+## What is actually left
+
+Verified against `origin/main`, not against the predecessor's prose:
+
+| item | state | evidence |
+|---|---|---|
+| `ui/` IR + gate + two tools | SHIPPED | `crates/operant-core/src/ui/{mod,gate,plain,request}.rs` |
+| TUI card + `ui_request_input` reachable | SHIPPED | `tui/adapter_types/tui_app.rs`, `tui/app/channel_drains.rs` |
+| Gateway registers + drains a surface receiver | SHIPPED (iter-2640) | `gateway_runner.rs:5957` + receiver task |
+| Turn-scoped capabilities (fail closed to `text_only`) | SHIPPED (iter-2640) | `SurfaceCapabilities::for_transport` in `tools/ui_tool.rs` |
+| `docs/library/ui.md` + INDEX row | SHIPPED (iter-2641) | `docs/library/ui.md` |
+| **Gateway rasteriser** | **ABSENT** | no `gateway/surface_raster.rs`, no `cell_buffer.rs` |
+| **Font for rasterisation** | **ABSENT** | zero `.ttf`/`.otf`/`.woff` in the tree |
+| **`OutgoingMessage` attachment field** | **ABSENT** | `gateway/types.rs:246` has no media field |
+| **`sendPhoto` on any adapter** | **ABSENT** | 0 hits across `gateway/` |
+| **`op:` callback family** | **ABSENT** | `telegram.rs:1339/1360/1377` handle `approval:`, `choice:`, `skill:` only |
+| **Durable HITL queue (RT-598)** | **OPEN** | ledger row RT-598, owner "the plan's successor" |
+
+So the remaining work is four things: a renderer, a photo path, a callback
+family, and the durability RT-598 records. The first three are T3; the fourth
+is T4.
+
+## The four decisions this outline exists to make
+
+### D1 — The `op:` callback payload does not fit. Measured, not asserted.
+
+The predecessor plan specifies `op:` as "b64url HMAC over
+surface_id/action_id/user_id/chat_id, message_id verified post-send".
+Telegram caps `callback_data` at **64 bytes** (`telegram.rs:785` says so, and
+the `choice:<idx>` / `skill:<idx>` families were built around it). Measured
+against realistic values:
+
+```
+op:surf_01H8X2K4M9QRSTUVWXY/act_yes/477281923/-1002345678901/XjGPjPnL4kk
+  -> 72 bytes   (OVER the cap by 8)
+```
+
+The obvious trim — dropping `chat_id` — does not work: `chat_id` is part of
+what the HMAC is supposed to authenticate, so removing it re-opens the
+cross-chat replay the field exists to prevent. **This tranche must resolve the
+constraint before writing a callback**, and the resolution has to be argued,
+not chosen. The candidates, in the order they should be tested:
+
+1. **Per-surface short ids.** Mint `surface_id` at 8 bytes and key the pending
+   map by a server-side row rather than by the ids themselves, so `callback_data`
+   carries only an opaque handle plus the MAC. Keeps every security property,
+   costs a pending-row table (which T4's durability needs anyway).
+2. **Drop `action_id` from the wire.** The button index already identifies the
+   action within a surface; carry `surface_id` + `action_idx` + MAC.
+3. **Shorten the MAC and re-measure.** 8 bytes of HMAC-SHA256 truncated to 4-6
+   base64url chars, with a per-surface nonce so a short tag is not
+   offline-brute-forceable across surfaces.
+
+Whichever wins, the invariant to pin is: **the callback cannot name a surface
+the sender could not already see.** Any candidate that needs a new
+authentication assumption goes in the plan's amendments, not in the code.
+
+### D2 — The rasteriser must not add a font stack. The audit already ruled.
+
+The audit (§7) measured `resvg`, `tiny-skia`, `usvg`, `cosmic-text`, `fontdb`,
+`ab_glyph`, `fontdue`, `imageproc` as **all absent** from `Cargo.lock`, and
+ruled that the SVG path "would add 5+ new crates + a font stack to a tree that
+deliberately avoids them." It endorses the alternative: **`TestBackend` buffer
+to `image::RgbaImage`**, which needs no new dependency, because `image = 0.25`
+is already a direct dep of both `operant-core` and `operant-cli`.
+
+The consequence to state plainly: with no font crate, the rasteriser is a
+**cell-grid** renderer — each terminal cell becomes an NxN block of pixels,
+colours from the existing `SemanticTone` to RGB mapping, and glyphs are drawn
+as a built-in bitmap font or not at all. That is a deliberate quality ceiling,
+not a shortcut. If the operator later wants real text in the PNG, that is a
+SEPARATE plan with a font dependency decision in it, not an amendment here.
+
+### D3 — The 64-byte cap is Telegram's, not the protocol's. Design for the weakest adapter.
+
+`choice:` and `skill:` are Telegram-only because inline keyboards are
+Telegram-only. The `op:` family must not inherit that assumption: Slack
+(RT-86, outbound-only, no Block Kit) and the other four adapters have no
+callback mechanism at all. So the honest v1 scope is **Telegram is the only
+adapter that can answer a surface card**, and the gateway's surface receiver
+must degrade to the existing text fallback elsewhere rather than pretending a
+button exists. The plan's predecessor already states this shape for the
+rasteriser ("gateway-only stretch"); it has to be stated for callbacks too.
+
+### D4 — Durability is a schema decision, not a timeout tweak.
+
+RT-598 says an in-flight `ui_request_input` does not survive a restart, and
+that closing it means "persisted queue + ReAct-loop resume + TUI-vs-gateway
+split-brain serialization". The split-brain half is the dangerous one: today
+the TUI and the gateway each hold their own pending map, and a durable queue
+means **both** could resolve the same surface. The single owner has to be
+chosen before the first row is written. This plan's position: the durable row
+is the authority, the in-memory oneshot becomes a fast path over it, and the
+resolver CASes the row so the second host loses cleanly instead of both
+answering.
+
+## Mechanism
+
+Four seams, each already existing (this is the plan's main safety property —
+none of it requires a new subsystem):
+
+1. **Cell-buffer raster** — `operant-core/src/gateway/` gains a renderer that
+   takes a `WidgetNode` tree plus `SurfaceCapabilities` and produces an
+   `image::RgbaImage`. It walks the SAME widget vocabulary as
+   `ui/plain.rs::render_plain`, so the PNG and the plain fallback cannot
+   disagree about what the surface contains. No new crate (D2).
+2. **Photo delivery** — `OutgoingMessage` gains an optional media field
+   (`gateway/types.rs`), and the Telegram adapter grows a `sendPhoto` that
+   multipart-uploads the PNG. The other five adapters must COMPILE against the
+   field and ignore it, degrading to the text fallback, so this is an
+   interface change with five no-op arms.
+3. **Callback family** — `telegram.rs`'s dispatcher gains one more
+   `starts_with("op:")` arm beside the existing three, verifying the MAC
+   BEFORE touching any state and resolving through the pending map. The
+   payload shape is D1's outcome.
+4. **Durable HITL queue** — one table, one owner, CAS resolution (D4), with
+   the existing in-memory maps kept as the hot path.
+
+## Gates / success criteria
+
+(fixed before the run — these are the plan's own tests, not aspirations)
+
+- **G1** a surface renders to a PNG that is byte-reproducible for the same op
+  and differs when any `SemanticTone` changes; the PNG's dimensions are
+  derived from the tree's measured depth/node count, not a constant.
+- **G2** the rasteriser and `plain.rs` are proven to agree: for every widget
+  kind, the text the plain renderer emits is a substring of what the PNG
+  encodes (pinned by walking the IR, not by eyeballing an image).
+- **G3** a forged `op:` callback is refused before any state is touched, and
+  the refusal is indistinguishable from an unknown surface (no oracle).
+- **G4** a callback that fits the 64-byte cap is proven to fit **by
+  measurement in the test**, not by a comment claiming it does. This is the
+  gate D1 exists to enforce.
+- **G5** an adapter without callback support degrades to text and says so;
+  no adapter silently drops the card (the iter-2640 rule).
+- **G6** RT-598 closes only with a test that kills the process mid-prompt and
+  shows the answer still resolving exactly once after restart.
+
+Every gate gets a mutation proof in the same iteration that lands it. A green
+run is not evidence.
+
+## Tranches
+
+Ordered by dependency, each leaving the tree compiling and net-positive.
+
+- **B1 — decide D1 and write it down.** No code. Amend the predecessor plan
+  with the measured 64-byte result and the chosen payload shape, with the
+  measurement in the amendment so the next reader cannot re-derive the wrong
+  answer. Cheapest tranche and it unblocks B3.
+- **B2 — cell-buffer raster + `OutgoingMessage` media field + Telegram
+  `sendPhoto`.** G1, G2, G5. No callback yet: a surface that renders but has
+  no buttons is still a strict improvement over a text wall.
+- **B3 — the `op:` callback family** over B1's payload shape. G3, G4. Lands
+  only after B1; writing it first is how the cap gets rediscovered in code.
+- **B4 — RT-598 durable queue.** G6. Largest tranche; depends on B2/B3 only
+  for the surfaces it must persist, not for their internals.
+
+## Cost
+
+- **Zero new crates.** Verified: `image 0.25` (both crates), `png 0.18.1`
+  (transitive), `hmac 0.12`, `sha2 0.10`, `ring 0.17` are all already
+  present; the eight font/SVG crates the audit lists are absent and stay
+  absent (D2).
+- **One config surface, reused.** The raster width/scale belongs under the
+  existing `[ui]` section next to `generative_enabled`; no new file.
+- **One DB table**, added by B4 only.
+- **Tool count unchanged.** No new tools: the renderer is gateway-internal,
+  reached from the `SurfaceRendered` event the tool already emits.
+- **No change to `ui_tool.rs` schemas**, so the per-request tool-token bill
+  does not move — the audit's finding 2 (96 tools / ~18.7k tokens) is a real
+  constraint this plan is careful not to worsen.
+
+## Explicitly out of scope
+
+Carried from the predecessor's own "NOT in v1" list, unchanged, plus what this
+plan adds:
+
+- WASM custom widgets and a Draft-Published widget registry (the plugins
+  crate's `manifest.toml` + `ToolRegistry` capability seam already suffices).
+- resvg / tiny-skia / usvg card renderer, and any real font stack (D2 — a
+  font decision is its own plan).
+- TUI form cards (`kind: form` stays refused TUI-side).
+- `ui_request_input(kind: approval)` (routes through the existing permission
+  dialog).
+- TOON streaming hydration at 30 fps.
+- Slack Block Kit actions / `files.uploadV2` (Slack stays outbound-only,
+  RT-86; this plan does not touch it).
+
+## Resume here
+
+Nothing landed. Start at B1, which is a measurement and a plan amendment, not
+code. If B1's measurement contradicts the predecessor's stated `op:` shape,
+the amendment records the contradiction and the successor's shape wins — that
+is the whole point of putting it first.
