@@ -147,11 +147,12 @@ async fn list_sessions(
     headers: HeaderMap,
 ) -> StatusCodeResult {
     if !token_ok(&state, &headers) {
-        eprintln!(
-            "DEBUG token_ok=false state_token={:?} headers={:?}",
-            state.token.as_str(),
-            headers
-        );
+        // Do NOT log the token or the headers here. This fires on every 401, so
+        // the daemon's stderr/journal accumulated the VALID bearer token on every
+        // failed request -- anyone who can read the unit's logs (or trigger a
+        // request and then read them) recovers the credential. `token_ok` is the
+        // only thing worth recording: that the check ran and refused.
+        tracing::debug!("gateway_api: token check failed");
         return auth_denied();
     }
     // The rows the TUI hub loads (500 there); one number, one shape.
@@ -505,7 +506,11 @@ mod tests {
             let host = host
                 .map(|h| h.to_string())
                 .unwrap_or_else(|| format!("127.0.0.1:{}", self.port));
-            eprintln!("DEBUG host={host:?} headers={headers:?}");
+            // Header NAMES only. The values carry `Authorization: Bearer <token>`,
+            // so dumping the map wrote the live credential into the logs on every
+            // proxied request.
+            let header_names: Vec<&str> = headers.keys().map(|n| n.as_str()).collect();
+            tracing::debug!(host = %host, header_names = ?header_names, "proxy request");
             let mut request =
                 format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
             for (name, value) in headers {
