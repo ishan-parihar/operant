@@ -930,9 +930,53 @@ scripts/build.sh --sync-only       # just the memory-wire lock advance
 - **Always** scope cargo commands to the crate being edited:
   - Editing `operant-core` → `cargo check -p operant-core --lib`
   - Editing `operant-cli` → `cargo check -p operant-cli --bin operant`
+- **`--bin` DOES NOT TYPE-CHECK `#[cfg(test)]` CODE. Add `--tests` whenever you
+  touch `operant-cli`, or you will push a broken test target.** Measured
+  2026-11-18 (iter-2624, iter-2627): a change to a test helper in
+  `tui/app/tests.rs` passed `cargo check -p operant-cli --bin operant` and broke
+  the build on `origin/main`; the next agent's `cargo test` caught it, not mine.
+  Use `./scripts/check.sh check -p operant-cli --bin operant --tests`. The
+  cheaper-than-it-looks alternative is to run the test you touched, which
+  compiles the target anyway -- but the flag is free and covers the files you
+  did NOT think to test.
+- **A `cargo check` on the lib target says nothing about a `tests/` file.** An
+  integration target under `crates/<crate>/tests/` is a SEPARATE crate; scope it
+  with `cargo test -p <crate> --test <name> --no-run` (this is what
+  `scripts/test-compile-gate.sh` exists to catch).
 - Reserve `--workspace` for the **final** verification step right before push.
 - If the change is in a `tests/` file, scope to that test target:
   `cargo test -p operant-core --test <name> --no-run`.
+
+### Phantom symbols — a recurring defect class here (iter-2630)
+
+This codebase has a demonstrated habit of comparing against string literals that
+name something which does not exist. Two verified instances in one campaign:
+
+- **iter-2627**: a test helper called `headers.keys()` on what is a
+  `&[(&str, &str)]` slice, not a map. The name promised a method the type never had.
+- **iter-2630**: memory-write mirroring (`agent/run.rs`) and the mutation-verifier
+  footer (`agent/turn_finalizer.rs`) both compared tool names against
+  `"write_file"` and `"create_file"`. **Neither name is registered anywhere** --
+  the real names are `file_write` (`tools/file_tools.rs`), `aft_write`
+  (`tools/aft_tools.rs`) and `patch` (`tools/patch_tool.rs`). Only `patch` matched,
+  so both features were silently dead for the tool the model actually calls.
+
+**The rule: a string literal that names a tool, command, event, config key or
+platform is a symbol, and it must be checked against its definition.** Before
+shiping a comparison against a literal, grep for the definition (`fn name(&self)`
+in `tools/*.rs`, the registry in `builtin.rs`, the `Commands` enum, the config
+parser). If the literal appears nowhere as a definition, it is a phantom.
+
+Note the trap: a *superset* list is harmless, an *equality* test is not.
+`agent/mod.rs`'s parallel-batch veto also listed the phantom names, but it only
+needed to recognise mutations, so the extra entries cost nothing and it stayed
+correct. The same wrong names in `run.rs` were a live bug because that site had
+to match reality exactly. Ask what the list is USED FOR before calling it broken.
+
+When you find one, prefer routing the site through an existing shared predicate
+over editing a third copy of the list -- iter-2630 made
+`agent::is_file_mutation_tool` `pub(crate)` and pointed both broken sites at it,
+so the registered names now live in exactly one place.
 
 ### Disk Constraint
 
