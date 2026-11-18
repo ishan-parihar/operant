@@ -10,6 +10,13 @@ on is `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-
 `docs/plans/2026-11-18-composable-generative-ui-surface-ir-for-the-tui-and-the-gate.md`
 (declared living: T1/T2/T3-gateway-half landed, T3-rasteriser and T4 open).
 
+**AMENDED iter-2648.** The first draft listed the TUI side as shipped and
+scoped this plan to the gateway. Both were wrong: `agent_events.rs:647` renders
+a surface as plain text, no `ratatui::Widget` impl for a `WidgetNode` exists,
+`confirm`/`text` cards are unhandled on BOTH hosts, and the predecessor's G2
+(`[v]` raw toggle) has no implementation at all. Tranche B0 and gate G0 are
+added for that; D1-D4 are unchanged.
+
 This is an OUTLINE, not a build order to be followed blindly. Its job is to fix
 the four decisions below BEFORE code, because three of them are cases where the
 predecessor plan's own text cannot ship as written.
@@ -31,7 +38,10 @@ Verified against `origin/main`, not against the predecessor's prose:
 | item | state | evidence |
 |---|---|---|
 | `ui/` IR + gate + two tools | SHIPPED | `crates/operant-core/src/ui/{mod,gate,plain,request}.rs` |
-| TUI card + `ui_request_input` reachable | SHIPPED | `tui/adapter_types/tui_app.rs`, `tui/app/channel_drains.rs` |
+| TUI `ui_request_input` reachable (choice) | SHIPPED | `tui/app/channel_drains.rs:416` |
+| **TUI widget renderer** | **ABSENT** (corrected iter-2648) | `tui/app/agent_events.rs:647` calls `plain::render_plain`, a `String` |
+| **`confirm` / `text` card kinds on BOTH hosts** | **ABSENT** (corrected iter-2648) | only a `ChoicePicker` arm at `channel_drains.rs:416` and `gateway_runner.rs:7714` |
+| **`[v]` raw-JSON toggle (predecessor G2)** | **ABSENT** (corrected iter-2648) | 4 `Char('v')` bindings in `keybindings/defaults.rs`, all vim; no `v` arm for the dialog |
 | Gateway registers + drains a surface receiver | SHIPPED (iter-2640) | `gateway_runner.rs:5957` + receiver task |
 | Turn-scoped capabilities (fail closed to `text_only`) | SHIPPED (iter-2640) | `SurfaceCapabilities::for_transport` in `tools/ui_tool.rs` |
 | `docs/library/ui.md` + INDEX row | SHIPPED (iter-2641) | `docs/library/ui.md` |
@@ -45,6 +55,38 @@ Verified against `origin/main`, not against the predecessor's prose:
 So the remaining work is four things: a renderer, a photo path, a callback
 family, and the durability RT-598 records. The first three are T3; the fourth
 is T4.
+
+**CORRECTION (iter-2648, verified against `origin/main` @ `452b9d26`).**
+The first draft called the TUI side shipped. It is not, and the gap is not
+cosmetic: `tui/app/agent_events.rs:647` renders a `SurfaceRendered` by calling
+`plain::render_plain(...)`, which returns a `String` — so every `WidgetNode`
+(`Card`, `Table`, `BarChart`, `Progress`, `CodeDiff`, `StatusTimeline`, …)
+reaches the TUI as monospaced text at `FALLBACK_MODEL_WIDTH = 100`. There is no
+`ratatui::Widget` impl for a `WidgetNode` anywhere under `crates/operant-cli/
+src/tui/`. `SurfaceCapabilities::tui()` sets `inline_widgets: true`
+(`ui/mod.rs:106`) and `check_capabilities` reads it (`ui/mod.rs:1004`), so the
+GATE claims widgets the BUILD cannot draw — the capability describes the
+transport, not this tree. Three sub-gaps follow, and all three are still open:
+
+1. **The widget renderer itself** — the largest single item, and a prerequisite
+   for the rasteriser being worth writing: the gateway PNG would mirror a tree
+   the TUI cannot yet draw.
+2. **Interactive kinds are `choice` only on BOTH hosts.**
+   `channel_drains.rs:416` and `gateway_runner.rs:7714` each match
+   `ChoicePicker` and fall through `_ => Vec::new()`, so a `confirm` or `text`
+   card shows the question with no field. `ui_tool.rs`'s own description
+   advertises "choice / confirm / text field", so the contract outruns both
+   hosts. (Not a hang: the dialog still resolves on a typed line.)
+3. **The `[v]` raw-JSON toggle does not exist.** The predecessor's G2 asserts
+   it. `rg "KeyCode::Char\('v'\)"` finds 4 bindings, all vim visual modes; the
+   dialog has no `v` arm. `gate.rs:33` already promises the raw view "shows the
+   post-scrub op", so this is a promised behaviour with no implementation — and
+   G2 cannot pass until it exists.
+
+So the TUI tranche (call it **B0**) runs before B2: the rasteriser's cell grid
+and the `[v]` toggle both assume a widget path that is not there yet. This does
+not change D1-D4, which remain gateway-scoped; it adds one tranche ahead of B2
+and one gate (G2) that the first draft had no way to satisfy.
 
 ## The four decisions this outline exists to make
 
@@ -161,6 +203,13 @@ none of it requires a new subsystem):
   no adapter silently drops the card (the iter-2640 rule).
 - **G6** RT-598 closes only with a test that kills the process mid-prompt and
   shows the answer still resolving exactly once after restart.
+- **G0** (added iter-2648) the TUI draws a `WidgetNode` as a WIDGET, not as
+  text: a `Card` snapshot shows a bordered box, a `Table` shows aligned
+  columns, and a `BarChart` shows bars — asserted against a `TestBackend`
+  frame at 120x40 AND 55x24, with zero argument truncation (the predecessor's
+  G2, which no draft could satisfy because no widget path existed). The `[v]`
+  toggle shows the POST-SCRUB op as JSON: feed a card carrying `sk-…`, press
+  `v`, and assert the rendered JSON contains the mask, not the key.
 
 Every gate gets a mutation proof in the same iteration that lands it. A green
 run is not evidence.
@@ -169,6 +218,17 @@ run is not evidence.
 
 Ordered by dependency, each leaving the tree compiling and net-positive.
 
+- **B0 — the TUI widget renderer + the `[v]` toggle (added iter-2648; G0).**
+  A `render_widget(&WidgetNode, area, buf)` covering all 17 variants in a new
+  `crates/operant-cli/src/tui/surface_widget.rs`; `agent_events.rs:647` switches
+  from `render_plain` to it, keeping `plain.rs` as the scrollback/text
+  fallback; `confirm` and `text` arms added beside the `ChoicePicker` arm at
+  `channel_drains.rs:416` (`Confirm` maps to `["Yes","No"]`; `TextField` maps
+  to `options = None`, which `open_with_header` already treats as
+  `in_custom_input`); `[v]` toggles the raw post-scrub op JSON. Lands before
+  B2 because the rasteriser mirrors a tree the TUI must already be able to
+  draw. Watch the render-layer invariants: ONE renderer, no live partials in
+  settled rows (AGENTS.md "TUI visual layer").
 - **B1 — decide D1 and write it down.** No code. Amend the predecessor plan
   with the measured 64-byte result and the chosen payload shape, with the
   measurement in the amendment so the next reader cannot re-derive the wrong
@@ -218,3 +278,8 @@ Nothing landed. Start at B1, which is a measurement and a plan amendment, not
 code. If B1's measurement contradicts the predecessor's stated `op:` shape,
 the amendment records the contradiction and the successor's shape wins — that
 is the whole point of putting it first.
+
+**Read order: B0 first if the TUI is the target, B1 first if the gateway is.**
+They are independent (B0 touches `operant-cli/src/tui/`, B1 is a measurement),
+so either can lead — but B2 must not start before whichever of B0/B1 it
+depends on: B2 mirrors a widget tree B0 has to exist for it to mirror.
