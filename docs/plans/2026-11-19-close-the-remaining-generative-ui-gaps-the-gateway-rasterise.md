@@ -40,9 +40,9 @@ Verified against `origin/main`, not against the predecessor's prose:
 | `ui/` IR + gate + two tools | SHIPPED | `crates/operant-core/src/ui/{mod,gate,plain,request}.rs` |
 | TUI `ui_request_input` reachable (choice) | SHIPPED | `tui/app/channel_drains.rs:416` |
 | **TUI widget renderer** | **ABSENT** (corrected iter-2648) | `tui/app/agent_events.rs:647` calls `plain::render_plain`, a `String` |
-| **`confirm` / `text` card kinds on BOTH hosts** | **ABSENT** (corrected iter-2648) | only a `ChoicePicker` arm at `channel_drains.rs:416` and `gateway_runner.rs:7714` |
+| **`confirm` / `text` card kinds on BOTH hosts** | **ABSENT** (corrected iter-2648) | only a `ChoicePicker` arm at `channel_drains.rs:416` and `gateway_runner.rs:7731` (line corrected iter-2650; it read 7714, which is a lock clone) |
 | **`[v]` raw-JSON toggle (predecessor G2)** | **ABSENT** (corrected iter-2648) | 4 `Char('v')` bindings in `keybindings/defaults.rs`, all vim; no `v` arm for the dialog |
-| Gateway registers + drains a surface receiver | SHIPPED (iter-2640) | `gateway_runner.rs:5957` + receiver task |
+| Gateway registers + drains a surface receiver | SHIPPED (iter-2640) | `gateway_runner.rs:5978` (set_surface_request_sender; line corrected iter-2650, it read 5957 which is a session-bus clone) + receiver task |
 | Turn-scoped capabilities (fail closed to `text_only`) | SHIPPED (iter-2640) | `SurfaceCapabilities::for_transport` in `tools/ui_tool.rs` |
 | `docs/library/ui.md` + INDEX row | SHIPPED (iter-2641) | `docs/library/ui.md` |
 | **Gateway rasteriser** | **ABSENT** | no `gateway/surface_raster.rs`, no `cell_buffer.rs` |
@@ -72,14 +72,14 @@ transport, not this tree. Three sub-gaps follow, and all three are still open:
    for the rasteriser being worth writing: the gateway PNG would mirror a tree
    the TUI cannot yet draw.
 2. **Interactive kinds are `choice` only on BOTH hosts.**
-   `channel_drains.rs:416` and `gateway_runner.rs:7714` each match
+   `channel_drains.rs:416` and `gateway_runner.rs:7731` each match
    `ChoicePicker` and fall through `_ => Vec::new()`, so a `confirm` or `text`
    card shows the question with no field. `ui_tool.rs`'s own description
    advertises "choice / confirm / text field", so the contract outruns both
    hosts. (Not a hang: the dialog still resolves on a typed line.)
 3. **The `[v]` raw-JSON toggle does not exist.** The predecessor's G2 asserts
    it. `rg "KeyCode::Char\('v'\)"` finds 4 bindings, all vim visual modes; the
-   dialog has no `v` arm. `gate.rs:33` already promises the raw view "shows the
+   dialog has no `v` arm. `gate.rs:24` already promises the raw view "shows the
    post-scrub op", so this is a promised behaviour with no implementation — and
    G2 cannot pass until it exists.
 
@@ -219,7 +219,7 @@ run is not evidence.
 Ordered by dependency, each leaving the tree compiling and net-positive.
 
 - **B0 — the TUI widget renderer + the `[v]` toggle (added iter-2648; G0).**
-  A `render_widget(&WidgetNode, area, buf)` covering all 17 variants in a new
+  A `render_widget(&WidgetNode, area, buf)` covering all **19** variants in a new
   `crates/operant-cli/src/tui/surface_widget.rs`; `agent_events.rs:647` switches
   from `render_plain` to it, keeping `plain.rs` as the scrollback/text
   fallback; `confirm` and `text` arms added beside the `ChoicePicker` arm at
@@ -229,6 +229,15 @@ Ordered by dependency, each leaving the tree compiling and net-positive.
   B2 because the rasteriser mirrors a tree the TUI must already be able to
   draw. Watch the render-layer invariants: ONE renderer, no live partials in
   settled rows (AGENTS.md "TUI visual layer").
+
+  **The count is 19, not 17 (corrected iter-2650).** Counted from the enum, not
+  from the predecessor's prose: `Row, Column, Card, Tabs, List, Divider, Text,
+  Badge, KeyValueGrid, Table, BarChart, Progress, CodeDiff, StatusTimeline,
+  Button, ChoicePicker, TextField, Confirm, Modal`. iter-2648 wrote "17",
+  which would have had a renderer silently drop two variants and still pass a
+  visual review. `ui/plain.rs` already matches all 19, so the fallback B0 keeps
+  is sound -- the error was in the plan, not the code. A future count change
+  must be re-derived the same way (walk the enum), never copied.
 - **B1 — decide D1 and write it down.** No code. Amend the predecessor plan
   with the measured 64-byte result and the chosen payload shape, with the
   measurement in the amendment so the next reader cannot re-derive the wrong
