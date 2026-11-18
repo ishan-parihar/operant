@@ -134,6 +134,20 @@ fn rtk_rewritten_command(command: &str, use_shell: bool, rtk: Option<&RtkLocatio
     }
 }
 
+/// Resolve the effective capture cap for one `terminal` call.
+///
+/// iter-2633 (wolf MED-4). The `timeout` argument directly above the call site
+/// is clamped with `.min(settings.max_timeout_secs)`; `max_output` was not, so
+/// `args.max_output.unwrap_or(settings.max_output_bytes)` bounded the DEFAULT
+/// and let an EXPLICIT caller value escape entirely -- a caller could request
+/// an unbounded capture and the operator's configured ceiling was bypassed.
+///
+/// A ceiling, not a floor: a caller asking for less keeps its value, so this
+/// does not break legitimate small captures.
+fn clamp_max_output(requested: Option<usize>, ceiling: usize) -> usize {
+    requested.unwrap_or(ceiling).min(ceiling)
+}
+
 #[async_trait]
 impl OperantTool for TerminalTool {
     fn name(&self) -> &str {
@@ -176,7 +190,7 @@ impl OperantTool for TerminalTool {
                 .unwrap_or(settings.max_timeout_secs)
                 .min(settings.max_timeout_secs),
         );
-        let max_output = args.max_output.unwrap_or(settings.max_output_bytes);
+        let max_output = clamp_max_output(args.max_output, settings.max_output_bytes);
 
         let cwd = args.working_dir.as_deref().map(std::path::Path::new);
         let env_vars = args.env_vars.unwrap_or_default();
@@ -387,6 +401,42 @@ mod tests {
         let v: Value = serde_json::from_str(&result.content).unwrap();
         let stdout = v["stdout"].as_str().unwrap();
         assert!(!stdout.is_empty(), "stdout should not be empty");
+    }
+
+    /// iter-2633 (wolf MED-4): a caller-supplied `max_output` is clamped to the
+    /// configured ceiling, the same way `timeout` is.
+    ///
+    /// Before the fix the site read `args.max_output.unwrap_or(settings.max_output_bytes)`
+    /// -- the default was bounded but an EXPLICIT value escaped entirely, so a
+    /// caller could request an unbounded capture and the operator's configured
+    /// ceiling was bypassed. That is the shape that survives review: the safe
+    /// path is the one nobody passes.
+    ///
+    /// This calls the REAL `clamp_max_output`, not a copy of its body, so it
+    /// cannot pass while the production path is broken.
+    /// Mutation proof: drop the `.min(ceiling)` in `clamp_max_output` and the
+    /// `usize::MAX` case returns `usize::MAX`, failing the first assert.
+    #[test]
+    fn caller_max_output_is_clamped_to_the_configured_ceiling() {
+        // Same source the tool itself reads, so the ceiling under test is the
+        // operator's real configured one rather than a test-local constant.
+        let ceiling = runtime_config().tools.terminal.max_output_bytes;
+        assert!(ceiling > 0, "the default ceiling must be non-zero");
+
+        // A caller asking for more than the ceiling gets the ceiling.
+        assert_eq!(
+            clamp_max_output(Some(usize::MAX), ceiling),
+            ceiling,
+            "an unbounded request must be clamped to the configured ceiling"
+        );
+        assert_eq!(clamp_max_output(Some(ceiling * 4), ceiling), ceiling);
+
+        // A caller asking for less keeps its value -- the clamp is a ceiling,
+        // not a floor, so this does not break legitimate small captures.
+        assert_eq!(clamp_max_output(Some(1024), ceiling), 1024);
+
+        // And the default path is unchanged.
+        assert_eq!(clamp_max_output(None, ceiling), ceiling);
     }
 
     #[tokio::test]
