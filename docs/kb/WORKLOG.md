@@ -1615,3 +1615,21 @@ in the check itself.
 - Cause: concurrent derivation in a shared worktree. I derived iter-2600 from origin/main at 20:20:50 (top was iter-2599), committed, and a peer committed their own iter-2600 before either pushed.
 - Per AGENTS.md "If a duplicate label reaches origin/main, do not rewrite history": both stay, no force-push, no renumber. Next free label is iter-2601.
 - **2026-11-18T03:25** · `jcode` — iter-2605: grounded the onboarding plan -- audited the real setup/doctor/secret/seat surface against origin/main @ 3d8defbb, found the proposal named a crate that does not exist, and planned 4 tranches instead of a subsystem
+
+## 2026-11-18 — duplicate iter-2616 label (recorded, not renumbered)
+
+`c54b6237 docs(iter-2616): the detached-HEAD push trap in a linked worktree`
+(peer) and `d9ba2791 fix(iter-2616): MCP OAuth CSRF state check warned and
+continued` (me) share a label. Both computed 2616 from origin/main at
+different instants, and the peer's push landed between my read and my push.
+
+Per AGENTS.md: a duplicate label is a cosmetic defect, not an incident. Both
+commits stay, both are real work, and rewriting published history to "fix" the
+number is strictly worse than the duplicate. Recorded here so the next audit
+does not re-derive it.
+
+Rule 1's arithmetic (fetch, read the top label, compute +1) cannot be made
+race-free by hand; that is what it is. The mitigation that DID work this
+session is the isolated-worktree cherry-pick, which decouples "commit" from
+"the shared tree's HEAD" and removes the peer's `git reset` from the critical
+path.
