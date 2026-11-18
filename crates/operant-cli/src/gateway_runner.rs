@@ -1192,6 +1192,60 @@ fn pending_skill_picker(key: &str) -> Option<PendingSkillPicker> {
         .and_then(|guard| guard.get(key).cloned())
 }
 
+/// Resolve a `/export <path>` argument to a path confined under `dir`.
+///
+/// `export` is `admin_only: false`, so the path arrives from anyone the
+/// gateway will talk to. Unconfined it is an arbitrary file overwrite: a
+/// channel sender could name `~/.operant/operant.toml`, `~/.operant/.env`, a
+/// systemd unit or an `authorized_keys`, and the gateway would write the
+/// transcript over it.
+///
+/// Rules: a relative path resolves inside `dir` (the TUI's behavior, where
+/// `/export foo.md` is a sibling of the timestamped default); an absolute path
+/// is accepted only when it already lives under `dir`. A traversal that
+/// escapes `dir` after lexical normalization is refused.
+fn confine_export_path(
+    dir: &std::path::Path,
+    requested: &str,
+) -> std::result::Result<std::path::PathBuf, String> {
+    use std::path::{Component, Path, PathBuf};
+
+    let requested = Path::new(requested);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        dir.join(requested)
+    };
+
+    // Lexical normalization before any filesystem touch: `a/../b` and `a/./b`
+    // must not be able to climb out, and the check must not depend on the
+    // target existing (it usually does not yet).
+    let mut normalized = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!(
+                        "Refusing to export outside the transcripts directory: `{}` escapes it.",
+                        requested.display()
+                    ));
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+
+    if !normalized.starts_with(dir) {
+        return Err(format!(
+            "Refusing to export outside the transcripts directory: `{}` is not under `{}`.",
+            requested.display(),
+            dir.display()
+        ));
+    }
+    Ok(normalized)
+}
+
 async fn handle_runtime_command(
     handler: &GatewayMessageHandler,
     name: &str,
@@ -1629,7 +1683,20 @@ async fn handle_runtime_command(
                             .unwrap_or_default();
                         dir.join(format!("transcript-{stamp}.md"))
                     } else {
-                        std::path::PathBuf::from(&requested)
+                        // `/export <path>` is NOT a write primitive. The path
+                        // is operator-supplied text arriving over a CHANNEL,
+                        // and `export` is `admin_only: false`, so anyone the
+                        // gateway will talk to can name any path the gateway
+                        // process can write -- `~/.operant/operant.toml`,
+                        // `~/.operant/.env`, a systemd unit, an
+                        // `authorized_keys`. Confine it: a RELATIVE path
+                        // resolves inside the transcripts dir (the TUI's own
+                        // behavior), and an ABSOLUTE one is accepted only when
+                        // it already lives there.
+                        match confine_export_path(&dir, &requested) {
+                            Ok(p) => p,
+                            Err(reply) => return reply,
+                        }
                     };
                     if let Some(parent) = path.parent()
                         && let Err(e) = std::fs::create_dir_all(parent)
@@ -9763,5 +9830,79 @@ mod admin_gate_tests {
     fn an_unconfigured_allowlist_refuses_nobody() {
         let m = msg("stranger", false, false);
         assert!(!admin_gate_refuses(&m, &[]));
+    }
+}
+
+#[cfg(test)]
+mod export_confinement_tests {
+    //! `/export <path>` is `admin_only: false`, so the path arrives from anyone
+    //! the gateway will talk to. Unconfined, `std::fs::write(PathBuf::from(s))`
+    //! is an arbitrary file overwrite: `~/.operant/operant.toml`, `.env`, a
+    //! systemd unit, an `authorized_keys`.
+
+    use super::confine_export_path;
+    use std::path::PathBuf;
+
+    fn dir() -> PathBuf {
+        std::env::temp_dir().join("operant-export-confinement-test")
+    }
+
+    #[test]
+    fn a_relative_name_lands_inside_the_transcripts_dir() {
+        // The normal case: `/export foo.md` is a sibling of the timestamped
+        // default, exactly as the TUI behaves.
+        let got = confine_export_path(&dir(), "foo.md").expect("a plain name is allowed");
+        assert!(got.starts_with(dir()), "got: {}", got.display());
+        assert!(got.ends_with("foo.md"));
+    }
+
+    #[test]
+    fn an_absolute_path_outside_the_dir_is_refused() {
+        // The exploit: any path the gateway process can write. This is the
+        // assertion that fails without the fix.
+        let err = confine_export_path(&dir(), "/home/ishanp/.ssh/authorized_keys")
+            .expect_err("an absolute path outside the transcripts dir must be refused");
+        assert!(err.contains("Refusing"), "got: {err}");
+    }
+
+    #[test]
+    fn the_live_config_and_env_file_are_refused() {
+        // The two the audit named specifically, as absolute paths.
+        for target in [
+            "/home/ishanp/.operant/operant.toml",
+            "/home/ishanp/.operant/.env",
+            "/etc/systemd/system/operant-gateway.service",
+        ] {
+            assert!(
+                confine_export_path(&dir(), target).is_err(),
+                "`{target}` must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_traversal_that_escapes_is_refused() {
+        // `../../../etc/passwd` must not climb out, and the check must not
+        // depend on the target existing.
+        let err = confine_export_path(&dir(), "../../../../etc/passwd")
+            .expect_err("a traversal escaping the dir must be refused");
+        assert!(err.contains("Refusing"), "got: {err}");
+    }
+
+    #[test]
+    fn an_absolute_path_inside_the_dir_is_allowed() {
+        // Confinement must not become a blanket refusal: an absolute path
+        // already under the transcripts dir is the operator's own file.
+        let inside = dir().join("nested").join("deep.md");
+        let got = confine_export_path(&dir(), &inside.to_string_lossy())
+            .expect("an absolute path under the dir is allowed");
+        assert!(got.starts_with(dir()), "got: {}", got.display());
+    }
+
+    #[test]
+    fn a_dot_segment_inside_is_normalized_not_refused() {
+        let got = confine_export_path(&dir(), "./sub/../foo.md").expect("./ normalization");
+        assert!(got.starts_with(dir()), "got: {}", got.display());
+        assert!(got.ends_with("foo.md"), "got: {}", got.display());
     }
 }
