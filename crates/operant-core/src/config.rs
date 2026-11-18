@@ -165,6 +165,14 @@ pub struct AppConfig {
     /// `families` overrides the chain per subject family.
     #[serde(default)]
     pub compression: crate::agent::evidence::EvidenceConfig,
+    /// `[ui]` — the generative-surface kill switch (see [`crate::ui::gate`]).
+    ///
+    /// One boolean, default true: the agent may render tables, charts, diffs
+    /// and choice cards as structured surfaces. Set
+    /// `generative_enabled = false` to make both surface tools refuse with a
+    /// typed reason while leaving every other tool untouched.
+    #[serde(default)]
+    pub ui: crate::ui::gate::UiSettings,
 }
 
 impl Default for AppConfig {
@@ -215,6 +223,7 @@ impl Default for AppConfig {
             holon: HolonSettings::default(),
             integrations: IntegrationsSettings::default(),
             compression: crate::agent::evidence::EvidenceConfig::default(),
+            ui: crate::ui::gate::UiSettings::default(),
         }
     }
 }
@@ -2976,6 +2985,38 @@ pub fn compression_config() -> crate::agent::evidence::EvidenceConfig {
         .read()
         .map(|config| config.compression.clone())
         .unwrap_or_default()
+}
+
+/// Serializes tests that mutate the process-global runtime config.
+///
+/// [`install_runtime_config`] writes a `static RwLock`, so a test that swaps in
+/// a crafted config and restores it on the way out is only correct if NO other
+/// test reads the config in between — and cargo runs tests in parallel threads.
+/// Two suites had already discovered this the hard way (`vision_tool`'s
+/// `ConfigGuard`, `skill_bundle`), each with its own private mutex, which is
+/// the same bug twice: the lock only serializes the tests that remember to take
+/// it, and a test in another module cannot know it exists.
+///
+/// This is the ONE lock. Hold it for the whole test body, next to the
+/// install/restore pair:
+///
+/// ```ignore
+/// let _guard = crate::config::runtime_config_test_lock();
+/// let previous = crate::config::runtime_config();
+/// let mut crafted = crate::config::runtime_config();
+/// crafted.ui.generative_enabled = false;
+/// crate::config::install_runtime_config(crafted);
+/// // ... exercise ...
+/// crate::config::install_runtime_config(previous);
+/// ```
+///
+/// The guard is a `MutexGuard`, so it also cannot be dropped early by a
+/// `return` in the middle of the test — the restore has to be explicit, but
+/// the lock does not.
+#[cfg(test)]
+pub fn runtime_config_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Files that sit beside the live config and are never read.

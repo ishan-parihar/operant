@@ -674,6 +674,15 @@ impl TuiApp {
             let _ = operant_core::user_question::set_user_question_sender(uq_tx);
             self.app.user_question_rx = Some(uq_rx);
 
+            // The `ui_request_input` channel (plan M3). Same registration
+            // shape as the question channel above: a host that is not
+            // registered leaves the tool degrading honestly instead of
+            // blocking on a channel nobody drains.
+            let (sr_tx, sr_rx) =
+                tokio::sync::mpsc::unbounded_channel::<operant_core::ui::request::SurfaceRequest>();
+            let _ = operant_core::ui::request::set_surface_request_sender(sr_tx);
+            self.app.surface_request_rx = Some(sr_rx);
+
             // Attach the MCP manager + file-history + current-turn counter to the
             // App. Without these, /mcp always shows "Disconnected" for every
             // server, /changes always shows "No changes", the "iter N" status

@@ -7024,6 +7024,24 @@ pub async fn start_gateway(
                         .with_thread_id(thread_id);
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                 }
+                AgentEvent::SurfaceRendered { op, .. } => {
+                    // A governed surface card. The gateway has no surface
+                    // rasteriser in v1 (that is tranche T3), so the op is
+                    // sent as its plain-text form — the same bytes the TUI
+                    // shows. Not dropped: a card the operator never sees is
+                    // worse than a plain-text one.
+                    let text = operant_core::ui::plain::render_plain(
+                        &op.root_widget(),
+                        100,
+                        operant_core::ui::plain::RenderProvenance::from_synthesized(
+                            op.is_synthesized(),
+                        ),
+                    );
+                    let msg = OutgoingMessage::new(&channel_id, &text)
+                        .no_markdown()
+                        .with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
                 // A 429 classified mid-turn. Without this the turn looks
                 // stalled while the provider is rate-limiting it.
                 AgentEvent::RateLimitNotice { retry_after_secs } => {

@@ -1236,3 +1236,19 @@ enabled = true
 # enabled = true
 # chain = "code-aggressive"   # signatures stay, function bodies go
 # methods = ["code-filter-aggressive"]   # switch that one method off
+
+# ── UI surfaces (plan 2026-11-18) ─────────────────────────────────────────
+# The generative-surface kill switch. One boolean, default true: the agent
+# may render governed surfaces (tables, charts, diffs, key-value grids,
+# timelines, choice cards) through the `ui_render_surface` and
+# `ui_request_input` tools instead of hand-building markdown.
+#
+# Every surface passes the governance gate (src/ui/gate.rs) before it is
+# shown: depth/count bounds so the recursive schema cannot blow a provider's
+# recursion limit, a capability check so a transport never gets a node it
+# cannot draw, and a secret scrub over every string leaf. Flip this to false
+# and both tools refuse with a typed reason ("generative UI is disabled by
+# the operator") while every other tool is untouched — the operator's
+# documented off switch, not a silent degradation.
+[ui]
+generative_enabled = true

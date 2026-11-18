@@ -969,6 +969,12 @@ pub struct App {
     pub user_question_rx: Option<
         tokio::sync::mpsc::UnboundedReceiver<operant_core::user_question::UserQuestionRequest>,
     >,
+    /// Receiver for `SurfaceRequest`s produced by `ui_request_input`
+    /// (plan M3). Same shape as `user_question_rx`, with one difference: the
+    /// answer goes back as structured JSON (the choice id, the confirm bool),
+    /// because the card the model raised is a widget, not a bare question.
+    pub surface_request_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<operant_core::ui::request::SurfaceRequest>>,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
 
@@ -2383,6 +2389,10 @@ impl App {
 
             // Drain user-question requests from the clarify tool.
             self.drain_user_questions();
+
+            // Drain surface requests from `ui_request_input` (plan M3) — the
+            // same seam, one dialog, a structured answer.
+            self.drain_surface_requests();
 
             // Dispatch a pending /mcp reconnect request immediately. The
             // MCP panel 'r' key sets this flag; App::run only returns to

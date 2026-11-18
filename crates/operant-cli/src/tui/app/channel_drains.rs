@@ -380,6 +380,54 @@ impl App {
         }
     }
 
+    /// 4b. Drain surface requests from `ui_request_input` (plan M3).
+    ///
+    /// The tool hands over a `SurfaceRequest` (a widget tree plus a oneshot
+    /// reply) and blocks; this opens the ask_user_dialog with the card's
+    /// plain fallback as its header and a reply channel that answers in the
+    /// STRUCTURED shape the tool returns to the model. The dialog itself is
+    /// not forked: one dialog, two producers — the difference is only that
+    /// `ui_request_input` fills the new header field and answers as JSON.
+    ///
+    /// Same at-most-one-per-frame rule as `drain_user_questions`.
+    pub(super) fn drain_surface_requests(&mut self) -> bool {
+        let Some(ref mut rx) = self.surface_request_rx else {
+            return false;
+        };
+        if let Ok(req) = rx.try_recv() {
+            let header = operant_core::ui::plain::render_plain(
+                &req.op.root_widget(),
+                operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+                operant_core::ui::plain::RenderProvenance::from_synthesized(
+                    req.op.is_synthesized(),
+                ),
+            );
+            // The dialog answers with a LABEL; the model asked by ID. Capture
+            // the id table here, where the request is still in scope, and
+            // resolve after the user answers.
+            let choices = match &req.body {
+                operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => choices.clone(),
+                _ => Vec::new(),
+            };
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let labels = if choices.is_empty() {
+                None
+            } else {
+                Some(choices.iter().map(|c| c.label.clone()).collect::<Vec<_>>())
+            };
+            self.ask_user_dialog
+                .open_with_header(req.question, labels, header, reply_tx);
+            let tool_reply = req.reply_tx;
+            tokio::spawn(async move {
+                let answer = reply_rx.await.unwrap_or_default();
+                let _ = tool_reply.send(surface_reply_for(&choices, answer));
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     /// 4. Drain user-question requests from the clarify tool. The
     ///    clarify tool pushes a UserQuestionRequest (question, choices
     ///    and reply_tx) and blocks awaiting the reply. We open the
@@ -713,4 +761,21 @@ pub(super) fn plain_command_prefix(command: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     (!entry.is_empty()).then_some(entry)
+}
+
+/// Resolve a label back to its choice id and shape the reply the
+/// `ui_request_input` tool returns to the model.
+///
+/// The dialog answers with the selected LABEL; the model asked by ID, so the
+/// reply must carry the id or two choices with the same label would resolve
+/// to the wrong branch. A label matching no id is passed through as text
+/// rather than dropped: the model sees what the operator actually chose.
+fn surface_reply_for(
+    choices: &[operant_core::ui::ChoiceOption],
+    answer: String,
+) -> serde_json::Value {
+    match choices.iter().find(|c| c.label == answer) {
+        Some(choice) => serde_json::json!({ "kind": "choice", "choice_id": choice.id }),
+        None => serde_json::json!({ "kind": "text", "value": answer }),
+    }
 }

@@ -644,6 +644,25 @@ impl App {
                 self.push_system_message(text, SystemMessageStyle::Info);
             }
 
+            AgentEvent::SurfaceRendered { surface_id, op } => {
+                // A governed surface card. The op is ALREADY validated (the
+                // gate ran inside `ui_render_surface`/`ui_request_input`), so
+                // this arm renders and never re-checks: re-validating here
+                // would mean the gate's verdict depends on which host drew it.
+                let text = operant_core::ui::plain::render_plain(
+                    &op.root_widget(),
+                    operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+                    operant_core::ui::plain::RenderProvenance::from_synthesized(
+                        op.is_synthesized(),
+                    ),
+                );
+                // The surface id rides the annotation so a later op that
+                // addresses the same surface is attributable in the
+                // transcript. It is not a second row: the card IS the row.
+                let _ = surface_id;
+                self.push_system_message(text, SystemMessageStyle::Info);
+            }
+
             AgentEvent::BackgroundReview { summary, .. } => {
                 // Advisor notes and idle recaps share the BackgroundReview
                 // channel (both are side-channel LLM output); the prefix the

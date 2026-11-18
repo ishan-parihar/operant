@@ -676,6 +676,14 @@ These are the user's intentional design choices. Do not replace, remove, or
   complete set of messaging surfaces.
 
 ### Native Tool Integrations
+- **Generative UI (iter-2638, plan 2026-11-18)**: the Surface IR + the governance
+  gate + the plain renderer (`crates/operant-core/src/ui/`) and TWO in-loop tools
+  (`tools/ui_tool.rs`): `ui_render_surface` and `ui_request_input`. Both are
+  registered in `builtin_tool_names()` and gated on `[ui] generative_enabled`
+  inside the tool (review F8: a pre-execute interceptor cannot refuse on
+  semantics, because it runs before the `SurfaceOp` is parsed). The TUI card
+  renderer and the PNG mapper are T2 / M4; the plain form ships now so a refused
+  card is never silently dropped.
 - **AFT (Agent File Tools)**: 20 IDE-grade coding tools via subprocess
   (`aft_bridge.rs` + `aft_tools.rs`)
   - Auto-downloads from GitHub releases, auto-updates
@@ -766,6 +774,32 @@ These are the user's intentional design choices. Do not replace, remove, or
   per-turn volatile context (memory recall, workspace, harness, MoA) rides the
   TAIL as a `<turn_context>` prefix on the latest user message (iter-911), so
   everything before the latest user message is byte-stable between turns
+
+### Generative UI surfaces (plan 2026-11-18)
+- **The Surface IR is the agent's only UI vocabulary.** `crates/operant-core/src/ui/`
+  holds the types (`SurfaceOp`, `WidgetNode`, `Provenance`, `SemanticTone`),
+  the governance gate (`ui/gate.rs`), the plain renderer (`ui/plain.rs`) and the
+  HITL request channel (`ui/request.rs`). `SemanticTone` is the ONLY colour
+  surface — no variant carries a `Color` or a hex string, because the TUI maps
+  tones to ANSI and the PNG mapper maps them to high-contrast RGB, and a raw
+  colour field would let a model bypass both palettes.
+- **Two tools, not nine** (`tools/ui_tool.rs`): `ui_render_surface` (never
+  suspends; emits `AgentEvent::SurfaceRendered` and returns the plain fallback)
+  and `ui_request_input` (suspends on the human, through the same
+  `user_question`-shaped oneshot channel `clarify` uses). Do NOT add
+  `ui_show_table` / `ui_show_chart` / `ui_ask_approval` and their siblings: one
+  discriminated enum each is the red-team §D3 merge and the whole point of M2.
+- **The gate is FAIL-CLOSED and is called INSIDE the tool** (review F8), never
+  from a registry interceptor: a pre-execute interceptor runs before the op
+  exists and a post-execute one runs after the card is already on screen. A
+  refusal is a typed `UiRefusal` naming the rule, surfaced to the model as an
+  actionable string, never a silently dropped card. `[ui] generative_enabled
+  = false` is the operator's kill switch and is documented in
+  `operant.example.toml`.
+- **Do not derive `JsonSchema` for `WidgetNode`** and do not hand-write a schema
+  for it: a 19-variant recursive type's schema would be a second copy of the
+  vocabulary M1's rules forbid. The tool parses the body through `WidgetNode`'s
+  own `Deserialize`, so the IR is the single authority on what a widget is.
 
 ### The operant home has ONE resolver (iter-1137)
 - `operant_core::platform::operant_home()` is THE resolver: `HERMES_HOME`

@@ -43,7 +43,7 @@ quietly.
 - [providers.md](providers.md) — the model path: OpenAI-compatible client, Anthropic, fallback chains, rate limiting, reasoning timeouts, model catalog
 - [model-roles.md](model-roles.md) — the model catalogue and the `@role[:level]` selector grammar: live endpoint, models.dev, configured, and the effort axis
 - [process-registry.md](process-registry.md) — the process registry: sessions, backends (local/Docker/SSH), the rtk rewrite path, reaping, and the `process`/`terminal` tools
-- [tools.md](tools.md) — the tool system: registry, the 65 names in `builtin_tool_names()` (105 types implement `name()`), AFT, sourcehound, kernel tools, guardrails, approval, blast radius
+- [tools.md](tools.md) — the tool system: registry, the 67 names in `builtin_tool_names()` (107 types implement `name()`), AFT, sourcehound, kernel tools, guardrails, approval, blast radius
 - [sub-agents.md](sub-agents.md) — delegation: the `delegate_task` tool, swarm mode, async delegation, the runner contract
 - [agents.md](agents.md) — what "agent" names: the definition record, the live roster, the worker, the pane report
 - [background-review.md](background-review.md) — the post-turn reviewer that learns skills and memories

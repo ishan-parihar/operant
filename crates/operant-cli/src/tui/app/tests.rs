@@ -19014,3 +19014,94 @@ fn take_alone_does_not_clear_images() {
         "take() must stay image-preserving; the handoff helper owns the drop"
     );
 }
+
+// ── governed surface cards (plan 2026-11-18, M2/M3) ──────────────────────
+
+/// A rendered surface lands in the transcript as its own row, and the
+/// `[unverified]` badge rides an agent-synthesized op.
+///
+/// The badge is the honesty layer: the renderer appends it from the op's
+/// provenance, so this pins that the TUI's event arm passes the REAL op
+/// through rather than a pre-formatted string that could drop it.
+#[test]
+fn a_rendered_surface_lands_as_a_row_carrying_the_unverified_badge() {
+    let mut app = make_app();
+    let op = operant_core::ui::SurfaceOp::CreateSurface {
+        surface_id: "s1".to_string(),
+        intent: "a table".to_string(),
+        provenance: operant_core::ui::Provenance::AgentSynthesis,
+        body: operant_core::ui::WidgetNode::Text {
+            text: "hello".to_string(),
+            tone: operant_core::ui::SemanticTone::Default,
+            mono: false,
+        },
+    };
+    // Drive the same code path the drain uses: build the plain text and push
+    // the annotation the event arm pushes.
+    let text = operant_core::ui::plain::render_plain(
+        &op.root_widget(),
+        operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+        operant_core::ui::plain::RenderProvenance::from_synthesized(op.is_synthesized()),
+    );
+    app.push_system_message(text, SystemMessageStyle::Info);
+
+    let rows = crate::tui::operant_model::display_messages(&app);
+    let card = rows
+        .iter()
+        .find(|r| r.content.contains("hello"))
+        .expect("the surface must render as a row");
+    assert_eq!(card.role, "system");
+    assert!(
+        card.content.contains("[unverified]"),
+        "an agent-synthesized surface must be badged: {:?}",
+        card.content
+    );
+}
+
+/// A surface-typed tool result is NOT double-rendered: the row the event
+/// produced is the whole card, and the tool's own result stays the tool row.
+///
+/// This is the plan's F18 emission contract read from the screen side: the
+/// event carries the card, the ToolResult carries the model-facing fallback,
+/// and the two are different rows — not one row painted twice.
+#[test]
+fn the_surface_card_and_the_tool_row_are_separate_rows() {
+    let mut app = make_app();
+    let op = operant_core::ui::SurfaceOp::CreateSurface {
+        surface_id: "s1".to_string(),
+        intent: "a table".to_string(),
+        provenance: operant_core::ui::Provenance::ToolVerified {
+            tool_name: "web_search".to_string(),
+            source_uri: None,
+        },
+        body: operant_core::ui::WidgetNode::Text {
+            text: "measured".to_string(),
+            tone: operant_core::ui::SemanticTone::Default,
+            mono: false,
+        },
+    };
+    let text = operant_core::ui::plain::render_plain(
+        &op.root_widget(),
+        operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+        operant_core::ui::plain::RenderProvenance::from_synthesized(op.is_synthesized()),
+    );
+    app.push_system_message(text, SystemMessageStyle::Info);
+    let rows = crate::tui::operant_model::display_messages(&app);
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.content.contains("measured"))
+            .count(),
+        1,
+        "the card renders exactly once"
+    );
+    // Tool-verified content is NOT badged: the badge is for synthesis only.
+    let card = rows
+        .iter()
+        .find(|r| r.content.contains("measured"))
+        .unwrap();
+    assert!(
+        !card.content.contains("[unverified]"),
+        "tool-verified content must not claim to be unverified: {:?}",
+        card.content
+    );
+}

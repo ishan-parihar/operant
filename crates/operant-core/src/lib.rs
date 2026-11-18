@@ -157,6 +157,8 @@ pub mod turn_attribution;
 pub mod turn_end;
 pub mod turn_end_heuristics;
 pub mod turn_summary;
+/// The Surface IR (`ui_render_surface` / `ui_request_input` payload types).
+pub mod ui;
 pub mod user_question;
 pub mod verification;
 pub mod write_approval;

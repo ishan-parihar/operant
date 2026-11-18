@@ -51,6 +51,13 @@ pub struct AskUserDialogState {
     pub in_custom_input: bool,
     /// Pending reply channel sender — set when the dialog opens, consumed on submit.
     pub(crate) reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    /// One-line header shown above the question: the surface's own plain
+    /// fallback (plan M3, "one new field: the surface's to_plain_fallback()
+    /// header"). `clarify` leaves it empty, so its dialog is byte-identical
+    /// to before; `ui_request_input` fills it with the card the model built,
+    /// so the operator sees the FULL surface (a table the choice sits under)
+    /// rather than a bare question.
+    pub header: String,
 }
 
 impl AskUserDialogState {
@@ -65,11 +72,27 @@ impl AskUserDialogState {
         options: Option<Vec<String>>,
         reply_tx: tokio::sync::oneshot::Sender<String>,
     ) {
+        self.open_with_header(question, options, String::new(), reply_tx);
+    }
+
+    /// Open the dialog with a header card above the question (plan M3).
+    ///
+    /// The header is the surface's plain fallback: what `ui_request_input`
+    /// built before the question. `clarify` uses [`Self::open`] and passes
+    /// none, so its dialog is unchanged.
+    pub fn open_with_header(
+        &mut self,
+        question: String,
+        options: Option<Vec<String>>,
+        header: String,
+        reply_tx: tokio::sync::oneshot::Sender<String>,
+    ) {
         self.question = question;
         self.options = options;
         self.selected_idx = 0;
         self.custom_text.clear();
         self.in_custom_input = self.options.is_none();
+        self.header = header;
         self.reply_tx = Some(reply_tx);
         self.visible = true;
     }
@@ -200,9 +223,16 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
         .as_ref()
         .map(|v| v.len() as u16 + 1)
         .unwrap_or(0);
+    // The header card (plan M3) only costs rows when it carries text: a
+    // `clarify` dialog has none, so its geometry is unchanged by this field.
+    let header_lines = if state.header.trim().is_empty() {
+        0
+    } else {
+        balanced_wrap(&state.header, 52).len() as u16 + 1
+    };
     // One title row + the content rows + the hint row, plus the two border rows
     // the primitive insets. `modal_layout` bounds it; nothing clamps here.
-    let desired_height = 1 + 5 + question_lines + options_lines + 3;
+    let desired_height = 1 + 5 + header_lines + question_lines + options_lines + 3;
 
     // The wrap width and the option-row budget both depend on the *clamped*
     // width, which only `modal_layout` knows. Ask it once for the geometry,
@@ -245,6 +275,31 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
                 Paragraph::new($line).render(r, buf);
             }
         }};
+    }
+
+    // Header card (plan M3): the surface the choice sits under. Dim, so the
+    // question below it stays the brightest thing in the dialog. Only drawn
+    // when a surface supplied one — `clarify` passes none.
+    if !state.header.trim().is_empty() {
+        for wrap_line in balanced_wrap(&state.header, inner_w) {
+            write_line!(
+                row,
+                Line::from(Span::styled(
+                    wrap_line,
+                    Style::default()
+                        .fg(theme::dim_color())
+                        .bg(theme_colors::panel_bg())
+                ))
+            );
+            row += 1;
+            if row >= last_row {
+                return;
+            }
+        }
+        row += 1; // spacer between the card and the question
+        if row >= last_row {
+            return;
+        }
     }
 
     // Question text
@@ -417,6 +472,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
 #[cfg(test)]
 mod tests {
     use super::balanced_wrap;
+    use super::*;
 
     #[test]
     fn word_wrap_uses_display_width_not_bytes() {
@@ -438,5 +494,40 @@ mod tests {
             balanced_wrap("the quick brown fox", 9),
             vec!["the quick".to_string(), "brown fox".to_string()]
         );
+    }
+
+    /// `open` leaves the header empty, so the `clarify` dialog's geometry and
+    /// pixels are unchanged by the plan-M3 field. This is the compatibility
+    /// half of the two-producer contract.
+    #[test]
+    fn plain_open_clears_the_surface_header() {
+        let mut state = AskUserDialogState::new();
+        state.header = "a stale card".to_string();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        state.open("Pick one".to_string(), None, tx);
+        assert!(
+            state.header.is_empty(),
+            "clarify's path must not inherit a previous surface's header"
+        );
+    }
+
+    /// `open_with_header` carries the surface card into the dialog, and the
+    /// answer channel is the one the caller awaits.
+    #[test]
+    fn open_with_header_keeps_the_surface_card() {
+        let mut state = AskUserDialogState::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        state.open_with_header(
+            "Pick one".to_string(),
+            Some(vec!["A".to_string(), "B".to_string()]),
+            "| name | qty |".to_string(),
+            tx,
+        );
+        assert_eq!(state.header, "| name | qty |");
+        assert_eq!(
+            state.options.as_deref(),
+            Some(&["A".to_string(), "B".to_string()][..])
+        );
+        assert!(state.visible);
     }
 }

@@ -69,6 +69,7 @@ pub mod tool_search;
 pub mod tool_state;
 pub mod transcription_tool;
 pub mod tts_tool;
+pub mod ui_tool;
 pub mod verification_tool;
 pub mod video_analysis_tool;
 pub mod vision_tool;
@@ -125,6 +126,7 @@ pub use spotify_tool::{
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
 };
 pub use transcription_tool::TranscriptionTool;
+pub use ui_tool::{UiRenderSurfaceTool, UiRequestInputTool};
 // The store is file-backed and its data is the operator's, so a non-agent
 // reader (the TUI's todo band) must be able to ask for it directly instead of
 // waiting to observe a tool result — see `todo_tool::todo_list_for_session`.
@@ -527,9 +529,8 @@ impl ToolExecutor {
         // trait's `&self` would otherwise borrow our local for the spawn's
         // lifetime, which is `'static`).
         let task_tool = tool.clone();
-        let spawned = tokio::spawn(async move {
-            task_tool.execute(normalize_arg_keys(args), context).await
-        });
+        let spawned =
+            tokio::spawn(async move { task_tool.execute(normalize_arg_keys(args), context).await });
         let result = timeout(effective, spawned).await;
 
         match result {

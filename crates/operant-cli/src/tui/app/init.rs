@@ -401,6 +401,7 @@ impl App {
             pending_key: None,
             model_fetch_rx: None,
             user_question_rx: None,
+            surface_request_rx: None,
             ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState::new(),
             context_window_size: 0,
             context_used_tokens: 0,

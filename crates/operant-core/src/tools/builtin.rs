@@ -303,7 +303,7 @@ pub async fn register_builtin_tools_with_sub_agent(
                 parent_disabled_tools,
                 parent_disabled_toolsets,
                 database,
-                event_tx,
+                event_tx.clone(),
             )
             .with_parent_approval(parent_approval_allowlist, parent_approval_allowlist_path)
             // (iter-2366) Children share the parent's MCP children. Without
@@ -311,6 +311,16 @@ pub async fn register_builtin_tools_with_sub_agent(
             .with_mcp_manager_opt(child_mcp_manager),
         )
         .await?;
+
+    // The Surface IR tools (plan 2026-11-18 M2). They ride the event channel
+    // so `ui_render_surface` can hand its card to the TUI/gateway, and they
+    // live HERE rather than in `register_builtin_tools` because that function
+    // has no event channel to give them (the same reason `delegate_task`
+    // is registered only in this variant).
+    registry
+        .register(crate::tools::UiRenderSurfaceTool::new(event_tx))
+        .await?;
+    registry.register(crate::tools::UiRequestInputTool).await?;
     Ok(())
 }
 
@@ -382,6 +392,12 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "spotify_playlists",
         "spotify_albums",
         "spotify_library",
+        // The Surface IR tools (plan 2026-11-18 M2). Registered by
+        // `register_builtin_tools_with_sub_agent`, so — like
+        // `delegate_task` — they are named here but NOT counted by
+        // `test_register_all_builtin_tools`, which drives the plain variant.
+        "ui_render_surface",
+        "ui_request_input",
         // Memory provider tools are NOT in builtin_tool_names —
         // they're registered conditionally from the active memory
         // provider's own tool_schemas. Including them here would
@@ -498,6 +514,18 @@ mod tests {
             builtin_tool_names().len()
         );
         assert!(registry.contains("delegate_task").await);
+        // The Surface IR tools are part of the agent's toolset, not an
+        // operator-only surface: without this a rename or a dropped
+        // registration would leave `ui_render_surface` advertised in
+        // `builtin_tool_names()` and unreachable in the loop.
+        assert!(
+            registry.contains("ui_render_surface").await,
+            "ui_render_surface must be registered with the builtins"
+        );
+        assert!(
+            registry.contains("ui_request_input").await,
+            "ui_request_input must be registered with the builtins"
+        );
         // iter-1126: the operator's SOP playbooks must be reachable BY THE
         // AGENT — the `sop` tool is registered with the builtins, so the
         // playbook directory is not an operator-only dead end.

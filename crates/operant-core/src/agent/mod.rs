@@ -514,6 +514,22 @@ pub enum AgentEvent {
         completed: usize,
         in_progress: usize,
     },
+    /// A governed surface (table / chart / diff / choice card / ...) the model
+    /// rendered through `ui_render_surface` or raised through
+    /// `ui_request_input`. The op is the ALREADY-VALIDATED IR: the gate ran
+    /// inside the tool, so every string leaf is scrubbed and every bound held
+    /// before the event existed.
+    ///
+    /// The TUI draws the op as a card row instead of the model's own markdown;
+    /// the gateway can carry it as an attachment. A host that ignores it loses
+    /// nothing, because the tool's result still carries the plain fallback the
+    /// model sees.
+    SurfaceRendered {
+        /// The surface this op addresses, so a later op can update it.
+        surface_id: String,
+        /// The validated op.
+        op: crate::ui::SurfaceOp,
+    },
 }
 
 /// Prefix of the system hint that marks a self-healing retry.
@@ -1080,7 +1096,10 @@ fn is_mcp_tool(name: &str) -> bool {
 }
 
 fn is_interactive_tool(name: &str) -> bool {
-    matches!(name, "clarify" | "approval_request")
+    // `ui_request_input` suspends on a human answer exactly as `clarify` and
+    // `approval_request` do (the same user_question oneshot seam, plan M3), so
+    // the generic 30s cap must not cut a live dialog mid-prompt.
+    matches!(name, "clarify" | "approval_request" | "ui_request_input")
 }
 
 #[cfg(test)]
@@ -1130,6 +1149,7 @@ mod tool_timeout_class_tests {
         }
         // ...and the two existing classifiers still own their own names.
         assert!(is_interactive_tool("clarify"));
+        assert!(is_interactive_tool("ui_request_input"));
         assert!(is_long_running_tool("delegate_task"));
     }
 }
@@ -5617,6 +5637,15 @@ mod tests {
                 total: 3,
                 completed: 1,
                 in_progress: 1,
+            },
+            AgentEvent::SurfaceRendered {
+                surface_id: "s1".to_string(),
+                op: crate::ui::SurfaceOp::CreateSurface {
+                    surface_id: "s1".to_string(),
+                    intent: "a table".to_string(),
+                    provenance: crate::ui::Provenance::AgentSynthesis,
+                    body: crate::ui::WidgetNode::Divider,
+                },
             },
         ];
 
