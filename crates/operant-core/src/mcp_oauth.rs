@@ -691,6 +691,25 @@ fn generate_state() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Verify the OAuth callback's `state` against the value this flow generated
+/// (OAuth 2.0 §4.1.2.1). Refuses on mismatch OR on a missing state: both are
+/// indistinguishable from a forged or truncated callback, and the safe answer
+/// is the same. The old code warned and continued, which left the check
+/// defeated without telling the caller.
+fn verify_state(expected: &str, returned: Option<&str>) -> Result<()> {
+    match returned {
+        Some(got) if got == expected => Ok(()),
+        Some(got) => Err(OAuthError::AuthFailed(format!(
+            "CSRF check failed: state mismatch (got '{got}', expected '{expected}')"
+        ))
+        .into()),
+        None => Err(OAuthError::AuthFailed(
+            "CSRF check failed: callback carried no state parameter".to_string(),
+        )
+        .into()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Callback server
 // ---------------------------------------------------------------------------
@@ -1374,12 +1393,12 @@ impl OAuthProvider {
             .code
             .ok_or_else(|| OAuthError::AuthFailed("No authorization code received".to_string()))?;
 
-        // Verify state
-        if let Some(returned_state) = result.state
-            && returned_state != state
-        {
-            warn!("MCP OAuth: state mismatch (possible CSRF)");
-        }
+        // Verify state (OAuth 2.0 §4.1.2.1). A mismatch is a failed CSRF check
+        // and MUST abort the flow: the code belongs to a different request, so
+        // exchanging it would complete the attacker's authorization instead of
+        // this one. The old behavior (warn + continue) left the door open — the
+        // caller could not tell the check had been defeated.
+        verify_state(&state, result.state.as_deref())?;
 
         // Step 7: Exchange code for tokens
         let token = self
@@ -1847,6 +1866,37 @@ mod tests {
         let challenge1 = compute_code_challenge(&verifier);
         let challenge2 = compute_code_challenge(&verifier);
         assert_eq!(challenge1, challenge2);
+    }
+
+    // ── RT-608 (CORE-H8): the CSRF state check must REFUSE, not warn ──────────
+    #[test]
+    fn state_mismatch_is_refused() {
+        // The core defect: a callback whose state differs from the one this
+        // flow minted is a CSRF attempt (or a flow mixup). The old code warned
+        // and then exchanged the code anyway.
+        // `verify_state` returns `crate::Error`, which wraps OAuthError as
+        // `Error::Agent(String)` (see the From impl), so the assertion is on
+        // the message text.
+        let err = verify_state("expected-abc", Some("attacker-xyz"))
+            .expect_err("a mismatched state must be an error, not a warning");
+        let msg = err.to_string();
+        assert!(msg.contains("CSRF"), "got: {msg}");
+        assert!(msg.contains("attacker-xyz"), "got: {msg}");
+    }
+
+    #[test]
+    fn state_match_is_accepted() {
+        verify_state("expected-abc", Some("expected-abc"))
+            .expect("a matching state must pass");
+    }
+
+    #[test]
+    fn missing_state_is_refused() {
+        // A callback that dropped the state parameter is as unsafe as a wrong
+        // one; both are forged/truncated callbacks.
+        let err = verify_state("expected-abc", None)
+            .expect_err("a missing state must be an error");
+        assert!(err.to_string().contains("CSRF"), "got: {err}");
     }
 
     #[test]
