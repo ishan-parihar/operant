@@ -228,12 +228,24 @@ where
 /// The classifier reads the MESSAGE rather than the error type on purpose.
 /// memory-wire is a 0.x branch-tracking dependency, so its error enum can
 /// change shape under us; the strings are SQLite's own and do not.
+///
+/// `already exists` is matched TOGETHER WITH `trigger`, not alone. The bare
+/// substring is too wide: memory-wire's own `StoreError::DocumentConflict`
+/// displays as "document already exists; use update_mode=replace"
+/// (memory-wire api.rs:137), which contains it. A 409 DocumentConflict is
+/// PERMANENT -- the document has one current revision and asking to add to it
+/// is neither replacing it nor naming a different one -- so matching the bare
+/// substring classified it transient and retried a permanent failure 5x with
+/// 50/100/200/400/800ms of blocking sleep before degrading to a miss. Both
+/// `retain_fact` and `retain_folded` reach that path, so every conflicting
+/// write paid ~1.55s. The migration collision this arm is FOR always names the
+/// trigger, so requiring both keeps the intended case and drops the false one.
 fn is_transient_store_message(message: &str) -> bool {
     let msg = message.to_lowercase();
     msg.contains("database is locked")
         || msg.contains("database table is locked")
         || msg.contains("database is busy")
-        || msg.contains("already exists")
+        || (msg.contains("trigger") && msg.contains("already exists"))
 }
 
 /// True when a `memory_wire` failure is one a concurrent process caused.
@@ -1707,6 +1719,34 @@ mod persistence_tests {
         // … and the two that will never clear on their own.
         assert!(!is_transient_store_message("unknown bank"));
         assert!(!is_transient_store_message("invalid content"));
+    }
+
+    /// The memory-wire crate's OWN conflict is permanent, and its message
+    /// contains the substring the migration-collision arm matches on.
+    ///
+    /// `StoreError::DocumentConflict` displays as "document already exists;
+    /// use update_mode=replace" (memory-wire api.rs:137). Matching the bare
+    /// `already exists` classified a 409 -- a PERMANENT condition -- as
+    /// transient, so `guard_retry` slept 50+100+200+400+800ms and then degraded
+    /// to a miss anyway. The regression this pins is the substring collision,
+    /// not the retry loop: the classifier must require `trigger` as well.
+    ///
+    /// MUTATION PROOF: widening the arm back to a bare
+    /// `msg.contains("already exists")` makes the DocumentConflict assertion
+    /// below fail (it becomes classified transient), while the migration
+    /// assertion still passes -- so the two are pinned independently.
+    #[test]
+    fn a_document_conflict_is_permanent_even_though_it_says_already_exists() {
+        let document_conflict = "document already exists; use update_mode=replace";
+        assert!(
+            !is_transient_store_message(document_conflict),
+            "a 409 DocumentConflict is permanent; classifying it transient costs 1.55s of blocking sleep per conflicting write"
+        );
+        // The migration collision the arm EXISTS for still has to match, or the
+        // narrowing would have traded one bug for another.
+        assert!(is_transient_store_message(
+            "trigger memories_ai already exists"
+        ));
     }
 
     #[test]
