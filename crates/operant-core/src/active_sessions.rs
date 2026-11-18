@@ -243,11 +243,19 @@ pub fn register_presence(session_id: &str, pid: u32) -> Result<(), String> {
     std::fs::write(presence_path(session_id), body.to_string()).map_err(|e| e.to_string())
 }
 
-/// Remove the presence record for `session_id`.
+/// Remove the presence record for `session_id`, but ONLY when this process
+/// wrote the record last.
 ///
 /// Called on a clean exit; an unclean exit leaves the record for
-/// `prune_dead_presence` to reclaim.
+/// `prune_dead_presence` to reclaim. Ownership is checked because two sessions
+/// that share one id race here otherwise: a stale TUI instance releasing the
+/// id after the live owner re-claimed it would delete the OWNER's record, and
+/// the session would look dead to every `operant continue` in the meantime
+/// (iter-2642). Returns whether a record this process owned was removed.
 pub fn unregister_presence(session_id: &str) -> bool {
+    if session_presence(session_id).map(|p| p.pid) != Some(std::process::id()) {
+        return false;
+    }
     std::fs::remove_file(presence_path(session_id)).is_ok()
 }
 
@@ -543,6 +551,27 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&home);
         out
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn unregister_leaves_another_processs_record_alone() {
+        // (iter-2642) A stale instance releasing an id the LIVE owner has
+        // re-claimed must not erase the owner's record: the session would then
+        // read dead to every `operant continue` until the owner re-claimed it.
+        with_presence_home(|_home| {
+            let foreign = std::process::id() + 100_000;
+            register_presence("sess-shared", foreign).expect("register a foreign record");
+            assert!(
+                !unregister_presence("sess-shared"),
+                "a record this process does not own is not its to remove"
+            );
+            assert_eq!(
+                session_presence("sess-shared").map(|p| p.pid),
+                Some(foreign),
+                "the foreign record must survive"
+            );
+        });
     }
 
     #[test]

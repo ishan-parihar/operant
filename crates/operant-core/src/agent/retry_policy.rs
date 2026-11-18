@@ -170,9 +170,21 @@ impl RetryPolicy {
             };
         }
         // The large span. The provider's own hint wins over our guess.
+        // The flat span is bounded by construction; a hint is bounded by the
+        // operator's ceiling, because the ceiling is only re-checked on the
+        // NEXT failure, so one honoured hint could otherwise park the turn
+        // past their span by the hint's whole length (iter-2642). With
+        // `max_span_secs == 0` (INFINITE) the hint wins outright — except
+        // against the flat span, so one malformed header cannot park a seat
+        // for an hour with no bound at all.
+        let own_span = Duration::from_secs(self.settings.large_span_secs.max(1));
+        let ceiling = match self.settings.max_span_secs {
+            0 => own_span,
+            max => Duration::from_secs(max).saturating_sub(elapsed),
+        };
         let delay = match retry_after {
-            Some(hint) if !hint.is_zero() => hint,
-            _ => Duration::from_secs(self.settings.large_span_secs.max(1)),
+            Some(hint) if !hint.is_zero() => hint.min(ceiling),
+            _ => own_span,
         };
         RetryDecision::Retry {
             delay,
@@ -329,6 +341,8 @@ mod tests {
 
     #[test]
     fn the_providers_retry_after_wins_over_the_flat_span() {
+        // A hint SHORTER than the flat span is honoured verbatim. (The hint's
+        // bound against the ceiling is `a_provider_hint_cannot_overshoot...`.)
         let p = policy(0, 300, 0);
         assert_eq!(
             p.next_delay(0, Duration::ZERO, Some(Duration::from_secs(2))),
@@ -348,6 +362,40 @@ mod tests {
             p.next_delay(0, Duration::ZERO, Some(Duration::ZERO)),
             RetryDecision::Retry {
                 delay: Duration::from_secs(300),
+                announced: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_provider_hint_cannot_overshoot_the_remaining_ceiling() {
+        // (iter-2642) The ceiling used to bound only the DECISION: at
+        // elapsed 59s of a 60s span, an hour-long hint was slept whole.
+        let p = policy(0, 300, 60);
+        assert_eq!(
+            p.next_delay(1, Duration::from_secs(59), Some(Duration::from_secs(3600))),
+            RetryDecision::Retry {
+                delay: Duration::from_secs(1),
+                announced: true,
+            }
+        );
+        assert!(matches!(
+            p.next_delay(2, Duration::from_secs(60), Some(Duration::from_secs(3600))),
+            RetryDecision::Stop { .. }
+        ));
+    }
+
+    #[test]
+    fn an_infinite_ceiling_caps_a_hostile_hint_at_the_flat_span() {
+        // max_span_secs == 0 is documented INFINITE, which is not the same as
+        // "sleep one hour because a header said so": with no ceiling of the
+        // operator's to honour, the hint is still capped at the ladder's own
+        // flat span.
+        let p = policy(0, 30, 0);
+        assert_eq!(
+            p.next_delay(1, Duration::ZERO, Some(Duration::from_secs(3600))),
+            RetryDecision::Retry {
+                delay: Duration::from_secs(30),
                 announced: true,
             }
         );

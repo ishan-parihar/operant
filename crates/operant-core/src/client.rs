@@ -745,11 +745,12 @@ impl OpenAIClient {
                     .drain_bucket(&self.limiter_key(model))
                     .await;
                 if attempt < max_attempts {
-                    let retry_after = retry_after_hdr.unwrap_or_else(|| {
-                        Duration::from_secs(exponential_backoff_secs(
-                            attempt, base_delay, max_delay,
-                        ))
-                    });
+                    let retry_after =
+                        retry_after_hdr.filter(|d| !d.is_zero()).unwrap_or_else(|| {
+                            Duration::from_secs(exponential_backoff_secs(
+                                attempt, base_delay, max_delay,
+                            ))
+                        });
                     warn!(
                         model = %model,
                         attempt,

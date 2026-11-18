@@ -540,6 +540,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_retry_after_zero_and_past_dates_are_the_zero_hint() {
+        // (iter-2642) Both of these produce `Some(Duration::ZERO)`, which the
+        // transport MUST treat as "no usable hint" — the parser's contract is
+        // pinned here so the transport's `.filter(|d| !d.is_zero())` has a
+        // stated input, not an assumed one.
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_static("0"),
+        );
+        assert_eq!(parse_retry_after_header(&headers), Some(Duration::ZERO));
+
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc2822();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_str(&past).expect("a date header value"),
+        );
+        assert_eq!(parse_retry_after_header(&headers), Some(Duration::ZERO));
+    }
+
+    #[test]
     fn parse_retry_after_missing_returns_none() {
         let headers = reqwest::header::HeaderMap::new();
         assert!(parse_retry_after_header(&headers).is_none());
