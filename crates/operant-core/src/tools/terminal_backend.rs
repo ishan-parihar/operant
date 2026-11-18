@@ -63,6 +63,21 @@ pub(crate) fn is_secret_env_var(name: &str) -> bool {
     SECRET_ENV_FRAGMENTS.iter().any(|frag| upper.contains(frag))
 }
 
+/// The largest char boundary at or below `cap`, clamped to `text.len()`.
+///
+/// The output cap is a BYTE budget and the output is arbitrary child-process
+/// text — CJK, emoji, any non-ASCII. `&text[..cap]` PANICS when `cap` lands
+/// inside a multibyte character, and the caller supplies `cap` per call, so
+/// the caller chooses where the cut lands. Every truncation site goes through
+/// here instead of slicing.
+fn truncate_at_char_boundary(text: &str, cap: usize) -> usize {
+    let mut idx = cap.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 /// Build the environment a spawned command runs with: the parent environment
 /// minus credential-bearing variables, plus the caller-supplied overrides.
 ///
@@ -173,7 +188,10 @@ impl TerminalBackend for LocalBackend {
                     stdout_output.push('\n');
                 } else if stdout_output.len() < max_output {
                     let remaining = max_output - stdout_output.len();
-                    stdout_output.push_str(&line[..remaining.min(line.len())]);
+                    // The cap is a BYTE budget and the line is arbitrary child
+                    // output, so `remaining` can land inside a multibyte char.
+                    let cut = truncate_at_char_boundary(&line, remaining.min(line.len()));
+                    stdout_output.push_str(&line[..cut]);
                     stdout_output.push_str("\n[output truncated]");
                 } else {
                     stdout_output.push_str("\n[output truncated]");
@@ -355,12 +373,14 @@ impl TerminalBackend for DockerBackend {
 
         // Truncate output
         let stdout = if stdout.len() > max_output {
-            format!("{}...[truncated]", &stdout[..max_output])
+            let cut = truncate_at_char_boundary(&stdout, max_output);
+            format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout
         };
         let stderr = if stderr.len() > max_output / 4 {
-            format!("{}...[truncated]", &stderr[..max_output / 4])
+            let cut = truncate_at_char_boundary(&stderr, max_output / 4);
+            format!("{}...[truncated]", &stderr[..cut])
         } else {
             stderr
         };
@@ -519,12 +539,14 @@ impl TerminalBackend for SshBackend {
 
         // Truncate output
         let stdout = if stdout.len() > max_output {
-            format!("{}...[truncated]", &stdout[..max_output])
+            let cut = truncate_at_char_boundary(&stdout, max_output);
+            format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout
         };
         let stderr = if stderr.len() > max_output / 4 {
-            format!("{}...[truncated]", &stderr[..max_output / 4])
+            let cut = truncate_at_char_boundary(&stderr, max_output / 4);
+            format!("{}...[truncated]", &stderr[..cut])
         } else {
             stderr
         };
@@ -722,6 +744,73 @@ mod tests {
         assert_eq!(
             merged.get("API_KEY").map(String::as_str),
             Some("explicitly-passed")
+        );
+    }
+
+    /// RED-TEAM iter-2502: a byte cap must not slice a UTF-8 string mid-char.
+    ///
+    /// `&stdout[..max_output]` PANICS when the cut lands inside a multibyte
+    /// character, and the output is arbitrary child-process bytes — CJK, emoji,
+    /// any non-ASCII text. A panic here replaces the tool result with a crash
+    /// of the whole turn. `max_output` is caller-supplied per call, so the
+    /// caller chooses where the cut lands.
+    #[test]
+    fn an_output_cap_that_lands_mid_char_does_not_panic() {
+        // 3-byte CJK chars; 4 lands inside the second character.
+        let stdout = "你好世界".to_string();
+        let cap = 4usize;
+        assert!(
+            !stdout.is_char_boundary(cap),
+            "the fixture must cut mid-char"
+        );
+
+        let cut = truncate_at_char_boundary(&stdout, cap);
+        assert!(
+            stdout.is_char_boundary(cut),
+            "the returned index must be a boundary"
+        );
+        assert_eq!(&stdout[..cut], "你", "the cut keeps whole characters only");
+        assert!(
+            cut <= cap,
+            "truncation never grows the string (got {cut} > {cap})"
+        );
+    }
+
+    /// A cap at or past the end is a no-op, and a cap of 0 cuts everything.
+    #[test]
+    fn an_output_cap_at_or_past_the_end_is_a_no_op() {
+        let text = "ascii";
+        assert_eq!(truncate_at_char_boundary(text, 100), text.len());
+        assert_eq!(truncate_at_char_boundary(text, text.len()), text.len());
+        assert_eq!(truncate_at_char_boundary(text, 0), 0);
+        assert_eq!(truncate_at_char_boundary("你好", 0), 0);
+    }
+
+    /// RED-TEAM iter-2502: the DEFAULT backend must survive a cap that lands
+    /// inside a multibyte character, not just the docker/ssh truncators.
+    ///
+    /// This is the local backend's own line-slicing site, reached with no
+    /// docker and no ssh: `stdout_output.push_str(&line[..remaining])` where
+    /// `remaining` is a byte budget. One CJK line plus a cap that falls inside
+    /// it used to panic the whole turn.
+    #[tokio::test]
+    async fn the_local_backend_survives_a_cap_that_lands_mid_char() {
+        let backend = LocalBackend;
+        // 10 ASCII bytes, then 3-byte CJK: byte index 11 (cap 12) is INSIDE the
+        // first CJK character, and 10 + 24 = 34 bytes exceeds the cap so the
+        // slicing branch is the one that runs.
+        let command = "printf 'aaaaaaaaaa你好世界'".to_string();
+        let env_vars = HashMap::new();
+
+        let out = backend
+            .execute_command(&command, None, &env_vars, true, Duration::from_secs(10), 12)
+            .await
+            .expect("a mid-char cap must not panic or error");
+
+        assert!(
+            out.stdout.contains("[output truncated]"),
+            "the cap must bite: {:?}",
+            out.stdout
         );
     }
 
