@@ -2483,6 +2483,15 @@ impl Database {
     ) -> Result<Vec<SessionSearchResult>> {
         let conn = self.lock_conn()?;
 
+        // Escape at THE bind, the same rule `search_messages_fts5` follows and
+        // for the same reason: FTS5's MATCH grammar treats `"`, `*`, `:`, `-`,
+        // `(`, `)` and the bare keywords as SYNTAX, so a quoted phrase from a
+        // model is a PARSE ERROR here and this method returns `Err` all the way
+        // to the tool, which reports "Database search failed". An unescaped
+        // bind is reachable from `session_search` and from
+        // `operant sessions search`.
+        let fts_query = Self::escape_fts5_query(query);
+
         // Use FTS5 to find matching messages, join to get session info.
         // `m.id` rides along so callers can open a message window around the
         // match (scroll mode) without a second FTS pass.
@@ -2499,7 +2508,7 @@ impl Database {
             .map_err(|e| Error::Agent(format!("Failed to prepare search: {}", e)))?;
 
         let rows = stmt
-            .query_map(params![query, role, limit], |row| {
+            .query_map(params![fts_query.as_str(), role, limit], |row| {
                 Ok(SessionSearchResult {
                     message_id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -5148,6 +5157,92 @@ mod tests {
         }
         let results = db.search_sessions("alpha", 3).unwrap();
         assert!(results.len() <= 3);
+    }
+
+    /// RED-TEAM iter-2502: the SESSION search path must escape its FTS5 query.
+    ///
+    /// `search_messages_fts` escapes at the bind (`escape_fts5_query`) precisely
+    /// because a raw quote is an FTS5 PARSE ERROR and the caller silently
+    /// degraded to a LIKE substring match. `search_sessions_filtered` — the
+    /// other MATCH site, reached from `session_search` and from
+    /// `operant sessions search` — bound the caller's string VERBATIM, so the
+    /// same malformed phrase errored there and the tool returned
+    /// "Database search failed" instead of an answer.
+    #[test]
+    fn a_session_search_with_an_unterminated_quote_does_not_error() {
+        let db = test_db();
+        db.save_message(
+            "test-session",
+            "user",
+            "quick brown fox",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message("test-session", "user", "fox bears", "2024-01-01T00:00:01Z")
+            .unwrap();
+
+        // The same malformed phrase the message-search regression uses: an
+        // unterminated quote plus a trailing backslash.
+        let results = db
+            .search_sessions("quick \"brown\\", 10)
+            .expect("a malformed FTS phrase must not fail the session search");
+        assert_eq!(
+            results.len(),
+            1,
+            "the escaped phrase should match one message, got {}: {:?}",
+            results.len(),
+            results
+                .iter()
+                .map(|r| r.content.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(results[0].content.contains("quick brown"));
+    }
+
+    /// The escape must make the query LITERAL, not merely non-erroring.
+    ///
+    /// `escape_fts5_query` wraps the whole query in quotes, so an FTS operator
+    /// inside the caller's string must stop acting as an operator. MEASURED on
+    /// this schema (unicode61 tokenizer): for a corpus holding "fox and bears
+    /// together", a raw bind of `fox NOT zzz` returns 1 row (it parses as
+    /// `fox AND NOT zzz`), while the escaped bind returns 0 (the literal phrase
+    /// "fox NOT zzz" appears nowhere). The two therefore differ in SILENT
+    /// WRONGNESS, not only in erroring -- which is why the unterminated-quote
+    /// case alone does not pin this method: it proves the error path, not the
+    /// literal-phrase path.
+    ///
+    /// `fox NOT bears` deliberately is NOT used here: measured, both binds
+    /// return 0 rows, so it discriminates nothing.
+    #[test]
+    fn a_session_search_treats_an_operator_as_text_not_syntax() {
+        let db = test_db();
+        db.save_message(
+            "test-session",
+            "user",
+            "fox and bears together",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        db.save_message(
+            "test-session",
+            "user",
+            "nothing here",
+            "2024-01-01T00:00:01Z",
+        )
+        .unwrap();
+
+        let results = db
+            .search_sessions("fox NOT zzz", 10)
+            .expect("an operator-carrying phrase must not fail the session search");
+        assert_eq!(
+            results.len(),
+            0,
+            "`fox NOT zzz` is one literal phrase and matches no row; unescaped it parses as `fox AND NOT zzz` and returns the fox row: {:?}",
+            results
+                .iter()
+                .map(|r| r.content.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     // === Event filtering ===
