@@ -460,8 +460,44 @@ shipped — the record simply has more steps to skip).
 - Nothing yet. This plan is published at iter-2642; the first tranche (T2) is the first
   iteration that will append here.
 
-**Open:** T1, T2, T3, T4, T5.
+**Open:** T1, T2, T3, T4, T5. Amendment 1 (end of file) narrows T5: its lock
+clause is already on main and its blocking-vs-non-blocking choice must be settled
+first.
 
 Start at T2. `research/audits/context-pack-2026-11-18-onboarding-round1/RESPONSE.md`
 holds the review's 18 breaks with the evidence for each; this plan's table above is the
 response contract.
+---
+
+## Amendment 1 (iter-2648) — T5's lock clause is partly satisfied, and not as specified
+
+Appended rather than edited: the plan body above is dated-frozen. Every claim
+here was re-read from the working tree at `452b9d26`, not from memory.
+
+1. **T5's `flock` in `persist_config_key_at` ALREADY EXISTS on `main`**
+   (`crates/operant-core/src/config.rs`, `ConfigWriteLock::acquire` plus
+   `unique_tmp_path`, both landed in iter-2646 with
+   `two_concurrent_writers_keep_both_keys` as the pin). T5 must NOT add a second
+   one: a second lock file would guard a different path than the writer the
+   gateway uses.
+2. **But the shipped lock is BLOCKING, and this plan specifies NON-BLOCKING.**
+   The plan says "Lock acquisition is non-blocking: a contended write fails with
+   a clear 'another process is writing operant.toml, retry'". The shipped
+   `lock_file_exclusive` calls `flock(LOCK_EX)` with no `LOCK_NB`, so a
+   contended write WAITS instead of failing. Neither behaviour is wrong on its
+   own (waiting is arguably better for a wizard), but they are different
+   contracts, and the plan's contended-write test asserts the failure text.
+   **Decide before T5:** either amend this plan to the waiting contract and
+   rewrite that test as "a contended write succeeds once the peer finishes", or
+   change the shipped lock to `LOCK_EX | LOCK_NB` with the retry message.
+3. **T5's remaining scope is therefore narrower than the plan's table states:**
+   the version-keyed onboarding record inside `Settings`, the silent resume, the
+   `--fresh` flag, and the gate condition. The lock work is not T5's.
+4. **The plan's Gates section overstates the lint baseline.** "cargo clippy …
+   -D warnings — clean" was never true of this tree; measured at `452b9d26` the
+   workspace gate reports 39 warnings against an empty allowlist. Use the gate
+   script's exit code as the gate, not `-D warnings` on the crates.
+5. **The genome-lint baseline moved.** The plan records "10 errors / 3 warnings".
+   Re-derive before claiming no regression:
+   `./scripts/genome lint` — and compare only against categories a tranche can
+   affect, because the pre-existing set is peer-owned.

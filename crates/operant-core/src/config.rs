@@ -4475,53 +4475,6 @@ fn apply_path_override_dual(operant: &str, legacy: &str, target: &mut PathBuf) -
     Ok(())
 }
 
-fn apply_u64_override(name: &str, target: &mut u64) -> Result<()> {
-    if let Some(value) = read_env(name) {
-        *target = value.parse().map_err(|_| {
-            Error::Config(format!(
-                "Environment variable '{}' must be an unsigned integer.",
-                name
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn apply_usize_override(name: &str, target: &mut usize) -> Result<()> {
-    if let Some(value) = read_env(name) {
-        *target = value.parse().map_err(|_| {
-            Error::Config(format!(
-                "Environment variable '{}' must be an unsigned integer.",
-                name
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn apply_bool_override(name: &str, target: &mut bool) -> Result<()> {
-    if let Some(value) = read_env(name) {
-        *target = match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => true,
-            "0" | "false" | "no" | "off" => false,
-            _ => {
-                return Err(Error::Config(format!(
-                    "Environment variable '{}' must be a boolean.",
-                    name
-                )));
-            }
-        };
-    }
-    Ok(())
-}
-
-fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
-    if let Some(value) = read_env(name) {
-        *target = PathBuf::from(value);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod rt418_tests {
     /// RT-418: the config write's mode round-trip was documented as

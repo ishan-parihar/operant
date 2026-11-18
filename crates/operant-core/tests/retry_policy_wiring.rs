@@ -39,24 +39,14 @@ use operant_core::tools::ToolRegistry;
 struct FlakyClient {
     counter: Arc<AtomicUsize>,
     failures: usize,
-    /// The turn's wall clock, injected so a test can make the WALL CLOCK the
-    /// binding constraint instead of the policy's ceiling. Without this the
-    /// default 20-minute wall clock never fires and a test cannot tell which
-    /// bound stopped the ladder.
-    wall_clock_secs: u64,
 }
 
 impl FlakyClient {
     fn new(failures: usize) -> (Self, Arc<AtomicUsize>) {
-        Self::with_wall(failures, 20 * 60)
-    }
-
-    fn with_wall(failures: usize, wall_clock_secs: u64) -> (Self, Arc<AtomicUsize>) {
         let counter = Arc::new(AtomicUsize::new(0));
         let client = Self {
             counter: counter.clone(),
             failures,
-            wall_clock_secs,
         };
         (client, counter)
     }

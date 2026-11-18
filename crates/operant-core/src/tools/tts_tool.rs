@@ -109,12 +109,14 @@ const GEMINI_DEFAULT_VOICE: &str = "Kore";
 /// payload is an error rather than silently-truncated audio.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     s.as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| {
             let hi = (pair[0] as char).to_digit(16)?;
             let lo = (pair[1] as char).to_digit(16)?;
             Some(((hi << 4) | lo) as u8)
@@ -591,18 +593,14 @@ impl TtsTool {
             .get("base_resp")
             .and_then(|b| b.get("status_code"))
             .and_then(Value::as_i64)
+            && code != 0
         {
-            if code != 0 {
-                let msg = result
-                    .get("base_resp")
-                    .and_then(|b| b.get("status_msg"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("no message");
-                return ToolResult::error(
-                    "text_to_speech",
-                    format!("MiniMax API error {code}: {msg}"),
-                );
-            }
+            let msg = result
+                .get("base_resp")
+                .and_then(|b| b.get("status_msg"))
+                .and_then(Value::as_str)
+                .unwrap_or("no message");
+            return ToolResult::error("text_to_speech", format!("MiniMax API error {code}: {msg}"));
         }
 
         // With `output_format: "hex"` the payload is hex-encoded, not base64.

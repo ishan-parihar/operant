@@ -334,13 +334,12 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     // so a live session and a backfilled legacy row agree on what "the first
     // prompt" means.
     let first_prompt = effective_query.trim();
-    if !first_prompt.is_empty() {
-        if let Err(e) = agent
+    if !first_prompt.is_empty()
+        && let Err(e) = agent
             .database
             .set_session_first_prompt(&session_id, first_prompt)
-        {
-            warn!(error = %e, "Failed to stamp session first prompt");
-        }
+    {
+        warn!(error = %e, "Failed to stamp session first prompt");
     }
 
     // Persist user message

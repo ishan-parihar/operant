@@ -23,9 +23,11 @@
 //!    is the message importance (0-1). No LLM calls — pure deterministic
 //!    truncation.
 //!
-//! 3. **Token estimation** (`estimate_tokens`): char-count / 4 heuristic
-//!    (CJK-aware via the iter-18 fix). This is a placeholder until a
-//!    real tokenizer (tiktoken-rs) is wired in.
+//! 3. **Token estimation** (`estimate_tokens`): a weighted character count
+//!    (ASCII / 4, CJK and other full-width scripts / 1). Measured against
+//!    real tokenizers it is close for both, and it is what the eviction
+//!    thresholds read. A real tokenizer (tiktoken-rs) would be exact; the
+//!    weighted count is the honest substitute until one is wired in.
 
 use crate::client::{Message, Role};
 
@@ -33,16 +35,40 @@ use crate::client::{Message, Role};
 // Token estimation
 // ---------------------------------------------------------------------------
 
-/// Estimate the token count of a string. Uses char-count / 4 (CJK-aware
-/// since iter-18 switched from byte count). This is a rough heuristic —
-/// a real tokenizer (tiktoken-rs) would be more accurate but adds a
-/// dependency. The heuristic is good enough for budgeting decisions
-/// (eviction thresholds), not for exact billing.
+/// Estimate the token count of a string from its characters, weighted by
+/// script.
+///
+/// `div_ceil(4)` on the CHARACTER count was the standard ENGLISH heuristic
+/// wearing the label "CJK-aware" (iter-2648, audit finding 13). Switching
+/// iter-18 from bytes to chars fixed the English case and left the CJK case
+/// FOUR TIMES too low: a CJK character is roughly one token, not a quarter.
+/// Eviction reads this number, so a CJK-heavy context passed the budget and
+/// still overflowed at the provider.
+///
+/// ASCII stays at /4 (the long-standing English behaviour, unchanged for
+/// every existing caller). A character outside ASCII counts as one token:
+/// that covers CJK ideographs, Hangul, Hiragana/Katakana and full-width
+/// punctuation, which a tokenizer splits to roughly one token apiece and
+/// sometimes to two. It can still under-count a non-ASCII script that packs
+/// more than a token per character, which is what the marker
+/// `approximate:` below names.
+///
+/// approximate: this is a heuristic, not a tokenizer. It is good enough to
+/// decide eviction thresholds and to display a budget, and it is NOT exact
+/// billing. Tradeoff taken deliberately rather than adding a tokenizer
+/// dependency; the hard-cap guard and the learned-limit path remain the
+/// backstop for a provider whose real count runs higher.
 pub fn estimate_tokens(text: &str) -> usize {
-    // char count / 4 is the standard heuristic for English text.
-    // For CJK text each char is ~1 token, so the heuristic overestimates
-    // for English and underestimates for CJK — acceptable for budgeting.
-    text.chars().count().div_ceil(4)
+    let mut ascii = 0usize;
+    let mut wide = 0usize;
+    for ch in text.chars() {
+        if ch.is_ascii() {
+            ascii += 1;
+        } else {
+            wide += 1;
+        }
+    }
+    ascii.div_ceil(4) + wide
 }
 
 /// The aggregate ceiling on the tool-output share of an assembled context.
@@ -2482,6 +2508,32 @@ mod tests {
         assert_eq!(estimate_tokens("hello world"), 3); // 11 chars / 4 = 2.75 -> 3
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("a"), 1); // 1 char / 4 = 0.25 -> 1 (rounded up)
+    }
+
+    /// (iter-2648, audit finding 13) The old formula was `chars/4` and the doc
+    /// called it CJK-aware. A CJK character is about ONE token, so a CJK-heavy
+    /// context was counted four times too small, passed the eviction budget,
+    /// and still overflowed at the provider. Eviction reads this number.
+    #[test]
+    fn estimate_tokens_counts_cjk_at_about_one_token_per_character() {
+        // 8 Han characters: ~8 tokens, not 8/4 = 2.
+        let han = "上下文管理是重要的";
+        assert_eq!(han.chars().count(), 9);
+        assert_eq!(
+            estimate_tokens(han),
+            9,
+            "each CJK character is about one token; chars/4 counted this string as 3"
+        );
+        // Mixed text: ASCII at /4 and wide characters at 1, summed.
+        let mixed = "hi 世界";
+        // "hi " is 3 ASCII -> ceil(3/4) = 1, plus two wide characters = 3.
+        // chars/4 counted the whole string as 2.
+        assert_eq!(estimate_tokens(mixed), 1 + 2);
+        // Hangul and Kana are wide too.
+        assert!(estimate_tokens("한국어") >= 3);
+        assert!(estimate_tokens("ひらがな") >= 4);
+        // ASCII is unchanged for every existing caller.
+        assert_eq!(estimate_tokens("hello world"), 3);
     }
 
     #[test]

@@ -1091,11 +1091,10 @@ mod tests {
     fn a_file_that_only_shares_a_prefix_is_not_denied() {
         // The parent is NOT a denied directory, and the name merely continues
         // past the denied prefix with an identifier character.
-        for allowed in ["/home/u/notes/id_rsa_notes.txt"] {
-            validate_path(allowed).unwrap_or_else(|e| {
-                panic!("{allowed} only shares a prefix and must not be denied: {e}")
-            });
-        }
+        let allowed = "/home/u/notes/id_rsa_notes.txt";
+        validate_path(allowed).unwrap_or_else(|e| {
+            panic!("{allowed} only shares a prefix and must not be denied: {e}")
+        });
     }
 
     /// The canonical name still matches through the pre-existing arms; this

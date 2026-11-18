@@ -91,7 +91,9 @@ pub mod gateway_pipeline;
 pub mod harness_slots;
 pub mod herdr;
 pub mod terminal_hints;
-pub use gateway_pipeline::{HookContext, HookEvent, HookRegistry, MessagePipeline, PipelineAction};
+pub use gateway_pipeline::{
+    HookContext, HookEvent, HookGeneration, HookRegistry, MessagePipeline, PipelineAction,
+};
 pub mod fs_secrets;
 pub mod gateway_session;
 pub mod harness_adapters;

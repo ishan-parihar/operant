@@ -363,7 +363,7 @@ impl HomeAssistantTool {
     /// Returns full state including all attributes, last_changed, and last_updated.
     async fn handle_get_state(&self, args: &Value) -> ToolResult {
         // Both spellings; see `requested_entity`.
-        let entity_id = match Self::requested_entity(&args) {
+        let entity_id = match Self::requested_entity(args) {
             Some(e) => e,
             None => {
                 return ToolResult::error("ha_get_state", "Missing required parameter: entity_id");
@@ -657,7 +657,7 @@ impl HomeAssistantTool {
 
         // Validate entity_id if provided. See `requested_entity` for why both
         // spellings are read there.
-        let entity_id = Self::requested_entity(&args);
+        let entity_id = Self::requested_entity(args);
         if let Some(eid) = entity_id
             && !ENTITY_ID_RE.is_match(eid)
         {

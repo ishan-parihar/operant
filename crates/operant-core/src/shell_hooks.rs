@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::gateway_pipeline::{HookContext, HookEvent, HookRegistry};
+use crate::gateway_pipeline::{HookContext, HookEvent, HookGeneration, HookRegistry};
 
 /// The events a shell hook may fire on, with the names the CLI and the
 /// files use. The list is the contract: every name here is emitted by the
@@ -228,10 +228,26 @@ pub async fn run_hook_command(
     }
 }
 
+/// The registry tag every handler this module registers carries, so a
+/// reload can remove exactly the previous install's handlers and nothing
+/// else. The registry holds the tag; this constant is its definition, and
+/// `gateway_pipeline::HookGeneration::ShellHooks` resolves to it — one
+/// owner for the string, no second literal to drift.
+pub const SHELL_HOOK_OWNER: &str = "shell-hooks";
+
 /// The production wiring: load the operator's hooks from the hooks
-/// directory and register them. The agent build calls this; a broken file
-/// is reported and skipped, never fatal.
+/// directory and register them, REPLACING whatever a previous install
+/// registered.
+///
+/// This used to only push (`gateway_pipeline.rs:193`, nothing removed), so
+/// the registry had no generation seam at all and a second call ran every
+/// hook command twice per emitted event (audit 2026-11-18, finding 6).
+/// `install_shell_hooks` is therefore idempotent: call it as often as the
+/// agent core is rebuilt, and each hook runs once per event.
+///
+/// A broken file is reported and skipped, never fatal.
 pub async fn install_shell_hooks(registry: &HookRegistry) -> usize {
+    registry.clear_generation(HookGeneration::ShellHooks);
     let (hooks, problems) = load_shell_hooks(&hooks_dir());
     for problem in &problems {
         tracing::warn!(
@@ -245,8 +261,10 @@ pub async fn install_shell_hooks(registry: &HookRegistry) -> usize {
     count
 }
 
-/// Register the hooks on a registry. Each hook runs on its own event; a
-/// failing command is reported and never breaks the agent loop.
+/// Register the hooks on a registry, under the shell-hook generation, so
+/// [`install_shell_hooks`] replaces rather than accumulates. Each hook runs
+/// on its own event; a failing command is reported and never breaks the
+/// agent loop.
 pub async fn register_shell_hooks(registry: &HookRegistry, hooks: Vec<(String, ShellHook)>) {
     for (name, hook) in hooks {
         let Some(event) = hook.hook_event() else {
@@ -284,8 +302,20 @@ pub async fn register_shell_hooks(registry: &HookRegistry, hooks: Vec<(String, S
                 }
             })
         });
-        registry.register(event, handler).await;
+        registry
+            .register_generation(HookGeneration::ShellHooks, event, handler)
+            .await;
     }
+}
+
+/// Remove the handlers a previous [`install_shell_hooks`] registered.
+/// Returns how many went.
+///
+/// Call it before a RELOAD if the reload does not go through
+/// `install_shell_hooks` itself; `install_shell_hooks` already calls it, so
+/// a caller that reloads by re-installing does not need to.
+pub fn clear_shell_hooks(registry: &HookRegistry) -> usize {
+    registry.clear_generation(HookGeneration::ShellHooks)
 }
 
 use std::sync::Arc;
@@ -454,5 +484,181 @@ mod tests {
         assert_eq!(status, Some(3));
         CALLS.fetch_add(1, Ordering::SeqCst);
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    /// A scratch directory + marker for one test, cleaned up by the caller.
+    fn hook_scratch_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("operant-shell-hooks-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the scratch hooks dir");
+        dir
+    }
+
+    /// Wait for a spawned hook handler to append its line, or fail.
+    async fn wait_for_lines(path: &Path, want: usize) -> String {
+        let mut waited = 0;
+        loop {
+            let seen = std::fs::read_to_string(path).unwrap_or_default();
+            if seen.lines().count() >= want {
+                return seen;
+            }
+            assert!(
+                waited < 200,
+                "timed out waiting for {want} run(s): {seen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            waited += 1;
+        }
+    }
+
+    /// FINDING 6 (audit 2026-11-18). `install_shell_hooks` used to PUSH and
+    /// nothing ever removed, so a second install left two copies of every
+    /// handler on the registry and `emit` — which clones and fires every
+    /// match — ran the command TWICE per event. The seam is
+    /// `register_generation` + `clear_generation`, and `install_shell_hooks`
+    /// now clears the previous shell-hook generation before registering.
+    ///
+    /// A reload is not reachable today (`main.rs` installs once per
+    /// process) — this pins the seam itself, so the day a reload lands it
+    /// cannot silently double every hook command.
+    #[tokio::test]
+    async fn installing_twice_runs_a_hook_command_exactly_once_per_event() {
+        let dir = hook_scratch_dir("reload");
+        let marker = dir.join("marker");
+        let command = format!("echo fired >> {}", marker.display());
+        write_shell_hook(&dir, "counted", "agent_end", &command).expect("write");
+
+        // `install_shell_hooks` reads the REAL hooks directory, so the
+        // process home has to point at this scratch tree for the test's
+        // lifetime (`test_env_lock` keeps parallel tests out of it).
+        let _guard = crate::platform::test_env_lock().await;
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join("data").join("hooks")).expect("create the home");
+        std::fs::write(
+            home.join("data").join("hooks").join("counted.hook"),
+            serde_json::to_string(&ShellHook {
+                event: "agent_end".to_string(),
+                command: command.clone(),
+            })
+            .expect("serialise"),
+        )
+        .expect("write the installed hook");
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+
+        let registry = HookRegistry::new();
+        assert_eq!(install_shell_hooks(&registry).await, 1);
+        assert_eq!(registry.len(), 1, "one usable file, one handler");
+        assert_eq!(install_shell_hooks(&registry).await, 1);
+        assert_eq!(
+            registry.len(),
+            1,
+            "the second install REPLACED the generation instead of pushing a second copy"
+        );
+
+        registry.emit(HookEvent::AgentEnd, HookContext::new()).await;
+        // Let any SURVIVING duplicate land too: the count is what fails.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let seen = wait_for_lines(&marker, 1).await;
+        assert_eq!(
+            seen.lines().count(),
+            1,
+            "one emitted event must run the command once: {seen:?}"
+        );
+
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A reset is scoped to the generation that asked for it. The registry
+    /// also carries ANONYMOUS registrations — `operant-cli` bridges the
+    /// kernel hook slot through `HookRegistry::register` — and a clear that
+    /// swept those would mute the kernel for the rest of the process. So a
+    /// second registration path has to survive a shell-hook reload.
+    #[tokio::test]
+    async fn a_concurrently_registered_non_shell_hook_survives_the_reset() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static OTHER_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+        let dir = hook_scratch_dir("scope");
+
+        // `install_shell_hooks` reads the REAL hooks directory, so the
+        // process home points at this scratch tree for the test's lifetime
+        // (`test_env_lock` keeps parallel tests out of it).
+        let _guard = crate::platform::test_env_lock().await;
+        let home = dir.join("home");
+        let hooks = home.join("data").join("hooks");
+        std::fs::create_dir_all(&hooks).expect("create the home");
+        std::fs::write(
+            hooks.join("scoped.hook"),
+            serde_json::to_string(&ShellHook {
+                event: "turn_end".to_string(),
+                // One line per run, so a duplicate handler is COUNTED and
+                // not merely visible.
+                command: format!("echo shell >> {}", dir.join("shell").display()),
+            })
+            .expect("serialise"),
+        )
+        .expect("write the installed hook");
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
+
+        let registry = HookRegistry::new();
+        // The other subsystem, registered the way the kernel bridge is:
+        // anonymously, through `register`.
+        registry
+            .register(
+                HookEvent::TurnEnd,
+                Arc::new(|_event, _ctx| {
+                    Box::pin(async {
+                        OTHER_RUNS.fetch_add(1, Ordering::SeqCst);
+                    })
+                }),
+            )
+            .await;
+
+        assert_eq!(install_shell_hooks(&registry).await, 1);
+        assert_eq!(registry.len(), 2, "the shell hook joined the existing one");
+
+        // The reload: the shell generation is cleared and re-registered.
+        assert_eq!(clear_shell_hooks(&registry), 1, "only the shell hook goes");
+        assert_eq!(
+            registry.len(),
+            1,
+            "the non-shell registration is still on the registry"
+        );
+        assert_eq!(install_shell_hooks(&registry).await, 1);
+        assert_eq!(registry.len(), 2);
+
+        registry.emit(HookEvent::TurnEnd, HookContext::new()).await;
+        // The shell hook's effect is a LINE in a file, so the duplicate
+        // count is read from the file; the other hook counts in memory.
+        let marker = dir.join("shell");
+        wait_for_lines(&marker, 1).await;
+        let mut waited = 0;
+        while OTHER_RUNS.load(Ordering::SeqCst) == 0 && waited < 200 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            waited += 1;
+        }
+        // Settle, so a double-fire is counted rather than merely visible.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            OTHER_RUNS.load(Ordering::SeqCst),
+            1,
+            "the reset must not have removed a concurrently-registered non-shell hook"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+            1,
+            "the reloaded shell hook runs exactly once"
+        );
+
+        unsafe { std::env::remove_var("HERMES_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

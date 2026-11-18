@@ -94,6 +94,21 @@ impl OperantTool for SendMessageTool {
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
+/// The parsed `send` arguments, borrowed from the tool input.
+///
+/// A named struct rather than a five-tuple: the tuple's fields were
+/// positional at both ends (the parse and the destructuring in
+/// `handle_send`), so a reader could not tell `media` from `message`
+/// without counting, and `clippy::type_complexity` was right that the
+/// signature had outgrown a tuple.
+struct SendArgs<'a> {
+    via: &'a str,
+    to: &'a str,
+    message: &'a str,
+    media: Option<&'a str>,
+    message_thread_id: Option<i64>,
+}
+
 impl SendMessageTool {
     // ── Action handlers ─────────────────────────────────────────────────────
 
@@ -112,9 +127,7 @@ impl SendMessageTool {
     /// forum-topic id silently, and a Telegram post then lands in the default
     /// topic instead of the requested one. Reading both here costs one line and
     /// makes this tool correct on its own.
-    fn parse_send_args(
-        args: &Value,
-    ) -> Result<(&str, &str, &str, Option<&str>, Option<i64>), String> {
+    fn parse_send_args<'a>(args: &'a Value) -> Result<SendArgs<'a>, String> {
         let via = args
             .get("via")
             .and_then(|v| v.as_str())
@@ -132,14 +145,27 @@ impl SendMessageTool {
             .get("message_thread_id")
             .or_else(|| args.get("messageThreadId"))
             .and_then(|v| v.as_i64());
-        Ok((via, to, message, media, message_thread_id))
+        Ok(SendArgs {
+            via,
+            to,
+            message,
+            media,
+            message_thread_id,
+        })
     }
 
     async fn handle_send(&self, args: Value) -> ToolResult {
-        let (via, to, message, media, message_thread_id) = match Self::parse_send_args(&args) {
+        let parsed = match Self::parse_send_args(&args) {
             Ok(parsed) => parsed,
             Err(missing) => return ToolResult::error("send_message", missing),
         };
+        let SendArgs {
+            via,
+            to,
+            message,
+            media,
+            message_thread_id,
+        } = parsed;
 
         match via {
             "telegram" => {
@@ -805,8 +831,9 @@ mod tests {
                 "message": "hello",
                 key: 9001
             });
-            let (_, _, _, _, thread_id) =
-                SendMessageTool::parse_send_args(&args).expect("all required fields present");
+            let thread_id = SendMessageTool::parse_send_args(&args)
+                .expect("all required fields present")
+                .message_thread_id;
             assert_eq!(
                 thread_id,
                 Some(9001),

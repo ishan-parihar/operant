@@ -1032,13 +1032,14 @@ fn handle_describe(config: &AppConfig, section: Option<String>, json: bool) -> R
         .unwrap_or(8)
         .max("KEY".len());
     println!(
-        "{:<kw$}  {:<vw$}  {}",
+        "{:<kw$}  {:<vw$}  {note_col}",
         "KEY",
         "VALUE",
-        "NOTE",
+        note_col = "NOTE",
         kw = key_width,
         vw = 24
     );
+
     println!("{}", "-".repeat(key_width + 2 + 24 + 2 + 40));
     for (key, value, note, non_default) in &rows {
         // A non-default row is marked, because the default rows are the
@@ -1047,7 +1048,7 @@ fn handle_describe(config: &AppConfig, section: Option<String>, json: bool) -> R
         println!(
             "{marker}{:<kw$}  {:<vw$}  {}",
             key,
-            truncate(&value, 24),
+            truncate(value, 24),
             truncate(note, 200),
             kw = key_width,
             vw = 24
@@ -1074,8 +1075,8 @@ fn handle_notes(key: &str) -> Result<()> {
             .iter()
             .map(|(k, _, _)| *k)
             .filter(|k| {
-                let a = k.split('.').last().unwrap_or(k);
-                let b = key.split('.').last().unwrap_or(key);
+                let a = k.rsplit('.').next().unwrap_or(k);
+                let b = key.rsplit('.').next().unwrap_or(key);
                 a.starts_with(b) || b.starts_with(a)
             })
             .collect();

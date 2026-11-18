@@ -33,13 +33,22 @@ scripts were run; the clippy gate result is finding 1.
 1. **The workspace lint gate is red on the live tip — 39 warnings against an
    empty allowlist.** `bash scripts/clippy-warning-gate.sh` (measured at
    `7b2d2530`, 1m32s) prints `seen=39 allowlist=0 new=39` and exits 1. `.ci/
-   clippy-allowlist.txt` is 0 bytes. `.github/workflows/ci.yml` pins
-   `cargo clippy … -- -D warnings`, so any run would be red. Attribution:
+   clippy-allowlist.txt` is 0 bytes. **Correction (iter-2648): the CI claim in
+   the first version of this finding was WRONG.** `.github/workflows/ci.yml`
+   does not pin `cargo clippy … -D warnings`; it runs
+   `bash scripts/clippy-warning-gate.sh` with `RUSTFLAGS=""` on purpose
+   (`ci.yml:66-90`), so CI asks exactly what the local gate asks. The real
+   defect is narrower and worse: with an EMPTY allowlist the gate's documented
+   contract (fail on NEW warnings, absorb pre-existing ones) has no baseline at
+   all, so every pre-existing warning is a "new" one and the only two outcomes
+   are red or a rebaseline that hides new ones too. Attribution:
    every `ui_tool.rs` / `ui/plain.rs` / `ui/request.rs` warning belongs to the
    Surface IR peer (open PR/branch, not fixable here); the remaining ~35 are
-   pre-existing on main. Fix: land the peer's UI work, then
-   `scripts/clippy-warning-gate.sh --update` once to rebaseline, and never
-   again to hide a new one.
+   pre-existing on main. Fix: fix the pre-existing ones in the code (not by
+   allowlisting), and write into the allowlist ONLY the peer-owned UI lines,
+   each with a reason, so the baseline exists and a NEW warning is once again
+   distinguishable from an old one. `--update` wholesale would absorb future
+   regressions and is the one thing not to do.
 
 2. **The audit ledger's index disagrees with its own checkboxes.**
    `scripts/audit-ledger-index.py` FAILs on main: `RT-555` is used by two index

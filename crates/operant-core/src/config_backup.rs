@@ -64,7 +64,7 @@ pub fn list(path: &Path) -> Vec<PathBuf> {
             Some((stamp, entry.path()))
         })
         .collect();
-    found.sort_by(|left, right| right.0.cmp(&left.0));
+    found.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     found.into_iter().map(|(_, path)| path).collect()
 }
 

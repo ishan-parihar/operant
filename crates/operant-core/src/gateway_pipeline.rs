@@ -174,7 +174,47 @@ pub type HookHandler = Arc<
 /// registry.emit(HookEvent::AgentStart, HookContext::new().with_session("s123")).await;
 /// ```
 pub struct HookRegistry {
-    handlers: Arc<RwLock<Vec<(HookEvent, HookHandler)>>>,
+    handlers: Arc<RwLock<Vec<HookRegistration>>>,
+}
+
+/// A registered handler plus the ownership tag it was registered under, if
+/// any. The tag is what makes a REGISTRATION removable while anonymous
+/// registrations stay anonymous: `register` pushes `owner: None`, and only
+/// the entries installed by a tagged registrar carry `Some(..)`.
+///
+/// An earlier design considered slot IDs (`register` returning a handle you
+/// call `unregister(handle)` with). That moves the bookkeeping onto every
+/// caller and gets it wrong the moment a caller forgets one — which is the
+/// exact failure this type exists to prevent. The tag is inferred from the
+/// REGISTRAR, so a caller that goes through the tracked path is tracked
+/// whether it remembers to be or not.
+struct HookRegistration {
+    pattern: HookEvent,
+    handler: HookHandler,
+    owner: Option<&'static str>,
+}
+
+/// Which registrars' handlers a generation reset removes.
+///
+/// [`HookRegistry::clear_generation`] takes this rather than a bare `&str` so
+/// that the nameless clears — the ones that would silently drop every hook in
+/// the process, shell or not — are not expressible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookGeneration {
+    /// The handlers a previous [`HookRegistry::register_generation`] call
+    /// installed, and only those. This is the shell-hook reload seam: it
+    /// replaces one generation's handlers without touching anything another
+    /// subsystem registered on the same registry.
+    ShellHooks,
+}
+
+impl HookGeneration {
+    /// The registry tag this generation owns.
+    fn tag(self) -> &'static str {
+        match self {
+            Self::ShellHooks => crate::shell_hooks::SHELL_HOOK_OWNER,
+        }
+    }
 }
 
 impl HookRegistry {
@@ -191,12 +231,69 @@ impl HookRegistry {
     /// Register a handler for a specific event. Supports wildcard matching
     /// for Command events: registering for `Command("*")` fires on all commands.
     pub async fn register(&self, event: HookEvent, handler: HookHandler) {
+        self.push(event, handler, None);
+    }
+
+    /// Register a handler under a NAMED GENERATION, so that a later
+    /// [`HookRegistry::clear_generation`] removes it.
+    ///
+    /// Call this — not [`HookRegistry::register`] — from any registrar that
+    /// can run more than once per process (a reload, a reconnect, a rebuild
+    /// of the agent core). Handlers registered with `register` are
+    /// deliberately NOT reachable by a reset: the kernel hook bridge in
+    /// `operant-cli` is anonymous for exactly that reason, and a reset that
+    /// took it out would mute the kernel for the process's remaining life.
+    pub async fn register_generation(
+        &self,
+        generation: HookGeneration,
+        event: HookEvent,
+        handler: HookHandler,
+    ) {
+        self.push(event, handler, Some(generation.tag()));
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    fn push(&self, event: HookEvent, handler: HookHandler, owner: Option<&'static str>) {
         let mut handlers = self
             .handlers
             .write()
             .expect("handlers RwLock poisoned — programmer error");
-        debug!(event = ?event, "Hook registered");
-        handlers.push((event, handler));
+        debug!(event = ?event, owner = ?owner, "Hook registered");
+        handlers.push(HookRegistration {
+            pattern: event,
+            handler,
+            owner,
+        });
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Remove every handler a previous `register_generation` installed for
+    /// `generation`, and report how many went. Registrations made through
+    /// [`HookRegistry::register`] and through OTHER generations are left
+    /// alone.
+    ///
+    /// This is the seam that makes a RELOAD idempotent. Without it a second
+    /// install pushes a second copy of every handler, and `emit` clones and
+    /// fires every match — so each lifecycle event runs the command twice
+    /// (audit 2026-11-18, finding 6). `register_generation` +
+    /// `clear_generation` is that pair.
+    pub fn clear_generation(&self, generation: HookGeneration) -> usize {
+        let mut handlers = self
+            .handlers
+            .write()
+            .expect("handlers RwLock poisoned — programmer error");
+        let tag = generation.tag();
+        let before = handlers.len();
+        handlers.retain(|registration| registration.owner != Some(tag));
+        let removed = before - handlers.len();
+        debug!(generation = ?generation, removed, "Hook generation cleared");
+        removed
     }
 
     #[expect(
@@ -214,20 +311,20 @@ impl HookRegistry {
     /// A panicking handler is caught and reported as a warning; it never
     /// takes down the gateway.
     pub async fn emit(&self, event: HookEvent, ctx: HookContext) {
-        let handlers: Vec<(HookEvent, HookHandler)> = {
+        let handlers: Vec<HookHandler> = {
             let handlers = self
                 .handlers
                 .read()
                 .expect("handlers RwLock poisoned — programmer error");
             handlers
                 .iter()
-                .filter(|(pattern, _)| event.matches(pattern))
-                .cloned()
+                .filter(|registration| event.matches(&registration.pattern))
+                .map(|registration| Arc::clone(&registration.handler))
                 .collect()
         };
 
-        for (pattern, handler) in handlers {
-            debug!(event = ?event, pattern = ?pattern, "Firing hook");
+        for handler in handlers {
+            debug!(event = ?event, "Firing hook");
             // Catch panics in handlers — a buggy hook should never crash the gateway.
             let handler_clone = handler.clone();
             let event_clone = event.clone();
