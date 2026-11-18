@@ -349,6 +349,22 @@ impl App {
         }
     }
 
+    /// Consume the composer for a NON-submitting handoff (the next-turn queue,
+    /// the steer queue) and report any image attachments that handoff drops.
+    ///
+    /// `PromptInput::take()` alone leaves `pending_images` untouched --
+    /// `clear()` does not touch them; they are drained only by
+    /// `clear_images()`, whose only caller until now was the SUBMIT path in
+    /// `event_coalesce.rs`. So a queued or steered message silently kept its
+    /// images, and the warning that eventually fired named a LATER, innocent
+    /// turn. Every path that consumes the composer without submitting must come
+    /// through here rather than calling `take()` directly.
+    pub fn take_composer_for_handoff(&mut self) -> String {
+        let text = self.prompt_input.take();
+        self.drop_pending_images_with_notice();
+        text
+    }
+
     /// Decide what the composer holds after a failed submission.
     ///
     /// Three rules, in order:

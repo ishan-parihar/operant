@@ -18948,3 +18948,69 @@ fn reload_skills_keeps_a_skill_that_lives_only_in_extra_roots() {
 
     let _ = std::fs::remove_dir_all(&extra);
 }
+
+// ── RT-602 (dove H2): a queued/steered message must not keep its images ───────
+//
+// `PromptInput::take()` calls `clear()`, which does NOT touch `pending_images`
+// (they are drained only by `clear_images()`). The submit path in
+// `event_coalesce.rs` was the ONLY caller of the drop-with-notice helper, so a
+// Ctrl+Enter queue or an Enter steer consumed the composer and left the image
+// attached. The warning then fired on a LATER, innocent turn, naming the wrong
+// message.
+
+#[test]
+fn queueing_the_composer_drops_pending_images_and_says_so() {
+    let mut app = make_app();
+    app.prompt_input.add_image(crate::image_paste::PastedImage {
+        path: std::path::PathBuf::from("/tmp/queued.png"),
+        label: "queued.png".to_string(),
+        dimensions: None,
+    });
+    app.prompt_input.replace_text("queued prompt".to_string());
+
+    let text = app.take_composer_for_handoff();
+
+    assert_eq!(text, "queued prompt", "the composer text must survive");
+    assert!(
+        app.prompt_input.pending_images.is_empty(),
+        "a queued message is never submitted, so its images must be dropped here -- \
+         otherwise the warning lands on a later, innocent turn"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("dropped")),
+        "the operator must be told the image was dropped, at the moment it happened"
+    );
+}
+
+#[test]
+fn the_handoff_helper_is_quiet_when_there_was_no_image() {
+    // Control: the helper must not invent a warning.
+    let mut app = make_app();
+    app.prompt_input.replace_text("just text".to_string());
+    let before = app.status_message.clone();
+
+    let text = app.take_composer_for_handoff();
+
+    assert_eq!(text, "just text");
+    assert_eq!(app.status_message, before);
+}
+
+#[test]
+fn take_alone_does_not_clear_images() {
+    // Pins the ROOT CAUSE so nobody "fixes" it by making clear() drain images:
+    // that would silently drop attachments on every other clear() caller
+    // (failed submit, /clear, agent switch) with no notice at all.
+    let mut app = make_app();
+    app.prompt_input.add_image(crate::image_paste::PastedImage {
+        path: std::path::PathBuf::from("/tmp/kept.png"),
+        label: "kept.png".to_string(),
+        dimensions: None,
+    });
+    let _ = app.prompt_input.take();
+    assert!(
+        !app.prompt_input.pending_images.is_empty(),
+        "take() must stay image-preserving; the handoff helper owns the drop"
+    );
+}

@@ -2480,9 +2480,13 @@ impl App {
                     let notice = self.queue_for_next_turn(&held);
                     let queued = notice.starts_with("Queued");
                     if queued {
-                        // Success: consume the composer (take() also
-                        // clears any paste-placeholder metadata).
-                        let _ = self.prompt_input.take();
+                        // Success: consume the composer. Through the handoff
+                        // helper, NOT `take()` directly: a queued message is
+                        // not submitted, so its image attachments are dropped
+                        // and the operator must be told NOW. `take()` left
+                        // `pending_images` intact and the warning fired later,
+                        // naming an innocent turn.
+                        let _ = self.take_composer_for_handoff();
                         self.remember_prompt_history(&held);
                     }
                     self.set_status_notice(notice);
@@ -2810,7 +2814,7 @@ impl App {
                         // a steer that was already delivered to the agent
                         // must never come back into the composer as if it
                         // had been lost.
-                        let _ = self.prompt_input.take();
+                        let _ = self.take_composer_for_handoff();
                         self.remember_prompt_history(&held);
                         // The steer's TRANSCRIPT ROW is pushed by
                         // `App::steer_now` itself, so `/steer` and the
