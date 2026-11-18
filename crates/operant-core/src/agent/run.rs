@@ -3547,16 +3547,19 @@ impl OperantAgent {
                             model_facing_tool_result(body, &full_body, marker.as_deref(), true);
 
                         // ── Memory write mirroring (hermes parity) ────────
-                        // When a built-in memory tool writes an entry
-                        // (write_file to MEMORY.md/USER.md, patch, create_file),
-                        // mirror the write to the memory provider so the graph
-                        // stays in sync. Ported from hermes-agent's
-                        // MemoryManager.notify_memory_tool_write() pattern.
-                        // Only fires for memory-related file paths, not all writes.
+                        // When a file-writing tool writes a memory file, mirror the
+                        // write to the memory provider so the graph stays in sync.
+                        // Ported from hermes-agent's MemoryManager.notify_memory_tool_write()
+                        // pattern. Only fires for memory-related file paths, not all writes.
+                        //
+                        // The predicate is the SHARED one (iter-2630, lion HIGH-1). This
+                        // site used to carry its own list naming `write_file` and
+                        // `create_file`, which are registered NOWHERE -- the registry
+                        // exposes `file_write`, `aft_write` and `patch`. Only `patch`
+                        // matched, so mirroring was DEAD for the tool the model actually
+                        // uses and MEMORY.md / USER.md edits never reached memory-wire.
                         if result.success
-                            && (result.name == "write_file"
-                                || result.name == "patch"
-                                || result.name == "create_file")
+                            && is_file_mutation_tool(&result.name)
                             && let Some(args_str) = call_args.get(&result.tool_call_id)
                             && let Ok(args_val) =
                                 serde_json::from_str::<serde_json::Value>(args_str)

@@ -1170,7 +1170,15 @@ const LONG_RUNNING_TOOL_TIMEOUT: Duration = Duration::from_secs(1800);
 /// Tools that mutate the filesystem. Two of these in the same batch can
 /// interleave (one reads a file the other is rewriting, or both write the
 /// same path), so a batch with more than one mutation runs sequentially.
-fn is_file_mutation_tool(name: &str) -> bool {
+///
+/// `pub(crate)` since iter-2630 (lion HIGH-1): this list is the single source
+/// of truth for "is this tool a file mutation", and it is the ONLY place the
+/// registered tool names (`file_write`, `aft_write`, `patch`) should be
+/// enumerated. Two other sites used to carry their own hand-written list that
+/// named `write_file` / `create_file` -- names that are registered NOWHERE --
+/// so memory-write mirroring and the mutation verifier were both silently dead
+/// for the tool the model actually uses. They now call this.
+pub(crate) fn is_file_mutation_tool(name: &str) -> bool {
     matches!(
         name,
         "file_write"
@@ -5190,6 +5198,43 @@ mod tests {
         assert!(batch_allows_parallel_execution(
             ["write_file", "web_search", "glob_search"].into_iter()
         ));
+    }
+
+    /// iter-2630 (lion HIGH-1): the predicate must recognize the tool names that
+    /// are ACTUALLY REGISTERED, not phantom aliases.
+    ///
+    /// `file_write` (tools/file_tools.rs), `aft_write` (tools/aft_tools.rs) and
+    /// `patch` (tools/patch_tool.rs) are the names the registry returns. Two
+    /// production sites (memory-write mirroring in run.rs, the mutation-verifier
+    /// footer in turn_finalizer.rs) carried their own list naming `write_file` /
+    /// `create_file` -- names registered NOWHERE -- so both were silently dead for
+    /// the tool the model actually uses. This test is the guard: drop `file_write`
+    /// or `aft_write` from the predicate and it goes RED.
+    #[test]
+    fn file_mutation_predicate_recognizes_the_registered_tool_names() {
+        for registered in [
+            "file_write",
+            "aft_write",
+            "patch",
+            "file_edit",
+            "aft_apply_patch",
+        ] {
+            assert!(
+                is_file_mutation_tool(registered),
+                "the registry exposes `{registered}` as a file-writing tool, but \
+                 is_file_mutation_tool() does not recognize it -- any site using \
+                 this predicate (memory-write mirroring, mutation verifier) is \
+                 silently dead for the tool the model actually calls"
+            );
+        }
+        // And it must not over-match read-only tools.
+        for readonly in ["read_file", "web_search", "glob_search", "memory_recall"] {
+            assert!(
+                !is_file_mutation_tool(readonly),
+                "`{readonly}` does not mutate the filesystem and must not be \
+                 treated as a file mutation"
+            );
+        }
     }
 
     #[test]

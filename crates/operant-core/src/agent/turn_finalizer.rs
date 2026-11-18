@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::agent::background_review::SelfEvolutionState;
+// iter-2630 (lion MED-1): shared file-mutation predicate. Was a local name list
+// that named phantom tools; see `is_file_mutation_tool`'s doc.
+use crate::agent::is_file_mutation_tool;
 use crate::client::{Message, Role};
 
 // ---------------------------------------------------------------------------
@@ -215,7 +218,11 @@ pub fn file_mutation_verifier_footer(messages: &[Message]) -> Option<String> {
         {
             for tc in tool_calls {
                 let name = tc.function.name.to_lowercase();
-                if name == "write_file" || name == "patch" || name == "create_file" {
+                // Shared predicate (iter-2630, lion MED-1). This site named
+                // `write_file` / `create_file`, which are registered nowhere, so
+                // the mutation-verifier footer never fired for `file_write`
+                // failures -- the tool that actually writes files.
+                if is_file_mutation_tool(&name) {
                     file_mutation_call_ids.insert(tc.id.clone());
                 }
             }
