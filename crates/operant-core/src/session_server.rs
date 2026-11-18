@@ -97,7 +97,8 @@ pub(crate) async fn bind_unless_live(socket: &std::path::Path) -> Result<tokio::
 /// A stale socket file from a killed server is removed before the bind, so a
 /// restarted server can take the same path. A path a live server already serves
 /// is REFUSED, not taken — see [`bind_unless_live`]. Every connection is served
-/// on its own task, so one slow client cannot block another.
+/// on its own task, and every message whose handler does blocking work is
+/// dispatched to the blocking pool, so one slow client cannot block another.
 ///
 /// Two gates guard the socket, because a session turn is the full toolset with
 /// no sandbox (Z30):
@@ -265,12 +266,22 @@ where
             subscription = Some(rx);
         }
 
-        // `LoadHistory` reads the session store, which is a SQLite read behind
-        // a mutex. Running it inline parks a runtime worker for the length of
-        // that read, so at a thousand attached clients a burst of history loads
-        // stalls every other connection. The blocking pool is where it belongs;
-        // every other message is pure bookkeeping and stays inline.
-        let replies = if matches!(message, WireMessage::LoadHistory { .. }) {
+        // `handle` does BLOCKING work: `LoadHistory` reads the session store
+        // behind a mutex, and `Prompt`/`Queue`/`Cancel` sweep the presence
+        // directory (`read_dir` + a `stat` per entry) to enforce the cap.
+        // Running any of that inline parks a runtime worker, so a burst on one
+        // connection stalls every other connection served by the same worker.
+        // (iter-2645: this arm used to name LoadHistory alone, which made the
+        // doc comment below false for the prompt path — the one that runs on
+        // every turn.) The blocking pool is where all four belong; `Hello` and
+        // the other pure lookups stay inline.
+        let replies = if matches!(
+            message,
+            WireMessage::LoadHistory { .. }
+                | WireMessage::Prompt { .. }
+                | WireMessage::Queue { .. }
+                | WireMessage::Cancel { .. }
+        ) {
             let handler = std::sync::Arc::clone(&handler);
             match tokio::task::spawn_blocking(move || handler.handle(message)).await {
                 Ok(replies) => replies,

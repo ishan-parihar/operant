@@ -147,15 +147,26 @@ pub fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
 /// (and with it the scheduled cron dispatcher) is running on this machine.
 /// `Err` is a real failure to answer the question (the lock file cannot be
 /// opened) — the caller decides how to degrade, never silently "no".
-#[cfg(unix)]
-fn gateway_daemon_holds_lock() -> std::io::Result<bool> {
-    gateway_daemon_holds_lock_at(&operant_core::cronjobs::gateway_daemon_lock_path())
-}
-
 /// The probe at an explicit path — the seam a test drives, so the test does
 /// not depend on whether a real daemon happens to be running on the host.
 #[cfg(unix)]
 fn gateway_daemon_holds_lock_at(path: &std::path::Path) -> std::io::Result<bool> {
+    Ok(try_hold_gateway_lock_at(path)?.is_none())
+}
+
+/// Take the gateway's lock for the DURATION of a manual run (iter-2645).
+///
+/// `None` = a live daemon holds it and the run must be refused. `Some(guard)`
+/// = this process holds it; the daemon cannot start until the guard drops.
+///
+/// The probe this replaces held the lock only long enough to answer, then
+/// released it, and `run_job_now` mints its own occurrence key — so a daemon
+/// starting in that window dispatched the same cadence a second time, and the
+/// claim ledger could not collide the two keys. Holding is the same three
+/// lines the probe already had; the difference is that the fd stays open
+/// across the await.
+#[cfg(unix)]
+fn try_hold_gateway_lock_at(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
     use std::os::fd::AsRawFd;
 
     if let Some(parent) = path.parent() {
@@ -169,20 +180,27 @@ fn gateway_daemon_holds_lock_at(path: &std::path::Path) -> std::io::Result<bool>
         .read(true)
         .write(true)
         .truncate(false)
-        .open(&path)?;
-    // SAFETY: `file` owns a live fd for the whole call, so `as_raw_fd()` is
-    // valid; LOCK_NB makes this a probe (never a wait) and the fd is closed
-    // on return, which RELEASES anything this probe might have taken.
+        .open(path)?;
+    // SAFETY: `file` owns a live fd; it is either returned to the caller (and
+    // the lock is released when THAT drops) or dropped here, which releases
+    // anything this call took. The path is never unlinked: `flock` protects
+    // the inode, so removing it would let a second starter lock a new one.
     let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-    Ok(!taken)
+    Ok(if taken { Some(file) } else { None })
+}
+
+/// Take the gateway lock for a manual run, or report who holds it.
+#[cfg(unix)]
+fn gateway_daemon_lock_guard() -> std::io::Result<Option<std::fs::File>> {
+    try_hold_gateway_lock_at(&operant_core::cronjobs::gateway_daemon_lock_path())
 }
 
 /// Non-unix stand-in: there is no `flock`, so the daemon's own lock is the
-/// best-effort pid-file shape and this probe cannot answer. `false` is the
-/// permissive answer — the manual run proceeds, exactly as it does today.
+/// best-effort pid-file shape and this probe cannot answer. The permissive
+/// answer is "hold nothing, run anyway", exactly as before.
 #[cfg(not(unix))]
-fn gateway_daemon_holds_lock() -> std::io::Result<bool> {
-    Ok(false)
+fn gateway_daemon_lock_guard() -> std::io::Result<Option<std::fs::File>> {
+    Ok(None)
 }
 
 /// The refusal text for a manual run while the daemon is live. Pure so the
@@ -705,21 +723,24 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
     // cannot be read the run PROCEEDS (fail-open) — refusing every manual run
     // because of a filesystem error would be a worse outage than the race it
     // prevents, and the claim ledger is still there as the backstop.
-    match gateway_daemon_holds_lock() {
-        Ok(true) => {
+    // (iter-2645) HELD, not probed: the guard lives until this function
+    // returns, so no daemon can start mid-run and dispatch the same cadence.
+    let _gateway_lock = match gateway_daemon_lock_guard() {
+        Ok(Some(guard)) => Some(guard),
+        Ok(None) => {
             let path = operant_core::cronjobs::gateway_daemon_lock_path();
             println!("{}", daemon_lock_refusal(id, &path));
             return Ok(());
         }
-        Ok(false) => {}
         Err(e) => {
             eprintln!(
                 "Warning: could not read the gateway daemon lock ({}): {e} — \
                  proceeding; a concurrent scheduled run is still possible.",
                 operant_core::cronjobs::gateway_daemon_lock_path().display()
             );
+            None
         }
-    }
+    };
 
     // RT-135: this used to mark the job "triggered_manually" and print
     // "Manual execution via CLI is not yet implemented" — a bookkeeping write
@@ -1089,6 +1110,29 @@ mod tests {
             path.starts_with(operant_core::platform::operant_home()),
             "and it must live under the resolved operant home: {}",
             path.display()
+        );
+    }
+
+    /// (iter-2645) The guard HOLDS while it lives. The old probe released the
+    /// lock the instant it answered, so a daemon could start in the window
+    /// between the check and the dispatch and run the same cadence twice.
+    #[cfg(unix)]
+    #[test]
+    fn the_guard_holds_the_lock_until_it_is_dropped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("gateway.lock");
+        let guard = try_hold_gateway_lock_at(&lock)
+            .expect("taking a free lock")
+            .expect("a free lock is taken");
+        assert!(
+            gateway_daemon_holds_lock_at(&lock).expect("read while held"),
+            "the guard must still be holding: a probe is not a leak, but this \
+             fd is exactly what a starting daemon would see"
+        );
+        drop(guard);
+        assert!(
+            !gateway_daemon_holds_lock_at(&lock).expect("read after drop"),
+            "dropping the guard releases the lock for the next starter"
         );
     }
 

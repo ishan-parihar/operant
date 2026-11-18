@@ -55,20 +55,23 @@ scripts were run; the clippy gate result is finding 1.
    not be enforced` (`operant-core/src/gateway/mod.rs:801-812`, RT-521); the
    socket path emits nothing. Trigger: `session_tracker_dir` a regular file, or
    an unreadable home. Consequence: unbounded concurrent turns on the socket
-   surface while channels refuse correctly. Fix: copy the single `warn!` from
-   `gateway/mod.rs:801-812` into both fallbacks; behaviour unchanged.
+   surface while channels refuse correctly. **FIXED iter-2645**: both fallbacks
+   now `warn!` naming the error and the turn; behaviour unchanged.
 
 4. **Every Prompt pays a synchronous `read_dir` + `stat` sweep on a runtime
    worker.** Verified `session_server.rs:273-288`: only `LoadHistory` is routed
    to `spawn_blocking`; `handle` for Prompt/Queue/Cancel runs inline over
    `tracker.count()` (`active_sessions.rs:125`). The doc comment at
    `session_server.rs:100` ("one slow client cannot block another") is false for
-   this path. Fix: widen the `matches!` to `Prompt | Queue | Cancel`.
+   this path. **FIXED iter-2645**: `LoadHistory | Prompt | Queue | Cancel` run
+   on the blocking pool, and the module doc states the real rule.
 
 5. **AFT: `bash_cache` never drains and `bash_waiters` leaks on timeout.**
    Verified `aft_bridge.rs:658-668` (insert, never removed on the normal path),
    `:971-976` (`get` + clone, no remove), `:997-1015` (timeout returns without
-   removing the waiter). Both maps grow for the bridge's lifetime. Note:
+   removing the waiter). Both maps grew for the bridge's lifetime. **FIXED iter-2645**: the fast
+   path REMOVES the cached frame (a handoff, not a history) and the timeout
+   branch removes its waiter. Note:
    `:1019` says "one blocking directory pass off the runtime thread" above a
    synchronous `tracker.count()` — a comment corrected on one call site only.
 
@@ -78,34 +81,38 @@ scripts were run; the clippy gate result is finding 1.
    process, so the duplicate-execution path the worker asserted is **not
    reachable today** (asserted claim downgraded). The real defect is that the
    registry has no generation/reset seam, so any future reload doubles the
-   commands. Fix if a reload lands: swap the registry atomically.
+   commands. Fix if a reload lands: swap the registry atomically. Deliberately
+    NOT changed in iter-2645: a reset seam with no caller is the speculative
+    feature this audit exists to remove, so it lands with the first reload.
 
 7. **`dashboard server`: the pid file is position-owned, not record-owned.**
    Verified `cmd_dashboard.rs:103` (overwrite on launch), `:112`
    (unconditional `remove_file` on exit), `:123-141` (no ownership check). A
    second server overwrites the first's record; an exiting process removes
-   someone else's. Fix: refuse an overwrite naming a live foreign pid, and
-   remove only a record that still names this pid.
+   someone else's. **FIXED iter-2645**: `claim_record` refuses a live foreign
+   owner and `release_record` removes only a record naming this pid.
 
 8. **`cron run`: the daemon gate is probe-then-release and fail-open.**
    Verified `cmd_cron.rs:151-177` (`flock` closes on return), `:712-726`
    (failure proceeds), `:773` (`run_job_now` mints its own occurrence key, so
    the ledger cannot collide it). Between the probe and the run the daemon can
-   start and both dispatch one cadence. Fix: hold `gateway.lock` across the
-   await rather than probing it.
+   start and both dispatch one cadence. **FIXED iter-2645**: the guard is held
+   for the run's whole duration (`try_hold_gateway_lock_at`).
 
 9. **`config set`: a failed persist still exits 0 and leaves the mutated
    runtime config installed.** Verified `cmd_config.rs:152` (install) then
    `:157-164` (`Err` branch prints "in-memory only", returns `Ok`). A wrapping
-   script cannot detect the divergence. Fix: roll `install_runtime_config`
-   back and return the error.
+   script cannot detect the divergence. **FIXED iter-2645**: the in-memory
+   value is rolled back and the command fails.
 
 10. **`persist_config_key_at`: unlocked read-modify-rename on a FIXED temp
     path.** Verified `config.rs:3416-3498` (`path.with_extension("toml.tmp")`,
     read at `:3417`, rename at `:3498`, and the module's own note at
     `:3200-3221` that the path lock is test-only). Two concurrent
-    `operant config set` calls lose one key while both exit 0. Fix: unique temp
-    name + `flock` across read → render → validate → rename.
+    `operant config set` calls lose one key while both exit 0. **FIXED
+    iter-2645**: a sibling `.lock` `flock` serialises read → render → validate
+    → rename and the temp name is writer-unique; pinned by
+    `two_concurrent_writers_keep_both_keys`.
 
 11. **`check.sh --offline` was a lie: it ran `cargo update -p memory-wire`.**
     Verified `check.sh:38` (`build.sh --sync-only` with no offline channel) and
@@ -167,8 +174,9 @@ scripts were run; the clippy gate result is finding 1.
 18. **`is_interactive_tool`'s test asserts the literal against itself.**
     Verified `agent/mod.rs:1098-1103` vs `:1152`: the test calls the function
     with a name from the same literal, so it cannot fail when the registry
-    gains or renames a suspending tool. Fix: derive both directions from
-    `builtin_tool_names()`.
+    gains or renames a suspending tool. **FIXED iter-2645**: one `INTERACTIVE`
+    list drives both the classifier assertion and registry membership, and the
+    arms are proven disjoint.
 
 ## Nice to have (lean, clarity)
 

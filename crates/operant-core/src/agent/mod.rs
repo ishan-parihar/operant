@@ -1118,6 +1118,40 @@ fn is_interactive_tool(name: &str) -> bool {
 mod tool_timeout_class_tests {
     use super::{is_interactive_tool, is_long_running_tool, is_mcp_tool};
 
+    /// (iter-2645) Every interactive tool is BOTH classified and REGISTERED,
+    /// derived from one list. The previous guard called `is_interactive_tool`
+    /// with a name written in the same literal the function matches on, so it
+    /// asserted the literal against itself: renaming or registering a
+    /// suspending tool could not fail it, while the classifier's own comment
+    /// says a missing entry lets the generic 30s wrapper cut a live dialog.
+    #[test]
+    fn every_interactive_tool_is_classified_and_registered() {
+        const INTERACTIVE: &[&str] = &["clarify", "approval_request", "ui_request_input"];
+        let registry = crate::tools::builtin_tool_names();
+        for name in INTERACTIVE {
+            assert!(
+                is_interactive_tool(name),
+                "{name} suspends on a human answer, so it must be interactive"
+            );
+            assert!(
+                registry.contains(name),
+                "{name} is classified interactive but no builtin registers it"
+            );
+            assert!(
+                !is_mcp_tool(name) && !is_long_running_tool(name),
+                "{name} must be exempt by the interactive arm, not another one"
+            );
+        }
+        // The arms are disjoint: a tool in two would be exempt for a reason
+        // nobody reading the classifier's comment expects.
+        for name in registry {
+            assert!(
+                !(is_interactive_tool(name) && is_long_running_tool(name)),
+                "{name} is claimed by two exemption arms"
+            );
+        }
+    }
+
     /// iter-2366: an MCP tool must be recognised as exempt from the agent's
     /// generic 30s wrapper.
     ///
@@ -1160,8 +1194,6 @@ mod tool_timeout_class_tests {
             assert!(!is_mcp_tool(name), "{name} must not match the MCP arm");
         }
         // ...and the two existing classifiers still own their own names.
-        assert!(is_interactive_tool("clarify"));
-        assert!(is_interactive_tool("ui_request_input"));
         assert!(is_long_running_tool("delegate_task"));
     }
 }

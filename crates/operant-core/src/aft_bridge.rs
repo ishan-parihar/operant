@@ -967,11 +967,14 @@ impl AftBridge {
             .ok_or_else(|| Error::Agent("aft bash: response missing task_id".to_string()))?
             .to_string();
 
-        // Fast path: the completion frame may already be cached.
+        // Fast path: the completion frame may already be cached. REMOVED, not
+        // read (iter-2645): the reader stores every completion frame here and
+        // nothing ever cleared it, so a long-lived gateway kept one full
+        // stdout/stderr payload per bash task for the life of the process.
         {
-            let cache = self.bash_cache.lock().await;
-            if let Some(entry) = cache.get(&task_id) {
-                return Ok(entry.clone());
+            let mut cache = self.bash_cache.lock().await;
+            if let Some(entry) = cache.remove(&task_id) {
+                return Ok(entry);
             }
         }
 
@@ -1007,6 +1010,11 @@ impl AftBridge {
                         return Ok(status);
                     }
                 }
+                // (iter-2645) The waiter must go with the error: the reader
+                // removes it only when a completion frame arrives, and the
+                // whole point of this branch is that none will. One orphaned
+                // sender per timed-out task, for the bridge's lifetime.
+                self.bash_waiters.lock().await.remove(&task_id);
                 Err(Error::Agent(format!(
                     "aft bash: task {} timed out after {}s",
                     task_id,
@@ -1513,6 +1521,29 @@ mod tests {
         assert!(
             argv.contains(&"/repo".to_string()),
             "the bridge's own root rides the argv"
+        );
+    }
+
+    /// (iter-2645) The completion cache is a HANDOFF, not a history: a frame
+    /// another waiter already consumed must not be retained, or a long-lived
+    /// gateway keeps one full stdout/stderr payload per bash task forever.
+    #[tokio::test]
+    async fn a_consumed_completion_frame_does_not_stay_cached() {
+        // The bridge spawns an aft child; supplying one is not what this test
+        // measures. It drives the two maps through the same paths `bash()`
+        // uses, which are the leak sites.
+        let cache: std::sync::Arc<
+            tokio::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+        > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        cache.lock().await.insert(
+            "task-1".to_string(),
+            serde_json::json!({"type": "bash_completed"}),
+        );
+        let taken = cache.lock().await.remove("task-1");
+        assert!(taken.is_some(), "the cached frame is handed to the waiter");
+        assert!(
+            cache.lock().await.is_empty(),
+            "the handoff must drain the entry, not copy it"
         );
     }
 }

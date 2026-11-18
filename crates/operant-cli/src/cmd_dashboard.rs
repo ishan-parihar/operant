@@ -108,8 +108,11 @@ async fn cmd_server(
 
     let served = crate::dashboard_server::serve(listener, app).await;
     // The pid file must not outlive the process it names, or the next
-    // `--stop` would signal whatever pid the OS recycled.
-    let _ = std::fs::remove_file(pid_file());
+    // `--stop` would signal whatever pid the OS recycled. `release_record`
+    // removes it ONLY if it still names this process (iter-2645): two servers
+    // share one path, so an unconditional remove here let a server that never
+    // recorded itself delete the record of the one that did.
+    release_record(&pid_file(), std::process::id());
     served
 }
 
@@ -122,6 +125,21 @@ fn pid_file() -> std::path::PathBuf {
 /// dashboard still serves, `--stop` just falls back to "not running".
 fn write_pid(url: &str) {
     let path = pid_file();
+    if !claim_record(&path, std::process::id(), url) {
+        return;
+    }
+}
+
+/// Record `me`'s pid + `url` in `path`, refusing when a LIVE foreign process
+/// already owns it. Returns whether the record now names this process.
+///
+/// MEASURED defect (iter-2645): the write was unconditional, so a second
+/// `dashboard server` overwrote the first's record, and then `--stop`
+/// signalled the wrong server while the first kept serving and holding the
+/// port with no handle left to find it. A record naming a DEAD pid is stale
+/// and is replaced, which is what keeps a SIGKILLed server from wedging the
+/// next launch.
+fn claim_record(path: &std::path::Path, me: u32, url: &str) -> bool {
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -129,14 +147,38 @@ fn write_pid(url: &str) {
             "Could not create {} for the dashboard pid file: {e}",
             parent.display()
         );
-        return;
+        return false;
     }
-    let body = format!("{}\n{url}\n", std::process::id());
-    if let Err(e) = std::fs::write(&path, body) {
+    if let Some((owner, owner_url)) = read_pid_at(path)
+        && owner != me
+        && pid_alive(owner)
+    {
+        tracing::warn!(
+            "dashboard pid file {} already names a live server (pid {owner}, {owner_url}); \
+             not overwriting it — this server (pid {me}) runs UNRECORDED",
+            path.display()
+        );
+        return false;
+    }
+    let body = format!("{me}\n{url}\n");
+    if let Err(e) = std::fs::write(path, body) {
         tracing::warn!(
             "Could not write the dashboard pid file {}: {e}",
             path.display()
         );
+        return false;
+    }
+    true
+}
+
+/// Remove `path` only when it still names `me`. Returns whether it was removed.
+///
+/// The removal used to be unconditional, so a process that never recorded
+/// itself still deleted another server's record on exit.
+fn release_record(path: &std::path::Path, me: u32) -> bool {
+    match read_pid_at(path) {
+        Some((owner, _)) if owner == me => std::fs::remove_file(path).is_ok(),
+        _ => false,
     }
 }
 
@@ -263,6 +305,59 @@ mod tests {
         assert_eq!(read_pid_at(&path), None);
         std::fs::remove_file(&path).expect("remove");
         assert_eq!(read_pid_at(&path), None, "a missing file is also no server");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// (iter-2645) A second server must not take over the record of a LIVE one:
+    /// doing so made `--stop` signal the newcomer while the original kept the
+    /// port, with no file naming it any more.
+    #[test]
+    fn a_second_server_does_not_overwrite_a_live_record() {
+        let path = temp_pid_file("live-owner");
+        let me = std::process::id();
+        assert!(claim_record(&path, me, "http://127.0.0.1:9119/dash"));
+        // pid 1 is always alive on this platform; our own pid is live too, and
+        // `owner != me` is what makes the refusal reachable without a second
+        // real server.
+        assert!(!claim_record(
+            &path,
+            me + 100_000,
+            "http://127.0.0.1:9220/dash"
+        ));
+        assert_eq!(
+            read_pid_at(&path).map(|(pid, _)| pid),
+            Some(me),
+            "the live owner's record must survive a foreign claim"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A record naming a DEAD pid is stale: the next launch replaces it, so a
+    /// SIGKILLed server cannot wedge every later start.
+    #[test]
+    fn a_dead_record_is_replaced() {
+        let path = temp_pid_file("dead-owner");
+        // pid 999999 is above the usual pid_max and cannot exist.
+        std::fs::write(&path, "999999\nhttp://127.0.0.1:9119/dash\n").expect("write");
+        let me = std::process::id();
+        assert!(claim_record(&path, me, "http://127.0.0.1:9220/dash"));
+        assert_eq!(read_pid_at(&path).map(|(pid, _)| pid), Some(me));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Exiting removes only a record this process owns.
+    #[test]
+    fn an_exiting_server_leaves_a_record_it_does_not_own() {
+        let path = temp_pid_file("foreign-release");
+        let me = std::process::id();
+        assert!(claim_record(&path, me, "http://127.0.0.1:9119/dash"));
+        assert!(
+            !release_record(&path, me + 100_000),
+            "a record another pid owns is not this process's to remove"
+        );
+        assert!(path.exists(), "the foreign record must survive");
+        assert!(release_record(&path, me), "its own record is removed");
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

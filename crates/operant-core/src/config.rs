@@ -3413,7 +3413,79 @@ pub fn validate_context_window(tokens: usize) -> Result<()> {
 /// The caller owns the target. This is the test- and embedding-safe seam:
 /// tests never have to install a process-global write target, and a
 /// read-only helper cannot redirect another writer by loading a config.
+/// A sibling temp name unique to THIS writer: pid plus a process-local
+/// counter, so two writers never render into one file (iter-2645).
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "operant.toml".to_string());
+    path.with_file_name(format!("{name}.{}.{}.tmp", std::process::id(), n))
+}
+
+/// An exclusive advisory lock on one config file's write sequence.
+///
+/// The lock lives in a SIBLING `.lock` file, never the config itself: the
+/// rename replaces the target's inode, and a lock on the old inode would be
+/// released by the rename while a second writer waits on the new one. The
+/// `.lock` file is never unlinked for the same reason `gateway.lock` is kept
+/// (RT-526): `flock` protects the inode, and removing the path lets two
+/// starters lock different inodes.
+struct ConfigWriteLock {
+    _file: std::fs::File,
+}
+
+impl ConfigWriteLock {
+    fn acquire(path: &Path) -> Result<Self> {
+        let lock_path = path.with_extension("toml.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| {
+                crate::error::Error::Config(format!("open {}: {e}", lock_path.display()))
+            })?;
+        lock_file_exclusive(&file).map_err(|e| {
+            crate::error::Error::Config(format!("lock {}: {e}", lock_path.display()))
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+#[cfg(unix)]
+fn lock_file_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `file` owns the fd for the call; LOCK_EX blocks until the peer
+    // writer's rename has happened, which is exactly the serialisation wanted.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Non-unix: no `flock`. The unique temp name still prevents two writers from
+/// sharing a file; the last rename wins, as it did before this lock existed.
+#[cfg(not(unix))]
+fn lock_file_exclusive(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
+}
+
 pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Result<PathBuf> {
+    // (iter-2645) Hold the target across read → render → validate → rename.
+    // The lock used to be test-only (see `config_path_test_guard`), and the
+    // temp name below was ONE fixed path, so two concurrent writers both read
+    // the same pre-image and the second rename silently dropped the first
+    // key while BOTH exited 0. Locking serialises the read-modify-write; the
+    // unique temp name keeps the two renders from sharing a file even if a
+    // writer is killed mid-way.
+    let _write_lock = ConfigWriteLock::acquire(path)?;
     let original = std::fs::read(path)
         .map_err(|e| crate::error::Error::Config(format!("read {}: {e}", path.display())))?;
 
@@ -3458,7 +3530,7 @@ pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Resu
     // config is never left broken by a typo from `operant config set`, and
     // a reader never sees a half-written file. The mode (0600 where
     // secrets live by design) must survive the round-trip.
-    let tmp = path.with_extension("toml.tmp");
+    let tmp = unique_tmp_path(path);
     // The config can carry provider keys, so the temp file is written
     // OWNER-ONLY — the mode is applied by the same open(2) that creates it.
     // A plain write would leave it at the umask default (0644 on a stock
@@ -5521,8 +5593,53 @@ model = "anthropic/claude-opus-4-20250514"
             before,
             "the file must be byte-identical after a rejected write"
         );
-        // No temp litter.
-        assert!(!path.with_extension("toml.tmp").exists());
+        // No temp litter. Temps are writer-unique since iter-2645, so the
+        // assertion is over the DIRECTORY, not one guessed file name.
+        let leaked: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read the config dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leaked.is_empty(), "temp litter left behind: {leaked:?}");
+    }
+
+    /// (iter-2645) Two concurrent writers must not lose each other's key. The
+    /// writer was an unlocked read-modify-rename over ONE fixed temp path, so
+    /// both threads read the same pre-image and the later rename dropped the
+    /// earlier key while BOTH returned Ok.
+    #[test]
+    fn two_concurrent_writers_keep_both_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant.toml");
+        std::fs::write(&path, "[agent]\nmodel = \"old\"\n").expect("fixture");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = [("agent.model", "\"new\""), ("agent.max_iterations", "41")]
+            .into_iter()
+            .map(|(key, value)| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    persist_config_key_at(&path, key, value)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .expect("writer thread")
+                .expect("each writer must succeed");
+        }
+        let text = std::fs::read_to_string(&path).expect("read the result");
+        assert!(
+            text.contains("max_iterations = 41"),
+            "the second writer's key was lost: {text}"
+        );
+        assert!(
+            text.contains("model = \"new\""),
+            "the first writer's key was lost: {text}"
+        );
     }
 
     /// The operator's first `operant config set` on a machine with no

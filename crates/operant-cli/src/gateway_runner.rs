@@ -3249,7 +3249,19 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                     // runtime entirely means making the trait async or wrapping
                     // the whole `handle` call in `spawn_blocking` at the
                     // `session_server` dispatch site.
-                    let running = tracker.count().unwrap_or(0);
+                    // (iter-2645) A cap that cannot be measured is a cap that
+                    // is NOT enforced, and the channel path says so out loud
+                    // (gateway/mod.rs, RT-521). This arm read 0 silently, so an
+                    // unreadable tracker admitted unbounded turns on one entry
+                    // point while the other refused correctly.
+                    let running = tracker.count().unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "the session cap could not be measured — this prompt is \
+                             admitted without it"
+                        );
+                        0
+                    });
                     if running >= max {
                         return vec![WireMessage::Error {
                             session_id: Some(session_id),
@@ -3319,7 +3331,16 @@ impl operant_core::session_server::SessionHandler for GatewaySessionHandler {
                             let blocking_tracker = tracker.clone();
                             let blocking_session = task_session.clone();
                             let admitted = tokio::task::spawn_blocking(move || {
-                                blocking_tracker.acquire(&blocking_session).unwrap_or(true)
+                                blocking_tracker
+                                    .acquire(&blocking_session)
+                                    .unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "the session cap lease could not be taken — this \
+                                             turn runs without the cap"
+                                        );
+                                        true
+                                    })
                             })
                             .await
                             .unwrap_or(true);

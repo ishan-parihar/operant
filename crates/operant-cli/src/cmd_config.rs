@@ -159,7 +159,14 @@ fn handle_set(key: String, value: String) -> Result<()> {
             "Set config '{key}' to '{value}' (persisted to {})",
             path.display()
         ),
-        Err(e) => println!("Set config '{key}' to '{value}' (in-memory only; persist failed: {e})"),
+        Err(e) => {
+            // (iter-2645) A failed persist used to print "in-memory only" and
+            // return Ok, so the process exited 0 with a runtime config that no
+            // longer matched the file and no way for a script to notice. Roll
+            // the in-memory value back and fail: the setting did NOT land.
+            install_runtime_config(current);
+            anyhow::bail!("Set config '{key}' failed: the value was not persisted ({e})");
+        }
     }
     Ok(())
 }
