@@ -3,12 +3,17 @@
 Dated-frozen: published `2026-11-18`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section).
 
-**STATUS: T1 SHIPPED (iter-2638); T2 partial; T3/T4 NOT STARTED.** The IR, the gate, the plain renderer, the two tools, the request channel, the TUI card row and the gateway text delivery are live. The TUI widget renderer, the `[v]` toggle, the PNG snapshotter and native buttons are not. See "Amendments made while building" for where the build departed from the text below. Every file, symbol
+**STATUS: T1 SHIPPED (iter-2638); T2 partial; T3/T4 NOT STARTED.** The IR, the gate, the plain renderer, the two tools, the request channel, the TUI card row and the gateway text delivery are live. The TUI widget renderer, the `[v]` toggle, the PNG snapshotter and native buttons are not. See "Amendments made while building" for where the build departed from the text below.
+
+This plan is `core.living_plans` (see genome.toml), so it evolves in place rather than
+being re-minted: the `Resume here` section at the foot is the authority on what has
+landed. Every file, symbol
 and count in this document was read from the working tree on 2026-11-18
 (`git rev-parse --short HEAD` at write time: derive it, per RG-008 — do not copy a
-number from this page). Where a claim is an inference from the CopilotKit/OpenBot
-write-up the user supplied, it is marked [source claim]; where it is a verified read
-of this tree, it carries its file path.
+number from this page) and describes the tree BEFORE the tranches ran; a line number
+in this document may therefore have drifted since. Where a claim is an inference from
+the CopilotKit/OpenBot write-up the user supplied, it is marked [source claim]; where
+it is a verified read of this tree, it carries its file path.
 
 Reference material (read-only, NOT modified): the user-supplied OpenBot/CopilotKit
 architecture digest of `CopilotKit/OpenBot` (three-tier A2UI surface system: 18
@@ -29,6 +34,16 @@ Predecessors / neighbours:
   — the prompt composer's @-mention grammar (the IR must not disturb it).
 - `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-survey.md`
   — the coverage audit this plan is grounded in (dated-frozen, audit).
+
+## Contents
+
+- [What this plan is](#what-this-plan-is)
+- [Measured ground truth (verified reads, 2026-11-18)](#measured-ground-truth-verified-reads-2026-11-18)
+- [Mechanism](#mechanism)
+- [Gates / success criteria](#gates--success-criteria)
+- [Cost](#cost)
+- [Tranches (each = one iteration = one gate)](#tranches-each--one-iteration--one-gate)
+- [Resume here](#resume-here)
 
 ## What this plan is
 
@@ -451,5 +466,49 @@ ship: each tranche must leave the tree compiling and net-positive.
 
 ## Resume here
 
-Nothing landed yet. Start at T1; `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-survey.md`
+**Landed (verified on `origin/main`, not inferred):**
+
+- **T1a** — `crates/operant-core/src/ui/` (`mod.rs` IR, `gate.rs`, `plain.rs`,
+  `request.rs`), the `[ui] generative_enabled` config boolean, the
+  `AgentEvent::SurfaceRendered` variant. Library page:
+  [docs/library/ui.md](../library/ui.md).
+- **T1b** — `ui_render_surface` (read-only, never suspends) and
+  `ui_request_input` (structured choice/confirm/text) in
+  `crates/operant-core/src/tools/ui_tool.rs`, registered in
+  `register_builtin_tools_with_sub_agent` beside `delegate_task`.
+- **T2** — the TUI side of `ui_request_input`: `ask_user_dialog` gained the
+  surface header field, `TurnState::WaitingForSurface`, and
+  `drain_surface_requests` in `tui/app/channel_drains.rs`.
+- **iter-2639** — the timeout rationale corrected and guarded by
+  `crates/operant-core/tests/surface_host_receivers.rs`.
+- **iter-2640** — the gateway side: the gateway NOW registers a surface
+  receiver (`gateway_runner.rs`, beside the `clarify` one) and drains it, so
+  `ui_request_input` is reachable from a channel turn. Capabilities come from
+  the turn (`SurfaceCapabilities::for_transport`, failing closed to
+  `text_only`) instead of always being `tui()`; a second concurrent card no
+  longer wedges the first; `root_widget()` was replaced by `widgets_column()`.
+
+**Hosts and their bounds** (do not re-derive this from a single call site):
+
+- **TUI** — drains into `ask_user_dialog`, which has NO timeout of its own, so
+  `SURFACE_REPLY_TIMEOUT` (300 s) is the only bound on that path.
+- **Gateway** — its receiver runs a 120 s timer and answers "dismissed", so on
+  that path the 300 s is the outer backstop.
+- **`operant run`** — hostless by design; `ui_request_input` fails fast with
+  "no interactive surface is attached".
+
+`crates/operant-core/tests/surface_host_receivers.rs` pins this set: a new host
+must be added there next to whatever bound it gives its own prompts.
+
+**Open:**
+
+- **T3** — the gateway RASTERISER (embedded font, geometric box-drawing,
+  `sendPhoto`, the `op:` callback family). Until it lands, a gateway
+  `SurfaceRendered` is sent as its plain-text fallback (the surface is NOT
+  dropped) and the gateway answers `ui_request_input` through its own receiver.
+- **T4** — the durable HITL queue (BUGS.md RT-598) and the Slack upload
+  stretch. (The `docs/library/ui.md` page this tranche names is DONE — see
+  [../library/ui.md](../library/ui.md).)
+
+Start at T3. `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-survey.md`
 holds the seam-by-seam evidence table the tranches cite.
