@@ -56,6 +56,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::client::{Message, Role};
 use crate::database::{Database, MessageData};
+use crate::error::{Error, Result};
 
 /// The unified listing record (`SessionEntryV2`) every session surface
 /// renders: the session hub, the CLI subcommands, and the gateway's
@@ -341,26 +342,35 @@ impl SessionStore {
         self.warm().remove(key).is_some()
     }
 
-    /// Drop `key`'s resident copy. NOT a durable delete — see below.
+    /// Delete `key`'s transcript from memory AND disk. Destructive.
     ///
-    /// RT-389: the doc used to promise a durable delete — transcript gone from
-    /// memory AND disk, and the sole operation in this type that loses data.
-    /// The body does neither: it removes the resident copy and never touches
-    /// the backing store, so a session whose rows remain stays recoverable
-    /// (the next `acquire` rehydrates it — the body's own comment already
-    /// said so). This
-    /// is the same behaviour as [`Self::evict`]; the difference is only what
-    /// the doc claimed.
+    /// RT-389: this doc used to promise exactly that and the body did neither —
+    /// it removed the resident copy and never touched the backing store, so a
+    /// session whose rows remained stayed recoverable and the next
+    /// [`Self::acquire`] rehydrated the history `/reset` had been called to
+    /// discard. iter-2681 shipped the durable half: the warm copy comes out AND
+    /// the database rows go.
     ///
-    /// NAMED, NOT SHIPPED: making `/reset` destroy the persisted transcript is
-    /// one of the three RT-285 product decisions (mapping the intended durable
-    /// delete to a DB call is the fix nobody has chosen).
-    pub fn discard(&self, key: &SessionKey) -> bool {
-        let removed = self.warm().remove(key).is_some();
-        // Backing store deletion lives in Database; a session whose rows are
-        // still there stays recoverable, which is why this reports whether the
-        // resident copy went away rather than claiming the data is gone.
-        removed
+    /// It reports how many session rows the database deleted, not a bool. A wipe
+    /// that silently reaches only half of the system is the defect being replaced,
+    /// so the caller sees the DB half's result rather than inferring it. `0` means
+    /// the session was never persisted (memory-only) — still a successful discard.
+    ///
+    /// It is destructive and named as such: the DB delete cascades every child
+    /// session in the branch lineage (`Database::delete_session`).
+    /// [`Self::evict`] is the NON-destructive sibling — it frees memory and keeps
+    /// the persisted transcript, which is what a capacity-pressure eviction wants.
+    #[must_use = "discarding a session is destructive -- count how many rows went, and act on a 0"]
+    pub fn discard(&self, key: &SessionKey) -> Result<usize> {
+        // The resident copy comes out first: a caller that is about to be told
+        // the DB write failed must not be left holding a transcript the operator
+        // believes is gone.
+        self.warm().remove(key);
+        let deleted = self
+            .db
+            .delete_session(key.id())
+            .map_err(|e| Error::Agent(format!("SessionStore::discard failed: {e}")))?;
+        Ok(deleted)
     }
 
     /// The resident transcript for `key`, or an empty slice if it is cold.
@@ -740,35 +750,41 @@ fn row_to_message(row: MessageData) -> Option<Message> {
 
 #[cfg(test)]
 mod rt389_tests {
-    /// RT-389: `discard`'s doc promised a durable transcript delete and named
-    /// itself this type's sole data-losing operation — the body only removes
-    /// the resident copy and never touches the backing store (the session
-    /// stays recoverable, which is the RT-285 product decision). The doc must
-    /// describe what the code does. Source contract, needles
-    /// concatenation-built — and the test's own prose must not quote the claim
-    /// it forbids.
+    /// RT-389 / RT-285(2): `discard`'s doc promised a durable transcript delete
+    /// and the body did not perform it. iter-2681 fixed the BODY rather than the
+    /// doc, so this guard inverts: the doc must promise the durable delete AND
+    /// the body must deliver it.
+    ///
+    /// It was first written the other way round (asserting the honest evict-shaped
+    /// doc), which pinned the defect as the intended contract. A guard that
+    /// describes the bug is how the bug survives the next reader. Source contract,
+    /// needles concatenation-built, and the test's own prose must not quote the
+    /// claim it forbids.
     #[test]
-    fn the_discard_doc_describes_what_the_body_does() {
+    fn the_discard_doc_promises_the_durable_delete_the_body_performs() {
         let src = include_str!("mod.rs");
-        let false_claim = format!("Delete a session's transcript from memory and {}", "disk");
+        // Either spelling of the durable promise is fine -- the point is that
+        // the doc PROMISES the durable delete, which the body now delivers.
+        let promise = [
+            format!("Delete a session's transcript from memory and {}", "disk"),
+            format!("Delete `key`'s transcript from memory AND {}", "disk"),
+        ];
         assert!(
-            !src.contains(&false_claim),
-            "the doc must not promise a durable delete the body never performs"
+            promise.iter().any(|p| src.contains(p)),
+            "the doc must promise the durable delete -- the body now performs it \
+             (RT-285(2), iter-2681)"
         );
-        let only_data_loser = format!("the only operation here that {}loses data", "");
+        let the_db_call = format!(".delete_session({}", "key.id()");
         assert!(
-            !src.contains(&only_data_loser),
-            "an evict-shaped operation must not be named the data loser"
+            src.contains(&the_db_call),
+            "the body must reach the database -- a resident-copy-only discard is \
+             the defect this iteration closed"
         );
-        let honest = format!("NOT a durable {}delete", "");
+        let durable_ret = "pub fn discard(&self, key: &SessionKey) -> Result<usize>";
         assert!(
-            src.contains(&honest),
-            "the doc must say the resident copy is all it drops"
-        );
-        let named = format!("one of the three RT-{}285 product decisions", "");
-        assert!(
-            src.contains(&named),
-            "the durable-delete decision must stay named, not implied"
+            src.contains(durable_ret),
+            "discard must report how many rows the database deleted; a bool would \
+             let a half-reached wipe read as success"
         );
     }
 }

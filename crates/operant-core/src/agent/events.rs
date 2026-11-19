@@ -517,12 +517,34 @@ impl OperantAgent {
         let mut conv = self.conversation.write().await;
         conv.clear();
         drop(conv);
-        // Drop the wiped session from the store too. Without this the store
-        // would still hold the pre-wipe transcript and the very next acquire
-        // would rehydrate the history /new was called to discard.
+        // Delete the wiped session from the store too -- resident copy AND
+        // database rows. Without this the store would still hold the pre-wipe
+        // transcript and the very next acquire would rehydrate the history /new
+        // was called to discard (RT-389). Before iter-2681 only the resident copy
+        // was dropped and the rows survived, which is exactly that defect.
+        //
+        // A failed durable delete is surfaced, not swallowed: the operator's
+        // history is supposed to be gone, and silently keeping it while the
+        // in-memory view looks clean is the failure this fixes.
         if let Some(id) = self.session_id() {
-            let key = crate::session::SessionKey::new(id);
-            self.sessions.discard(&key);
+            let key = crate::session::SessionKey::new(id.clone());
+            match self.sessions.discard(&key) {
+                Ok(0) => {
+                    // Nothing was persisted -- a memory-only session. Still a
+                    // successful discard, so nothing to report.
+                }
+                Ok(n) => {
+                    tracing::debug!(rows = n, session = %id, "discarded session transcript");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        session = %id,
+                        error = %e,
+                        "failed to delete the session's persisted transcript -- the history \
+                         survives on disk after /new"
+                    );
+                }
+            }
         }
         // Reset LLM compressor state so the next session starts fresh.
         // Without this, a previous session's summary would bleed into
