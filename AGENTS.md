@@ -507,6 +507,13 @@ gitignore is doing its job; leave them alone.
   disposition, phased plan) before changing `operant-core/src/org/`, the cron cast, kanban, the
   curator or skill nudges, the kernel sidecar, or anything Holon would drive
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
+  (`AppConfig`) — ONE config file (`~/.operant/operant.toml`) and ONE config type.
+  The CLI's `CliConfig` (`crates/operant-cli/src/config.rs`) is an ADAPTER onto it,
+  not a second system: its `config.yaml` / `config.local.yaml` paths are resolved and
+  never parsed (kept only so `operant doctor` can flag a legacy file), and its
+  `delegation.*` / `security.redact_secrets` fields are in-code process knobs with no
+  home in `AppConfig`. F7 was raised as a second live config system; it is not one,
+  and `docs/library/config.md` names what each layer owns
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is
   launched through `operant autonomous` or `operant run --autonomous`
@@ -651,9 +658,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   `crates/operant-cli/src/gateway_runner.rs`) — telegram, discord, slack,
   whatsapp, email_smtp, sms_twilio, webhooks
 - **All seven have a real adapter** in `operant-core/src/gateway/`. Telegram
-  and Discord are the two platforms that RECEIVE (Discord over a real
-  Gateway WebSocket, `discord.rs:316` MESSAGE_CREATE; Telegram over long
-  polling).
+  and Discord are the long-polling platforms, and they RECEIVE.
   **Slack is OUTBOUND-ONLY**: operant can post to Slack, but there is no
   Socket Mode WebSocket in this tree — `start()` logs and returns, and
   nothing opens a `wss://` connection, so Slack messages never reach the
@@ -852,9 +857,9 @@ operant/
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
 │   │   │   │   ├── sourcehound.rs # web_search/scrape/extract/crawl + MCP seam (subprocess)
 │   │   │   │   ├── aft_tools.rs   # 20 AFT IDE tools
-│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire)
+│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire/builtin)
 │   │   │   ├── memory_wire.rs # MemoryWireProvider (in-process, catch_unwind)
-│   │   │   ├── memory_provider.rs # memory-wire (the only engine; BuiltinProvider is gone)
+│   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
 │   │   │   ├── context_management.rs # Tiered eviction + decay curve
 │   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
 │   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/WhatsApp/Email/SMS/Webhook)

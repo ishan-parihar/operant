@@ -30,6 +30,39 @@ RETIRED (iters 1138-1141, RT-141): none of it ever loaded in
 production. `operant-config` now holds only the shared types the live
 config composes.
 
+### The CLI layer is a bridge, not a second system (iter-2691, F7)
+
+`crates/operant-cli/src/config.rs` defines `CliConfig`, which LOOKS like
+a second config system: it has a `config.yaml` + `config.local.yaml`
+loader, a `delegation` table, and a `security.redact_secrets` flag, all
+read live from `main.rs`. It is not a second system, and the distinction
+matters because the field names invite the wrong conclusion.
+
+- **The YAML paths are resolved and never opened.** `CliConfig::load()`
+  sets `config_file` / `local_config_file` from `OPERANT_CONFIG` /
+  `HERMES_CONFIG` and stores them on the struct; no `serde_yaml` read of
+  either path exists anywhere in the workspace. The struct fields are
+  kept only so `operant doctor` can *detect* a legacy `config.yaml`
+  sitting in the home and say "(Python compatibility)". A file that is
+  looked at and never parsed feeds nothing.
+- **`CliConfig::load()` really reads two things**: `~/.operant/.env`
+  and the `OPERANT_*` / `HERMES_*` environment overrides. Those are
+  precedence steps 1 and 3 below, not a separate schema.
+- **`delegation.*` and `security.redact_secrets` are `CliConfig` fields
+  with in-code defaults**, populated by nothing on disk. `main.rs` reads
+  them to seed the delegation tool's limits and
+  `redaction::set_redact_enabled`, and `to_app_config()` maps the API /
+  agent / display fields onto `AppConfig`. That makes `CliConfig` the
+  CLI's **adapter** onto the one system, plus a handful of process-level
+  knobs (`delegation`, `redact_secrets`) that have no `AppConfig` home
+  because they configure the process, not the agent.
+
+The honest one-line version: **one config FILE (`operant.toml`, plus
+`.env` for secrets), one config TYPE (`AppConfig`), and one CLI adapter
+(`CliConfig`) that also carries two process knobs.** Anyone who greps
+`config.rs` and finds `config.yaml` should read `load()` first — it is
+six lines and shows the YAML is a path, not a source.
+
 ## Precedence
 
 1. **Process env** (`OPENAI_BASE_URL`, `HERMES_MODEL`, `OPERANT_*`) —
