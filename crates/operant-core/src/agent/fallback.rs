@@ -360,11 +360,7 @@ const DEFAULT_COOLDOWN: Duration = Duration::from_secs(60);
 ///
 /// Returns `None` when the model has no known ceiling (unknown model, no
 /// cache entry), in which case the caller leaves `max_tokens` as-is.
-fn clamp_max_tokens_to_model(
-    current: Option<u32>,
-    provider: &str,
-    model: &str,
-) -> Option<u32> {
+fn clamp_max_tokens_to_model(current: Option<u32>, provider: &str, model: &str) -> Option<u32> {
     let fitted = current?;
     let leaf = model.rsplit('/').next().unwrap_or(model);
     let ceiling = crate::models_dev::cached_capabilities(provider, leaf)
@@ -422,17 +418,14 @@ impl FallbackModelClient {
     /// elapses. Lower is more aggressive: fewer wasted primary round trips
     /// during an outage. Must be >= 1.
     pub fn with_breaker_threshold(mut self, threshold: u32) -> Self {
-        let cooldown = (*self.primary_breaker).cooldown_period;
-        self.primary_breaker = Arc::new(PrimaryBreaker::new(
-            threshold.max(1),
-            cooldown,
-        ));
+        let cooldown = self.primary_breaker.cooldown_period;
+        self.primary_breaker = Arc::new(PrimaryBreaker::new(threshold.max(1), cooldown));
         self
     }
 
     /// Configure the circuit breaker's cooldown period.
     pub fn with_breaker_cooldown(mut self, cooldown: Duration) -> Self {
-        let threshold = (*self.primary_breaker).failure_threshold;
+        let threshold = self.primary_breaker.failure_threshold;
         self.primary_breaker = Arc::new(PrimaryBreaker::new(threshold, cooldown));
         self
     }
@@ -1571,21 +1564,17 @@ mod tests {
         let inner = MockModelClient::new(
             "test",
             vec![
-                MockResult::ServerError,          // 0: r1 primary
+                MockResult::ServerError,                    // 0: r1 primary
                 MockResult::Ok(chat_response("fallback1")), // 1: r1 fallback
-                MockResult::ServerError,          // 2: r2 primary
+                MockResult::ServerError,                    // 2: r2 primary
                 MockResult::Ok(chat_response("fallback1")), // 3: r2 fallback
                 MockResult::Ok(chat_response("primary")),   // 4: r3 primary OK
             ],
         );
 
-        let client = FallbackModelClient::new(
-            inner,
-            "primary".into(),
-            vec!["fallback1".into()],
-            true,
-        )
-        .with_breaker_threshold(3);
+        let client =
+            FallbackModelClient::new(inner, "primary".into(), vec!["fallback1".into()], true)
+                .with_breaker_threshold(3);
 
         // Request 1: primary fails (count=1), fallback succeeds
         client.chat(make_request()).await.unwrap();
@@ -1610,13 +1599,11 @@ mod tests {
     #[test]
     fn clamp_max_tokens_is_noop_when_model_unknown() {
         // A model with no models.dev entry: the clamp returns None (no
-        // ceiling to apply), so max_tokens passes through unchanged.
+        // ceiling to apply), which tells the caller to leave max_tokens
+        // as-is. The contract is "None = no clamp", not "return the input".
         let fitted = Some(4096u32);
         let result = clamp_max_tokens_to_model(fitted, "test", "nonexistent-model-xyz");
-        assert_eq!(
-            result, fitted,
-            "unknown model must not change max_tokens"
-        );
+        assert!(result.is_none(), "unknown model must return None (no clamp): {result:?}");
     }
 
     #[test]
@@ -1635,7 +1622,7 @@ mod tests {
         // A mock client that records the max_tokens it received, so we can
         // assert the value survived the fallback swap.
         struct MaxTokensRecorder {
-            inner: MockModelClient,
+            inner: Arc<MockModelClient>,
             recorded: Arc<std::sync::Mutex<Vec<Option<u32>>>>,
         }
 
@@ -1663,15 +1650,13 @@ mod tests {
 
         let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
         let inner = MaxTokensRecorder {
-            inner: MockModelClient::new(
+            inner: MockModelClient::new_arc(
                 "test",
                 vec![
                     MockResult::ServerError,
                     MockResult::Ok(chat_response("fallback1")),
                 ],
-            )
-            .downcast::<MockModelClient>()
-            .expect("downcast"),
+            ),
             recorded: recorded.clone(),
         };
 

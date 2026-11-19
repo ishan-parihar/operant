@@ -2113,6 +2113,7 @@ pub fn guard_tool_result(
     budget_tokens: usize,
     max_share: f64,
     cost_per_million_input: Option<f64>,
+    persisted_key: Option<&str>,
 ) -> Option<String> {
     let limit = tool_result_token_limit(budget_tokens, max_share);
     let tokens = estimate_tokens(content);
@@ -2132,13 +2133,28 @@ pub fn guard_tool_result(
         ),
         None => String::new(),
     };
+    // F6 (Hydrogen review 2026-11-19): the recovery pointer must be TRUE.
+    // When the evidence layer persisted the full text (the session store
+    // holds it), the marker names `evidence_recall` — the same pointer the
+    // evidence layer's own marker emits — instead of "re-run the tool",
+    // which told the model the withheld bulk was unrecoverable when it was
+    // not. One chokepoint, one promise: every truncation of a persisted
+    // result points at the store.
+    let recovery = match persisted_key {
+        Some(key) => format!(
+            " Full output: `evidence_recall \"{key}\"`. Do not re-run the tool to recover it.\n"
+        ),
+        None => String::from(
+            " Re-run the tool with a narrower slice (head/tail, a line range, or a narrower query) \
+             if you need the rest.\n",
+        ),
+    };
     let header = format!(
         "[operant: oversized tool result for call {tool_call_id} — {} chars, ~{tokens} tokens, \
          {share_pct:.1}% of the {budget_tokens}-token context window. The ceiling for one result \
          is {limit} tokens ({:.0}% of the window).{cost_note} Only the first {{KEPT}} tokens are \
          inlined below; the remainder was withheld so the conversation stays inside its window. \
-         Re-run the tool with a narrower slice (head/tail, a line range, or a narrower query) \
-         if you need the rest.]\n",
+         {recovery}]\n",
         content.chars().count(),
         max_share * 100.0,
     );
@@ -3077,7 +3093,7 @@ mod tests {
     fn oversized_tool_result_should_report_size_and_token_price() {
         let huge = "x".repeat(200_000);
         let budget = 8_000usize;
-        let guarded = guard_tool_result("call_42", &huge, budget, 0.05, Some(3.0))
+        let guarded = guard_tool_result("call_42", &huge, budget, 0.05, Some(3.0), None)
             .expect("200k chars is 50% of an 8k window — guard must fire");
 
         assert!(guarded.contains("call_42"), "names the call it replaced");
@@ -3116,7 +3132,7 @@ mod tests {
     fn oversized_tool_result_should_never_silently_truncate() {
         let huge = "x".repeat(200_000);
         let guarded =
-            guard_tool_result("call_7", &huge, 8_000, 0.05, None).expect("guard must fire");
+            guard_tool_result("call_7", &huge, 8_000, 0.05, None, None).expect("guard must fire");
         // Truncation is always announced, in both the header and the footer.
         assert!(
             guarded.contains("oversized tool result"),
@@ -3139,9 +3155,66 @@ mod tests {
         );
         // A result within the ceiling is returned untouched (no clone, no marker).
         let small = "y".repeat(80);
-        assert_eq!(guard_tool_result("call_8", &small, 8_000, 0.05, None), None);
+        assert_eq!(
+            guard_tool_result("call_8", &small, 8_000, 0.05, None, None),
+            None
+        );
         // 0.0 disables the guard entirely.
-        assert_eq!(guard_tool_result("call_9", &huge, 8_000, 0.0, None), None);
+        assert_eq!(
+            guard_tool_result("call_9", &huge, 8_000, 0.0, None, None),
+            None
+        );
+    }
+
+    /// F6 (Hydrogen review 2026-11-19): when the evidence layer persisted the
+    /// full output at a session-store key, the guard's recovery pointer must
+    /// name that key (`evidence_recall "<key>"`) — the same pointer the
+    /// evidence layer's own marker emits. Before F6 the guard always said
+    /// "re-run the tool with a narrower slice", which told the model the
+    /// withheld bulk was unrecoverable when the store in fact held it. One
+    /// chokepoint, one promise: every truncation of a persisted result points
+    /// at the store.
+    #[test]
+    fn a_persisted_tool_result_names_the_recall_key_not_a_rerun() {
+        let huge = "x".repeat(200_000);
+        let key = "session:abc:tool_call_7";
+        let guarded = guard_tool_result("call_7", &huge, 8_000, 0.05, Some(3.0), Some(key))
+            .expect("200k chars is 50% of an 8k window — guard must fire");
+
+        // The pointer names the store and the key the evidence layer wrote.
+        assert!(
+            guarded.contains(&format!("evidence_recall \"{key}\"")),
+            "persisted result must point at the store, not at a re-run: {guarded}"
+        );
+        assert!(
+            guarded.contains("Do not re-run the tool to recover it"),
+            "says explicitly that a re-run is unnecessary: {guarded}"
+        );
+        // The un-archived advice is NOT present — it would contradict the
+        // pointer right above it.
+        assert!(
+            !guarded.contains("Re-run the tool with a narrower slice"),
+            "a persisted result must not carry the re-run-advice fallback: {guarded}"
+        );
+    }
+
+    /// F6 companion: the re-run advice is the honest fallback for a result
+    /// NOTHING stored — the guard must keep it exactly in that case, and must
+    /// NOT invent a pointer to a store row that does not exist.
+    #[test]
+    fn an_unpersisted_tool_result_keeps_the_rerun_advice() {
+        let huge = "x".repeat(200_000);
+        let guarded = guard_tool_result("call_7", &huge, 8_000, 0.05, Some(3.0), None)
+            .expect("200k chars is 50% of an 8k window — guard must fire");
+
+        assert!(
+            guarded.contains("Re-run the tool with a narrower slice"),
+            "an unpersisted result must keep the re-run advice: {guarded}"
+        );
+        assert!(
+            !guarded.contains("evidence_recall"),
+            "no store pointer may be invented for a result nothing stored: {guarded}"
+        );
     }
 
     // -----------------------------------------------------------------------

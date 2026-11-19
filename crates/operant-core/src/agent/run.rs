@@ -3520,7 +3520,27 @@ impl OperantAgent {
                             (full_body.clone(), None)
                         };
                         let body = self
-                            .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
+                            .guard_tool_output_spend(
+                                &result.tool_call_id,
+                                &result.name,
+                                body,
+                                // F6 (Hydrogen review 2026-11-19): when
+                                // the evidence layer persisted the full text
+                                // (`marker` is Some), the guard's marker points
+                                // at the session store via the SAME key the
+                                // evidence layer's own marker names, so the
+                                // model is never told a persisted result is
+                                // unrecoverable.
+                                marker
+                                    .as_ref()
+                                    .map(|_| {
+                                        crate::agent::evidence::recall::key_for(
+                                            Some(&session_id),
+                                            &result.tool_call_id,
+                                        )
+                                    })
+                                    .as_deref(),
+                            )
                             .await;
                         // The absolute cap trims whatever the guard let
                         // through -- after the guard, so the guard saw the

@@ -814,6 +814,7 @@ impl OperantAgent {
         tool_call_id: &str,
         tool_name: &str,
         content: String,
+        persisted_key: Option<&str>,
     ) -> String {
         let budget = self
             .effective_context_window()
@@ -841,6 +842,16 @@ impl OperantAgent {
             budget,
             max_share,
             price,
+            // F6 (Hydrogen review 2026-11-19): when the evidence layer
+            // persisted this result's full text, the guard's marker must
+            // point at the session store (`evidence_recall`) instead of
+            // "re-run the tool" — the same true pointer the evidence layer's
+            // own marker emits. The caller passes `Some(key)` exactly when
+            // `compress_tool_result` returned a marker (i.e. a lossy result
+            // whose archive row landed); otherwise `None` keeps the re-run
+            // advice, which is the honest fallback for a result nothing
+            // stored.
+            persisted_key,
         ) else {
             return content;
         };
