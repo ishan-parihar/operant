@@ -509,11 +509,11 @@ gitignore is doing its job; leave them alone.
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
   (`AppConfig`) — ONE config file (`~/.operant/operant.toml`) and ONE config type.
   The CLI's `CliConfig` (`crates/operant-cli/src/config.rs`) is an ADAPTER onto it,
-  not a second system: its `config.yaml` / `config.local.yaml` paths are resolved and
-  never parsed (kept only so `operant doctor` can flag a legacy file), and its
-  `delegation.*` / `security.redact_secrets` fields are in-code process knobs with no
-  home in `AppConfig`. F7 was raised as a second live config system; it is not one,
-  and `docs/library/config.md` names what each layer owns
+  not a second system: its legacy-YAML path fields are resolved and never parsed
+  (kept only so `operant doctor` can flag a legacy file from the Python build), and
+  its `delegation.*` / `security.redact_secrets` fields are in-code process knobs
+  with no home in `AppConfig`. F7 was raised as a second live config system; it is
+  not one, and `docs/library/config.md` names what each layer owns
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is
   launched through `operant autonomous` or `operant run --autonomous`
