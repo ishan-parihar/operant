@@ -152,6 +152,47 @@ existing negative-control test in `cron_session_isolation.rs` proves nothing
 the DB path, discard, construct a NEW store over the same database, acquire
 the same key, assert the history is empty. Mutation-prove.
 
+## DO NOT IMPLEMENT THIS TRANCHE WITHOUT AN OPERATOR RULING (recorded 2026-11-19)
+
+**T1 is done by someone else** and this note re-scopes the rest of the plan.
+
+`iter-2680` (peer, `d73063f8`) closed RT-275 itself, at the same time this
+tranche was being built independently. It deleted the same four `Database`
+tool_state/checkpoint methods, went further and also removed the three
+`operant-config` types this plan said to KEEP (ReliabilityConfig,
+MemoryPolicyConfig, MultimodalConfig), and landed a guard test
+(`dead_db_surfaces_stay_dead.rs`) that does the same job as the one written
+here. **T1 is CLOSED and must not be re-done.** The peer's wider deletion is
+correct and this plan's instruction was wrong: `AppConfig` carries
+`#[serde(default, deny_unknown_fields)]` (config.rs:44) and none of those
+three tables are fields on it, so an operator naming `[reliability]` in
+operant.toml already got a hard load error. The types protected nobody. The
+"it is in a published schema" objection the earlier draft raised does not
+survive that: an unreachable schema type whose table is rejected at load is
+not a contract.
+
+**T3 IS BLOCKED ON A RULING, and the plan's "take the durable one" is not
+ours to take.** Q6 in `docs/kb/ASKS.md` (status `open`, asked 2026-11-19)
+asks the operator exactly this question in (a): *should `/reset` destroy the
+persisted transcript or only the in-memory view?* RT-285's own verdict says
+"none is a wrong behaviour today" and "each needs a decision this campaign
+must not make silently". Implementing durable discard is a destructive
+datastore change decided without the person who owns the data, so it stops
+here until Q6 is ruled. `SessionStore::discard` at session/mod.rs:358 and its
+single production caller (`agent/events.rs:525`) are unchanged; RT-389 keeps
+the doc honest in the meantime, so nothing is currently lying.
+
+**T3's premise is half stale already.** The autocompactor third of RT-285 is
+gone from the tree: `rg -n 'Autocompactor' crates/` returns nothing, and even
+the word "autocompact" has no match in `crates/operant-cli/src`. Q6(b) asks
+whether to mount or delete it, and the answer is now "it is already deleted".
+That half of the row can close on measurement once (a) is ruled.
+
+**Next unblocked tranche is T4 (RT-209).** Its own alternative route (re-scope
+the row to "consumer delivered at the seam; event-carried value intentionally
+unread") needs no operator input and no new behaviour, which makes it the
+right next move rather than T3.
+
 ---
 
 # T4 — RT-209: the attribution value has a seam and no subscriber
