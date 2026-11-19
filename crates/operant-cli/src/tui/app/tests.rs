@@ -19,6 +19,19 @@ pub(crate) fn make_app() -> App {
     let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    // (RT-527) Reset the process-global palette to the default BEFORE the app
+    // is built. `App::new` seeds `set_active_theme_enum(settings.theme)` and
+    // `set_role_overrides(config.tui.colors)`, so a fresh app starts from the
+    // DEFAULT theme and NO operator overrides — but a test that switched the
+    // palette mid-run (a `/theme` exercise) leaves its colours installed, and
+    // the next `make_app` inherited them: the same chord then behaved
+    // differently in a later fresh app, and any cross-app sweep was unsound.
+    // The restore is the mirror of the theme tests' own Restore guards:
+    // overrides FIRST (a bundled palette records its pairs as overrides), then
+    // the theme. Both writes land under the lock above, so no concurrent
+    // theme-asserting test can observe the reset mid-flight.
+    crate::tui::theme_colors::set_role_overrides(&std::collections::BTreeMap::new());
+    crate::tui::theme_colors::set_active_theme("default");
     let config = AppConfig::default();
     let settings = Settings::default();
     let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
@@ -19189,5 +19202,85 @@ async fn a_second_surface_request_waits_while_the_dialog_is_open() {
     assert!(
         first_reply_rx.await.is_ok(),
         "the first card's oneshot must still be resolvable after the second card arrives"
+    );
+}
+
+// ---- RT-527: a fresh app starts from the default palette ----------------
+//
+// `make_app()` resets the process-global palette + role overrides to the
+// default BEFORE the app is built, so a test that switched the palette
+// mid-run (a `/theme` exercise) cannot poison the next fresh app. The
+// mutation this guards: drop the reset and a chord driven under a non-default
+// palette behaves differently in the NEXT app — the cross-app sweep defect.
+#[test]
+fn two_fresh_apps_bind_chords_identically() {
+    use crate::tui::vendor::style::palette::{self, Role};
+
+    // App A: drive a theme switch the way a `/theme` exercise does, then
+    // drop it. The switch is the poison; make_app must clear it. The poison
+    // runs under the palette lock, which is RELEASED before make_app —
+    // make_app takes the same (non-reentrant) lock, so holding it across the
+    // call would self-deadlock.
+    {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::tui::theme_colors::set_role_overrides(&std::collections::BTreeMap::from([(
+            "accent".to_string(),
+            "#010203".to_string(),
+        )]));
+        crate::tui::theme_colors::set_active_theme("dark-retro");
+        // The poison is live: the accent is NOT the default's.
+        assert_ne!(
+            palette::palette().rgb(Role::Accent),
+            palette::Palette::default().rgb(Role::Accent),
+            "the poison must actually repaint the role table, or this test \
+             proves nothing"
+        );
+    }
+    // The guard is dropped here; make_app's own reset runs under its own
+    // acquisition of the same lock.
+
+    // App B: a fresh app. make_app resets the palette; the accent is the
+    // default's again. The expected value is the DEFAULT THEME's own accent,
+    // derived WITHOUT touching the process-global: `Role::Accent` is seeded
+    // from the palette's `emphasis` field (see `roles_for_field`), so
+    // `for_theme("default").emphasis` IS the rgb a clean role table holds.
+    // Deriving it this way is also what makes the make_app reset the ONLY
+    // thing between poison and assertion — any manual pre-clean here (the
+    // first draft did exactly that, via a set_active_theme call) would clear
+    // the poison itself and make the mutation unobservable.
+    let clean_default = {
+        // `ColorPalette` and `Color` are `theme_colors` types (the vendor
+        // palette module is private to it), and the emphasis field IS the
+        // accent role (see `roles_for_field`), so this is the rgb a clean
+        // role table holds for the default theme.
+        let default = crate::tui::theme_colors::ColorPalette::for_theme("default")
+            .expect("the default theme is built in");
+        match default.emphasis {
+            ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+            _ => panic!("the default theme's emphasis is an Rgb colour"),
+        }
+    };
+    let app = make_app();
+    drop(app);
+    assert_eq!(
+        palette::palette().rgb(Role::Accent),
+        clean_default,
+        "a fresh app must start from the default palette — a leftover theme \
+         or operator override makes the same chord behave differently in a \
+         later app (RT-527)"
+    );
+
+    // And the chord itself is bound the same in both apps: Alt+B moves the
+    // cursor back a word in a fresh app exactly as it does in isolation.
+    let mut app = make_app();
+    app.prompt_input
+        .replace_text("focus on the parser".to_string());
+    app.handle_key_event(press_key(KeyCode::Char('b'), KeyModifiers::ALT));
+    assert_eq!(
+        app.prompt_input.cursor, 13,
+        "Alt+B in a fresh app must move the cursor back a word (the poison \
+         made it a silent no-op); 13 is the start of \"parser\""
     );
 }
