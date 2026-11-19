@@ -4741,3 +4741,71 @@ fn gateway_choice_reply_is_unchanged_by_the_confirm_arm() {
     assert_eq!(reply["kind"], "choice");
     assert_eq!(reply["choice_id"], "b");
 }
+
+/// B3 (iter-2666): a `ChoicePicker` card gets one `choice:<idx>` button per
+/// option, in order. This is the regression pin for the audit finding that
+/// NOTHING ever attached an inline keyboard to a surface card, so the
+/// `choice:` callback branch could not fire on one.
+#[test]
+fn attach_choice_buttons_puts_one_button_per_choice() {
+    use operant_core::ui::{ChoiceOption, Provenance, SurfaceOp, WidgetNode};
+    let op = SurfaceOp::CreateSurface {
+        surface_id: "s1".into(),
+        intent: "pick one".into(),
+        provenance: Provenance::ToolVerified {
+            tool_name: "ui_request_input".into(),
+            source_uri: None,
+        },
+        body: WidgetNode::ChoicePicker {
+            question: "pick".into(),
+            choices: vec![
+                ChoiceOption {
+                    id: "a".into(),
+                    label: "alpha".into(),
+                    description: None,
+                },
+                ChoiceOption {
+                    id: "b".into(),
+                    label: "beta".into(),
+                    description: None,
+                },
+            ],
+        },
+    };
+    let msg = OutgoingMessage::new("chat", "pick one");
+    let buttons = crate::gateway_runner::attach_choice_buttons(msg, &op)
+        .buttons
+        .expect("buttons attached");
+    assert_eq!(buttons.len(), 2, "two rows, one button each");
+    assert_eq!(buttons[0].len(), 1);
+    assert_eq!(buttons[1].len(), 1);
+    assert_eq!(buttons[0][0].callback_data, "choice:0");
+    assert_eq!(buttons[1][0].callback_data, "choice:1");
+    assert_eq!(buttons[0][0].text, "alpha");
+}
+
+/// A card with no interactive widget gets NO buttons (every plain card keeps
+/// its existing shape).
+#[test]
+fn attach_choice_buttons_leaves_a_plain_card_alone() {
+    use operant_core::ui::{Provenance, SemanticTone, SurfaceOp, WidgetNode};
+    let op = SurfaceOp::CreateSurface {
+        surface_id: "s1".into(),
+        intent: "info".into(),
+        provenance: Provenance::ToolVerified {
+            tool_name: "ui_render_surface".into(),
+            source_uri: None,
+        },
+        body: WidgetNode::Text {
+            text: "just text".into(),
+            tone: SemanticTone::Default,
+            mono: false,
+        },
+    };
+    let msg = OutgoingMessage::new("chat", "just text");
+    assert!(
+        crate::gateway_runner::attach_choice_buttons(msg, &op)
+            .buttons
+            .is_none()
+    );
+}

@@ -348,6 +348,155 @@ impl TelegramAdapter {
             .map(|id| id.to_string())
             .unwrap_or_default())
     }
+
+    /// Send a message that carries MEDIA and/or BUTTONS (B3, iter-2666).
+    ///
+    /// The single send path for "a card the operator can act on":
+    /// `send_message` and `send_message_return_id` both route here when the
+    /// message has a PNG or an inline keyboard, so the two entry points can
+    /// no longer disagree about what a surface card is. Returns the Telegram
+    /// message id so the streaming/edit path can still target it.
+    ///
+    /// - media present: `sendPhoto` (multipart), text as the caption, capped
+    ///   at Telegram's 1024-char caption limit (a longer caption is
+    ///   truncated, never dropped — the image is the surface).
+    /// - buttons present: an `inline_keyboard` `reply_markup` under the
+    ///   photo or the text message.
+    /// - neither (defensive): falls through to `send_telegram_inner`.
+    async fn send_telegram_with_extras(&self, message: &OutgoingMessage) -> Result<String> {
+        // Build the reply_markup once; both the photo and the text paths use it.
+        let reply_markup = message.buttons.as_ref().and_then(|rows| {
+            if rows.is_empty() {
+                return None;
+            }
+            let keyboard: Vec<Vec<serde_json::Value>> = rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|b| {
+                            serde_json::json!({
+                                "text": b.text,
+                                "callback_data": b.callback_data,
+                            })
+                        })
+                        .collect()
+                })
+                .collect();
+            Some(serde_json::json!({ "inline_keyboard": keyboard }))
+        });
+
+        if let Some(png) = message.media.as_ref() {
+            let caption: String = message.content.chars().take(1024).collect();
+            let part = reqwest::multipart::Part::bytes(png.clone())
+                .file_name("card.png")
+                .mime_str("image/png")
+                .map_err(|e| crate::error::Error::Agent(format!("bad PNG part: {e}")))?;
+            let mut form = reqwest::multipart::Form::new()
+                .text("chat_id", message.channel_id.clone())
+                .part("photo", part);
+            if !caption.is_empty() {
+                form = form.text("caption", caption);
+            }
+            if let Some(tid) = message.thread_id {
+                form = form.text("message_thread_id", tid.to_string());
+            }
+            if let Some(reply) = message.reply_to.as_deref() {
+                form = form.text("reply_to_message_id", reply.to_string());
+            }
+            if let Some(markup) = reply_markup.as_ref() {
+                form = form.text("reply_markup", markup.to_string());
+            }
+            let response = self
+                .client
+                .post(format!("{}/sendPhoto", self.api_url()))
+                .multipart(form)
+                .send()
+                .await?;
+            let status = response.status();
+            if send_outcome(status.as_u16()) == SendOutcome::Failed {
+                let err = response
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|d| d["description"].as_str().map(String::from))
+                    .unwrap_or_else(|| status.as_u16().to_string());
+                // A photo Telegram rejects (too large, bad format, blocked)
+                // must NOT lose the card: degrade to the text fallback with
+                // the buttons, which is the same shape the non-image adapters
+                // produce.
+                tracing::warn!(
+                    error = %err,
+                    "Telegram rejected the photo send (HTTP {}); falling back to text with buttons",
+                    status.as_u16()
+                );
+                return self
+                    .send_telegram_with_buttons(&message.content, message, reply_markup)
+                    .await;
+            }
+            let data: serde_json::Value = response.json().await?;
+            return Ok(data["result"]["message_id"]
+                .as_i64()
+                .map(|id| id.to_string())
+                .unwrap_or_default());
+        }
+
+        // Text + buttons (no media).
+        self.send_telegram_with_buttons(&message.content, message, reply_markup)
+            .await
+    }
+
+    /// The text half of `send_telegram_with_extras`: send `text` as a
+    /// message with the given `reply_markup` (may be `None`), honoring the
+    /// reply-to/thread fields. Used both directly (text + buttons) and as
+    /// the degrade path when a photo send is rejected.
+    async fn send_telegram_with_buttons(
+        &self,
+        text: &str,
+        message: &OutgoingMessage,
+        reply_markup: Option<serde_json::Value>,
+    ) -> Result<String> {
+        let html = markdown_to_telegram_html(text);
+        let mut body = serde_json::json!({
+            "chat_id": message.channel_id,
+            "text": html,
+            "parse_mode": "HTML",
+        });
+        if let Some(reply) = message.reply_to.as_deref() {
+            body["reply_to_message_id"] = serde_json::json!(reply);
+        }
+        if let Some(tid) = message.thread_id {
+            body["message_thread_id"] = serde_json::json!(tid);
+        }
+        if let Some(markup) = reply_markup {
+            body["reply_markup"] = markup;
+        }
+        let response = self
+            .client
+            .post(format!("{}/sendMessage", self.api_url()))
+            .json(&body)
+            .send()
+            .await?;
+        let status = response.status();
+        if send_outcome(status.as_u16()) == SendOutcome::Failed {
+            let err = response
+                .text()
+                .await
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|d| d["description"].as_str().map(String::from))
+                .unwrap_or_else(|| status.as_u16().to_string());
+            return Err(crate::error::Error::Agent(format!(
+                "Telegram rejected the card send: HTTP {} ({err}).",
+                status.as_u16()
+            )));
+        }
+        let data: serde_json::Value = response.json().await?;
+        Ok(data["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string())
+            .unwrap_or_default())
+    }
 }
 
 /// Count UTF-16 code units in a string (Telegram's length metric).
@@ -580,65 +729,13 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
-        // B2 (iter-2656): a message with image bytes uploads them via
-        // sendPhoto, with the text as the caption. Telegram's caption cap is
-        // 1024 chars; a longer text is truncated to it rather than dropped,
-        // because the image is the surface and the caption is the label.
-        if let Some(png) = message.media.as_ref() {
-            let caption: String = message.content.chars().take(1024).collect();
-            let mut body = serde_json::json!({
-                "chat_id": message.channel_id,
-                "photo": png,
-            });
-            if !caption.is_empty() {
-                body["caption"] = serde_json::json!(caption);
-            }
-            if let Some(tid) = message.thread_id {
-                body["message_thread_id"] = serde_json::json!(tid);
-            }
-            if let Some(reply) = message.reply_to.as_deref() {
-                body["reply_to_message_id"] = serde_json::json!(reply);
-            }
-            // multipart: the photo goes as a file part named "photo" (a bare
-            // byte array with the right content type), everything else as
-            // form fields — the same shape curl -F photo=@card.png sends.
-            let part = reqwest::multipart::Part::bytes(png.clone())
-                .file_name("card.png")
-                .mime_str("image/png")
-                .map_err(|e| crate::error::Error::Agent(format!("bad PNG part: {e}")))?;
-            let form = reqwest::multipart::Form::new()
-                .text("chat_id", message.channel_id.clone())
-                .part("photo", part);
-            let mut form = form;
-            if !caption.is_empty() {
-                form = form.text("caption", caption);
-            }
-            if let Some(tid) = message.thread_id {
-                form = form.text("message_thread_id", tid.to_string());
-            }
-            if let Some(reply) = message.reply_to.as_deref() {
-                form = form.text("reply_to_message_id", reply.to_string());
-            }
-            let response = self
-                .client
-                .post(format!("{}/sendPhoto", self.api_url()))
-                .multipart(form)
-                .send()
-                .await?;
-            let status = response.status();
-            if send_outcome(status.as_u16()) == SendOutcome::Failed {
-                let err = response
-                    .text()
-                    .await
-                    .ok()
-                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                    .and_then(|d| d["description"].as_str().map(String::from))
-                    .unwrap_or_else(|| status.as_u16().to_string());
-                return Err(crate::error::Error::Agent(format!(
-                    "Telegram rejected the photo send: HTTP {} ({err}).",
-                    status.as_u16()
-                )));
-            }
+        // B2/B3 (iter-2666): media and/or buttons route through the one
+        // extras path, so `send_message` and `send_message_return_id` can
+        // never disagree about what a surface card is. A photo Telegram
+        // rejects degrades to the text fallback with the buttons instead of
+        // dropping the card (that is inside `send_telegram_with_extras`).
+        if message.media.is_some() || message.buttons.is_some() {
+            self.send_telegram_with_extras(&message).await?;
             return Ok(());
         }
         let chunks = chunk_text(&message.content, 4000);
@@ -674,6 +771,16 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_message_return_id(&self, message: OutgoingMessage) -> Result<String> {
+        // B3 (iter-2666): route through send_message so the MEDIA upload
+        // (sendPhoto) and the BUTTON plane both work on this path too. This
+        // method previously chunked the text only, so a surface card sent
+        // from the gateway's SurfaceRendered arm silently lost its PNG -- the
+        // whole B2 rasteriser was dead in production because the one caller
+        // the gateway uses is this one.
+        if message.media.is_some() || message.buttons.is_some() {
+            let id = self.send_telegram_with_extras(&message).await?;
+            return Ok(id);
+        }
         let chunks = chunk_text(&message.content, 4000);
         let id = self
             .send_telegram_inner(

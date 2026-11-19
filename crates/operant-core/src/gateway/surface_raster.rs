@@ -66,10 +66,7 @@ struct Cell {
 
 impl Default for Cell {
     fn default() -> Self {
-        Self {
-            ch: ' ',
-            fg: 7,
-        }
+        Self { ch: ' ', fg: 7 }
     }
 }
 
@@ -489,8 +486,7 @@ fn render_node(node: &WidgetNode, cols: usize, grid: &mut Grid, row: &mut usize)
             }
         }
         WidgetNode::Badge { label, tone } => {
-            let mut c = 0;
-            for ch in label.chars() {
+            for (c, ch) in label.chars().enumerate() {
                 grid.put(
                     c,
                     *row,
@@ -499,7 +495,6 @@ fn render_node(node: &WidgetNode, cols: usize, grid: &mut Grid, row: &mut usize)
                         fg: tone_index(*tone),
                     },
                 );
-                c += 1;
             }
             *row += 1;
         }
@@ -529,8 +524,7 @@ fn render_node(node: &WidgetNode, cols: usize, grid: &mut Grid, row: &mut usize)
             match kind {
                 ChartKind::Sparkline => {
                     let max = data.iter().map(|d| d.value.abs()).fold(0.0f64, f64::max);
-                    let mut c = 0;
-                    for d in data {
+                    for (c, d) in data.iter().enumerate() {
                         let frac = if max > 0.0 { d.value.abs() / max } else { 0.0 };
                         let ch = match (frac * 7.0) as usize {
                             0 => '▁',
@@ -542,8 +536,7 @@ fn render_node(node: &WidgetNode, cols: usize, grid: &mut Grid, row: &mut usize)
                             6 => '▇',
                             _ => '█',
                         };
-                        grid.put(c, *row, Cell { ch, fg: 12});
-                        c += 1;
+                        grid.put(c, *row, Cell { ch, fg: 12 });
                     }
                     *row += 1;
                 }
@@ -742,14 +735,7 @@ fn render_table_grid(
     let mut c = 0;
     for (i, column) in columns.iter().enumerate() {
         if i > 0 {
-            grid.put(
-                c,
-                *row,
-                Cell {
-                    ch: ' ',
-                    fg: 8,
-                },
-            );
+            grid.put(c, *row, Cell { ch: ' ', fg: 8 });
             c += 1;
         }
         grid.text(c, *row, &column.header, 7);
@@ -767,14 +753,14 @@ fn render_table_grid(
     *row += 1;
     for r in rows {
         let mut c = 0;
-        for i in 0..count {
+        for (i, w) in widths.iter().enumerate().take(count) {
             if i > 0 {
                 c += 1;
             }
             let cell = r.cells.get(i).cloned().unwrap_or_default();
-            let text: String = cell.chars().take(widths[i]).collect();
+            let text: String = cell.chars().take(*w).collect();
             grid.text(c, *row, &text, 7);
-            c += widths[i];
+            c += w;
         }
         *row += 1;
     }

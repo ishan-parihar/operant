@@ -215,6 +215,36 @@ mod tests {
         assert_eq!(row.op_json, "v2");
     }
 
+    /// B4 / RT-598 (iter-2666): the durable-resolve flow a late tap takes
+    /// when the in-memory oneshot is gone -- read the row, resolve against its
+    /// choice_ids, answer it, and a REPLAY must be a no-op. This is the
+    /// regression pin for the audit finding that B4 only ANNOTATED a row and
+    /// never resolved from it.
+    #[test]
+    fn a_late_tap_resolves_from_the_persisted_row() {
+        let c = conn();
+        register(
+            &c,
+            "s1",
+            "tg:1",
+            "{\"op\":\"create\"}",
+            "[\"a\",\"b\"]",
+            "t0",
+        )
+        .unwrap();
+        // The tap handler's read-back: newest-first is oldest-first on purpose,
+        // so the CARD the operator is looking at is the one answered.
+        let rows = pending_for_channel(&c, "tg:1").unwrap();
+        let row = rows.into_iter().next().expect("the card is still pending");
+        assert_eq!(row.choice_ids(), vec!["a", "b"]);
+        // Resolve `choice:1` (index 1 -> ids[0] = "a") and answer durably.
+        assert!(answer(&c, "s1", "{\"kind\":\"choice\",\"choice_id\":\"a\"}", "t1").unwrap());
+        // A replayed tap finds no pending row: the answer is durable and a
+        // double-tap cannot double-answer.
+        assert!(pending_for_channel(&c, "tg:1").unwrap().is_empty());
+        assert!(!answer(&c, "s1", "{}", "t2").unwrap());
+    }
+
     #[test]
     fn pending_for_channel_orders_oldest_first() {
         let c = conn();

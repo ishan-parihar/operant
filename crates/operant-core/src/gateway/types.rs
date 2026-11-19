@@ -266,6 +266,25 @@ pub struct OutgoingMessage {
     /// v1) fall back to the text — the degrade is per-adapter, never a
     /// dropped message.
     pub media: Option<Vec<u8>>,
+    /// Inline-keyboard rows (B3, iter-2666): label + callback_data per
+    /// button, one inner Vec per row. Telegram renders these as an inline
+    /// keyboard under the message; every other adapter ignores them and the
+    /// message degrades to the text + the operator's prose reply. `None` (or
+    /// an empty vec) means no buttons. This is the button plane the surface
+    /// cards needed: without it a `ChoicePicker` could only be answered by
+    /// typing the option number, because nothing ever attached `reply_markup`
+    /// to a surface card.
+    pub buttons: Option<Vec<Vec<Button>>>,
+}
+
+/// One inline-keyboard button (B3, iter-2666): a label the operator reads
+/// and a `callback_data` string the platform sends back on tap.
+#[derive(Debug, Clone)]
+pub struct Button {
+    /// The label the operator reads.
+    pub text: String,
+    /// The callback payload sent back on tap (`choice:<idx>` for surfaces).
+    pub callback_data: String,
 }
 
 impl OutgoingMessage {
@@ -279,12 +298,21 @@ impl OutgoingMessage {
             thread_id: None,
             target_platform: None,
             media: None,
+            buttons: None,
         }
     }
 
     /// Attach PNG bytes (B2, iter-2656). The text stays as the caption.
     pub fn with_media(mut self, png: Vec<u8>) -> Self {
         self.media = Some(png);
+        self
+    }
+
+    /// Attach inline-keyboard rows (B3, iter-2666). Telegram renders them as
+    /// an inline keyboard under the message; other adapters ignore them and
+    /// the message degrades to text + the operator's prose reply.
+    pub fn with_buttons(mut self, buttons: Vec<Vec<Button>>) -> Self {
+        self.buttons = Some(buttons);
         self
     }
 
@@ -962,4 +990,42 @@ pub fn picker_label(name: &str, description: &str) -> String {
     }
     let kept: String = label.chars().take(MAX_LABEL - 1).collect();
     format!("{kept}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B3 (iter-2666): the button plane round-trips onto the message, so the
+    /// adapter's send path can see it. This is the regression pin for the
+    /// audit finding that surface cards carried NO buttons at all -- nothing
+    /// ever attached a `reply_markup`, so the `choice:` callback branch could
+    /// never fire on a surface card.
+    #[test]
+    fn with_buttons_roundtrips_rows_and_callback_data() {
+        let msg = OutgoingMessage::new("chat", "pick one").with_buttons(vec![vec![
+            Button {
+                text: "Ship".into(),
+                callback_data: "choice:0".into(),
+            },
+            Button {
+                text: "Hold".into(),
+                callback_data: "choice:1".into(),
+            },
+        ]]);
+        let rows = msg.buttons.expect("buttons attached");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 2);
+        assert_eq!(rows[0][0].callback_data, "choice:0");
+        assert_eq!(rows[0][1].text, "Hold");
+    }
+
+    /// A message with no buttons stays `None` (the common case -- every
+    /// existing send path must not grow a keyboard).
+    #[test]
+    fn default_has_no_buttons() {
+        let msg = OutgoingMessage::new("chat", "hello");
+        assert!(msg.buttons.is_none());
+        assert!(msg.media.is_none());
+    }
 }

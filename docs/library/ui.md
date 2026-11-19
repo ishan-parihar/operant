@@ -12,15 +12,25 @@ Source: `crates/operant-core/src/ui/mod.rs` (the IR types and nothing
 else), `crates/operant-core/src/ui/gate.rs` (validation and scrubbing),
 `crates/operant-core/src/ui/request.rs` (the host-request channel),
 `crates/operant-core/src/ui/plain.rs` (the width-bounded plain-text
-fallback), `crates/operant-core/src/tools/ui_tool.rs` (the two tools),
-`crates/operant-cli/src/tui/adapter_types/tui_app.rs` (the only production
-host registration).
+fallback), `crates/operant-core/src/ui/surface_queue.rs` (the durable HITL
+queue, B4), `crates/operant-core/src/gateway/surface_raster.rs` (the
+cell-grid PNG rasteriser, B2), `crates/operant-core/src/gateway/types.rs`
+(`OutgoingMessage.media` + the inline-keyboard button plane, B2/B3),
+`crates/operant-core/src/tools/ui_tool.rs` (the two tools),
+`crates/operant-cli/src/tui/surface_widget.rs` (the TUI widget renderer,
+B0), `crates/operant-cli/src/tui/adapter_types/tui_app.rs` (the only
+production host registration).
 
-Plan: `docs/plans/2026-11-18-composable-generative-ui-surface-ir-for-the-tui-and-the-gate.md`.
-Landed so far: T1a (IR + gate), T1b (the two tools), T2 (`ui_request_input`
-reachable in the TUI), and iter-2640 (the gateway receiver, turn-scoped
-capabilities). T3 (gateway rasteriser) and T4 (the durable HITL queue) are
-NOT in v1.
+Plan: `docs/plans/2026-11-18-composable-generative-ui-surface-ir-for-the-tui-and-the-gate.md`
+and its successor `docs/plans/2026-11-19-close-the-remaining-generative-ui-gaps-the-gateway-rasterise.md`
+(B0-B4). Landed: T1a (IR + gate), T1b (the two tools), T2
+(`ui_request_input` reachable in the TUI), iter-2640 (the gateway receiver,
+turn-scoped capabilities), B0 (the TUI widget renderer + the `[v]` raw
+toggle, `tui/surface_widget.rs`), B2 (the gateway rasteriser,
+`gateway/surface_raster.rs`, PNG with no font stack) and `OutgoingMessage.media`,
+B3 (the `choice:<idx>` button plane on surface cards + the callback
+resolution), and B4 (the durable HITL queue, `ui/surface_queue.rs`, which
+closed RT-598).
 
 ## Why this exists
 
@@ -125,7 +135,8 @@ human that is not there — the same rule `clarify` uses.
 
 WASM custom widgets, a Draft-Published widget registry (the plugins crate's
 `manifest.toml` + `ToolRegistry` capability seam is enough for a plugin to
-return a `WidgetNode`), a resvg card renderer, TOON hydration at 30 fps,
-TUI form cards (`kind: form` is refused TUI-side), and
-`ui_request_input(kind: approval)` (that routes through the existing
-permission dialog, not a surface card). The gateway rasteriser is T3.
+return a `WidgetNode`), a resvg card renderer (the rasteriser is the
+cell-grid `surface_raster.rs` with a built-in bitmap font, no font stack),
+TOON hydration at 30 fps, TUI form cards (`kind: form` is refused TUI-side),
+and `ui_request_input(kind: approval)` (that routes through the existing
+permission dialog, not a surface card).

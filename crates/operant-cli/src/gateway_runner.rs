@@ -819,22 +819,6 @@ pub(crate) type PendingSurfaceQuestions =
 /// through both of them.
 pub static PENDING_SURFACE_QUESTIONS: OnceLock<PendingSurfaceQuestions> = OnceLock::new();
 
-/// Pending surface-op entries, keyed by the op's `surface_id`.
-///
-/// B3 (iter-2657): a button tap on a rendered surface arrives as
-/// `callback_data = "choice:<idx>"` (the same shape the clarify buttons
-/// use), which is useless without the choice ids that were offered. The
-/// `SurfaceRendered` arm registers the op here before sending the card, so
-/// the callback handler can resolve the index to the choice id the agent
-/// asked for. Removed when the surface's question resolves (the same
-/// `PENDING_SURFACE_QUESTIONS` intercept) or on the 120 s timeout, so the
-/// map never grows past the number of cards actually in flight.
-pub(crate) type PendingSurfaceOps =
-    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, operant_core::ui::SurfaceOp>>>>>;
-
-/// Global store of pending surface ops (B3), keyed by `surface_id`.
-pub static PENDING_SURFACE_OPS: OnceLock<PendingSurfaceOps> = OnceLock::new();
-
 /// The answer a surface gets when nobody could answer it.
 ///
 /// The tool treats a dismissed prompt as a normal outcome ("user dismissed"), so
@@ -849,9 +833,70 @@ pub(crate) fn dismissed_surface_reply() -> serde_json::Value {
 ///
 /// A 1-based number (a button tap's index, or a digit typed by hand) or a
 /// matching label maps to that choice's id; anything else is free text. This is
+/// B3 (iter-2666): attach `choice:<idx>` inline buttons to a surface card
+/// when the op carries a `ChoicePicker` or a `Confirm`. Telegram renders them
+/// under the message; every other adapter ignores them and the operator
+/// answers by typing the option number (the prose path).
+///
+/// This is the button plane the plan's mechanism #3 assumed: without it a
+/// surface card could never be TAPPED, because nothing attached
+/// `reply_markup` to it -- the `choice:` callback branch only ever fired for
+/// clarify cards.
+/// Resolve a surface reply from the operator's text, given the choice ids that
+/// were offered.
+///
+/// A 1-based number (a button tap's index, or a digit typed by hand) or a
+/// matching label maps to that choice's id; anything else is free text. This is
 /// the gateway twin of `channel_drains::surface_reply_for` in the TUI: the two
 /// hosts must answer with the SAME shape, because the tool parses one format
 /// and does not know which host asked.
+fn attach_choice_buttons(
+    msg: OutgoingMessage,
+    op: &operant_core::ui::SurfaceOp,
+) -> OutgoingMessage {
+    let choices: Option<Vec<(String, String)>> = op.widgets().iter().find_map(|w| match w {
+        operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => Some(
+            choices
+                .iter()
+                .map(|c| (c.label.clone(), c.id.clone()))
+                .collect::<Vec<_>>(),
+        ),
+        operant_core::ui::WidgetNode::Confirm { default, .. } => {
+            let labels = if *default {
+                vec!["Yes".to_string(), "No".to_string()]
+            } else {
+                vec!["No".to_string(), "Yes".to_string()]
+            };
+            Some(
+                labels
+                    .into_iter()
+                    .map(|l| {
+                        let id = l.to_lowercase();
+                        (l, id)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }
+        _ => None,
+    });
+    match choices {
+        Some(choices) if !choices.is_empty() => {
+            let rows = choices
+                .into_iter()
+                .enumerate()
+                .map(|(i, (label, _id))| {
+                    vec![operant_core::gateway::Button {
+                        text: label,
+                        callback_data: format!("choice:{i}"),
+                    }]
+                })
+                .collect::<Vec<_>>();
+            msg.with_buttons(rows)
+        }
+        _ => msg,
+    }
+}
+
 pub(crate) fn surface_reply_from_text(
     choice_ids: Option<&[String]>,
     labels: Option<&[String]>,
@@ -2488,7 +2533,6 @@ fn init_pending_permissions() {
     PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
     PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
     PENDING_SURFACE_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
-    PENDING_SURFACE_OPS.get_or_init(|| std::sync::Mutex::new(None));
 }
 
 /// Store the shared pending-permission map into the global.
@@ -7216,11 +7260,12 @@ pub async fn start_gateway(
                         let base = OutgoingMessage::new(&channel_id, &caption)
                             .no_markdown()
                             .with_thread_id(thread_id);
-                        if png.is_empty() {
+                        let base = if png.is_empty() {
                             base
                         } else {
                             base.with_media(png)
-                        }
+                        };
+                        attach_choice_buttons(base, &op)
                     } else {
                         let text = operant_core::ui::plain::render_plain(
                             &op.widgets_column(),
@@ -7229,15 +7274,14 @@ pub async fn start_gateway(
                                 op.is_synthesized(),
                             ),
                         );
-                        OutgoingMessage::new(&channel_id, &text)
+                        let base = OutgoingMessage::new(&channel_id, &text)
                             .no_markdown()
-                            .with_thread_id(thread_id)
+                            .with_thread_id(thread_id);
+                        attach_choice_buttons(base, &op)
                     };
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
-                    // B3 (iter-2657): register the op so a button tap on this
-                    // card can resolve `choice:<idx>` back to the choice id the
-                    // agent asked for. Only interactive widgets need it; a
-                    // plain card registers nothing and the map stays small.
+                    // B3/B4 (iter-2666): the surface id and whether the op is
+                    // interactive drive the durable-queue registration below.
                     let surface_id = op.surface_id().to_string();
                     let interactive = op.widgets().iter().any(|w| {
                         matches!(
@@ -7246,22 +7290,6 @@ pub async fn start_gateway(
                                 | operant_core::ui::WidgetNode::Confirm { .. }
                         )
                     });
-                    if interactive && let Some(global) = PENDING_SURFACE_OPS.get() {
-                        // Clone out the Arc under the (sync) guard, then drop
-                        // the guard BEFORE the .await on the inner tokio::Mutex
-                        // -- a std::sync::MutexGuard is !Send and cannot cross
-                        // an await inside a tokio::spawn.
-                        let map = {
-                            let mut guard = global.lock().unwrap_or_else(|e| e.into_inner());
-                            if guard.is_none() {
-                                *guard = Some(Arc::new(Mutex::new(HashMap::new())));
-                            }
-                            guard.as_ref().cloned()
-                        };
-                        if let Some(map) = map {
-                            map.lock().await.insert(surface_id.clone(), op.clone());
-                        }
-                    }
                     // B4 / RT-598 (iter-2658): persist the card so it survives
                     // a restart. Only interactive cards are queued (a plain
                     // card has nothing to answer); the choice ids ride
@@ -8596,19 +8624,57 @@ pub async fn start_gateway(
                                                 *guard = Some(pending_map);
                                             }
                                         }
-                                        // Drop the op registry entry too: the card is
-                                        // answered, so a stale lookup cannot leak into
-                                        // the next card with the same surface_id.
-                                        if resolved
-                                            && let Some(global) =
-                                                crate::gateway_runner::PENDING_SURFACE_OPS.get()
-                                        {
-                                            let map = global
-                                                .lock()
-                                                .ok()
-                                                .and_then(|g| g.as_ref().cloned());
-                                            if let Some(map) = map {
-                                                map.lock().await.clear();
+                                        // B4 / RT-598 (iter-2666): the oneshot is gone
+                                        // (the 120 s timeout fired, or the process restarted).
+                                        // The durable queue is the authority now: resolve the
+                                        // tap against the persisted row, mark it answered, and
+                                        // record the answer. This is the half of RT-598 that
+                                        // makes an hours-late tap resolve instead of the
+                                        // timeout string -- the row survives the process, and
+                                        // the answer is written to it. (Delivering to the
+                                        // ORIGINAL turn is a ReAct-loop resume the plan defers;
+                                        // what this guarantees is that the answer is never
+                                        // silently swallowed and a replayed tap is a no-op.)
+                                        if !resolved {
+                                            let db_path = session_db_path_for_dispatch.clone();
+                                            let outcome = (|| -> Option<(rusqlite::Connection, operant_core::ui::surface_queue::PendingSurfaceRow)> {
+                                                let conn = rusqlite::Connection::open(&db_path).ok()?;
+                                                let rows =
+                                                    operant_core::ui::surface_queue::pending_for_channel(
+                                                        &conn,
+                                                        &channel_key,
+                                                    )
+                                                    .ok()?;
+                                                Some((conn, rows.into_iter().next()?))
+                                            })();
+                                            if let Some((conn, row)) = outcome {
+                                                let choice_ids = row.choice_ids();
+                                                let choice_ids = row.choice_ids();
+                                                let idx = cc
+                                                    .get("idx")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0) as usize;
+                                                let answer =
+                                                    crate::gateway_runner::surface_reply_from_text(
+                                                        Some(&choice_ids),
+                                                        None,
+                                                        &format!("{}", idx + 1),
+                                                    );
+                                                let answer_json = answer.to_string();
+                                                let now = chrono::Utc::now().to_rfc3339();
+                                                let sid = row.surface_id.clone();
+                                                let _ = tokio::task::spawn_blocking(move || {
+                                                    let _ = operant_core::ui::surface_queue::answer(
+                                                        &conn, &sid, &answer_json, &now,
+                                                    );
+                                                })
+                                                .await;
+                                                tracing::info!(
+                                                    channel = %channel_key,
+                                                    kind = %answer["kind"],
+                                                    surface = %row.surface_id,
+                                                    "Resolved a surface tap from the durable queue (oneshot gone)"
+                                                );
                                             }
                                         }
                                         return Ok(true);
