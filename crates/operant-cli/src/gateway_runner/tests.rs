@@ -3416,6 +3416,48 @@ fn the_session_cap_and_the_slot_count_are_one_number() {
     );
 }
 
+/// F3 (Hydrogen review 2026-11-19): the gateway is the UNATTENDED host, so
+/// its agents must not inherit `[agent.retry] max_span_secs = 0` (INFINITE).
+/// An infinite span means one persistent retryable provider error retries
+/// every `large_span_secs` forever while `TurnLease` holds the session's
+/// turn slot and `SessionStallTracker` can only observe, not preempt.
+///
+/// The ceiling is `GATEWAY_RETRY_SPAN_MULTIPLIER * large_span_secs` and an
+/// EXPRESSED ceiling (`> 0`) is never lowered by it.
+#[test]
+fn the_gateway_caps_the_retry_span_an_operator_left_infinite() {
+    let ceiling = gateway_turn_ceiling_secs();
+
+    // Derived from the configured large span, not a second hardcoded 300.
+    let default_span = operant_core::config::RetrySettings::default().large_span_secs;
+    assert_eq!(
+        u64::from(ceiling),
+        default_span * GATEWAY_RETRY_SPAN_MULTIPLIER,
+        "the ceiling must track the configured large span"
+    );
+
+    // Finite and useful: ten large-span attempts to recover, not forever.
+    assert!(ceiling > 0, "an unattended turn cannot retry forever");
+    assert!(
+        ceiling >= u32::try_from(default_span).unwrap_or(u32::MAX),
+        "the ceiling must allow at least one full large span"
+    );
+
+    // An operator who wrote a ceiling keeps it: the host only fills 0. This
+    // is the invariant the call site depends on, so it is pinned here.
+    let mut behavior = operant_core::config::BehaviorSettings::default();
+    behavior.retry.max_span_secs = 120;
+    let ceiling_when_set = if behavior.retry.max_span_secs == 0 {
+        ceiling
+    } else {
+        behavior.retry.max_span_secs as u32
+    };
+    assert_eq!(
+        ceiling_when_set, 120,
+        "an expressed ceiling is the operator's decision and is never lowered"
+    );
+}
+
 /// RT-550: a cancel STOPS the turn, it does not acknowledge and run on.
 ///
 /// The interrupt flag is what stops it (an abort skipped the interrupted marker

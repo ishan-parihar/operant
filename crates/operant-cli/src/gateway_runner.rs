@@ -3733,6 +3733,33 @@ fn slot_count_for(max_concurrent_sessions: Option<usize>) -> usize {
         .clamp(1, MAX_AGENT_SLOT_COUNT)
 }
 
+/// The ceiling the gateway's agents place on `[agent.retry] max_span_secs`
+/// when the operator left it at the default `0` (INFINITE).
+///
+/// F3 (Hydrogen review 2026-11-19): an infinite retry span is the right
+/// default for an interactive session and the wrong one for the unattended
+/// gateway daemon — one persistent retryable provider error would retry
+/// every `large_span_secs` forever while `TurnLease` holds the session's
+/// turn slot and `SessionStallTracker` can only observe, not preempt. The
+/// ceiling is `10 * large_span_secs` (default 3,000 s / 50 min), which gives
+/// a healthy-but-slow provider ten large-span attempts to come back while
+/// bounding a wedged turn to a finite, daemon-restart-free span. An
+/// EXPRESSED ceiling (`max_span_secs > 0`) is the operator's decision and is
+/// never lowered by this.
+fn gateway_turn_ceiling_secs() -> u32 {
+    // One read of the SRWL-derived default (via `RetrySettings::default`) so
+    // the multiplier tracks the configured `large_span_secs` rather than a
+    // second hardcoded 300 that could drift from it.
+    let retry = operant_core::config::RetrySettings::default();
+    (retry
+        .large_span_secs
+        .saturating_mul(GATEWAY_RETRY_SPAN_MULTIPLIER)) as u32
+}
+
+/// How many `large_span_secs` a gateway turn may spend before the retry
+/// policy surfaces the typed error instead of sleeping again.
+const GATEWAY_RETRY_SPAN_MULTIPLIER: u64 = 10;
+
 /// One agent slot (RT-508).
 ///
 /// The slot owns the agent AND the one-turn-at-a-time lock that used to
@@ -6110,6 +6137,34 @@ pub async fn start_gateway(
     // the MCP CHILDREN are shared) and the permission channel.
     let slot_count = slot_count_for(app_config.gateway.max_concurrent_sessions);
     tracing::info!(slots = slot_count, "the gateway's agent slots");
+    // F3 (Hydrogen review 2026-11-19): the gateway is the UNATTENDED host.
+    //
+    // `[agent.retry] max_span_secs` defaults to 0 = INFINITE, which is the
+    // right default for an interactive TUI session (a human can press stop)
+    // and the wrong one here: a single persistent retryable provider error
+    // retries every `large_span_secs` (300 s by default) forever, `TurnLease`
+    // holds the session's only turn slot for as long as it does, and one
+    // wedged chat pins an `agent_slot` until the daemon restarts — while
+    // `SessionStallTracker` only makes the wedged turn VISIBLE, it cannot
+    // preempt it. A human pressing stop on a gateway chat is the exception,
+    // not the rule.
+    //
+    // So the gateway and cron agents get a finite ceiling on the SAME
+    // `BehaviorSettings`, cloned per host rather than mutated in place (the
+    // config is shared). An explicit operator ceiling (> 0) still wins:
+    // `max_span_secs.max(ceiling)` would LOWER it, which is not ours to do.
+    let gateway_retry_ceiling_secs = u64::from(gateway_turn_ceiling_secs());
+    let gateway_behavior = {
+        let mut behavior = std::borrow::Cow::Borrowed(&app_config.agent);
+        if behavior.retry.max_span_secs == 0 {
+            behavior.to_mut().retry.max_span_secs = gateway_retry_ceiling_secs;
+            tracing::info!(
+                max_span_secs = gateway_retry_ceiling_secs,
+                "the gateway's agents cap the retry span — unattended turns cannot retry forever"
+            );
+        }
+        behavior.into_owned()
+    };
     let mut slots: Vec<AgentSlot> = Vec::with_capacity(slot_count);
     // (iter-2366) ONE model client for the whole slot pool.
     //
@@ -6170,7 +6225,7 @@ pub async fn start_gateway(
         });
         let mut agent = crate::create_runtime_agent_with_client(
             app_config,
-            &app_config.agent,
+            &gateway_behavior,
             None,
             slot_event_tx,
             &mcp_manager,
@@ -6338,7 +6393,7 @@ pub async fn start_gateway(
     let cron_agent = Arc::new(
         crate::create_runtime_agent_with(
             app_config,
-            &app_config.agent,
+            &gateway_behavior,
             None,
             cron_event_tx,
             &cron_mcp_manager,
