@@ -130,3 +130,36 @@ gate is that the counters exist and are flat.
 - **Risk:** #6 and #7 touch the agent's session-identity and interrupt paths, which the TUI also
   uses. Their regression tests must run against the TUI's resume path too, or the TUI's resume
   silently changes behaviour.
+
+## Amendment 1 (iter-2662) — row 7's attach claim is superseded by the session socket
+
+Appended rather than edited: the plan body above is dated-frozen. Every claim
+here was re-read from the working tree at `378a61db`, not from memory. This
+amendment closes **RT-544** (the plan/comment promise a scale story that does
+not exist).
+
+1. **Row 7's `operant chat`/`run` attach claim is SUPERSEDED.** Row 7 says
+   "the daemon serves ACP over a unix socket; `operant chat`/`run` attach to it
+   instead of building their own runtime". What shipped is a DIFFERENT wire:
+   the **session socket** (`operant_core::session_server::run_session_socket`,
+   bound by `start_gateway` when a session socket path is configured), spoken
+   by `operant chat --attach` (iter-2241) and the TUI's attach render path
+   (iter-2239). `operant run` still builds its own runtime and always will:
+   it is the one-shot path, and the attach story is the INTERACTIVE surfaces.
+   The ACP-over-socket daemon (`operant acp server`) remains a second program;
+   its disposition is RT-543's, decision-gated, and this amendment does not
+   decide it.
+2. **The mechanism diagram (lines 26/29-30) is corrected by this amendment**
+   to the same effect: "the attach point for every CLI session" is the session
+   socket for the interactive surfaces, not ACP-over-socket.
+3. **Row 7's `one_daemon_two_clients_one_shared_child_set` result STANDS** —
+   the two-process test still holds (one daemon, two attached clients, one
+   shared MCP child set), now over the session socket.
+4. **The AGENT_SLOT_COUNT comment the row names is already gone** (iter-2223 /
+   d34177c1 removed the stale "scale story" comment from `gateway_runner.rs`;
+   what stands there now is `DEFAULT_AGENT_SLOT_COUNT` + the RT-548 slot-count
+   comment, both accurate). A reader of the amendment learns both halves are
+   settled.
+5. **RT-542, RT-545, RT-547 and RT-552 are the remaining rows** and are
+   scheduled in `docs/plans/2026-11-19-remaining-implementation-gaps-the-open-ledger-rows-and-the-scale-socket-cluster.md`
+   (T2-T5). RT-542, RT-545 and RT-547 closed in iters 2654/2658/2661.

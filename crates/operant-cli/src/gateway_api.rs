@@ -534,6 +534,84 @@ mod tests {
         }
     }
 
+    /// RT-552: the HTTP session API exposes NO write route — GET only, so a
+    /// write-capable client cannot use it.
+    ///
+    /// The row: "the gateway's session API is read-only — three GET routes" —
+    /// and the pinned-by wants a guard so a future `post`/`put`/`delete` on
+    /// the session API fails here rather than shipping. A SOURCE contract over
+    /// the route table: every `.route(` in `build_router` names `get(`.
+    /// Mutation: add a `.post(...)` route and the count must fail.
+    #[test]
+    fn the_gateway_api_exposes_no_write_route() {
+        let source = include_str!("gateway_api.rs");
+        // The PRODUCTION part of the file: the test module may mention `post`
+        // freely (this test's own source must not trip the guard).
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        // Every route registration, as a `route(` call with its method.
+        let routes = production.matches(".route(").count();
+        assert!(
+            routes >= 3,
+            "the API must register its routes, found {routes} route( calls"
+        );
+        // No write method may appear in the route table. The needle is the
+        // method-registration form `post(` (what `axum::routing::post` and a
+        // bare `post(...)` route both spell), split so this test's own source
+        // cannot satisfy it.
+        for forbidden in [
+            concat!("po", "st("),
+            concat!("pu", "t("),
+            concat!("dele", "te("),
+            concat!("pat", "ch("),
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "the session API must be GET-only: found `{forbidden}` in the \
+                 production route table — writes belong to the session socket \
+                 (RT-552)"
+            );
+        }
+        // And every route names `get(`: the positive half, so the guard
+        // cannot pass by deleting the routes.
+        let gets = production.matches("get(").count();
+        assert!(
+            gets >= routes,
+            "every route must name get( — found {gets} get( for {routes} route("
+        );
+    }
+
+    /// RT-552 (second half): the HTTP API has no route a prompt could use —
+    /// the socket is the write path.
+    ///
+    /// The row's pinned-by: "a test that the socket path can prompt a session
+    /// the HTTP API cannot". The socket half is pinned (iter-2658's wire
+    /// round-trips + the T2 entry-point pin); this is the HTTP half: an
+    /// explicit probe of a write-shaped request against the running API. The
+    /// source contract above proves no `post(` route exists; this proves the
+    /// running server ANSWERS a POST with 405 (method not allowed) rather than
+    /// silently accepting it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_http_api_refuses_a_write_shaped_request() {
+        let api = TestApi::start();
+        // A POST with a valid token and a valid Host — everything a real
+        // client would send. The route table has no post( route, so axum
+        // answers 405 Method Not Allowed.
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", api.port)).expect("connect");
+        let host = format!("127.0.0.1:{}", api.port);
+        let request = format!(
+            "POST /api/sessions HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer [REDACTED]\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).expect("write");
+        stream.flush().expect("flush");
+        let mut reader = BufReader::new(stream);
+        let mut status = String::new();
+        reader.read_line(&mut status).expect("status line");
+        assert!(
+            status.contains("405"),
+            "a write-shaped request must be refused (405), got: {status}"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn sessions_rejects_missing_and_foreign_tokens() {
         let api = TestApi::start();
