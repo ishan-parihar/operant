@@ -11,14 +11,6 @@ pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }
 
-pub(crate) fn default_multimodal_max_images() -> usize {
-    4
-}
-
-pub(crate) fn default_multimodal_max_image_size_mb() -> usize {
-    5
-}
-
 pub(crate) fn normalize_comma_values(values: Vec<String>) -> Vec<String> {
     let mut output = Vec::new();
     for value in values {
@@ -45,28 +37,4 @@ pub(crate) fn default_runtime_trace_path() -> String {
 
 pub(crate) fn default_runtime_trace_max_entries() -> usize {
     200
-}
-
-pub(crate) fn default_provider_retries() -> u32 {
-    2
-}
-
-pub(crate) fn default_provider_backoff_ms() -> u64 {
-    500
-}
-
-pub(crate) fn default_channel_backoff_secs() -> u64 {
-    2
-}
-
-pub(crate) fn default_channel_backoff_max_secs() -> u64 {
-    60
-}
-
-pub(crate) fn default_scheduler_poll_secs() -> u64 {
-    15
-}
-
-pub(crate) fn default_scheduler_retries() -> u32 {
-    2
 }

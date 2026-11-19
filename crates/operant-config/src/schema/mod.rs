@@ -31,7 +31,6 @@
 mod core;
 mod cost;
 mod helpers;
-mod media;
 mod memory_store;
 mod platform_cfg;
 mod proxy;
@@ -39,7 +38,6 @@ mod proxy;
 pub use core::*;
 pub use cost::*;
 pub(crate) use helpers::*;
-pub use media::*;
 pub use memory_store::*;
 pub use platform_cfg::*;
 pub use proxy::*;

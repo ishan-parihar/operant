@@ -2671,26 +2671,12 @@ impl Database {
 
     // === Checkpoint Management ===
 
-    /// Store or update a checkpoint.
-    pub fn store_checkpoint(
-        &self,
-        hash: &str,
-        timestamp: &str,
-        reason: Option<&str>,
-        directory: &str,
-    ) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
-            "INSERT INTO checkpoints (hash, timestamp, reason, directory)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(hash) DO UPDATE SET
-                 reason = excluded.reason,
-                 timestamp = excluded.timestamp",
-            params![hash, timestamp, reason, directory],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to store checkpoint: {}", e)))?;
-        Ok(())
-    }
+    // `store_checkpoint` / `get_checkpoint` were DELETED here (RT-275): they
+    // had zero production callers, and the live checkpoint store is the
+    // filesystem shadow-git manager in tools/checkpoint_tool.rs. The
+    // `checkpoints` TABLE and the `list_checkpoints` / `delete_checkpoint`
+    // methods remain -- `operant checkpoints` (RT-612) reads the shadow
+    // store, and a live database must keep opening.
 
     /// List checkpoints for a directory.
     pub fn list_checkpoints(&self, directory: &str) -> Result<Vec<StoredCheckpoint>> {
@@ -2718,26 +2704,6 @@ impl Database {
             checkpoints.push(row.map_err(|e| Error::Agent(format!("Row error: {}", e)))?);
         }
         Ok(checkpoints)
-    }
-
-    /// Get a specific checkpoint by hash.
-    pub fn get_checkpoint(&self, hash: &str) -> Result<Option<StoredCheckpoint>> {
-        let conn = self.lock_conn()?;
-        let mut stmt = conn
-            .prepare("SELECT hash, timestamp, reason, directory FROM checkpoints WHERE hash = ?1")
-            .map_err(|e| Error::Agent(format!("Failed to prepare get: {}", e)))?;
-
-        let checkpoint = stmt
-            .query_row(params![hash], |row| {
-                Ok(StoredCheckpoint {
-                    hash: row.get(0)?,
-                    timestamp: row.get(1)?,
-                    reason: row.get(2).ok(),
-                })
-            })
-            .ok();
-
-        Ok(checkpoint)
     }
 
     /// Delete a checkpoint.
@@ -2876,56 +2842,12 @@ impl Database {
         Ok(())
     }
 
-    // === Tools State ===
-
-    /// Save tool state for a session.
-    pub fn set_tool_state(&self, session_id: &str, tool_name: &str, state: &Value) -> Result<()> {
-        let state_json = serde_json::to_string(state)?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let conn = self.lock_conn()?;
-        conn.execute(
-            "INSERT INTO tools_state (session_id, tool_name, state_json, updated_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(session_id, tool_name) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
-            params![session_id, tool_name, state_json, now],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to set tool state: {}", e)))?;
-        Ok(())
-    }
-
-    /// Get tool state for a session.
-    pub fn get_tool_state(&self, session_id: &str, tool_name: &str) -> Option<Value> {
-        let conn = self.conn.lock().ok()?;
-        let json: String = conn
-            .query_row(
-                "SELECT state_json FROM tools_state WHERE session_id = ?1 AND tool_name = ?2",
-                params![session_id, tool_name],
-                |row| row.get(0),
-            )
-            .ok()?;
-        serde_json::from_str(&json).ok()
-    }
-
-    /// Clear tool state for a specific tool in a session.
-    pub fn clear_tool_state(&self, session_id: &str, tool_name: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
-            "DELETE FROM tools_state WHERE session_id = ?1 AND tool_name = ?2",
-            params![session_id, tool_name],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to clear tool state: {}", e)))?;
-        Ok(())
-    }
-
-    /// Clear all tool states for a session.
-    pub fn clear_all_tool_states(&self, session_id: &str) -> Result<()> {
-        let conn = self.lock_conn()?;
-        conn.execute(
-            "DELETE FROM tools_state WHERE session_id = ?1",
-            params![session_id],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to clear all tool states: {}", e)))?;
-        Ok(())
-    }
+    // The four DB-backed tool-state methods (set/get/clear_tool_state,
+    // clear_all_tool_states) were DELETED here (RT-275). The live tool-state
+    // store is the JSON file tools/tool_state.rs (tool_state.json), which is
+    // what `operant tools disable` writes and what the runtime reads. These DB
+    // methods had zero production callers; the `tools_state` TABLE remains
+    // because a live database must keep opening.
 
     // === Session Tags ===
 
@@ -4459,45 +4381,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_state_crud() {
-        let db = test_db();
-        let session_id = "test-session";
-
-        let state = serde_json::json!({"count": 42, "active": true});
-
-        // Set
-        db.set_tool_state(session_id, "code_executor", &state)
-            .unwrap();
-
-        // Get
-        let retrieved = db.get_tool_state(session_id, "code_executor");
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap()["count"], 42);
-
-        // Get nonexistent
-        assert!(db.get_tool_state(session_id, "nonexistent").is_none());
-
-        // Update
-        let new_state = serde_json::json!({"count": 99});
-        db.set_tool_state(session_id, "code_executor", &new_state)
-            .unwrap();
-        let retrieved = db.get_tool_state(session_id, "code_executor").unwrap();
-        assert_eq!(retrieved["count"], 99);
-
-        // Clear single
-        db.set_tool_state(session_id, "other_tool", &serde_json::json!({"x": 1}))
-            .unwrap();
-        db.clear_tool_state(session_id, "other_tool").unwrap();
-        assert!(db.get_tool_state(session_id, "other_tool").is_none());
-        // First tool still exists
-        assert!(db.get_tool_state(session_id, "code_executor").is_some());
-
-        // Clear all
-        db.clear_all_tool_states(session_id).unwrap();
-        assert!(db.get_tool_state(session_id, "code_executor").is_none());
-    }
-
-    #[test]
     fn test_tag_operations() {
         let db = test_db();
         let session_id = "test-session";
@@ -4810,10 +4693,8 @@ mod tests {
         let db = test_db();
         let session_id = "test-session";
 
-        // Add metadata, tool state, tags, events
+        // Add metadata, tags, events
         db.set_session_metadata(session_id, "k", "v").unwrap();
-        db.set_tool_state(session_id, "tool1", &serde_json::json!({"x": 1}))
-            .unwrap();
         db.add_session_tag(session_id, "mytag").unwrap();
         db.record_event(session_id, "test_event", &serde_json::json!({"ok": true}))
             .unwrap();
@@ -4821,14 +4702,13 @@ mod tests {
         // Delete session
         db.delete_session(session_id).unwrap();
 
-        // Verify cascade: metadata, tags, events, tools_state all gone
+        // Verify cascade: metadata, tags, events all gone
         let meta = db.get_all_session_metadata(session_id).unwrap();
         assert!(meta.is_empty());
         let tags = db.get_session_tags(session_id).unwrap();
         assert!(tags.is_empty());
         let events = db.get_session_events(session_id, None).unwrap();
         assert!(events.is_empty());
-        assert!(db.get_tool_state(session_id, "tool1").is_none());
     }
 
     // === New Tests for Expanded Schema ===
@@ -5050,92 +4930,12 @@ mod tests {
     // === Checkpoint CRUD ===
 
     #[test]
-    fn test_checkpoint_store_and_list() {
-        let db = test_db();
-        let dir = std::env::temp_dir().join(format!("ckpt_dir_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint(
-            "abc123hash",
-            "2024-06-01T12:00:00Z",
-            Some("test checkpoint"),
-            dir.to_str().unwrap(),
-        )
-        .unwrap();
-        let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].hash, "abc123hash");
-        assert_eq!(list[0].reason.as_deref(), Some("test checkpoint"));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_checkpoint_get_by_hash() {
-        let db = test_db();
-        let dir = std::env::temp_dir().join(format!("ckpt_get_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint(
-            "hash_get",
-            "2024-06-01T12:00:00Z",
-            Some("reason"),
-            dir.to_str().unwrap(),
-        )
-        .unwrap();
-        let ckpt = db.get_checkpoint("hash_get").unwrap();
-        assert!(ckpt.is_some());
-        assert_eq!(ckpt.unwrap().hash, "hash_get");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_checkpoint_delete() {
-        let db = test_db();
-        let dir = std::env::temp_dir().join(format!("ckpt_del_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint(
-            "hash_del",
-            "2024-06-01T12:00:00Z",
-            Some("to delete"),
-            dir.to_str().unwrap(),
-        )
-        .unwrap();
-        db.delete_checkpoint("hash_del").unwrap();
-        let ckpt = db.get_checkpoint("hash_del").unwrap();
-        assert!(ckpt.is_none());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn test_checkpoint_list_empty() {
         let db = test_db();
         let dir = std::env::temp_dir().join(format!("ckpt_empty_{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
         let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
         assert!(list.is_empty());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_checkpoint_duplicate_overwrite() {
-        let db = test_db();
-        let dir = std::env::temp_dir().join(format!("ckpt_dup_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok();
-        db.store_checkpoint(
-            "same_hash",
-            "2024-06-01T12:00:00Z",
-            Some("first"),
-            dir.to_str().unwrap(),
-        )
-        .unwrap();
-        db.store_checkpoint(
-            "same_hash",
-            "2024-06-02T12:00:00Z",
-            Some("second"),
-            dir.to_str().unwrap(),
-        )
-        .unwrap();
-        let list = db.list_checkpoints(dir.to_str().unwrap()).unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].reason.as_deref(), Some("second"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -5790,36 +5590,6 @@ mod tests {
         assert_eq!(m.tool_call_id.as_deref(), Some("call_rt123"));
         assert_eq!(m.tool_name.as_deref(), Some("test_tool"));
         assert_eq!(m.token_count, Some(100));
-    }
-
-    // === Tool state tests ===
-
-    #[test]
-    fn test_tool_state_set_get_clear() {
-        let db = test_db();
-        db.set_tool_state(
-            "test-session",
-            "my_tool",
-            &serde_json::json!({"status": "active"}),
-        )
-        .unwrap();
-        let state = db.get_tool_state("test-session", "my_tool");
-        assert!(state.is_some());
-        assert_eq!(state.unwrap()["status"], "active");
-        db.clear_tool_state("test-session", "my_tool").unwrap();
-        assert!(db.get_tool_state("test-session", "my_tool").is_none());
-    }
-
-    #[test]
-    fn test_clear_all_tool_states() {
-        let db = test_db();
-        db.set_tool_state("test-session", "t1", &serde_json::json!({"a": 1}))
-            .unwrap();
-        db.set_tool_state("test-session", "t2", &serde_json::json!({"b": 2}))
-            .unwrap();
-        db.clear_all_tool_states("test-session").unwrap();
-        assert!(db.get_tool_state("test-session", "t1").is_none());
-        assert!(db.get_tool_state("test-session", "t2").is_none());
     }
 
     // === Metadata edge cases ===

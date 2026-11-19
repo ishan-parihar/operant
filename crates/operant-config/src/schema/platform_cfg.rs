@@ -18,23 +18,11 @@ pub enum SearchMode {
     Hybrid,
 }
 
-/// Memory policy configuration (`[memory.policy]` section).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-pub struct MemoryPolicyConfig {
-    /// Maximum entries per namespace (0 = unlimited).
-    #[serde(default)]
-    pub max_entries_per_namespace: usize,
-    /// Maximum entries per category (0 = unlimited).
-    #[serde(default)]
-    pub max_entries_per_category: usize,
-    /// Retention days by category (overrides global). Keys: "core", "daily", "conversation".
-    #[serde(default)]
-    pub retention_days_by_category: std::collections::HashMap<String, u32>,
-    /// Namespaces that are read-only (writes are rejected).
-    #[serde(default)]
-    pub read_only_namespaces: Vec<String>,
-}
+/// `MemoryPolicyConfig` and `ReliabilityConfig` were DELETED here (RT-275):
+/// neither was reachable from `AppConfig`, and `AppConfig` uses
+/// `deny_unknown_fields`, so an operator naming `[memory.policy]` or
+/// `[reliability]` already got a hard load error. They are removed rather than
+/// wired because the runtime has no home for their settings.
 
 /// Observability backend configuration (`[observability]` section).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,59 +90,6 @@ impl Default for ObservabilityConfig {
             runtime_trace_mode: default_runtime_trace_mode(),
             runtime_trace_path: default_runtime_trace_path(),
             runtime_trace_max_entries: default_runtime_trace_max_entries(),
-        }
-    }
-}
-
-/// Reliability and supervision configuration (`[reliability]` section).
-///
-/// Controls provider retries, fallback chains, API key rotation, and channel restart backoff.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-pub struct ReliabilityConfig {
-    /// Retries per provider before failing over.
-    #[serde(default = "default_provider_retries")]
-    pub provider_retries: u32,
-    /// Base backoff (ms) for provider retry delay.
-    #[serde(default = "default_provider_backoff_ms")]
-    pub provider_backoff_ms: u64,
-    /// Fallback provider chain (e.g. `["anthropic", "openai"]`).
-    #[serde(default)]
-    pub fallback_providers: Vec<String>,
-    /// Additional API keys for round-robin rotation on rate-limit (429) errors.
-    /// The primary `api_key` is always tried first; these are extras.
-    #[serde(default)]
-    pub api_keys: Vec<String>,
-    /// Per-model fallback chains. When a model fails, try these alternatives in order.
-    /// Example: `{ "claude-opus-4-20250514" = ["claude-sonnet-4-20250514", "gpt-4o"] }`
-    #[serde(default)]
-    pub model_fallbacks: std::collections::HashMap<String, Vec<String>>,
-    /// Initial backoff for channel/daemon restarts.
-    #[serde(default = "default_channel_backoff_secs")]
-    pub channel_initial_backoff_secs: u64,
-    /// Max backoff for channel/daemon restarts.
-    #[serde(default = "default_channel_backoff_max_secs")]
-    pub channel_max_backoff_secs: u64,
-    /// Scheduler polling cadence in seconds.
-    #[serde(default = "default_scheduler_poll_secs")]
-    pub scheduler_poll_secs: u64,
-    /// Max retries for cron job execution attempts.
-    #[serde(default = "default_scheduler_retries")]
-    pub scheduler_retries: u32,
-}
-
-impl Default for ReliabilityConfig {
-    fn default() -> Self {
-        Self {
-            provider_retries: default_provider_retries(),
-            provider_backoff_ms: default_provider_backoff_ms(),
-            fallback_providers: Vec::new(),
-            api_keys: Vec::new(),
-            model_fallbacks: std::collections::HashMap::new(),
-            channel_initial_backoff_secs: default_channel_backoff_secs(),
-            channel_max_backoff_secs: default_channel_backoff_max_secs(),
-            scheduler_poll_secs: default_scheduler_poll_secs(),
-            scheduler_retries: default_scheduler_retries(),
         }
     }
 }
