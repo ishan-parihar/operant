@@ -234,7 +234,7 @@ run is not evidence.
 
 Ordered by dependency, each leaving the tree compiling and net-positive.
 
-- **B0 — the TUI widget renderer + the `[v]` toggle (added iter-2648; G0).**
+- **B0 — the TUI widget renderer + the `[v]` toggle (added iter-2648; G0). SHIPPED iter-2655** (`surface_widget.rs` 904 lines + `Surface(String)` + `[v]`; confirm/text arms; pushed `1356b1c3`).
   A `render_widget(&WidgetNode, area, buf)` covering all **19** variants in a new
   `crates/operant-cli/src/tui/surface_widget.rs`; `agent_events.rs:647` switches
   from `render_plain` to it, keeping `plain.rs` as the scrollback/text
@@ -254,17 +254,27 @@ Ordered by dependency, each leaving the tree compiling and net-positive.
   visual review. `ui/plain.rs` already matches all 19, so the fallback B0 keeps
   is sound -- the error was in the plan, not the code. A future count change
   must be re-derived the same way (walk the enum), never copied.
-- **B1 — decide D1 and write it down.** No code. Amend the predecessor plan
+- **B1 — decide D1 and write it down.** SHIPPED iter-2651 (`89df7b41`). No code. Amend the predecessor plan
   with the measured 64-byte result and the chosen payload shape, with the
   measurement in the amendment so the next reader cannot re-derive the wrong
   answer. Cheapest tranche and it unblocks B3.
 - **B2 — cell-buffer raster + `OutgoingMessage` media field + Telegram
-  `sendPhoto`.** G1, G2, G5. No callback yet: a surface that renders but has
-  no buttons is still a strict improvement over a text wall.
+  `sendPhoto`.** SHIPPED iter-2656 (`0366dc35`): `surface_raster.rs` 861 lines (5x7 font, 19 variants, SemanticTone->palette, PNG+zlib+CRC32), `OutgoingMessage.media`, `sendPhoto` multipart upload, `SurfaceRendered` arm renders PNG when `caps.images`. G1/G2/G5 green: raster tests 4/4 (byte-reproducible, tone-moves-pixels, fallback matches plain, narrow+empty safe). No callback yet: a surface that renders but has no buttons is still a strict improvement over a text wall.
 - **B3 — the `op:` callback family** over B1's payload shape. G3, G4. Lands
   only after B1; writing it first is how the cap gets rediscovered in code.
-- **B4 — RT-598 durable queue.** G6. Largest tranche; depends on B2/B3 only
-  for the surfaces it must persist, not for their internals.
+  SHIPPED iter-2657 (`61de7af2`): callback data stays `choice:<idx>` (no new
+  bytes on the wire, so the 64-byte cap is untouched); a new
+  `PENDING_SURFACE_OPS` registry (surface_id -> SurfaceOp) is registered by
+  the `SurfaceRendered` arm for ChoicePicker/Confirm cards; a new dispatch
+  branch 1.6b (after clarify 1.6, before 1.7) resolves a tap through
+  `PENDING_SURFACE_QUESTIONS` via `surface_reply_from_text` and clears the op
+  entry. G3/G4 reachable; surface tests 44/44.
+- **B4 — RT-598 durable queue.** SHIPPED iter-2659 (`ddc2f895`): new
+  `pending_surfaces` table (surface_queue.rs, 4 tests) + migration; the
+  `SurfaceRendered` arm registers interactive cards in both the in-memory
+  `PENDING_SURFACE_OPS` map and the durable queue (dedicated WAL connection);
+  dispatch branch 1.6b writes the answer durably so a replayed tap is a no-op.
+  G6 reachable. The 'one DB table, added by B4' invariant holds.
 
 ## Cost
 
