@@ -412,6 +412,7 @@ pub fn heal_config(config: &mut crate::config::AppConfig) -> Vec<Healed> {
     heal_tool_search(&mut config.tools.tool_search, &mut out);
     heal_rate_limit(&mut config.client.rate_limit, &mut out);
     heal_proxy(&mut config.proxy, &mut out);
+    heal_observability(&mut config.observability, &mut out);
 
     out
 }
@@ -643,6 +644,46 @@ fn heal_proxy(proxy: &mut operant_config::schema::ProxyConfig, out: &mut Vec<Hea
     }
 }
 
+/// `[observability]` — the backend enum and the trace mode enum.
+///
+/// RT-274 closed by documenting that six of these seven keys are ACCEPTED BUT
+/// NOT APPLIED: only `backend` is read (by the observer factory), and a set
+/// value on any other is reported by `unused_setting_warnings`. So the heal
+/// has one job here — keep the two ENUM-shaped strings inside the value set
+/// their doc comment promises, because a typo'd backend name silently selects
+/// no observer at all, which is the "observability is on and nothing is
+/// recorded" failure.
+fn heal_observability(
+    obs: &mut operant_config::schema::ObservabilityConfig,
+    out: &mut Vec<Healed>,
+) {
+    const BACKENDS: &[&str] = &["none", "log", "verbose", "prometheus", "otel", "console"];
+    let backend = obs.backend.trim().to_ascii_lowercase();
+    if !BACKENDS.contains(&backend.as_str()) {
+        out.push(Healed::missing(
+            "observability.backend",
+            BACKENDS.join(" | "),
+            "backend is not one of the observer backends, so no observer would be mounted",
+        ));
+        obs.backend = "none".to_string();
+    } else if backend != obs.backend {
+        obs.backend = backend;
+    }
+
+    const TRACE_MODES: &[&str] = &["none", "off", "rolling", "full"];
+    let mode = obs.runtime_trace_mode.trim().to_ascii_lowercase();
+    if !TRACE_MODES.contains(&mode.as_str()) {
+        out.push(Healed::missing(
+            "observability.runtime_trace_mode",
+            TRACE_MODES.join(" | "),
+            "runtime_trace_mode is not a trace mode, so the runtime trace would not record",
+        ));
+        obs.runtime_trace_mode = "off".to_string();
+    } else if mode != obs.runtime_trace_mode {
+        obs.runtime_trace_mode = mode;
+    }
+}
+
 /// `[tools.tool_search]` — a percentage and two token budgets.
 fn heal_tool_search(search: &mut crate::config::ToolSearchSettings, out: &mut Vec<Healed>) {
     // A threshold above 100 would let the catalog listing claim more than the
@@ -731,6 +772,46 @@ fn heal_rate_limit(rl: &mut crate::config::RateLimitSettings, out: &mut Vec<Heal
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A typo'd observer backend silently mounts NO observer, which is the
+    /// "observability is on and nothing is recorded" failure.
+    #[test]
+    fn an_unknown_observer_backend_falls_back_to_none() {
+        let mut config = crate::config::AppConfig::default();
+        config.observability.backend = "opente-lemetry".to_string();
+        let rows = heal_config(&mut config);
+        assert_eq!(config.observability.backend, "none");
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"observability.backend"), "{keys:?}");
+    }
+
+    /// A real backend name is kept, and a case variant is normalized rather
+    /// than rejected — the operator's intent is legible.
+    #[test]
+    fn a_known_observer_backend_is_kept_and_normalized() {
+        let mut config = crate::config::AppConfig::default();
+        config.observability.backend = " OTEL ".to_string();
+        let rows = heal_config(&mut config);
+        assert_eq!(config.observability.backend, "otel");
+        assert!(
+            !rows.iter().any(|r| r.key == "observability.backend"),
+            "a normalized value must not be reported as missing"
+        );
+    }
+
+    /// `runtime_trace_mode` has the same shape: a typo would record nothing.
+    #[test]
+    fn an_unknown_trace_mode_falls_back_to_off() {
+        let mut config = crate::config::AppConfig::default();
+        config.observability.runtime_trace_mode = "rollng".to_string();
+        let rows = heal_config(&mut config);
+        assert_eq!(config.observability.runtime_trace_mode, "off");
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(
+            keys.contains(&"observability.runtime_trace_mode"),
+            "{keys:?}"
+        );
+    }
 
     /// The contract's own rule 1: a healed config heals to nothing.
     #[test]

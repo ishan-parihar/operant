@@ -580,6 +580,62 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
         format!("{} = {:?}", "proxy.services", config.proxy.services),
     ));
 
+    // `[observability]` — the observer backend and the six RT-274 knobs that
+    // are accepted but unread. `backend` is the one key the observer factory
+    // reads, so it is reported as a value; the other six are reported as a
+    // group so the doctor repeats what `unused_setting_warnings` already says
+    // on the load path (the doctor is the surface an operator runs when
+    // something is wrong, and a knob that does nothing is exactly that).
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {} (the observer backend; only this key is read)",
+            "observability.backend", config.observability.backend
+        ),
+    ));
+    // Compared against the REAL defaults (`default_runtime_trace_path` is
+    // "state/runtime-trace.jsonl", `default_runtime_trace_max_entries` is 200,
+    // `default_runtime_trace_mode` is "none"). Hardcoding a number here would
+    // report every install that never touched the key.
+    let obs = &config.observability;
+    let d = &operant_config::schema::ObservabilityConfig::default();
+    for (key, is_set) in [
+        (
+            "observability.otel_endpoint",
+            obs.otel_endpoint != d.otel_endpoint,
+        ),
+        (
+            "observability.otel_service_name",
+            obs.otel_service_name != d.otel_service_name,
+        ),
+        (
+            "observability.otel_headers",
+            obs.otel_headers != d.otel_headers,
+        ),
+        (
+            "observability.runtime_trace_mode",
+            obs.runtime_trace_mode != d.runtime_trace_mode,
+        ),
+        (
+            "observability.runtime_trace_path",
+            obs.runtime_trace_path != d.runtime_trace_path,
+        ),
+        (
+            "observability.runtime_trace_max_entries",
+            obs.runtime_trace_max_entries != d.runtime_trace_max_entries,
+        ),
+    ] {
+        if is_set {
+            items.push(CheckResult::warn(
+                cat,
+                format!(
+                    "{} is set but ACCEPTED BUT NOT APPLIED (RT-274) — the runtime reads none of the six runtime knobs. Remove it from operant.toml.",
+                    key
+                ),
+            ));
+        }
+    }
+
     // The two-span retry policy's own values (`[agent.retry]`). A large span of
     // 1 s is a busy loop against a dead provider (the heal clamps it, but a
     // config that reaches the doctor with it is worth naming); a ceiling below
