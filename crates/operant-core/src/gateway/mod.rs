@@ -50,7 +50,6 @@ use crate::gateway::lifecycle::{DeliveryLedger, MirrorRule, SessionStallTracker,
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
 // Platform adapters extracted verbatim from this file (dedup pass 6).
-mod admin;
 mod discord;
 mod email;
 mod slack;
@@ -64,7 +63,6 @@ mod types;
 pub mod webhook;
 pub mod webhook_subscriptions;
 mod whatsapp;
-pub use admin::*;
 pub use discord::*;
 pub use email::*;
 pub use slack::*;
@@ -2393,119 +2391,6 @@ mod tests {
         assert!(stats.uptime_seconds < 5); // just started
     }
 
-    // ── Admin command tests ──
-
-    #[tokio::test]
-    async fn test_admin_command_unauthorized() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "help",
-            &[],
-            "ch1",
-            "unknown_user",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("not authorized"));
-    }
-
-    #[tokio::test]
-    async fn test_admin_command_help() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "help",
-            &[],
-            "ch1",
-            "admin1",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("sessions"));
-        assert!(result.contains("channels"));
-        assert!(result.contains("broadcast"));
-        assert!(result.contains("shutdown"));
-    }
-
-    #[tokio::test]
-    async fn test_admin_command_sessions_empty() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "sessions",
-            &[],
-            "ch1",
-            "admin1",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("No active sessions"));
-    }
-
-    #[tokio::test]
-    async fn test_admin_command_channels_empty() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "channels",
-            &[],
-            "ch1",
-            "admin1",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("No registered channels"));
-    }
-
-    #[tokio::test]
-    async fn test_admin_command_unknown() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "foobar",
-            &[],
-            "ch1",
-            "admin1",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("Unknown command"));
-    }
-
-    #[tokio::test]
-    async fn test_admin_command_broadcast() {
-        let store = SessionStore::new();
-        let dir = ChannelDirectory::new();
-        let result = handle_admin_command(
-            "broadcast",
-            &[],
-            "ch1",
-            "admin1",
-            &store,
-            &dir,
-            &["admin1".to_string()],
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("Broadcast"));
-    }
-
     // ── Adapter health check tests ──
 
     /// The inbound table must name EXACTLY the platforms whose inbound
@@ -2729,44 +2614,6 @@ mod tests {
         let adapter = TelegramAdapter::new(None);
         let healthy = adapter.health_check().unwrap();
         assert!(healthy);
-    }
-
-    // ── Startup message tests ──
-
-    #[test]
-    fn test_format_startup_message() {
-        let config = GatewayConfig {
-            holon_notion: None,
-            telegram_enabled: true,
-            telegram_token: Some("tok".to_string()),
-            discord_enabled: false,
-            discord_token: None,
-            slack_enabled: true,
-            slack_token: Some("tok".to_string()),
-            webhooks_enabled: false,
-            webhooks_addr: None,
-            webhooks_secret: None,
-            admins: vec!["admin1".to_string()],
-            streaming_transport: "auto".to_string(),
-            telegram_proxy: None,
-            telegram_bot_username: None,
-            telegram_dm_topics_enabled: false,
-            whatsapp_enabled: false,
-            whatsapp_token: None,
-            whatsapp_phone_number_id: None,
-            email_enabled: false,
-            email_smtp_host: None,
-            email_smtp_user: None,
-            email_smtp_pass: None,
-            sms_twilio_enabled: false,
-            max_concurrent_sessions: None,
-        };
-        let msg = format_startup_message(&config);
-        assert!(msg.contains("Operant Gateway"));
-        assert!(msg.contains("Telegram"));
-        assert!(msg.contains("ENABLED"));
-        assert!(msg.contains("DISABLED"));
-        assert!(msg.contains("Admin Users: 1"));
     }
 
     // ── ChannelType tests ──

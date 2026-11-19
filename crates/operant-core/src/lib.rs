@@ -218,8 +218,7 @@ pub use error::{Error, Result};
 pub use gateway::{
     ChannelDirectory, ChannelInfo, ChannelType, DrainOutcome, EmailAdapter, Gateway, GatewayConfig,
     GatewayStats, IncomingMessage, OutgoingMessage, PlatformAdapter, PlatformSession, SessionStore,
-    SmsAdapter, TelegramAdapter, UserInfo, WebhookAdapter, WhatsAppAdapter, format_startup_message,
-    handle_admin_command,
+    SmsAdapter, TelegramAdapter, UserInfo, WebhookAdapter, WhatsAppAdapter,
 };
 pub use gateway_session::{
     PersistentSessionStore, ResetMode, SessionEntry, SessionResetPolicy, SessionSource,
