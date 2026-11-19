@@ -336,6 +336,58 @@ assert it is infinite. Mutation-prove.
 
 **Severity 3. Low risk** — one construction-site override.
 
+## F3 IS DISPOSITIONED, AND ITS PREMISE WAS PARTLY FALSE. Read this before touching retry again.
+
+Shipped as `iter-2680` (peer, `75284a07`): the gateway and cron hosts now derive
+`gateway_behavior` from `app_config.agent` via a per-host `Cow` clone, setting
+`retry.max_span_secs = 10 * large_span_secs` (default 3,000 s) ONLY when the
+operator left it at `0`. An expressed ceiling is never lowered
+(`gateway_runner/tests.rs:3420` pins it). That is a sound defensive change: it
+bounds a span nobody can see, for the one host with nobody watching.
+
+**But the finding it was written from was partly false, and that is recorded
+here deliberately so the next reader does not repeat it. Measured
+2026-11-19, at `75284a07` and re-proved empirically:**
+
+1. **"retries every 300 s forever" — FALSE.** `TURN_MAX_RETRY_FAILURES` is
+   **12** (`agent/turn_retry_state.rs:158`), consulted on BOTH retry paths
+   (`agent/run.rs:1182` normal, `agent/run.rs:2184` streaming). A provider
+   failing every time burns 12 attempts and the turn ends with a TYPED
+   `Error::Provider` — not infinite, and not unpinned.
+   **Empirical, not argued:** `cargo test -p operant-core --test
+   retry_policy_wiring the_turn_cap_bounds_an_infinite_policy` at this commit
+   passes in **12.37 s** against a client that fails every time
+   (`FlakyClient::new(usize::MAX)`). The pre-existing test
+   `retry_policy_wiring.rs` (`the_turn_cap_bounds_an_infinite_policy`)
+   already pinned this; F3 was written without reading it.
+
+2. **"0 means unbounded" — FALSE as a claim about the SYSTEM, true only for
+   the one knob.** The `max_span_secs == 0` default is bounded by (1); only
+   the config *value* is unset. The retry SPAN of a gateway turn was already
+   finite at ~12 attempts.
+
+**What was genuinely true:** the bound is an ATTEMPT COUNT, not a wall clock,
+so at the default `large_span_secs = 300` a wedged turn holds its `TurnLease`
+and `agent_slot` for up to ~1 hour with no preemptor — `SessionStallTracker`
+only observes (`gateway/lifecycle.rs:8-12`). Reducing that ceiling to ~50
+minutes is the real, defensible value of `iter-2680`, and it is worth noting
+that the attempt-count bound still stands on top of it: the new ceiling caps
+SPAN, not attempts.
+
+**The lesson that matters for the "infinite default" debate:** the change
+respects the documented preference (config.rs:1248-1250,
+`operant.example.toml:327-329`) by applying only where the operator expressed
+nothing, and never overwriting an expressed value. That is the correct way to
+change an unattended seat's posture without contradicting the operator — and
+it is the precedent to follow for any future "the default is wrong for
+unattended runs" finding.
+
+**The lesson that matters for reviewers:** this campaign refuted at the tree
+four Hydrogen findings that each read a config default and inferred the
+behaviour without following the consuming code path. The turn cap's own test
+would have answered F3 in one grep. Before writing a fix, run the suite that
+already covers the file.
+
 ---
 
 # T10 — F4: doctor's TTS wording — PREFERENCE-OWNED
