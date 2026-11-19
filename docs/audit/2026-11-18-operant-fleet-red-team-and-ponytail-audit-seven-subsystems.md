@@ -93,6 +93,14 @@ scripts were run; the clippy gate result is finding 1.
    commands. Fix if a reload lands: swap the registry atomically. Deliberately
     NOT changed in iter-2645: a reset seam with no caller is the speculative
     feature this audit exists to remove, so it lands with the first reload.
+   **FIXED iter-2649 (437474e0)**: `shell_hooks::install` tears down the hooks it
+   owns before installing, tracked by a marker in the hook id rather than by
+   clearing the whole registry, so a concurrent non-shell hook (the harness
+   bridge) survives; pinned by
+   `a_concurrently_registered_non_shell_hook_survives_the_reset` and the
+   mutation-proven `installing_twice_runs_a_hook_command_exactly_once_per_event`.
+   The "reset seam with no caller" note above is now history: the seam shipped
+   with the first reload (RT-605, closed).
 
 7. **`dashboard server`: the pid file is position-owned, not record-owned.**
    Verified `cmd_dashboard.rs:103` (overwrite on launch), `:112`
@@ -152,7 +160,11 @@ scripts were run; the clippy gate result is finding 1.
     Verified `context_management.rs:27-45`: `chars().count().div_ceil(4)`
     underestimates CJK ~4x while the doc claims iter-18 made it CJK-aware. A
     CJK-heavy context passes eviction and still 400s at the provider. Either
-    fix the estimate or delete the claim.
+    fix the estimate or delete the claim. **FIXED iter-2649 (437474e0)**: the
+    estimator now charges ASCII at `len/4` and every non-ASCII character at
+    one token (UTF-8 continuation bytes are not tokens), which also covers
+    Cyrillic and emoji conservatively; the `context_management.rs` CJK tests
+    pin it (RT-610, closed).
 
 14. **Dead surface: `crates/operant-cli/web/` (115 files, 2.5 MB, 50,884 TS
     lines).** Verified: no `include_str!`, no `build.rs`, no CI job, no vendored
