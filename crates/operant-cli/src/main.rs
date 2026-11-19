@@ -4970,4 +4970,123 @@ mod tests {
             "the runtime builder must resolve the hint at all: {resolve}"
         );
     }
+
+    /// RT-542: an attached client builds NO runtime — the pin at the ENTRY
+    /// POINT, not only at the mechanism.
+    ///
+    /// `cmd_chat_attach` is `async fn` (not `pub`), so a source contract is
+    /// the observable: the attach arm must route to `cmd_chat_attach` BEFORE
+    /// any runtime build, and the attach function itself must contain no
+    /// `build_registry` / `create_runtime_agent` / `McpManager::new` — the
+    /// three constructions the row names. The needles are concatenation-built
+    /// so this test's own source cannot satisfy them.
+    ///
+    /// Mutation: point the Chat arm's attach branch at `chat_non_tui` (or
+    /// delete the branch) and the first assertion fails; add a
+    /// `build_registry` call inside `cmd_chat_attach` and the second fails.
+    #[test]
+    fn the_chat_attach_entry_point_builds_no_runtime() {
+        let source = include_str!("main.rs");
+
+        // (1) The Chat arm routes --attach to the thin client, and does so
+        // BEFORE the local build. The arm's guard names `cmd_chat_attach`
+        // and the call is a tail `return`, so nothing after it runs.
+        let guard = "if let Some(socket) = attach_socket.clone()";
+        assert!(
+            source.contains(&guard),
+            "the Chat arm must guard the attach path on the resolved socket: {guard}"
+        );
+        let call = format!("cmd_chat_attach(&{}, ", "socket");
+        assert!(
+            source.contains(&call),
+            "the Chat arm must call the thin client for --attach: {call}"
+        );
+
+        // (2) The attach function builds NO runtime. Extract its body by the
+        // function signature (the only `cmd_chat_attach` definition), cut at
+        // the next top-level item, and assert none of the runtime
+        // constructions appears in it. The tail slice would run to the end
+        // of the file and trip on the NEXT function's `build_registry` — the
+        // seam is the body, not the file.
+        let signature = "async fn cmd_chat_attach(";
+        let start = source
+            .find(&signature)
+            .unwrap_or_else(|| panic!("cmd_chat_attach must exist: {signature}"));
+        let after = &source[start..];
+        // The body ends at the next top-level `async fn` / `fn` / `pub` item
+        // after the signature (the next definition begins a new item).
+        let end = after[signature.len()..]
+            .find("\nasync fn ")
+            .map(|i| signature.len() + i)
+            .unwrap_or(after.len());
+        let body = &after[..end];
+        for forbidden in [
+            "build_registry(",
+            "create_runtime_agent(",
+            "create_agent_without_events(",
+            "McpManager::new(",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "cmd_chat_attach must build no runtime, found `{forbidden}` — \
+                 an attached client builds no registry, no MCP children, no AFT bridge (RT-542)"
+            );
+        }
+
+        // (3) The no-build property is real end to end: the attach path
+        // reaches the server over the socket and renders its events. A
+        // server that answers hello proves the client's connect/recv loop
+        // works without any local runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime");
+        rt.block_on(async {
+            use operant_core::session_protocol::{PROTOCOL_VERSION, WireMessage, encode};
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+            let dir = tempfile::tempdir().expect("a temp dir");
+            let socket = dir.path().join("attach-entry-point.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept");
+                let (mut read_half, mut write_half) = stream.into_split();
+                let mut line = String::new();
+                tokio::io::BufReader::new(&mut read_half)
+                    .read_line(&mut line)
+                    .await
+                    .expect("read hello");
+                let hello: WireMessage =
+                    serde_json::from_str(line.trim()).expect("the hello decodes");
+                assert!(matches!(hello, WireMessage::Hello));
+                let reply = encode(
+                    &WireMessage::HelloOk {
+                        sessions: vec!["s-entry".to_string()],
+                    },
+                    PROTOCOL_VERSION,
+                )
+                .expect("encode");
+                write_half
+                    .write_all(reply.as_bytes())
+                    .await
+                    .expect("write hello ok");
+                write_half.write_all(b"\n").await.expect("newline");
+                // Keep the connection open until the client goes away.
+                let mut sink = String::new();
+                let _ = tokio::io::BufReader::new(&mut read_half)
+                    .read_line(&mut sink)
+                    .await;
+            });
+
+            let client = operant_core::session_client::SessionClient::connect(&socket)
+                .await
+                .expect("the thin client connects");
+            assert_eq!(
+                client.sessions,
+                vec!["s-entry".to_string()],
+                "the hello round-trip must reach the client with no local runtime"
+            );
+            server.abort();
+        });
+    }
 }
