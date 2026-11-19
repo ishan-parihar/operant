@@ -38,6 +38,16 @@ impl App {
         if self.command_palette.visible {
             return Some(DialogPriority::CommandPalette);
         }
+        // (T2) Two more surfaces the chain did not describe. Appended, not woven
+        // into semantic neighbours, for the reason the three before them were:
+        // the chain's order already diverges from the inline order, so claiming
+        // a "correct" slot would be false precision. Presence is what matters.
+        if self.subagent_navigator.visible {
+            return Some(DialogPriority::SubagentNavigator);
+        }
+        if self.agent_picker.visible {
+            return Some(DialogPriority::AgentPicker);
+        }
         if self.settings_screen.visible {
             return Some(DialogPriority::Settings);
         }
@@ -361,10 +371,19 @@ mod tests {
 
         let mut problems: Vec<String> = Vec::new();
         for (surface, _) in app.overlay_flags() {
-            let in_chain = chain.contains(&format!("self.{surface}.visible"))
-                || chain.contains(&format!("self.{surface}.is_some()"));
-            let in_dispatcher = dispatcher.contains(&format!("if self.{surface}.visible"))
-                || dispatcher.contains(&format!("if self.{surface}.is_some()"));
+            // (T2) The catalogue keys the context menu `context_menu`, while both
+            // chains gate the App field that holds it, `context_menu_state`. The
+            // catalogue name is the surface's name everywhere else (the paint row,
+            // the simulator's snapshot key), so the chains are asked about the
+            // field -- not the reverse.
+            let field = match surface {
+                "context_menu" => "context_menu_state",
+                other => other,
+            };
+            let in_chain = chain.contains(&format!("self.{field}.visible"))
+                || chain.contains(&format!("self.{field}.is_some()"));
+            let in_dispatcher = dispatcher.contains(&format!("if self.{field}.visible"))
+                || dispatcher.contains(&format!("if self.{field}.is_some()"));
             if !in_chain {
                 problems.push(format!(
                     "{surface} is in the overlay catalogue but the priority chain does not gate it"
@@ -380,6 +399,79 @@ mod tests {
             problems.is_empty(),
             "the overlay catalogue and the key-routing chains disagree:\n{}",
             problems.join("\n")
+        );
+    }
+
+    /// THE OTHER DIRECTION, and the one that was missing (T4, plan
+    /// `2026-11-20-close-the-tui-audit-round-*`).
+    ///
+    /// The guard above checks catalogue -> chains. Nothing checked chains ->
+    /// catalogue, so a surface could be gated in the dispatcher, painted by the
+    /// renderer and STILL absent from the catalogue -- which is exactly what
+    /// happened to `agent_picker` and `subagent_navigator`: both had a
+    /// `if self.X.visible` gate in `key_handling.rs`, both painted, and neither
+    /// appeared in `overlay_flags()`. The catalogue is what the headless
+    /// simulator asserts against and what `any_modal_open` derives from, so an
+    /// uncatalogued modal is a modal the tests cannot see.
+    ///
+    /// The check is deliberately narrow: it names the dispatcher gates that
+    /// stand alone as a surface's own gate (`if self.X.visible {` at the start
+    /// of a block that RETURNS), not every `self.X.visible` read -- the
+    /// dispatcher also reads these flags for scrolling and input, and a surface
+    /// with no gate of its own is not a modal.
+    #[test]
+    fn every_dispatcher_gated_surface_is_in_the_catalogue() {
+        let app = crate::tui::app::tests::make_app();
+        let dispatcher = include_str!("key_handling.rs");
+
+        // The catalogue's own keys, so a surface need only be checked once.
+        let catalogued: Vec<&str> = app.overlay_flags().iter().map(|(name, _)| *name).collect();
+
+        // A dispatcher gate is a standalone `if self.<surface>.visible {` or
+        // `.is_some() {` that RETURNS from the function -- the shape every
+        // modal's own key block uses. Reads inside an expression
+        // (`&& self.x.visible`, `if !self.x.visible`) are not gates.
+        let mut gated: Vec<String> = Vec::new();
+        for line in dispatcher.lines() {
+            let t = line.trim();
+            let Some(rest) = t.strip_prefix("if self.") else {
+                continue;
+            };
+            let field = rest.split('.').next().unwrap_or("");
+            let is_gate = rest.starts_with(&format!("{field}.visible {{"))
+                || rest.starts_with(&format!("{field}.is_some() {{"));
+            if is_gate && !gated.iter().any(|g| g == field) {
+                gated.push(field.to_string());
+            }
+        }
+        assert!(
+            gated.len() >= 25,
+            "the gate reader found only {} gates ({gated:?}) -- a reader that \
+             silently returns nothing makes this guard vacuous",
+            gated.len()
+        );
+
+        // The context menu's dispatcher gate reads `context_menu_state`, while the
+        // catalogue keys it `context_menu` (the paint row is `Entry { name:
+        // "context_menu" }`). That is a real naming split, not a missing
+        // surface, so it is mapped rather than "fixed" by renaming a field the
+        // whole renderer reads.
+        fn catalogue_key(gate: &str) -> &str {
+            match gate {
+                "context_menu_state" => "context_menu",
+                other => other,
+            }
+        }
+
+        let missing: Vec<&String> = gated
+            .iter()
+            .filter(|g| !catalogued.contains(&catalogue_key(g)))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the dispatcher gates surfaces the overlay catalogue does not name: \
+             {missing:?}. Add them to App::overlay_flags() (and to the priority \
+             chain) or the simulator and /keys cannot see them."
         );
     }
 }

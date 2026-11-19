@@ -3,7 +3,7 @@
   "excluded": [
     {
       "name": "context-menu",
-      "surface": "crates/operant-cli/src/tui/context_menu.rs::render_context_menu",
+      "surface": "crates/operant-cli/src/tui/render/selection.rs::render_context_menu",
       "baseline": "context-menu.txt",
       "style_baseline": "context-menu.style.txt",
       "reason": "The scenario drives a REAL agent turn against the pinned unroutable endpoint, and the turn's failure is rendered into the transcript. Which failure depends on the machine: with an API key present the agent reaches the endpoint and renders a NETWORK error whose text embeds a reqwest/hyper error string ('error sending request for url (...)') — a string that changes with the transport library's version and the platform — and without a key the credential pool refuses first and renders 'no available keys'. The committed golden held the second, so it drifted on every machine that has a key. A golden must never encode a transport-library error string.",
@@ -18,14 +18,6 @@
       "unblock_when": "The scenario runs against a FIXED tree — a temporary git repository with a known diff, seeded by the fixture — so the rendered diff is the same on every machine and every commit."
     },
     {
-      "name": "hooks-config-menu",
-      "surface": "crates/operant-cli/src/tui/hooks_config_menu.rs::render_hooks_config_menu",
-      "baseline": "hooks-config-menu.txt",
-      "style_baseline": "hooks-config-menu.style.txt",
-      "reason": "THE SURFACE IS GONE. `crates/operant-cli/src/tui/hooks_config_menu.rs` does not exist: the settings.json hooks menu was removed in iter-973 (the settings.json read went with it — RT-14), and `/hooks` now pushes a system message pointing at `operant hooks` instead of opening an overlay. The scenario asserted an overlay that no longer has a render target, so it could only ever fail.",
-      "unblock_when": "A hooks-config overlay is built again. `/hooks` would have to open it rather than print a message, and the scenario would need its assertions rewritten against the new surface."
-    },
-    {
       "name": "diff-viewer-turn",
       "surface": "crates/operant-cli/src/tui/diff_viewer.rs::render_diff_dialog",
       "baseline": "diff-viewer-turn.txt",
@@ -34,5 +26,5 @@
       "unblock_when": "A turn-diff mode is implemented: a second opener on DiffViewerState, a second mode in the renderer, and a dispatch arm that reaches it."
     }
   ],
-  "$comment_history": "THREE PAIRS were REMOVED as their surfaces were deleted: session-browser (iter-B) replaced by the hub, and session-branching (iter-1467 / audit R1) whose fork-tree load race is moot because /branch now opens the hub on the CurrentBranch filter, which paints synchronously. A deleted surface has no render target to park. A third pair followed on 2026-11-05 (iter-1751): mcp-approval and mcp-approval-dialog, whose surface `dialogs/mcp_approval.rs` was DELETED at iter-978 (AD-034's dead-path purge). Their entries still described it as a live PRODUCT GAP — \u201cthe dialog is fully built \u2014 render, key handling, Z-order branch in render_app, dialog_priority entry, overlay_flags entry\u201d \u2014 for a file that no longer exists, and the false claim pointed the next agent at a call site for a deleted dialog. The same rule applies."
+  "$comment_history": "THREE PAIRS were REMOVED as their surfaces were deleted: session-browser (iter-B) replaced by the hub, and session-branching (iter-1467 / audit R1) whose fork-tree load race is moot because /branch now opens the hub on the CurrentBranch filter, which paints synchronously. A deleted surface has no render target to park. A third pair followed on 2026-11-05 (iter-1751): mcp-approval and mcp-approval-dialog, whose surface `dialogs/mcp_approval.rs` was DELETED at iter-978 (AD-034's dead-path purge). Their entries still described it as a live PRODUCT GAP — \u201cthe dialog is fully built \u2014 render, key handling, Z-order branch in render_app, dialog_priority entry, overlay_flags entry\u201d \u2014 for a file that no longer exists, and the false claim pointed the next agent at a call site for a deleted dialog. The same rule applies. A FOURTH went on 2026-11-20 (plan 2026-11-20-close-the-tui-audit-round-*, T6): hooks-config-menu, whose own reason already read THE SURFACE IS GONE -- `hooks_config_menu.rs` was deleted in iter-973 and /hooks now prints a system message. An entry that documents a deleted render target is not an exclusion, it is a stale claim: _run.py counts this list and prints the count twice as a coverage number, so a dead entry reads as a surface deliberately not run. The context-menu entry STAYED (its surface moved to render/selection.rs and is still live; its reason is a real determinism problem), with its path corrected."
 }

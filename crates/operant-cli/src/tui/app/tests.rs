@@ -4250,6 +4250,87 @@ fn esc_closes_every_dialog() {
     }
 }
 
+/// (T3, plan `2026-11-20-close-the-tui-audit-round-*`) The vim pair must work
+/// on every MOVE-ONLY list surface, and must NOT work on a surface that takes
+/// typed text.
+///
+/// MEASURED when this was written: 12 surfaces took `j`/`k`, one took `q`, and
+/// the rest took neither, so an operator who drives the TUI from the home row
+/// had to reach for the arrow cluster on most of it. The fix adds `j`/`k` to
+/// the move-only surfaces. The other half of the invariant matters just as
+/// much: `k` typed into a filter must stay a `k`, which is why the text-entry
+/// surfaces are asserted here to be UNCHANGED.
+#[test]
+fn vim_navigation_works_on_move_only_surfaces_and_not_on_text_entry() {
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    type Opener = fn(&mut crate::tui::app::App);
+
+    // Move-only: a list or a scroll region, no text field. Each entry is
+    // (surface, opener, read-the-cursor) -- the read is what makes the
+    // assertion about MOVEMENT rather than about the key being consumed.
+    let move_only: &[(&str, Opener, fn(&crate::tui::app::App) -> u32)] = &[
+        (
+            "memory_file_selector",
+            |app| {
+                app.memory_file_selector.visible = true;
+                app.memory_file_selector.files = vec![
+                    crate::tui::memory_file_selector::MemoryFile {
+                        display_path: "first.md".to_string(),
+                        file_type: crate::tui::memory_file_selector::MemoryFileType::User,
+                        exists: true,
+                    },
+                    crate::tui::memory_file_selector::MemoryFile {
+                        display_path: "second.md".to_string(),
+                        file_type: crate::tui::memory_file_selector::MemoryFileType::User,
+                        exists: true,
+                    },
+                ];
+            },
+            |app| app.memory_file_selector.selected as u32,
+        ),
+        (
+            "stats_dialog",
+            |app| app.stats_dialog.visible = true,
+            |app| u32::from(app.stats_dialog.scroll),
+        ),
+    ];
+
+    for (name, open, cursor) in move_only {
+        let mut app = make_app();
+        open(&mut app);
+        let before = cursor(&app);
+
+        app.handle_key_event(press_key(KeyCode::Char('j'), KeyModifiers::NONE));
+        let after_down = cursor(&app);
+        assert!(
+            after_down > before,
+            "{name}: `j` must move down (the vim pair T3 adds), but the cursor \
+             went {before} -> {after_down}"
+        );
+
+        app.handle_key_event(press_key(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert!(
+            cursor(&app) < after_down,
+            "{name}: `k` must move back up, but the cursor stayed at {}",
+            cursor(&app)
+        );
+    }
+
+    // The text-entry side: `j`/`k` must stay LITERAL. The command palette is
+    // the clearest case -- it has a real filter field, so a nav arm on `Char('k')`
+    // would make the letter k untypeable in the one place you type a command.
+    let mut app = make_app();
+    app.command_palette.open();
+    app.handle_key_event(press_key(KeyCode::Char('k'), KeyModifiers::NONE));
+    assert!(
+        app.command_palette.filter.contains('k'),
+        "the command palette's filter is TEXT: `k` must be typed into it, not \
+         swallowed by a vim nav arm (filter is {:?})",
+        app.command_palette.filter
+    );
+}
+
 /// (iter-1931) The memory file selector's footer must not promise a selection
 /// that nothing consumes.
 ///
@@ -8884,6 +8965,41 @@ fn keys_command_should_report_registry_bindings() {
     assert!(
         crate::tui::keybindings::os_conflict_reason("Enter").is_none(),
         "Enter must not be flagged — the conflict list is not a catch-all"
+    );
+}
+
+/// A `[keybindings]` table the TUI never reads must say so ON `/keys`.
+///
+/// (T5, plan `2026-11-20-close-the-tui-audit-round-*`.) The refusal used to be
+/// a single `eprintln!` inside the config load: invisible on a GUI launch,
+/// gone after the first `/quit`, and re-loaded without a re-print on a slot
+/// handover. The operator asking "what bindings are in effect" got a confident
+/// list that was not the one they configured, with nothing on screen to say so.
+#[test]
+fn keys_report_flags_a_keybindings_table_the_tui_ignores() {
+    use crate::tui::keybindings::KeyBindingRegistry;
+
+    let registry = KeyBindingRegistry::with_defaults();
+    let mut app = make_app();
+
+    // Clean config: no refusal banner.
+    let clean = app.render_keys_report(&registry, &registry.usage_report(&app.slash_usage));
+    assert!(
+        !clean.contains("[keybindings]"),
+        "a clean config must not warn, got: {clean}"
+    );
+
+    // A stale `[keybindings]` block: the report must say the table is not read.
+    app.config.keybindings = Some(toml::Table::new());
+    let warned = app.render_keys_report(&registry, &registry.usage_report(&app.slash_usage));
+    assert!(
+        warned.contains("[keybindings]") && warned.contains("does NOT read"),
+        "the report must refuse a [keybindings] table it ignores, got: {warned}"
+    );
+    // The refusal must not eat the report itself: the rows still follow it.
+    assert!(
+        warned.contains("binding(s) from the registry"),
+        "the warning must not replace the catalogue, got: {warned}"
     );
 }
 

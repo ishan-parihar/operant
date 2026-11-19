@@ -199,6 +199,8 @@ overlay_visible_guards!(
     is_visible_custom_provider_dialog => custom_provider_dialog,
     is_visible_free_mode_dialog => free_mode_dialog,
     is_visible_command_palette => command_palette,
+    is_visible_subagent_navigator => subagent_navigator,
+    is_visible_agent_picker => agent_picker,
     is_visible_session_hub => session_hub,
     is_visible_export_dialog => export_dialog,
     is_visible_context_viz => context_viz,
@@ -356,6 +358,26 @@ const OVERLAYS: &[Entry] = &[
         name: "command_palette",
         visible: is_visible_command_palette,
         paint: paint_command_palette,
+        sink: Sink::Frame,
+    },
+    // (T2, plan 2026-11-20-close-the-tui-audit-round-*) TWO surfaces were gated
+    // in the dispatcher and absent from BOTH this table and the overlay
+    // catalogue. They reached the screen only because `paint_command_palette`
+    // happened to paint them as a side effect -- `if app.agent_picker.visible`
+    // INSIDE the command palette's row -- so opening the identity picker with
+    // `/agent` painted nothing: the row above it is gated on
+    // `command_palette.visible`, and the picker's own flag was never consulted.
+    // They are their own rows now, which is what "one surface, one row" means.
+    Entry {
+        name: "subagent_navigator",
+        visible: is_visible_subagent_navigator,
+        paint: paint_subagent_navigator,
+        sink: Sink::Frame,
+    },
+    Entry {
+        name: "agent_picker",
+        visible: is_visible_agent_picker,
+        paint: paint_agent_picker,
         sink: Sink::Frame,
     },
     Entry {
@@ -535,16 +557,24 @@ fn paint_free_mode_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
-    if app.subagent_navigator.visible {
-        crate::tui::subagent_navigator::draw_subagent_navigator(
-            frame,
-            &app.subagent_navigator,
-            ctx.size,
-        );
-    }
-    if app.agent_picker.visible {
-        render_dialog_select(frame, &app.agent_picker, ctx.size);
-    }
+}
+
+/// The subagent navigator (`/subagents`, `←` on a session with live children).
+/// Its own row since T2: it used to paint only as a side effect of the command
+/// palette's row being visible, which is why the dispatcher gated a surface the
+/// renderer never consulted on its own.
+fn paint_subagent_navigator(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
+    crate::tui::subagent_navigator::draw_subagent_navigator(
+        frame,
+        &app.subagent_navigator,
+        ctx.size,
+    );
+}
+
+/// The identity picker (`Shift+Tab`, `/agent`). Same history as the row above:
+/// dispatcher-gated, renderer-invisible until it grew its own row.
+fn paint_agent_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
+    render_dialog_select(frame, &app.agent_picker, ctx.size);
 }
 
 fn paint_session_hub(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
@@ -690,6 +720,8 @@ mod tests {
         ("custom_provider_dialog", Sink::Frame),
         ("free_mode_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
+        ("subagent_navigator", Sink::Frame),
+        ("agent_picker", Sink::Frame),
         ("session_hub", Sink::Frame),
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),

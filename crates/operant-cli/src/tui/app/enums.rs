@@ -109,6 +109,16 @@ pub enum DialogPriority {
     ImportConfigPicker = 120,
     /// Command palette
     CommandPalette = 130,
+    /// The subagent navigator (`/subagents`, Left on a session with live
+    /// children). Its own variant since T2 (plan
+    /// 2026-11-20-close-the-tui-audit-round-*): the surface was gated inline and
+    /// rendered as a side effect of the command palette's row, so neither this
+    /// chain nor the overlay catalogue described it.
+    SubagentNavigator = 135,
+    /// The identity picker (Shift+Tab, `/agent`) -- one row per seat on the
+    /// roster. Same history as the variant above: gated, painted only under the
+    /// command palette's predicate, and uncatalogued until T2.
+    AgentPicker = 140,
     /// Settings screen
     Settings = 150,
     /// Export dialog

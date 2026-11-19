@@ -2545,12 +2545,17 @@ pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
             ));
         }
     }
-    // Adapt the finished frame at buffer level so every widget and overlay
-    // follows the same policy. User-configured colors remain exact.
-    // Attribute explicit palette overrides before light-theme contrast repair
-    // can make distinct muted source grays converge to the same rendered ink.
-    crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(frame.buffer_mut());
-    adapt_buffer_for_emoji_preference(frame.buffer_mut());
+    // (T1, plan 2026-11-20-close-the-tui-audit-round-*) THE CONTRAST AND EMOJI
+    // PASS IS NOT HERE ANY MORE. It moved to the end of `render_app`
+    // (`tui::render`), because everything this pass is meant to cover is painted
+    // AFTER `operant_ui::draw` returns: the background-task rows, every operant
+    // overlay, and the error modal that early-returns out of `render_app`. A
+    // pass at this tail repaired the chrome and nothing else, so on `light` and
+    // `deuteranopia` the overlays kept the dark theme's luminance while the
+    // panel behind them was flipped. The pass is not idempotent
+    // (`flip_luminance` is an involution: applying it twice undoes it), so it
+    // must run EXACTLY ONCE, on the final buffer -- which is what moving it,
+    // rather than copying it, guarantees.
     // Cache eviction/clearing can outlive the last visible image. Carry Kitty
     // deletion commands on any completed frame so terminal-side pixel storage
     // is reclaimed even when no image widget renders again.

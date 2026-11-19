@@ -90,7 +90,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 29] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 32] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -130,6 +130,21 @@ impl App {
             ("import_config_picker", self.import_config_picker.visible),
             ("import_config_dialog", self.import_config_dialog.visible),
             ("command_palette", self.command_palette.visible),
+            // (T2, plan 2026-11-20-close-the-tui-audit-round-*) these two were
+            // gated in the dispatcher and absent here, so the catalogue did
+            // not describe the UI -- and the dispatcher's own guard could not
+            // see them, because it only checks catalogue -> chains, never the
+            // reverse. A surface the catalogue omits is a surface the
+            // simulator cannot assert on and `/keys` cannot name.
+            ("subagent_navigator", self.subagent_navigator.visible),
+            ("agent_picker", self.agent_picker.visible),
+            // (T2) The context menu is the THIRD surface this round found gated
+            // in the dispatcher and painted by the renderer while absent here.
+            // It is `Option`-shaped like `permission_request`, and its paint row
+            // uses `always_visible` because the renderer self-gates on the same
+            // state -- so the catalogue has to name it for the simulator to be
+            // able to assert on an open menu at all.
+            ("context_menu", self.context_menu_state.is_some()),
             ("ask_user_dialog", self.ask_user_dialog.visible),
             ("permission_request", self.permission_request.is_some()),
         ]
@@ -378,6 +393,16 @@ impl App {
             "Keybindings — {} binding(s) from the registry. /hotkeys shows what you have used.\n",
             registry.catalogue().len()
         );
+        // (T5, plan 2026-11-20-close-the-tui-audit-round-*) `/keys` is the one
+        // surface whose whole job is answering "what bindings are in effect", so
+        // it is where a `[keybindings]` block the TUI will never read has to say
+        // so. The config load refused it on stderr, which a GUI launch never shows
+        // and `/quit` erases; a stale table otherwise reads here as a working one.
+        if self.config.keybindings.is_some() {
+            out.push_str(
+                "\n⚠ Your operant.toml has a [keybindings] table, and the TUI does NOT read it: \n  every binding below comes from the built-in registry, not your file. Remove the table, or \n  these chords are not the ones you configured.\n",
+            );
+        }
         let mut current: Option<BindingContext> = None;
         for (context, binding) in registry.catalogue() {
             if current != Some(context) {

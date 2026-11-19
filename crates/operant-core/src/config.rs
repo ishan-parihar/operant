@@ -3137,12 +3137,11 @@ fn load_app_config_impl(explicit: Option<&Path>, record_target: bool) -> Result<
     for line in config.unused_setting_warnings() {
         eprintln!("{line}");
     }
-    // (RT-3) [keybindings] is accepted-and-ignored until dispatch reads it.
-    if config.keybindings.is_some() {
-        eprintln!(
-            "warning: [keybindings] is ignored; the TUI does not read key overrides yet. Remove the table. `/keys` lists the bindings in effect."
-        );
-    }
+    // (T5, plan 2026-11-20-close-the-tui-audit-round-*) [keybindings] is refused
+    // by `unused_setting_warnings()` above, not printed here: a bare `eprintln!`
+    // from the load path is invisible on a GUI launch and gone after the first
+    // `/quit`. The refusal is data now, so every surface that renders config
+    // warnings carries it.
 
     // O-26: [holon] paths arrive with `~` expanded exactly once.
     config.holon = config.holon.expand_tilde();
@@ -4221,6 +4220,20 @@ impl AppConfig {
                 || self.tools.tool_search.max_search_limit != d.tools.tool_search.max_search_limit,
             "[tools.tool_search] search_default_limit / max_search_limit"
         );
+        // (T5, plan 2026-11-20-close-the-tui-audit-round-*) `[keybindings]` was
+        // refused with a bare `eprintln!` from inside the load path, which is
+        // the wrong channel for three reasons the audit measured: it is invisible
+        // on a GUI launch (stderr is not the screen), it is gone after the first
+        // `/quit`, and a slot handover re-loads the config without re-printing it.
+        // The operator could not tell a stale `[keybindings]` block from a working
+        // one. The warning is DATA like every other accepted-but-unread key, so
+        // every surface that already prints `unused_setting_warnings` (startup
+        // banner, `operant doctor`, the TUI's config notice) carries it too.
+        if self.keybindings.is_some() {
+            out.push(
+                "warning: [keybindings] is accepted but unread — the TUI does not read key overrides yet. Remove the table from operant.toml. `/keys` lists the bindings in effect.".to_string(),
+            );
+        }
         out
     }
     pub fn apply_env_overrides(&mut self) -> Result<()> {
@@ -6366,6 +6379,41 @@ wonderful_unknown_key = 42
         let warnings = config.unused_setting_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("[socialization]"), "{warnings:?}");
+    }
+
+    /// (T5, plan `2026-11-20-close-the-tui-audit-round-*`) A `[keybindings]`
+    /// table is accepted so an existing operant.toml still parses, and the TUI
+    /// does not read it — so a set table must REPORT, on the same data channel
+    /// every other accepted-but-unread key uses. It used to be refused by a bare
+    /// `eprintln!` in the load path, which a GUI launch never shows.
+    #[test]
+    fn a_keybindings_table_is_reported_as_unread() {
+        assert!(AppConfig::default().unused_setting_warnings().is_empty());
+
+        // A source path with a REAL parent, not `memory://name`: the parked-key
+        // sidecar resolves to `<parent>/operant.unknown.toml`, and a bare
+        // `memory://name` has an empty parent, so the sidecar lands in the
+        // process's CWD -- where another test's leftover then gets MERGED INTO
+        // THIS test's document and makes the strict parse fail. That is not
+        // hypothetical: it is what made this test read `keybindings: None`.
+        let dir = std::env::temp_dir().join("operant-kb-unread");
+        std::fs::create_dir_all(&dir).ok();
+        let _ = std::fs::remove_file(dir.join("operant.unknown.toml"));
+        let raw = "[keybindings]\nquit = 'q'\n";
+        let config = parse_config_str(raw, &dir.join("operant.toml")).unwrap();
+        let warnings = config.unused_setting_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("[keybindings]"),
+            "the refusal must name the table: {warnings:?}"
+        );
+        // It must say the table is UNREAD, not merely that it exists: an
+        // operator who cannot tell a stale table from a working one is exactly
+        // the failure this tranche closes.
+        assert!(
+            warnings[0].contains("unread"),
+            "the refusal must say the table has no effect: {warnings:?}"
+        );
     }
 
     /// RT-289: `[context_injection]`'s three aspect quotas are accepted but

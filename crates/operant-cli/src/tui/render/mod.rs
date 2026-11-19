@@ -141,7 +141,16 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         // The error modal is the frame's only early exit: every buffer-level
         // post-pass below (rasters, pinned graphics, OSC 8) paints over it
         // otherwise, which is what the old dispatch ladder's early return
-        // suppressed. The colour substitution already ran inside the draw.
+        // suppressed.
+        //
+        // (T1, plan 2026-11-20-close-the-tui-audit-round-*) the colour pass runs
+        // HERE TOO, before the return. It moved out of `operant_ui::draw` to this
+        // function's tail so it covers the surfaces that paint after the chrome;
+        // the modal is painted by the call above, so a tail-only placement would
+        // leave the single surface an operator most needs to read unrepaired on a
+        // light theme. Ordering is safe because `prepare_strip` (which BLANKS
+        // pinned-image rects) runs after this point on the non-modal path only.
+        crate::tui::render::finish_frame_colour(frame);
         return;
     }
 
@@ -159,6 +168,29 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     if let Err(e) = crate::tui::osc8::emit_hits(&hits) {
         tracing::debug!("OSC8 hyperlink emission failed: {e}");
     }
+
+    // (T1) The frame's ONE colour pass, on the final buffer. It used to live at
+    // the tail of `operant_ui::draw`, which meant everything painted after that
+    // call -- background-task rows, every operant overlay -- was never
+    // contrast-repaired and kept the dark theme's luminance on `light`. It is
+    // here rather than earlier because `osc8::scan_buffer_for_urls` READS the
+    // buffer to find links (running the pass first would repair colours it then
+    // reports) and `prepare_strip` writes cells of its own.
+    finish_frame_colour(frame);
+}
+
+/// The frame's single colour pass: light-theme contrast repair, then the emoji
+/// preference substitution.
+///
+/// (T1, plan `2026-11-20-close-the-tui-audit-round-*`.) Both halves must see the
+/// FINAL text: contrast repair rewrites each cell's foreground from its
+/// background, and the emoji pass rewrites the symbol -- a pass that runs before
+/// some surface paints repairs a colour that surface then overwrites. That is
+/// why this is one function with one call site per exit path rather than a pair
+/// of calls sprinkled through the frame.
+pub(crate) fn finish_frame_colour(frame: &mut ratatui::Frame) {
+    crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(frame.buffer_mut());
+    crate::tui::operant_app::output_style::adapt_buffer_for_emoji_preference(frame.buffer_mut());
 }
 
 #[cfg(test)]
@@ -435,6 +467,67 @@ mod tests {
                  First few (index, symbol): {:?}",
                 leaked.len(),
                 &leaked[..leaked.len().min(8)]
+            );
+        });
+    }
+
+    /// The overlay contrast seam (audit F4, plan
+    /// `2026-11-20-close-the-tui-audit-round-*` T1).
+    ///
+    /// `operant_ui::draw` ran the colour-substitution pass at its own tail, and
+    /// `render_app` paints the background-task rows and every operant overlay
+    /// AFTER that call. Those surfaces were therefore never colour-substituted:
+    /// on the light theme their ink keeps the dark theme's luminance while the
+    /// panel behind them is flipped, which is the wrong-contrast pair the pass
+    /// exists to prevent.
+    ///
+    /// The assertion is on the WHOLE finished frame under two themes, not on a
+    /// specific cell: the pass is the only thing that can make the frame
+    /// theme-dependent for a role colour, and the sibling test
+    /// `switching_theme_repaints_the_frame` already pins that for the chrome.
+    /// What was missing is the same claim for a frame with an OVERLAY open --
+    /// which is exactly the case the misplaced pass got wrong.
+    #[test]
+    fn an_open_overlay_is_contrast_repaired_like_the_chrome() {
+        with_palette_lock(|| {
+            let mut app = make_app();
+            app.rewind_selector.open();
+
+            let dark = painted_frame(&app);
+            let light = frame_under("light", &app);
+            theme_colors::set_active_theme("default");
+
+            // The overlay's own ink: the accent its title is painted with. Read
+            // from the same source the renderer uses, so a palette change cannot
+            // silently turn this into a test of some other colour.
+            let accent = crate::tui::vendor::style::palette::palette().color(Role::Accent);
+            let accent_cells = |buf: &Buffer| -> usize {
+                buf.content
+                    .iter()
+                    .filter(|c| c.fg == accent && c.symbol() != " ")
+                    .count()
+            };
+            let dark_hits = accent_cells(&dark);
+            assert!(dark_hits > 0, "the overlay painted no accent cell");
+
+            // On light the pass REWRITES that accent to a readable ink, so the
+            // dark theme's exact value is expected to be gone. That absence is
+            // the positive signal: it can only happen if something touched the
+            // overlay's cells after they were painted, which is precisely what
+            // the misplaced pass did not do.
+            let light_hits = accent_cells(&light);
+            assert_eq!(
+                light_hits, 0,
+                "the overlay's accent survived the light theme unchanged \
+                 ({light_hits} cell(s) still carry {accent:?}) -- the \
+                 colour-substitution pass does not reach the overlay rows"
+            );
+
+            // And the frames must actually differ -- which is the whole claim.
+            assert_ne!(
+                foregrounds(&dark),
+                foregrounds(&light),
+                "a frame with an open overlay is theme-invariant"
             );
         });
     }

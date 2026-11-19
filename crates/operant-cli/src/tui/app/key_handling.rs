@@ -597,8 +597,8 @@ impl App {
         if self.subagent_navigator.visible {
             match key.code {
                 KeyCode::Esc => self.subagent_navigator.close(),
-                KeyCode::Up => self.subagent_navigator.move_up(),
-                KeyCode::Down => self.subagent_navigator.move_down(),
+                KeyCode::Up | KeyCode::Char('k') => self.subagent_navigator.move_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.subagent_navigator.move_down(),
                 KeyCode::Char('t') => self.subagent_navigator.toggle_view(),
                 KeyCode::Enter => self.focus_navigator_selection(),
                 _ => {}
@@ -1136,8 +1136,14 @@ impl App {
         if self.memory_file_selector.visible {
             match key.code {
                 KeyCode::Esc => self.memory_file_selector.close(),
-                KeyCode::Up => self.memory_file_selector.select_prev(),
-                KeyCode::Down => self.memory_file_selector.select_next(),
+                // (T3, plan 2026-11-20-close-the-tui-audit-round-*) the vim pair,
+                // matching the shape every other list surface here uses
+                // (`KeyCode::Up | KeyCode::Char('k')`). This surface had arrows
+                // only, so an operator who drives the rest of the TUI with j/k
+                // had to reach for the arrow cluster for this one picker. It is
+                // move-only -- no text field -- so `k` cannot collide with input.
+                KeyCode::Up | KeyCode::Char('k') => self.memory_file_selector.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.memory_file_selector.select_next(),
                 KeyCode::Enter => {
                     self.memory_file_selector.close();
                 }
@@ -2907,8 +2913,15 @@ impl App {
             KeyCode::Tab | KeyCode::Right => self.stats_dialog.next_tab(),
             KeyCode::BackTab | KeyCode::Left => self.stats_dialog.prev_tab(),
             KeyCode::Char('r') => self.stats_dialog.cycle_range(),
-            KeyCode::Up => self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_sub(1),
-            KeyCode::Down => self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_add(1),
+            // (T3, plan 2026-11-20-close-the-tui-audit-round-*) the vim pair. This
+            // handler already had `q` to close, so j/k was the one dialect gap
+            // left on a surface an operator scrolls through.
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.stats_dialog.scroll = self.stats_dialog.scroll.saturating_add(1)
+            }
             _ => {}
         }
     }
@@ -3009,14 +3022,17 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.diff_viewer.close(),
             KeyCode::Tab | KeyCode::Left | KeyCode::Right => self.diff_viewer.switch_pane(),
-            KeyCode::Up => {
+            // (T3, plan 2026-11-20-close-the-tui-audit-round-*) the vim pair.
+            // `q` was already here, so j/k was the only dialect gap on a surface
+            // whose whole job is walking a file list and scrolling a pane.
+            KeyCode::Up | KeyCode::Char('k') => {
                 if self.diff_viewer.active_pane == DiffPane::FileList {
                     self.diff_viewer.select_prev();
                 } else {
                     self.diff_viewer.scroll_detail_up();
                 }
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 if self.diff_viewer.active_pane == DiffPane::FileList {
                     self.diff_viewer.select_next();
                 } else {
@@ -3046,10 +3062,13 @@ impl App {
                 self.help_overlay.close();
                 self.show_help = false;
             }
-            KeyCode::Up => {
+            // (T3, plan 2026-11-20-close-the-tui-audit-round-*) the vim pair. The
+            // help overlay is the one surface an operator opens to LEARN the
+            // bindings, and it was reachable with arrows only.
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.help_overlay.scroll_up();
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 // (iter-1795) The bound is the CONTENT's real max scroll,
                 // recorded by the render path — the hard-coded 50 this used
                 // ("a generous upper bound") was generous for the /keys
