@@ -282,6 +282,21 @@ pub fn run_config_checks(
         );
     }
 
+    // Parked config keys that parse but have no runtime reader. F12 (Hydrogen
+    // review 2026-11-19): `agent.context_historian` was accepted-and-ignored
+    // after iter-2404 removed the historian fold, with no warning anywhere —
+    // an operator setting it got silence, not a dead-key notice.
+    if historian_key_is_parked(config) {
+        check_warn(
+            "agent.context_historian = true has no effect",
+            "(the historian compaction fold was removed in iter-2404; the key is accepted and ignored)",
+        );
+        manual_issues.push(
+            "agent.context_historian is set but does nothing (removed iter-2404). Remove the key from operant.toml."
+                .to_string(),
+        );
+    }
+
     // =====================================================================
     // B. Auth Providers
     // =====================================================================
@@ -534,6 +549,14 @@ pub fn run_config_checks(
 /// looking at an inert knob, and the doctor is where that fact belongs.
 pub(crate) fn lcm_surface_is_inert(config: &AppConfig) -> bool {
     !config.agent.context_engine.eq_ignore_ascii_case("lcm")
+}
+
+/// The historian compaction fold was removed in iter-2404; the
+/// `agent.context_historian` key stays in the schema (AppConfig denies unknown
+/// fields) and is accepted-and-ignored. F12 (Hydrogen review 2026-11-19):
+/// before this helper existed, an operator setting it got no warning anywhere.
+pub(crate) fn historian_key_is_parked(config: &AppConfig) -> bool {
+    config.agent.context_historian
 }
 
 /// How the window was resolved, in the operator's words.
@@ -1114,6 +1137,24 @@ mod tests {
         assert!(
             !lcm_surface_is_inert(&config),
             "the engine name is case-insensitive"
+        );
+    }
+
+    /// The historian compaction fold was removed in iter-2404; the
+    /// `agent.context_historian` key is accepted and ignored. F12 (Hydrogen
+    /// review 2026-11-19): doctor now warns instead of silence.
+    #[test]
+    fn the_historian_key_warns_only_when_set() {
+        let config = AppConfig::default();
+        assert!(
+            !historian_key_is_parked(&config),
+            "the default config does not set the parked key"
+        );
+        let mut config = AppConfig::default();
+        config.agent.context_historian = true;
+        assert!(
+            historian_key_is_parked(&config),
+            "an operator setting the key must get the doctor warning"
         );
     }
 

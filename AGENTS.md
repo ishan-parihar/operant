@@ -651,7 +651,9 @@ These are the user's intentional design choices. Do not replace, remove, or
   `crates/operant-cli/src/gateway_runner.rs`) — telegram, discord, slack,
   whatsapp, email_smtp, sms_twilio, webhooks
 - **All seven have a real adapter** in `operant-core/src/gateway/`. Telegram
-  and Discord are the long-polling platforms, and they RECEIVE.
+  and Discord are the two platforms that RECEIVE (Discord over a real
+  Gateway WebSocket, `discord.rs:316` MESSAGE_CREATE; Telegram over long
+  polling).
   **Slack is OUTBOUND-ONLY**: operant can post to Slack, but there is no
   Socket Mode WebSocket in this tree — `start()` logs and returns, and
   nothing opens a `wss://` connection, so Slack messages never reach the
@@ -850,9 +852,9 @@ operant/
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
 │   │   │   │   ├── sourcehound.rs # web_search/scrape/extract/crawl + MCP seam (subprocess)
 │   │   │   │   ├── aft_tools.rs   # 20 AFT IDE tools
-│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire/builtin)
+│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire)
 │   │   │   ├── memory_wire.rs # MemoryWireProvider (in-process, catch_unwind)
-│   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
+│   │   │   ├── memory_provider.rs # memory-wire (the only engine; BuiltinProvider is gone)
 │   │   │   ├── context_management.rs # Tiered eviction + decay curve
 │   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
 │   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/WhatsApp/Email/SMS/Webhook)
