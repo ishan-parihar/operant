@@ -224,10 +224,6 @@ impl HookRegistry {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Register a handler for a specific event. Supports wildcard matching
     /// for Command events: registering for `Command("*")` fires on all commands.
     pub async fn register(&self, event: HookEvent, handler: HookHandler) {

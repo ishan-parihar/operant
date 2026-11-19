@@ -6825,7 +6825,6 @@ mod tests {
     #[test]
     fn the_page_is_filtered_in_sql_and_pages_within_the_filter() {
         let db = test_db();
-        let now = chrono::Utc::now().to_rfc3339();
         // 12 sessions, alternating directory and employee, one interrupted.
         // The timestamps are DISTINCT on purpose: the page cursor is a
         // timestamp comparison, and a tie at the boundary is excluded by

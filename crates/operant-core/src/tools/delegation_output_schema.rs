@@ -455,6 +455,12 @@ mod tests {
         // show the child what it actually sent.
         let (valid, errors, candidate) = validate_output(r#"{"nope": 1}"#, &schema);
         assert!(!valid);
+        // The error list is the retry path's payload, so assert it is non-empty:
+        // a validation that silently reported nothing would still pass below.
+        assert!(
+            !errors.is_empty(),
+            "an invalid answer must report at least one error"
+        );
         assert_eq!(candidate.as_deref(), Some("{\"nope\": 1}"));
     }
 

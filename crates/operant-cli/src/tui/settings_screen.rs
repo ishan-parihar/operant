@@ -106,6 +106,10 @@ pub struct SettingsEntry {
     /// Which store this row writes. The TUI's own visual state lives in
     /// `settings.json` and must not leak into a shared `operant.toml`; every
     /// other key is a config key. Carried on the row so no arm has to know.
+    #[allow(
+        dead_code,
+        reason = "field carried for SettingStore enum completeness; the dispatch arms read the key, not the store"
+    )]
     pub store: SettingStore,
 }
 

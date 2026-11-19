@@ -657,6 +657,19 @@ fn emit_surface_rendered(event_tx: &Option<tokio::sync::mpsc::Sender<AgentEvent>
 
 #[cfg(test)]
 mod tests {
+    // The `GenEnabledGuard` tests hold the crate's runtime-config test lock
+    // across `tool.execute(..).await` ON PURPOSE: the lock is what keeps another
+    // test from installing a different runtime config between this test's set
+    // and its restore, which is the exact race that made
+    // `render_accepts_toon_rows` fail on a gate it never touched (see the
+    // guard's own doc comment). Dropping the guard before the await would
+    // reopen that window, and these are single-threaded `#[tokio::test]`s, so
+    // there is no separate task to starve. Test-only, so it cannot reach
+    // production.
+    #![expect(
+        clippy::await_holding_lock,
+        reason = "the lock IS the fixture: it closes the runtime-config race these tests exist to pin"
+    )]
     use super::*;
     use crate::tools::ToolContext;
     use serde_json::json;

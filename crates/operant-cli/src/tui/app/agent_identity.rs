@@ -11,16 +11,17 @@
 
 use super::*;
 
+/// The (roster, session-counts) pair `load_agent_roster` resolves to.
+type AgentRoster = (
+    Vec<operant_core::database::EmployeeRecord>,
+    Vec<(String, usize)>,
+);
+
 impl App {
     /// Roster rows for the picker, from the store's authoritative employees
     /// table and the session-tag counts that show how many sessions each seat
     /// has run.
-    fn load_agent_roster(
-        &self,
-    ) -> Option<(
-        Vec<operant_core::database::EmployeeRecord>,
-        Vec<(String, usize)>,
-    )> {
+    fn load_agent_roster(&self) -> Option<AgentRoster> {
         let db_path = self.config.database_path.clone();
         let db = operant_core::database::Database::init(db_path).ok()?;
         let roster = db.list_employee_roster().ok()?;

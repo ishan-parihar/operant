@@ -50,6 +50,10 @@ impl ResolvedSelector {
 /// Why a selector could not be resolved. Every variant carries the offending
 /// text, because "unknown model" without the text is not actionable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "variants share the Unknown prefix because they all answer the same question — which part of the selector was unrecognised"
+)]
 pub enum SelectorError {
     /// `@word` where `word` is not a configured role.
     UnknownRole(String),
@@ -137,14 +141,14 @@ pub fn resolve(selector: &str, available: &[String]) -> Result<ResolvedSelector,
 
     // A bare word may be a role name (`/model slow`). A `provider/id` is never a
     // role, so the `/` test comes first and the two namespaces cannot collide.
-    if !head.contains('/') {
-        if let Some(role) = ModelSlot::parse(head) {
-            return Ok(ResolvedSelector {
-                role: Some(role),
-                effort,
-                model: None,
-            });
-        }
+    if !head.contains('/')
+        && let Some(role) = ModelSlot::parse(head)
+    {
+        return Ok(ResolvedSelector {
+            role: Some(role),
+            effort,
+            model: None,
+        });
     }
 
     if head.trim().is_empty() {

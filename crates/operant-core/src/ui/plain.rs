@@ -357,7 +357,7 @@ fn render_node(node: &WidgetNode, width: usize, indent: usize, out: &mut String)
             out.push_str(&pad);
             out.push_str(&format!("{label} [{bar}] {clamped:.0}%"));
             if let Some(detail) = detail {
-                out.push_str(" ");
+                out.push(' ');
                 out.push_str(detail);
             }
             out.push('\n');
@@ -398,7 +398,7 @@ fn render_node(node: &WidgetNode, width: usize, indent: usize, out: &mut String)
                 out.push_str(&pad);
                 out.push_str(&badge_label(step.tone, &step.label));
                 if let Some(detail) = &step.detail {
-                    out.push_str(" ");
+                    out.push(' ');
                     out.push_str(detail);
                 }
                 out.push('\n');
@@ -456,7 +456,7 @@ fn render_node(node: &WidgetNode, width: usize, indent: usize, out: &mut String)
             out.push('\n');
             render_node(child, width, indent + 2, out);
             out.push_str(&pad);
-            out.push_str("┘");
+            out.push('┘');
             out.push('\n');
         }
     }
@@ -555,15 +555,14 @@ fn render_table(
     }
     for row in rows {
         out.push_str(&pad);
-        for i in 0..ncols {
+        for (i, w) in widths.iter().enumerate().take(ncols) {
             if i > 0 {
                 out.push_str(" │ ");
             } else {
                 out.push('│');
             }
-            let w = widths[i];
             let cell = row.cells.get(i).map(String::as_str).unwrap_or("");
-            let text = truncate_chars(cell, w);
+            let text = truncate_chars(cell, *w);
             // Ragged rows pad on the right; the alignment hint comes from
             // the column when the row does not carry one.
             let align = columns.get(i).map(|c| c.align).unwrap_or_default();

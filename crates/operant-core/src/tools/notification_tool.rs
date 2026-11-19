@@ -37,7 +37,7 @@ impl OperantTool for NotificationTool {
         )
     }
 
-    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let message = match args.get("message").and_then(|v| v.as_str()) {
             Some(m) => m,
             None => {

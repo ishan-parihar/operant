@@ -398,6 +398,7 @@ impl CronScheduler {
     /// dispatch is still running across a tick boundary" case is never
     /// mistaken for abandonment — the claim must be open for a cadence AND
     /// a half before anyone calls it dead.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn claim_horizon_secs(job: &CronJob) -> i64 {
         let cadence = crate::cronjobs::schedule::interval_seconds(&job.schedule);
         cadence

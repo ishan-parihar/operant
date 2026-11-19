@@ -3642,7 +3642,7 @@ impl App {
                 )
                 .map(|p| p.name)
                 .unwrap_or_default();
-                let capabilities = operant_core::models_dev::cached_capabilities(&provider, &head);
+                let capabilities = operant_core::models_dev::cached_capabilities(provider, &head);
                 if let Some(why) = slot.accepts(capabilities.as_ref()).refusal() {
                     self.set_status_notice(format!(
                         "{} slot refuses {}: {}",

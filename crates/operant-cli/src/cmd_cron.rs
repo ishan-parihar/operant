@@ -150,6 +150,7 @@ pub fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
 /// The probe at an explicit path — the seam a test drives, so the test does
 /// not depend on whether a real daemon happens to be running on the host.
 #[cfg(unix)]
+#[cfg(test)]
 fn gateway_daemon_holds_lock_at(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(try_hold_gateway_lock_at(path)?.is_none())
 }

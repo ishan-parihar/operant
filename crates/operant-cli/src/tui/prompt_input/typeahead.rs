@@ -493,6 +493,7 @@ static SKILL_MENTION_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<(String
 /// so the popup can never be a SUBSET of what the expander would run. A
 /// vendor skill typed in full always resolved; before this it simply never
 /// appeared in the popup, which read as "not installed".
+#[cfg(test)]
 pub fn register_invocable_skills(
     skills_dir: &std::path::Path,
     vendor_roots: &[std::path::PathBuf],
@@ -526,6 +527,7 @@ pub fn register_invocable_skills_in(
 
 /// Lock-free inner writer used by `register_invocable_skills` and by the
 /// typeahead test (which holds `SKILL_SNAPSHOT_LOCK` across its assertions).
+#[cfg(test)]
 pub(super) fn set_invocable_skills(
     skills_dir: &std::path::Path,
     vendor_roots: &[std::path::PathBuf],

@@ -31,6 +31,28 @@ use event_coalesce::MAX_DRAINED_EVENTS_PER_WAKE;
 use crate::tui::operant_model::ContentPos;
 pub(crate) use scroll_anchor::ScrollMemory;
 
+/// The session-list channel's payload: (rows, store_total, employee_roster,
+/// per-mode counts).
+///
+/// - `store_total`: how many sessions the STORE holds, with no limit. The hub
+///   loads a page (500), so without this the header's row count is the page
+///   size and reads as the whole truth (audit finding 3).
+/// - `employee_roster`: every employee the store knows about, by id, label and
+///   how many sessions it has (session-hub plan T1). Zero is a value, not
+///   silence.
+/// - `counts`: the store-wide per-mode counts (plan F4) — the tabs say how many
+///   rows a filter would show in the STORE, not in the page.
+///
+/// The tuple used to be written inline at this field, where those comments sat
+/// next to their components; they moved here with the alias so the rationale
+/// survives.
+type SessionListPayload = (
+    Vec<operant_core::session::listing::SessionEntryV2>,
+    Option<usize>,
+    Vec<(String, String, usize)>,
+    Option<operant_core::database::SessionFilterCounts>,
+);
+
 #[cfg(test)]
 pub(crate) mod advisor_card_tests;
 #[cfg(test)]
@@ -786,22 +808,7 @@ pub struct App {
     pub pending_title_save: Option<String>,
     /// Receiver for background session-hub row loads (plan 2026-10-28: the
     /// unified `SessionEntryV2` rows — DB list + delegation snapshot).
-    pub session_list_rx: Option<
-        tokio::sync::mpsc::Receiver<(
-            Vec<operant_core::session::listing::SessionEntryV2>,
-            // How many sessions the STORE holds, with no limit. The hub loads
-            // a page (500), so without this the header's row count is the
-            // page size and reads as the whole truth (audit finding 3).
-            Option<usize>,
-            // The EMPLOYEE ROSTER: every employee the store knows about, by id,
-            // label and how many sessions it has (session-hub plan T1). Zero is
-            // a value, not silence.
-            Vec<(String, String, usize)>,
-            // The store-wide per-mode counts (plan F4): the tabs say how many
-            // rows a filter would show in the STORE, not in the page.
-            Option<operant_core::database::SessionFilterCounts>,
-        )>,
-    >,
+    pub session_list_rx: Option<tokio::sync::mpsc::Receiver<SessionListPayload>>,
     /// J2: the next hub row load appends instead of replacing (the operator
     /// pressed Enter on the `Show more` row). Consumed by the drain, like
     /// `rename_on_list_load`.

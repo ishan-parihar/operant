@@ -1032,12 +1032,11 @@ fn handle_describe(config: &AppConfig, section: Option<String>, json: bool) -> R
         .unwrap_or(8)
         .max("KEY".len());
     println!(
-        "{:<kw$}  {:<vw$}  {note_col}",
+        "{:<kw$}  {:<vw$}  NOTE",
         "KEY",
         "VALUE",
-        note_col = "NOTE",
         kw = key_width,
-        vw = 24
+        vw = 24,
     );
 
     println!("{}", "-".repeat(key_width + 2 + 24 + 2 + 40));

@@ -124,10 +124,9 @@ fn pid_file() -> std::path::PathBuf {
 /// Write the running server's pid and URL. Failure is not fatal: the
 /// dashboard still serves, `--stop` just falls back to "not running".
 fn write_pid(url: &str) {
-    let path = pid_file();
-    if !claim_record(&path, std::process::id(), url) {
-        return;
-    }
+    // `claim_record` logs why it refuses (a LIVE foreign server owns the path),
+    // so its verdict needs no handling here — this server simply runs unrecorded.
+    let _recorded = claim_record(&pid_file(), std::process::id(), url);
 }
 
 /// Record `me`'s pid + `url` in `path`, refusing when a LIVE foreign process

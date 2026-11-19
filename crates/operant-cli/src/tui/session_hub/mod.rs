@@ -445,10 +445,10 @@ pub(super) fn dirs_match(a: &str, b: &str) -> bool {
     let a_path = std::path::Path::new(a);
     let b_path = std::path::Path::new(b);
     // One inside the other.
-    if let Some(home) = dirs::home_dir() {
-        if std::path::Path::new(a) == home || std::path::Path::new(b) == home {
-            return a == b;
-        }
+    if let Some(home) = dirs::home_dir()
+        && (std::path::Path::new(a) == home || std::path::Path::new(b) == home)
+    {
+        return a == b;
     }
     if a_path.starts_with(b_path) || b_path.starts_with(a_path) {
         // A bare prefix like `/home/ishanp/Documents` ⊂ `/home/ishanp/Documents/x`
@@ -1394,10 +1394,10 @@ impl SessionHubState {
                 // rows otherwise (tests, and the frame before the first load).
                 // `Working` is absent from the store on purpose: it is a
                 // process fact, so it counts the rows it always counted.
-                if let Some(store) = &self.store_counts {
-                    if let Some(n) = Self::store_count_for(store, mode) {
-                        return (mode, n);
-                    }
+                if let Some(store) = &self.store_counts
+                    && let Some(n) = Self::store_count_for(store, mode)
+                {
+                    return (mode, n);
                 }
                 let n = self
                     .rows
@@ -2146,9 +2146,7 @@ fn salvage_first_string_field(text: &str) -> Option<String> {
     let mut at = 0;
     while let Some(rel) = text[at..].find('"') {
         let key_start = at + rel + 1;
-        let Some(rel_end) = text[key_start..].find('"') else {
-            return None;
-        };
+        let rel_end = text[key_start..].find('"')?;
         let key_end = key_start + rel_end;
         let key = &text[key_start..key_end];
         let after = text[key_end + 1..].trim_start();
@@ -2213,10 +2211,10 @@ fn summarize_tool_result_at(tool_name: Option<&str>, content: &str, depth: usize
         // column that clips). Printing the first 200 characters of a half-written
         // object is the raw JSON the pane is not supposed to show, so salvage the
         // first readable field instead.
-        if trimmed.starts_with('{') || trimmed.starts_with('[') {
-            if let Some(salvaged) = salvage_json_field(trimmed) {
-                return salvaged;
-            }
+        if (trimmed.starts_with('{') || trimmed.starts_with('['))
+            && let Some(salvaged) = salvage_json_field(trimmed)
+        {
+            return salvaged;
         }
         return first_line(trimmed);
     };
@@ -2361,9 +2359,9 @@ fn scalar_text(value: &serde_json::Value, limit: usize) -> String {
             if items.iter().all(is_scalar) {
                 let joined = items
                     .iter()
-                    .filter_map(|v| match v {
-                        serde_json::Value::String(s) => Some(s.clone()),
-                        other => Some(scalar_text(other, limit)),
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => scalar_text(other, limit),
                     })
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>()

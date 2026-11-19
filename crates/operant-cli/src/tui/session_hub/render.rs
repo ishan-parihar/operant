@@ -1046,7 +1046,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // "opera" — a directory that does not exist. The folder glyph
                 // is TWO cells and the status glyph is another 3-4, so both
                 // the tag and the prefix have to be measured in cells.
-                let title_line_cells = crate::tui::render::utils::display_width(&title_text)
+                let _title_line_cells = crate::tui::render::utils::display_width(&title_text)
                     + crate::tui::render::utils::display_width(&status_prefix);
                 spans.extend(highlight_spans(
                     &title_text,
@@ -1146,7 +1146,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // above already names it (Stage B), so it is the one field here
                 // the row can afford to lose. Shrinking the id first would burn
                 // the handle to save a word that is already one row up.
-                let show_status = metrics_width as usize + 13 <= inner_width as usize;
+                let show_status = metrics_width + 13 <= inner_width as usize;
                 let metrics_width = if show_status {
                     metrics_width
                 } else {
@@ -1154,8 +1154,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 };
                 let mut id_budget = 12usize;
                 // Then shrink the id while it still reads as a handle.
-                while metrics_width as usize + id_budget + 1 > inner_width as usize && id_budget > 3
-                {
+                while metrics_width + id_budget + 1 > inner_width as usize && id_budget > 3 {
                     id_budget -= 1;
                 }
                 // (2026-11-14, audit finding 17) THE FLOOR.
@@ -1174,7 +1173,7 @@ fn render_list_body(frame: &mut Frame, state: &SessionHubState, area: ratatui::l
                 // recoverable too), then the badge, and only then is the line
                 // allowed to clip.
                 let emp_cost = emp.chars().count();
-                let show_emp = metrics_width as usize + id_budget + 1 <= inner_width as usize;
+                let show_emp = metrics_width + id_budget < inner_width as usize;
                 // The badge's width comes out of the budget when the line
                 // cannot hold it. The value is not used again — the span
                 // below is what is gated — but the subtraction is the

@@ -815,7 +815,8 @@ struct FullPrepCacheKey {
     streaming_thinking_hash: u64,
     /// (A7 HIGH-1, second half) Reserved tool rows render in the Streaming
     /// section (`adapter::live_tool_rows`) and are driven by `tool_use_blocks`
-    /// + `after_index`. A `ToolStart` that arrives during a thinking-only
+    /// +
+    /// `after_index`. A `ToolStart` that arrives during a thinking-only
     /// stream is a same-key mutation without this: the row appears only once
     /// the text starts moving. Count plus the highest `after_index` is enough
     /// to change the key, and it is cheaper than hashing the rows.

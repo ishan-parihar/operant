@@ -4,6 +4,12 @@ use super::auth::AuthStore;
 use super::config::Settings;
 use crate::commands::CommandResult;
 
+/// The panic-hook leftover slot: `Arc<Mutex<Option<(panic_message,
+/// Option<location>)>>>`. The panic hook stashes the payload here so the
+/// run loop can print it after unwinding; a type alias keeps the signature
+/// of the `let` binding readable.
+type PanicLeftover = std::sync::Arc<std::sync::Mutex<Option<(String, Option<String>)>>>;
+
 pub struct TuiApp {
     app: crate::tui::app::App,
     initial_query: Option<String>,
@@ -400,8 +406,7 @@ impl TuiApp {
         // refresh below) so it is `None` before the first turn and correct
         // after any in-TUI session switch — which the frozen copy was not.
         let no_mouse = self.no_mouse;
-        let panic_leftover: std::sync::Arc<std::sync::Mutex<Option<(String, Option<String>)>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let panic_leftover: PanicLeftover = std::sync::Arc::new(std::sync::Mutex::new(None));
         let hook_leftover = std::sync::Arc::clone(&panic_leftover);
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {

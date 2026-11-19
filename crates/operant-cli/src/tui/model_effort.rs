@@ -110,6 +110,7 @@ impl EffortLevel {
     /// Wrapping to `Off` rather than clamping at `Max` is what makes one key able
     /// to turn reasoning off at all — the ladder is the only control most
     /// operators reach.
+    #[cfg(test)]
     pub fn next_up(self) -> Self {
         match self {
             Self::Off => Self::Minimal,
@@ -180,6 +181,7 @@ pub enum EffortSupport {
 
 impl EffortSupport {
     /// Whether the effort controls should open at all.
+    #[cfg(test)]
     pub fn allows_effort(self) -> bool {
         !matches!(self, Self::None)
     }

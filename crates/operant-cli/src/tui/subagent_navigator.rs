@@ -39,6 +39,7 @@ pub struct NavigatorEntry {
     /// Zero for a direct child; one per extra hop.
     pub depth: usize,
     /// The parent of this entry within the walk, for the tree view.
+    #[allow(dead_code, reason = "field read by tests in app/tests.rs")]
     pub parent: Option<String>,
 }
 

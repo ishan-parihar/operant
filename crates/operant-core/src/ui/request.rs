@@ -119,7 +119,7 @@ pub fn has_surface_request_sender() -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::ui::{Provenance, SemanticTone, WidgetNode};
+    use crate::ui::{Provenance, WidgetNode};
 
     /// Serializes the tests that touch the process-global
     /// `SURFACE_REQUEST_TX` `OnceLock`.
