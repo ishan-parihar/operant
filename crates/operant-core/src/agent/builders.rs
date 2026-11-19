@@ -802,8 +802,15 @@ impl OperantAgent {
             },
             move |recap| {
                 if let Some(tx) = &event_tx {
+                    // RT-209: the attribution the event carried used to be
+                    // dropped by every subscriber, so the operator never saw the
+                    // per-turn cost even though the engine had it in hand.
+                    let summary = match recap.attribution.as_deref() {
+                        Some(a) => format!("※ recap: {} · {}", recap.text, a),
+                        None => format!("※ recap: {}", recap.text),
+                    };
                     let _ = tx.try_send(AgentEvent::BackgroundReview {
-                        summary: format!("※ recap: {}", recap.text),
+                        summary,
                         session_id: recap.session_id.clone(),
                     });
                 }

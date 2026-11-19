@@ -74,6 +74,23 @@ pub struct Recap {
     pub session_id: String,
     /// The recap text, already trimmed to a single line.
     pub text: String,
+    /// The measured turn-cost breakdown for the turn that armed the timer, as
+    /// one line, or `None` when attribution was off or the bus carried none.
+    ///
+    /// **Why this field exists (RT-209).** The recap engine is a `TurnEnd`
+    /// subscriber, and before this field it read ONLY `end.session_id` -- so the
+    /// attribution value the event CARRIED was silently dropped, exactly as the
+    /// `turn_attribution` module header warned. The engine is the one subscriber
+    /// whose whole job is "tell the operator what just happened", which makes it
+    /// the natural home for "here is what the turn cost". The seam's `debug!`
+    /// line (`TurnEndBus::log_attribution`) is NOT the same claim: it renders
+    /// before the emit from a local, so an operator watching the TUI never sees
+    /// it and a subscriber that ignores the field is still an orphan.
+    ///
+    /// `None` under `TurnAttribution::Disabled` (the kill-switch returned before
+    /// anything was built) and when the bus carried no attribution at all -- an
+    /// absence is never rendered as a fake zero.
+    pub attribution: Option<String>,
 }
 
 /// Handle for the host to signal user activity (re-arm/cancel the timer).
@@ -215,6 +232,13 @@ pub fn spawn_recap_engine(
                 Err(_) => break, // channel closed: agent dropped, engine exits
             };
             let session_id = end.session_id.clone();
+            // RT-209: this subscriber used to read ONLY `session_id` and drop
+            // the attribution the event carried, which is the orphan the
+            // `turn_attribution` module header predicted. Render it here -- at
+            // the one place that already holds the classified enum AND knows the
+            // turn is over -- rather than at the emit, so the value reaches the
+            // operator through the host callback instead of only a `debug!`.
+            let attribution = end.attribution.as_ref().map(|a| a.render_one_line());
             // Drain stale activity before arming: a notify that queued while
             // the turn was RUNNING (e.g. the gateway's turn-start cancel for
             // this very turn) must not cancel the window that opens at this
@@ -294,7 +318,11 @@ pub fn spawn_recap_engine(
                 continue;
             }
             tracing::debug!(session = %session_id, "recap delivered to host callback");
-            deliver(Recap { session_id, text });
+            deliver(Recap {
+                session_id,
+                text,
+                attribution,
+            });
         }
     });
     RecapActivity { tx: Some(act_tx) }

@@ -14,19 +14,20 @@
 //! An `Incomplete` result is a legitimate value -- it NAMES the gaps -- so a
 //! measurement gap is never a reason to suppress the emission.
 //!
-//! **Consumed at the seam as of iter-1661, not by any subscriber.**
-//! `run()` classifies the turn, `TurnEnd` carries the enum into every
-//! delivered event, and `TurnEndBus::log_attribution` renders one `debug!`
-//! line per turn at the emission site -- so the value an operator can see is
-//! real. What is still absent is a SUBSCRIBER: both existing subscribers
-//! (`advisor.rs`, `recap.rs`) read only `end.session_id`, so the value the
-//! event CARRIED is dropped. The seam log reads the local variable before the
-//! emit, which is why the two are not the same claim. `TurnBreakdown`'s
-//! `is_exclusive()` has no production caller either, and `TurnAttribution`'s
-//! multi-line `render()` has none -- the seam uses `render_one_line`. All
-//! three gaps print a `KNOWN GAP` notice from the guard at the bottom of this
-//! file, because a guard that passes silently is the failure this module has
-//! already shipped twice.
+//! **The subscriber gap is CLOSED as of iter-2689 (RT-209).**
+//! `recap.rs` is a real `TurnEndBus` subscriber (`spawn_recap_engine`, called
+//! from `agent/builders.rs`), and it now reads `end.attribution` rather than only
+//! `end.session_id`: `Recap::attribution` carries `render_one_line()` to the host,
+//! which appends it to the operator-visible recap. `advisor.rs` is the OTHER
+//! subscriber and still reads only `session_id` -- it is a mid-turn advisor
+//! (its `trigger` is user/assistant activity, not turn end), so per-turn cost
+//! there is a different question with a different owner, not this one.
+//! `TurnBreakdown::is_exclusive()` and `TurnAttribution::render()` (the
+//! multi-line form) remain production-callerless: the seam uses
+//! `render_one_line`, and a second rendering of the same numbers is not worth a
+//! caller. Those two print a `KNOWN GAP` notice from the guard at the bottom of
+//! this file, because a guard that passes silently is the failure this module
+//! has already shipped twice.
 //!
 //! **Why the log line and not a TUI panel.** A panel needs new TUI surface,
 //! which is a peer's area and a far larger iteration. The seam is the one
