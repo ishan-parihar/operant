@@ -1,6 +1,7 @@
 // Vendored from jcode (crates/operant-tui/src/tui/ui_frame_metrics.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
+#![allow(dead_code)] // vendored jcode TUI layer; functions land before their cutover wiring
 
 use super::*;
 use serde::Serialize;

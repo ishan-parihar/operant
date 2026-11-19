@@ -1,6 +1,7 @@
 // Vendored from jcode (crates/operant-tui/src/tui/ui_animations.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
+#![allow(dead_code)] // vendored jcode TUI layer; functions land before their cutover wiring
 
 use crate::tui::operant_app::color_support::rgb;
 use crate::tui::operant_app::tui_state::TuiState;

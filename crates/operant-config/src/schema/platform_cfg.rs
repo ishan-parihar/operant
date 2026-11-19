@@ -23,7 +23,6 @@ pub enum SearchMode {
 /// `deny_unknown_fields`, so an operator naming `[memory.policy]` or
 /// `[reliability]` already got a hard load error. They are removed rather than
 /// wired because the runtime has no home for their settings.
-
 /// Observability backend configuration (`[observability]` section).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]

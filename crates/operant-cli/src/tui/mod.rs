@@ -120,13 +120,6 @@ pub mod space;
 pub mod stats_dialog;
 pub mod status_line;
 pub mod subagent_navigator;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "lands before its cutover wiring (App-seam adaptation)"
-    )
-)]
 pub mod surface_widget;
 pub mod terminal_setup;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)

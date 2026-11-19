@@ -61,7 +61,7 @@ pub fn render_surface(node: &WidgetNode, width: usize) -> Vec<Line<'static>> {
 /// Render one node as lines at `width` columns, dropping `pad` columns of
 /// left gutter of each line so nested bodies align under their border.
 fn render_surface_padded(node: &WidgetNode, width: usize, pad: usize) -> Vec<Line<'static>> {
-    let span = width.max(1).min(120);
+    let span = width.clamp(1, 120);
     let mut lines = Vec::new();
     render_node(node, span, &mut lines);
     if pad > 0 {
@@ -162,7 +162,7 @@ fn render_node(node: &WidgetNode, width: usize, lines: &mut Vec<Line<'static>>) 
         }
         WidgetNode::Divider => {
             lines.push(Line::from(Span::styled(
-                "─".repeat(width.max(1).min(120)),
+                "─".repeat(width.clamp(1, 120)),
                 Style::default().fg(rgb(70, 74, 86)),
             )));
         }

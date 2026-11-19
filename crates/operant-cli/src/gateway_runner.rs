@@ -8704,7 +8704,6 @@ pub async fn start_gateway(
                                             })();
                                             if let Some((conn, row)) = outcome {
                                                 let choice_ids = row.choice_ids();
-                                                let choice_ids = row.choice_ids();
                                                 let idx = cc
                                                     .get("idx")
                                                     .and_then(|v| v.as_u64())

@@ -1,6 +1,7 @@
 // Vendored from jcode (crates/operant-tui/src/tui/ui_panel_image_preview.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
+#![allow(dead_code)] // vendored jcode TUI layer; functions land before their cutover wiring
 
 //! Click targets are rebuilt from actual image widget rectangles each frame.
 //! Keeping them separate from text selection allows a click to preview an image

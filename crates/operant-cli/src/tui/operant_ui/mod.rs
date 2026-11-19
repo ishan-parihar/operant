@@ -1,6 +1,8 @@
 // Vendored from jcode (crates/operant-tui/src/tui/ui.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map; jcode issue refs stripped.
+#![allow(dead_code)]
+// vendored jcode TUI layer; functions land before their cutover wiring
 //
 // TRUTH CLAUSE: this is the slim parent skeleton of upstream ui.rs — the
 // child module declarations, the upstream re-export subset whose target

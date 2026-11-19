@@ -1,6 +1,7 @@
 // Vendored from jcode (crates/operant-tui/src/tui/ui_messages.rs), MIT License,
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; imports
 // re-rooted per the batch-3 map. See operant_ui/mod.rs for scope.
+#![allow(dead_code)] // vendored jcode TUI layer; functions land before their cutover wiring
 
 use super::*;
 // [port-decision] diff helpers collect_diff_lines / generate_diff_lines_from_tool_input /
