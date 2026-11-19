@@ -1,5 +1,11 @@
 # What stands after iter-2666 — the last nine open ledger rows
 
+> **SUPERSEDED iter-2693.** The owner of the residual-cleanup question is
+> `docs/plans/2026-11-19-close-the-measured-residuals-stale-checkboxes-doc-drift-dead.md`
+> (iter-2693), which inventories what is measurably open at `66533e7f` and
+> supersedes the scheduling half of this plan and its predecessor.
+> This file is kept as dated-frozen history; do not edit it.
+
 ## Relationship to the peer plan (read this first)
 
 A parallel agent published

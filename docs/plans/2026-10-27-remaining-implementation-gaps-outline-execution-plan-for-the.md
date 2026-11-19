@@ -1,5 +1,11 @@
 # What stands after iter-1379 — the open ledger rows, and the order they close
 
+> **SUPERSEDED iter-2693.** The owner of the residual-cleanup question is
+> `docs/plans/2026-11-19-close-the-measured-residuals-stale-checkboxes-doc-drift-dead.md`
+> (iter-2693), which inventories what is measurably open at `66533e7f` and
+> supersedes the scheduling half of this plan and the two that followed it.
+> This file is kept as dated-frozen history; do not edit it.
+
 Dated-frozen: published `2026-10-27`. A plan that changes is a new plan (or declare it
 in genome.toml `core.living_plans` and keep a 'Resume here' section.
 

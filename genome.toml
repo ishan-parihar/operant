@@ -104,6 +104,12 @@ coverage_exempt = [
   "crates/operant-cli/src/cmd_sop.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
   "crates/operant-cli/src/cmd_tools.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
   "crates/operant-cli/src/cmd_version.rs -> leaf; the CLI command surface entry, owned by docs/library/cli-surface.md",
+  "crates/operant-api/src/media.rs -> leaf; multimodal config types removed iter-2680 (dead code); the file is an empty schema stub",
+  "crates/operant-core/src/config/docker_terminal.rs -> leaf; config submodule for Docker terminal provider settings",
+  "crates/operant-core/src/config/ssh_terminal.rs -> leaf; config submodule for SSH terminal provider settings",
+  "crates/operant-core/src/config/stt.rs -> leaf; config submodule for speech-to-text settings",
+  "crates/operant-core/src/config/vision.rs -> leaf; config submodule for vision model settings",
+  "crates/operant-core/src/text_slice.rs -> leaf; text-slicing utility for context window management",
 ]
 
 # E019: a doc's DERIVED claim about the code must match the code. The script is the
