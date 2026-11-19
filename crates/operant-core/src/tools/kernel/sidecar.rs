@@ -67,8 +67,13 @@ pub struct SidecarHandle {
     pub writer: SidecarWriter,
     child: Arc<AsyncMutex<Child>>,
     pending: PendingMap,
-    /// Bridged tool-call requests awaiting host execution (phase 2.5).
-    #[allow(dead_code)] // consumed by tool_bridge drain loop (phase 2.5 wiring)
+    /// Bridged tool-call requests awaiting host execution.
+    /// Consumed by `tool_bridge::drain_loop` (the phase 2.5 wiring is live —
+    /// `tool_bridge.rs` does `handle.bridge_rx.lock().await`). The
+    /// `#[allow(dead_code)]` this field carried until iter-2706 was stale:
+    /// the drainer exists and reads it every tick, so the lint has nothing to
+    /// suppress. Converted to a doc comment rather than `#[expect]` because
+    /// there is no lint to expect — the field is live.
     pub bridge_rx: AsyncMutex<mpsc::UnboundedReceiver<Inbound>>,
     last_activity: Arc<AtomicU64>,
 }
