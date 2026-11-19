@@ -225,6 +225,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_compartments_hash
     ON compartments(session_id, source_hash);
 ";
 
+/// B4 / RT-598 (iter-2658): the durable surface-question queue.
+///
+/// A surface card that waits on the operator is only in-memory today
+/// (`PENDING_SURFACE_QUESTIONS` / `PENDING_SURFACE_OPS`): a restart, a
+/// cron-fired surface with no TUI, or an hours-late tap all lose the
+/// oneshot and resolve to the 120 s timeout string. This table persists the
+/// card so the offer survives the process, and a tap arriving after a
+/// restart can still resolve to the choice the agent asked for.
+///
+/// One row per in-flight card. `op_json` is the serialized `SurfaceOp`
+/// (the widget tree + the choice ids); `choice_ids_json` is the offered
+/// choice ids in render order, so a `choice:<idx>` tap maps back to an id
+/// without re-deriving the tree. `answered_at` NULL means still pending;
+/// a non-NULL value is the durable record that this card was answered (and
+/// by what), so a replayed tap is a no-op instead of a double-answer.
+const SURFACE_QUEUE_MIGRATION: &str = "
+CREATE TABLE IF NOT EXISTS pending_surfaces (
+    surface_id TEXT PRIMARY KEY,
+    channel_key TEXT NOT NULL,
+    op_json TEXT NOT NULL,
+    choice_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    answered_at TEXT,
+    answer_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_surfaces_channel
+    ON pending_surfaces(channel_key);
+";
+
 /// The status axis of a session row, as the store holds it.
 ///
 /// `Live` is deliberately absent: the row that is being streamed right now is
@@ -317,6 +346,7 @@ impl Database {
         CONTEXT_LEDGER_MIGRATION,
         FIRST_PROMPT_MIGRATION,
         COMPARTMENT_MIGRATION,
+        SURFACE_QUEUE_MIGRATION,
     ];
 
     /// Initialize a new database at the specified path.

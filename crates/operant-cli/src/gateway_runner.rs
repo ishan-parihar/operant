@@ -6629,6 +6629,10 @@ pub async fn start_gateway(
     // parity). Also drains AgentEvent::Content for streaming
     // progressive-edit (iter-100 — closes Bug #12 from iter-98 audit).
     let gw_for_events = gw.clone();
+    // B4 / RT-598 (iter-2658): the session db path, captured for the surface
+    // queue's own WAL connection (the agent's hot connection stays
+    // uncontended). Cloned here so the spawned loop owns it.
+    let session_db_path_events = session_db_path.clone();
     let session_channels_for_events = session_channels.clone();
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
@@ -7255,7 +7259,77 @@ pub async fn start_gateway(
                             guard.as_ref().cloned()
                         };
                         if let Some(map) = map {
-                            map.lock().await.insert(surface_id, op.clone());
+                            map.lock().await.insert(surface_id.clone(), op.clone());
+                        }
+                    }
+                    // B4 / RT-598 (iter-2658): persist the card so it survives
+                    // a restart. Only interactive cards are queued (a plain
+                    // card has nothing to answer); the choice ids ride
+                    // alongside the op so a late tap resolves without
+                    // re-deriving the tree. Best-effort: a queue write that
+                    // fails (locked db, no session store) must NOT block the
+                    // card the operator is waiting on -- the in-memory maps
+                    // above still cover the live process.
+                    if interactive {
+                        let channel_key = format!("{platform}:{channel_id}");
+                        let choice_ids: Vec<String> = match &op {
+                            operant_core::ui::SurfaceOp::CreateSurface { body, .. }
+                            | operant_core::ui::SurfaceOp::UpdateDataModel { body, .. } => {
+                                match body {
+                                    operant_core::ui::WidgetNode::ChoicePicker {
+                                        choices, ..
+                                    } => choices.iter().map(|c| c.id.clone()).collect(),
+                                    operant_core::ui::WidgetNode::Confirm { .. } => {
+                                        vec!["yes".into(), "no".into()]
+                                    }
+                                    _ => Vec::new(),
+                                }
+                            }
+                            operant_core::ui::SurfaceOp::UpdateComponents {
+                                components, ..
+                            } => components
+                                .iter()
+                                .filter_map(|w| match w {
+                                    operant_core::ui::WidgetNode::ChoicePicker {
+                                        choices, ..
+                                    } => Some(
+                                        choices.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+                                    ),
+                                    operant_core::ui::WidgetNode::Confirm { .. } => {
+                                        Some(vec!["yes".into(), "no".into()])
+                                    }
+                                    _ => None,
+                                })
+                                .flatten()
+                                .collect(),
+                            operant_core::ui::SurfaceOp::SealSurface { .. } => Vec::new(),
+                        };
+                        // B4: the queue is a separate concern from the agent's
+                        // message store, so it opens its own WAL-mode connection
+                        // to the same db file rather than contending on the
+                        // agent's hot connection. WAL is designed for exactly
+                        // this (concurrent readers + one writer).
+                        {
+                            let db_path = session_db_path_events.clone();
+                            let op_json = serde_json::to_string(&op).unwrap_or_default();
+                            let choice_json =
+                                serde_json::to_string(&choice_ids).unwrap_or_default();
+                            let now = chrono::Utc::now().to_rfc3339();
+                            let sid = surface_id.clone();
+                            let ck = channel_key.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                    let _ = operant_core::ui::surface_queue::register(
+                                        &conn,
+                                        &sid,
+                                        &ck,
+                                        &op_json,
+                                        &choice_json,
+                                        &now,
+                                    );
+                                }
+                            })
+                            .await;
                         }
                     }
                 }
@@ -7890,6 +7964,9 @@ pub async fn start_gateway(
     let app_config_clone = app_config.clone();
     let handler_for_stop = handler.clone();
     let stream_delivery_for_dispatch = stream_delivery.clone();
+    // B4 / RT-598: the dispatch spawn needs the queue db path too; clone it
+    // here so the event-loop spawn's move does not consume the only copy.
+    let session_db_path_for_dispatch = session_db_path.clone();
     tokio::spawn(async move {
         // ── Turn dispatch: per-session serialization with live dialogs ────────
         // Only one agent turn runs per session at a time; further messages for
@@ -8478,8 +8555,39 @@ pub async fn start_gateway(
                                                     kind = %answer["kind"],
                                                     "Routing surface-card tap (dispatch)"
                                                 );
-                                                let _ = pending.reply_tx.send(answer);
+                                                let _ = pending.reply_tx.send(answer.clone());
                                                 resolved = true;
+                                                // B4 / RT-598: record the answer durably so a
+                                                // replayed tap (after a restart, or a double-tap)
+                                                // is a no-op instead of a double-answer. The
+                                                // oneshot above already fired; this is the durable
+                                                // record that it fired.
+                                                let answer_channel = channel_key.clone();
+                                                let answer_json = answer.to_string();
+                                                let now = chrono::Utc::now().to_rfc3339();
+                                                let db_path = session_db_path_for_dispatch.clone();
+                                                let _ = tokio::task::spawn_blocking(move || {
+                                                    let Ok(conn) = rusqlite::Connection::open(&db_path) else { return };
+                                                    // Find the surface_id for this channel's
+                                                    // pending card: the queue is keyed by
+                                                    // surface_id, and the tap carries the channel.
+                                                    // Mark the oldest pending row answered.
+                                                    if let Ok(rows) =
+                                                        operant_core::ui::surface_queue::pending_for_channel(
+                                                            &conn,
+                                                            &answer_channel,
+                                                        )
+                                                        && let Some(row) = rows.into_iter().next()
+                                                    {
+                                                        let _ = operant_core::ui::surface_queue::answer(
+                                                            &conn,
+                                                            &row.surface_id,
+                                                            &answer_json,
+                                                            &now,
+                                                        );
+                                                    }
+                                                })
+                                                .await;
                                             }
                                             if let Some(g) =
                                                 crate::gateway_runner::PENDING_SURFACE_QUESTIONS.get()

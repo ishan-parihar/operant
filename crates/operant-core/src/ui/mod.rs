@@ -28,6 +28,7 @@
 pub mod gate;
 pub mod plain;
 pub mod request;
+pub mod surface_queue;
 
 use serde::{Deserialize, Serialize};
 
