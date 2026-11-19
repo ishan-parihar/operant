@@ -1292,9 +1292,24 @@ fn human_bytes(bytes: i64) -> String {
 /// absent one is a setup task. Telling the first operator to "run operant
 /// setup" sends them to a wizard that downloads nothing they are missing and
 /// never mentions the switch that would turn TTS on.
+///
+/// **What the message must NOT claim (iter-2686, Hydrogen finding F4).** It
+/// used to tell the operator the exact flag flip that would let them use TTS.
+/// That is false: `enabled` is read only by the setup/doctor surfaces and is
+/// **not consulted by `TtsTool::execute`**, and the `tts` tool is registered
+/// unconditionally. An operator who sets `enabled = false` still has a working
+/// TTS tool -- the flag switches off the operator-facing surface, not the
+/// dispatch (AGENTS.md design preference: "there is none to find"). Saying it
+/// disables the feature sent operators looking for a guard that does not exist.
+/// The honest line names what the flag actually does and where the real block
+/// is (tool policy).
 fn tts_disabled_detail(cached: bool) -> &'static str {
     if cached {
-        "(disabled \u{2014} the phonon model is downloaded; set [tts] enabled = true to use it)"
+        // The cache is warm, so the only thing standing between the operator and
+        // TTS is the flag itself -- and the flag does NOT gate dispatch, so the
+        // line must not imply it does. This is the case the old wording got
+        // wrong: it promised `enabled = true` would "use it".
+        "(the phonon model is downloaded; [tts] enabled = false only marks the feature off in doctor/setup -- the tool stays active unless blocked via tool policy)"
     } else {
         "(not configured \u{2014} run operant setup)"
     }
