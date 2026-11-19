@@ -109,19 +109,35 @@ cross-chat replay the field exists to prevent. **This tranche must resolve the
 constraint before writing a callback**, and the resolution has to be argued,
 not chosen. The candidates, in the order they should be tested:
 
-1. **Per-surface short ids.** Mint `surface_id` at 8 bytes and key the pending
-   map by a server-side row rather than by the ids themselves, so `callback_data`
-   carries only an opaque handle plus the MAC. Keeps every security property,
-   costs a pending-row table (which T4's durability needs anyway).
-2. **Drop `action_id` from the wire.** The button index already identifies the
-   action within a surface; carry `surface_id` + `action_idx` + MAC.
-3. **Shorten the MAC and re-measure.** 8 bytes of HMAC-SHA256 truncated to 4-6
-   base64url chars, with a per-surface nonce so a short tag is not
-   offline-brute-forceable across surfaces.
+**RESOLVED (iter-2651, B1).** Measured on 2026-11-19 (HMAC-SHA256 over the four
+fields, realistic ids `surf_01H8X2K4M9QRSTUVWXY` / `477281923` /
+`[REDACTED:card]`):
 
-Whichever wins, the invariant to pin is: **the callback cannot name a surface
-the sender could not already see.** Any candidate that needs a new
-authentication assumption goes in the plan's amendments, not in the code.
+| Candidate | Wire bytes | Fits 64? |
+|---|---|---|
+| raw MAC over all four fields | 104 | no |
+| 8-byte MAC over the same four | 72 | **no (OVER by 8)** |
+| `op:{sid}:{action_idx}:{mac64}` | 41 | yes |
+| `op:{opaque 8-byte handle}` | 14 | yes |
+
+**Chosen: `op:{opaque 8-byte handle}`** keyed by a server-side row
+(`pending_surface_action`). It wins on every axis that matters here: it fits
+with room to spare, it does not drop `chat_id` (keeping the replay property), it
+is strictly simpler than the index shape (which still needs the row to map
+index → action), and it is the same shape across the channels that can carry a
+`callback_data` and those that cannot (Discord/Slack). Dropping to a truncated
+MAC over the four fields does NOT fix D1 and was never going to: the cap is the
+four id fields, not the MAC.
+
+**Cost this forces:** the opaque handle implies a pending-row table under the
+migrations conventions. That is the same schema B4/RT-598 needs, so **the
+"0 new DB tables" invariant breaks here (B3), not in B2** — one migration,
+shared by the callback and durability tranches. The invariant violation is
+recorded rather than hidden.
+
+The invariant to pin stands: **the callback cannot name a surface the sender
+could not already see.** Under the opaque handle, the tap can only reference a
+row that was written when the surface was offered, so it cannot.
 
 ### D2 — The rasteriser must not add a font stack. The audit already ruled.
 

@@ -512,3 +512,47 @@ must be added there next to whatever bound it gives its own prompts.
 
 Start at T3. `docs/audit/2026-11-18-generative-ui-surface-ir-governance-and-rasterizer-survey.md`
 holds the seam-by-seam evidence table the tranches cite.
+## Amendment — the `op:` callback payload (iter-2651, B1 of the successor)
+
+The predecessor (above, §3 / the T3 tranche and D1) specifies `op:` as a bare
+b64url HMAC over `surface_id/action_id/user_id/chat_id`. **That shape does not
+fit Telegram's 64-byte `callback_data` cap. Measured on 2026-11-19**, using
+HMAC-SHA256 over the four fields with realistic values:
+
+| Candidate | Wire bytes | Fits 64? |
+|---|---|---|
+| `op:{sid}:{act}:{uid}:{cid}:{mac48}` (raw MAC over all four fields) | 104 | no |
+| `op:{sid}:{act}:{uid}:{cid}:{mac64_truncated}` (8-byte MAC) | 72 | **no** |
+| `op:{sid}:{action_idx}:{mac64}` (idx into a server-side action table) | 41 | yes |
+| `op:{opaque_8B_handle}` (server holds surface+action+mac context) | 14 | yes |
+
+(`callback_data` cap verified at `telegram.rs:785`; full-width realistic ids:
+`surface_id="surf_01H8X2K4M9QRSTUVWXY"`, `user_id="477281923"`,
+`[REDACTED:card]`. Design values, not a live surface.)
+
+**The chosen shape is the opaque handle: `op:{8-byte handle}`** carried in a
+server-side pending row keyed by that handle. Rationale:
+- Dropping `chat_id` from the wire (the obvious trim) re-opens the cross-chat
+  replay that field exists to prevent.
+- Dropping `action_id` and carrying an index works (41 B) but still requires
+  the surface row to exist server-side to map index → action; the opaque
+  handle already implies that row, so it is strictly simpler.
+- The opaque handle is also the one shape that survives channels that cannot
+  carry a long callback (Discord, Slack) and keeps the security property that
+  **the callback cannot name a surface the sender could not already see.**
+
+**Cost, derived:** the opaque handle forces a pending-row table under the
+migrations conventions (a `pending_surface_action { handle, surface_id,
+action_id, actor_user_id, actor_chat_id, status, expires_at }` family). This is
+the same schema T4/RT-598 needs, so the durability work and the callback work
+share one migration rather than two — recorded here so it is not re-discovered
+as a surprise. The "0 new DB tables" line in the predecessor therefore breaks in
+B3/B4, not in B2.
+
+**Scope unchanged:** T3's cell-grid renderer, `OutgoingMessage` media field and
+`sendPhoto` still land first (B2), then the callback family over this handle
+(B3), then durability (B4). The 300 s oneshot and the 120 s gateway timer
+remain in the interim.
+
+The plan-twin brief's §Statements remain frozen; this amendment records the
+departure inside the successor plan instead.
