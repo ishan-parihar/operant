@@ -444,6 +444,47 @@ impl CheckpointManager {
         self.list_checkpoints_for(None, working_dir, limit)
     }
 
+    /// Every checkpoint in EVERY store for `working_dir`: the session-less one
+    /// and every session-scoped one (RT-539), newest first.
+    ///
+    /// `list_checkpoints` answers for ONE store, and the caller has to know
+    /// which session it means. The operator's own view has no session in hand
+    /// but must not silently hide the chats' snapshots — that is exactly the
+    /// split-brain RT-539 fixed inside the tool, so the operator-facing list
+    /// has to span the same set the tool writes.
+    pub fn all_checkpoints_in(&self, working_dir: &str) -> Vec<Checkpoint> {
+        let workdir = PathBuf::from(working_dir);
+        let mut all: Vec<Checkpoint> = Vec::new();
+        for store in self.stores_for(working_dir) {
+            if !store.join("HEAD").exists() {
+                continue;
+            }
+            let env = git_shadow_env(&store, &workdir, &store.join("index"));
+            let env_iter = env.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+            let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
+            let n = max.clamp(1, 100);
+            let log_output = Command::new("git")
+                .args([
+                    "log",
+                    "--format=%H|%h|%aI|%s",
+                    "--shortstat",
+                    "-n",
+                    &n.to_string(),
+                ])
+                .envs(env_iter)
+                .output();
+            if let Ok(output) = log_output
+                && output.status.success()
+            {
+                all.extend(Self::parse_checkpoint_log(&String::from_utf8_lossy(
+                    &output.stdout,
+                )));
+            }
+        }
+        all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all
+    }
+
     /// List the checkpoints of one session in a directory (RT-539).
     pub fn list_checkpoints_for(
         &self,
@@ -654,14 +695,50 @@ impl CheckpointManager {
 }
 
 impl CheckpointManager {
-    /// Drop the oldest shadow-store commits so at most `max_snapshots` remain.
-    /// Uses `git update-ref`, which is safe on a bare store and never touches
-    /// the user's index or worktree.
-    fn prune_old_checkpoints(&self, store: &Path, env: &[(String, String)]) {
-        let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
-        if max == 0 {
-            return;
+    /// Drop the oldest shadow-store commits of EVERY store belonging to
+    /// `working_dir` so at most `keep` remain in each, and report how many
+    /// commits were dropped in total.
+    ///
+    /// This is the path `operant checkpoints prune` takes. That command used
+    /// to read the DATABASE `checkpoints` table, which `store_checkpoint`
+    /// alone writes and nothing calls — so it always found nothing and pruned
+    /// nothing while the shadow stores beside it grew without bound. The
+    /// operator-facing count has to come from the store that actually holds
+    /// the snapshots, which is this one.
+    ///
+    /// A `keep` of 0 is refused rather than honoured: `git update-ref` to the
+    /// empty tree would leave a store whose HEAD names nothing, and every
+    /// later `list_checkpoints` would report no history at all. Clearing is
+    /// [`Self::clear_store`], which removes the whole directory.
+    pub fn prune_to(&self, working_dir: &str, keep: usize) -> crate::Result<usize> {
+        if keep == 0 {
+            return Ok(0);
         }
+        let workdir = PathBuf::from(working_dir);
+        let mut dropped = 0usize;
+        for store in self.stores_for(working_dir) {
+            if !store.join("HEAD").exists() {
+                continue;
+            }
+            let env = git_shadow_env(&store, &workdir, &store.join("index"));
+            dropped += self.prune_store_to(&store, &env, keep)?;
+        }
+        Ok(dropped)
+    }
+
+    /// Drop the oldest commits of ONE store so at most `keep` remain, and
+    /// report how many were dropped.
+    ///
+    /// Uses `git update-ref`, which is safe on a bare store and never touches
+    /// the user's index or worktree. `git gc --prune=now` runs afterwards so
+    /// the dropped objects are reclaimed rather than merely unreachable —
+    /// `update-ref` alone hides them and the store keeps growing.
+    fn prune_store_to(
+        &self,
+        store: &Path,
+        env: &[(String, String)],
+        keep: usize,
+    ) -> crate::Result<usize> {
         let env_iter = env.iter().map(|(k, v)| (k.as_str(), v.as_str()));
         let count = match Command::new("git")
             .args(["rev-list", "--count", "HEAD"])
@@ -669,28 +746,30 @@ impl CheckpointManager {
             .output()
         {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-            _ => return,
+            // A store whose HEAD cannot be counted is either fresh or
+            // corrupt; neither is a reason to fail the operator's command.
+            _ => return Ok(0),
         };
         let Ok(n) = count.parse::<usize>() else {
-            return;
+            return Ok(0);
         };
-        if n <= max {
-            return;
+        if n <= keep {
+            return Ok(0);
         }
-        let excess = n - max;
+        let excess = n - keep;
         let keep = match Command::new("git")
             .args(["rev-list", "-n", "1", &format!("HEAD~{}", excess)])
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output()
         {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-            _ => return,
+            _ => return Ok(0),
         };
         if keep.is_empty() {
-            return;
+            return Ok(0);
         }
         let Some(branch) = current_branch(store) else {
-            return;
+            return Ok(0);
         };
         // NOTE: `current_branch` must return the full `refs/heads/<name>` form;
         // a bare `master` would create a stray top-level loose ref instead of
@@ -704,7 +783,7 @@ impl CheckpointManager {
                 debug!(
                     "Pruned old checkpoints for {} (kept newest {})",
                     store.display(),
-                    max
+                    keep
                 );
             }
             other => {
@@ -714,7 +793,7 @@ impl CheckpointManager {
                     excess,
                     other.as_ref().map(|o| &o.stderr)
                 );
-                return;
+                return Ok(0);
             }
         }
         // update-ref only hides the dropped commits; reclaim their objects so
@@ -734,6 +813,20 @@ impl CheckpointManager {
                 String::from_utf8_lossy(&o.stderr).trim()
             );
         }
+        Ok(excess)
+    }
+
+    /// The same prune the checkpoint tool runs after every write, keyed to the
+    /// configured snapshot cap. Kept as the single caller so the cap and the
+    /// operator-facing prune cannot drift apart.
+    fn prune_old_checkpoints(&self, store: &Path, env: &[(String, String)]) {
+        let max = self.config.lock().map(|g| g.max_snapshots).unwrap_or(20);
+        if max == 0 {
+            return;
+        }
+        // The store-level count is diagnostics only; the operator's `prune`
+        // path reports its own total.
+        let _ = self.prune_store_to(store, env, max);
     }
 }
 
@@ -1985,6 +2078,119 @@ mod tests {
         if let Some(latest) = cps.first() {
             mgr.restore(dir, &latest.hash, Some("a.txt")).unwrap();
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `prune_to` is the operator's `checkpoints prune` path, and it must
+    /// report the commits it actually dropped. Mutation-proved two ways:
+    /// returning 0 unconditionally fails the count assertion, and pruning to a
+    /// larger keep than asked fails the remaining-count assertion.
+    #[test]
+    fn prune_to_drops_the_oldest_and_reports_how_many() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // A high cap so the tool itself never prunes mid-test: the drop must
+        // be attributable to `prune_to` alone.
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            max_snapshots: 100,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        for i in 0..5 {
+            std::fs::write(tmp.join("a.txt"), format!("v{i}")).unwrap();
+            mgr.new_turn();
+            assert!(mgr.ensure_checkpoint(dir, &format!("c{i}")));
+        }
+        assert_eq!(mgr.list_checkpoints(dir, None).len(), 5);
+
+        let dropped = mgr.prune_to(dir, 2).expect("prune_to must succeed");
+        assert_eq!(dropped, 3, "5 commits pruned to 2 must drop exactly 3");
+        assert_eq!(
+            mgr.list_checkpoints(dir, None).len(),
+            2,
+            "exactly `keep` commits must remain"
+        );
+
+        // keep=0 is refused rather than honoured: an empty HEAD would make
+        // every later list report no history at all.
+        assert_eq!(
+            mgr.prune_to(dir, 0)
+                .expect("keep=0 is a no-op, not an error"),
+            0
+        );
+        assert_eq!(mgr.list_checkpoints(dir, None).len(), 2);
+
+        // Nothing left to drop is a zero, not an error.
+        assert_eq!(mgr.prune_to(dir, 5).expect("prune above count succeeds"), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `all_checkpoints_in` must span the SESSION-scoped stores as well as the
+    /// session-less one, because that is what the operator's view reads and
+    /// the chats' snapshots are the ones it used to hide (RT-539).
+    /// Mutation-proved: dropping the per-store loop (listing only the
+    /// session-less store) fails the session-scoped assertion.
+    #[test]
+    fn all_checkpoints_in_spans_session_scoped_stores() {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let tmp = std::env::temp_dir().join(format!("operant_ckpt_{}", uuid::Uuid::new_v4()));
+        let base =
+            std::env::temp_dir().join(format!("operant_ckpt_store_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "shared").unwrap();
+
+        let mgr = CheckpointManager::new();
+        mgr.configure(CheckpointConfig {
+            base_dir: base.clone(),
+            enabled: true,
+            ..Default::default()
+        });
+        let dir = tmp.to_str().unwrap();
+
+        assert!(mgr.ensure_checkpoint(dir, "operator view"));
+        assert!(mgr.ensure_checkpoint_for(Some("chat-a"), dir, "chat a"));
+
+        // The session-less view sees only its own store...
+        assert_eq!(mgr.list_checkpoints(dir, None).len(), 1);
+        // ...while the operator-wide view spans both.
+        let all = mgr.all_checkpoints_in(dir);
+        assert_eq!(
+            all.len(),
+            2,
+            "the operator view must span the session-less AND the session-scoped store, got {}",
+            all.len()
+        );
+        assert!(
+            all.iter().any(|c| c.reason == "chat a"),
+            "the session-scoped checkpoint must be visible to the operator"
+        );
+
+        // Newest first, so `list`'s table reads in the order the operator
+        // expects without a second sort at the call site.
+        assert!(
+            all.windows(2).all(|w| w[0].timestamp >= w[1].timestamp),
+            "all_checkpoints_in must return newest first"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&base);

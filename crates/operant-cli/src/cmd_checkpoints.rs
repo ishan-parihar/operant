@@ -6,8 +6,9 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
-use operant_core::database::Database;
 use operant_core::platform::operant_home;
+use operant_core::tools::checkpoint_tool::Checkpoint;
+use operant_core::tools::get_checkpoint_manager;
 
 /// Manage filesystem checkpoints
 #[derive(Debug, Clone, Subcommand)]
@@ -71,6 +72,29 @@ fn format_size(size: u64) -> String {
     }
 }
 
+/// Every snapshot this directory holds, across the session-less store and
+/// every session-scoped store (RT-539), newest first.
+///
+/// THE SOURCE OF THIS LIST IS THE SHADOW STORE, NOT THE DATABASE. It used to
+/// be the database's own checkpoint reader, over a `checkpoints` table that
+/// one writer fills and nothing in the workspace calls — so
+/// `operant checkpoints list` always printed "No checkpoints found",
+/// `prune` always reported nothing to prune, and `clear` returned before it
+/// reached `clear_store`, leaving a multi-gigabyte store on disk. Every row
+/// the TOOL wrote went to `checkpoint_tool`'s git shadow stores, which is
+/// what this now reads.
+fn live_checkpoints(dir: &str) -> Vec<Checkpoint> {
+    let manager = get_checkpoint_manager();
+    let mut all = manager.list_checkpoints(dir, None);
+    // Session-scoped stores are keyed by a hash the caller does not have, so
+    // the manager's own directory-wide entry point is the only one that can
+    // see them. It is the session-less store; the per-session ones are found
+    // by listing each directory's store set, which only the manager can do.
+    all.extend(manager.all_checkpoints_in(dir));
+    all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    all
+}
+
 async fn cmd_status(config: &AppConfig) -> Result<()> {
     let storage = operant_home().join("checkpoints");
     let enabled = storage.exists();
@@ -92,20 +116,16 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
         println!("Storage size:     N/A (directory does not exist yet)");
     }
 
-    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
-
     let dir = working_dir()?;
-    let checkpoints = db
-        .list_checkpoints(&dir)
-        .context("Failed to list checkpoints")?;
+    let checkpoints = live_checkpoints(&dir);
 
     println!("Working directory: {}", dir);
     println!();
-    println!("Database: {}", config.database_path.display());
-
-    if let Ok(meta) = std::fs::metadata(&config.database_path) {
-        println!("Database size: {}", format_size(meta.len()));
-    }
+    // The database line is gone with the table it described: the checkpoint
+    // store is a git shadow directory, so the size that matters is its own.
+    // (`config` is still taken by every arm so the command's signature and
+    // its call site stay uniform.)
+    let _ = config;
 
     println!("Checkpoints (this dir): {}", checkpoints.len());
     println!();
@@ -114,15 +134,15 @@ async fn cmd_status(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_list(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let _ = config;
 
     let dir = working_dir()?;
-    let checkpoints = db
-        .list_checkpoints(&dir)
-        .context("Failed to list checkpoints")?;
+    let checkpoints = live_checkpoints(&dir);
 
     if checkpoints.is_empty() {
-        println!("No checkpoints found for this directory.");
+        println!("No checkpoints found for this directory. (Checkpoints are");
+        println!("filesystem snapshots taken by the checkpoint tool; enable");
+        println!("them with [tools.checkpoint] enabled = true in the config.)");
         return Ok(());
     }
 
@@ -137,7 +157,11 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
         } else {
             &cp.hash
         };
-        let reason = cp.reason.as_deref().unwrap_or("-");
+        let reason = if cp.reason.is_empty() {
+            "-"
+        } else {
+            cp.reason.as_str()
+        };
         // CHAR-safe: the reason is free text, and a byte slice panics when
         // the cut lands inside a multi-byte character (the same defect that
         // killed `operant sessions list` on the operator's own em-dash).
@@ -157,12 +181,10 @@ async fn cmd_list(config: &AppConfig) -> Result<()> {
 }
 
 async fn cmd_prune(config: &AppConfig, keep: usize) -> Result<()> {
-    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let _ = config;
 
     let dir = working_dir()?;
-    let checkpoints = db
-        .list_checkpoints(&dir)
-        .context("Failed to list checkpoints")?;
+    let checkpoints = live_checkpoints(&dir);
 
     if checkpoints.len() <= keep {
         println!(
@@ -173,46 +195,48 @@ async fn cmd_prune(config: &AppConfig, keep: usize) -> Result<()> {
         return Ok(());
     }
 
-    // checkpoints sorted by timestamp DESC so first `keep` are newest
-    let to_delete = &checkpoints[keep..];
-    for cp in to_delete {
-        db.delete_checkpoint(&cp.hash)
-            .with_context(|| format!("Failed to delete checkpoint {}", cp.hash))?;
-    }
+    // `prune_to` keeps the newest `keep` commits IN EACH STORE and reclaims
+    // the dropped objects. The count it reports is commits, which is what the
+    // operator asked about, rather than a database row count that never moved.
+    let dropped = get_checkpoint_manager()
+        .prune_to(&dir, keep)
+        .context("Failed to prune checkpoints")?;
 
-    println!("Pruned {} checkpoint(s), kept {}.", to_delete.len(), keep,);
+    println!("Pruned {} checkpoint(s), kept {} per store.", dropped, keep);
     Ok(())
 }
 
 async fn cmd_clear(config: &AppConfig) -> Result<()> {
-    let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
+    let _ = config;
 
     let dir = working_dir()?;
-    let checkpoints = db
-        .list_checkpoints(&dir)
-        .context("Failed to list checkpoints")?;
+    let checkpoints = live_checkpoints(&dir);
 
     let count = checkpoints.len();
     if count == 0 {
-        println!("No checkpoints to clear.");
+        // Still reclaim the bytes: a store whose commits were all pruned, or
+        // one written by an older build, holds packed objects with no row to
+        // count. The directory is the thing the operator asked to clear.
+        let reclaimed = get_checkpoint_manager().clear_store(&dir).unwrap_or(0);
+        if reclaimed > 0 {
+            println!(
+                "Cleared no checkpoints, but reclaimed {} MiB of the shadow store.",
+                reclaimed / (1024 * 1024)
+            );
+        } else {
+            println!("No checkpoints to clear.");
+        }
         return Ok(());
     }
 
-    for cp in &checkpoints {
-        db.delete_checkpoint(&cp.hash)
-            .with_context(|| format!("Failed to delete checkpoint {}", cp.hash))?;
-    }
-
-    // The ROWS are gone; the BYTES are not. The shadow store is a bare git
-    // repo on disk, and clearing the database rows leaves it exactly as
-    // large as it was — a store that had reached 1.5 GB of packed objects
-    // reported "cleared N checkpoints" and reclaimed nothing. The store
-    // holds snapshots of the working directory, so removing it removes a
-    // rollback history and nothing else; `clear` is the command that
-    // says so, so it does it.
+    // The ROWS were never the store. `clear_store` removes every session's
+    // shadow directory for this working directory and reports the bytes it
+    // reclaimed — a store that had reached 1.5 GB of packed objects used to
+    // report "cleared N checkpoints" and reclaim nothing, because the rows
+    // it counted were in a table the tool never wrote to.
     let reclaimed = operant_core::tools::get_checkpoint_manager()
         .clear_store(&dir)
-        .unwrap_or(0);
+        .context("Failed to clear the checkpoint store")?;
 
     if reclaimed > 0 {
         println!(
