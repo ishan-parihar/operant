@@ -649,18 +649,26 @@ impl App {
                 // gate ran inside `ui_render_surface`/`ui_request_input`), so
                 // this arm renders and never re-checks: re-validating here
                 // would mean the gate's verdict depends on which host drew it.
-                let text = operant_core::ui::plain::render_plain(
-                    &op.widgets_column(),
-                    operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
-                    operant_core::ui::plain::RenderProvenance::from_synthesized(
-                        op.is_synthesized(),
-                    ),
-                );
+                //
+                // B0 (iter-2652): the settled row carries the POST-SCRUB op as
+                // JSON and renders it as a widget tree (bordered card, aligned
+                // columns, bars) instead of a paragraph of plain text. The
+                // fallback plain text stays: a host that cannot decode the op
+                // still sees the same words the model read.
+                let op_json = serde_json::to_string(&op).unwrap_or_else(|_| {
+                    operant_core::ui::plain::render_plain(
+                        &op.widgets_column(),
+                        operant_core::ui::plain::FALLBACK_MODEL_WIDTH,
+                        operant_core::ui::plain::RenderProvenance::from_synthesized(
+                            op.is_synthesized(),
+                        ),
+                    )
+                });
                 // The surface id rides the annotation so a later op that
                 // addresses the same surface is attributable in the
                 // transcript. It is not a second row: the card IS the row.
                 let _ = surface_id;
-                self.push_system_message(text, SystemMessageStyle::Info);
+                self.push_system_message(op_json.clone(), SystemMessageStyle::Surface(op_json));
             }
 
             AgentEvent::BackgroundReview { summary, .. } => {

@@ -198,6 +198,13 @@ impl App {
         // Ask-user question dialog (AskUserQuestion tool)
         if self.ask_user_dialog.visible {
             match key.code {
+                // B0 (iter-2652): the plan's G2 `[v]` toggle. Flips the
+                // header between the rendered card and the raw POST-SCRUB op
+                // JSON. The gate ran before the op reached this dialog, so
+                // the raw view can only show what the gate already masked.
+                KeyCode::Char('v') if self.ask_user_dialog.header_has_raw_op() => {
+                    self.ask_user_dialog.toggle_raw();
+                }
                 KeyCode::Esc => {
                     self.ask_user_dialog.dismiss();
                     // The question is answered (by dismissal) — the turn

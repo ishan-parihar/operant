@@ -289,6 +289,7 @@ fn is_reserved(app: &App, block: &ToolUseBlock) -> bool {
 fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
     match annotation.style {
         SystemMessageStyle::Error => DisplayMessage::error(annotation.text.clone()),
+        SystemMessageStyle::Surface(ref op_json) => DisplayMessage::surface(op_json.clone()),
         _ => DisplayMessage::system(annotation.text.clone()),
     }
 }
