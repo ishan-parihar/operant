@@ -580,6 +580,67 @@ impl PlatformAdapter for TelegramAdapter {
     }
 
     async fn send_message(&self, message: OutgoingMessage) -> Result<()> {
+        // B2 (iter-2656): a message with image bytes uploads them via
+        // sendPhoto, with the text as the caption. Telegram's caption cap is
+        // 1024 chars; a longer text is truncated to it rather than dropped,
+        // because the image is the surface and the caption is the label.
+        if let Some(png) = message.media.as_ref() {
+            let caption: String = message.content.chars().take(1024).collect();
+            let mut body = serde_json::json!({
+                "chat_id": message.channel_id,
+                "photo": png,
+            });
+            if !caption.is_empty() {
+                body["caption"] = serde_json::json!(caption);
+            }
+            if let Some(tid) = message.thread_id {
+                body["message_thread_id"] = serde_json::json!(tid);
+            }
+            if let Some(reply) = message.reply_to.as_deref() {
+                body["reply_to_message_id"] = serde_json::json!(reply);
+            }
+            // multipart: the photo goes as a file part named "photo" (a bare
+            // byte array with the right content type), everything else as
+            // form fields — the same shape curl -F photo=@card.png sends.
+            let part = reqwest::multipart::Part::bytes(png.clone())
+                .file_name("card.png")
+                .mime_str("image/png")
+                .map_err(|e| crate::error::Error::Agent(format!("bad PNG part: {e}")))?;
+            let form = reqwest::multipart::Form::new()
+                .text("chat_id", message.channel_id.clone())
+                .part("photo", part);
+            let mut form = form;
+            if !caption.is_empty() {
+                form = form.text("caption", caption);
+            }
+            if let Some(tid) = message.thread_id {
+                form = form.text("message_thread_id", tid.to_string());
+            }
+            if let Some(reply) = message.reply_to.as_deref() {
+                form = form.text("reply_to_message_id", reply.to_string());
+            }
+            let response = self
+                .client
+                .post(format!("{}/sendPhoto", self.api_url()))
+                .multipart(form)
+                .send()
+                .await?;
+            let status = response.status();
+            if send_outcome(status.as_u16()) == SendOutcome::Failed {
+                let err = response
+                    .text()
+                    .await
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|d| d["description"].as_str().map(String::from))
+                    .unwrap_or_else(|| status.as_u16().to_string());
+                return Err(crate::error::Error::Agent(format!(
+                    "Telegram rejected the photo send: HTTP {} ({err}).",
+                    status.as_u16()
+                )));
+            }
+            return Ok(());
+        }
         let chunks = chunk_text(&message.content, 4000);
         for (i, chunk) in chunks.iter().enumerate() {
             let reply_to = if i == 0 {

@@ -7180,21 +7180,38 @@ pub async fn start_gateway(
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                 }
                 AgentEvent::SurfaceRendered { op, .. } => {
-                    // A governed surface card. The gateway has no surface
-                    // rasteriser in v1 (that is tranche T3), so the op is
-                    // sent as its plain-text form — the same bytes the TUI
-                    // shows. Not dropped: a card the operator never sees is
-                    // worse than a plain-text one.
-                    let text = operant_core::ui::plain::render_plain(
-                        &op.widgets_column(),
-                        100,
-                        operant_core::ui::plain::RenderProvenance::from_synthesized(
-                            op.is_synthesized(),
-                        ),
-                    );
-                    let msg = OutgoingMessage::new(&channel_id, &text)
-                        .no_markdown()
-                        .with_thread_id(thread_id);
+                    // A governed surface card. B2 (iter-2656): platforms
+                    // with an image path (telegram today) get the PNG with
+                    // the plain text as its caption; everything else keeps
+                    // the text-only fallback — the same bytes the TUI shows.
+                    // Not dropped either way: a card the operator never sees
+                    // is worse than a plain-text one.
+                    let caps = operant_core::ui::SurfaceCapabilities::for_transport(Some(
+                        platform.as_str(),
+                    ));
+                    let msg = if caps.images {
+                        let (png, caption) =
+                            operant_core::gateway::surface_raster::render_op_png(&op, 100);
+                        let base = OutgoingMessage::new(&channel_id, &caption)
+                            .no_markdown()
+                            .with_thread_id(thread_id);
+                        if png.is_empty() {
+                            base
+                        } else {
+                            base.with_media(png)
+                        }
+                    } else {
+                        let text = operant_core::ui::plain::render_plain(
+                            &op.widgets_column(),
+                            100,
+                            operant_core::ui::plain::RenderProvenance::from_synthesized(
+                                op.is_synthesized(),
+                            ),
+                        );
+                        OutgoingMessage::new(&channel_id, &text)
+                            .no_markdown()
+                            .with_thread_id(thread_id)
+                    };
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
                 }
                 // A 429 classified mid-turn. Without this the turn looks

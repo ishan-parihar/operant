@@ -260,6 +260,12 @@ pub struct OutgoingMessage {
     /// (a webhook subscription's `deliver` target). `None` = the platform
     /// the message came from.
     pub target_platform: Option<String>,
+    /// An image attachment (B2, iter-2656): PNG bytes the adapter uploads
+    /// instead of sending the text alone. `content` rides along as the
+    /// caption. Adapters without an image path (everything but telegram in
+    /// v1) fall back to the text — the degrade is per-adapter, never a
+    /// dropped message.
+    pub media: Option<Vec<u8>>,
 }
 
 impl OutgoingMessage {
@@ -272,7 +278,14 @@ impl OutgoingMessage {
             reply_to: None,
             thread_id: None,
             target_platform: None,
+            media: None,
         }
+    }
+
+    /// Attach PNG bytes (B2, iter-2656). The text stays as the caption.
+    pub fn with_media(mut self, png: Vec<u8>) -> Self {
+        self.media = Some(png);
+        self
     }
 
     /// Disable markdown parsing

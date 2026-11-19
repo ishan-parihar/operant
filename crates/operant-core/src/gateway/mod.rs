@@ -55,6 +55,7 @@ mod discord;
 mod email;
 mod slack;
 mod sms;
+pub mod surface_raster;
 mod telegram;
 mod types;
 // (in-flight completion by the concurrent agent — the peer's phase-F
