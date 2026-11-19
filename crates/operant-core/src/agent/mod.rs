@@ -38,7 +38,6 @@ use tokio::sync::{RwLock, mpsc};
 use crate::client::{Message, Role, ToolCall};
 use crate::config::{BehaviorSettings, runtime_config};
 use crate::database::Database;
-use crate::memory::MemoryManager;
 use crate::observer::Observer;
 use crate::skills::SkillManager;
 use crate::tools::{ToolRegistry, ToolResult};
@@ -690,7 +689,13 @@ pub struct OperantAgent {
     /// user allowed forever. Loaded from `approval_allowlist_path` on
     /// construction and written back on `AllowAlways`.
     persistent_allowlist: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
-    memory_manager: Option<MemoryManager>,
+    // `memory_manager: Option<MemoryManager>` was here and was DELETED
+    // (iter-2665): write-only. It was set by `with_memory_manager` and by the
+    // constructor, and NO method of this agent ever read it. The file-backed
+    // `<long_term_memory>` block it once fed was removed by plan 11C3; what
+    // remained was a field that made the agent LOOK memory-backed. The live
+    // engine is the memory-wire provider, reached through
+    // `build_memory_provider` and driven by `prefetch`/`sync_turn`.
     /// Wrapped for interior mutability (`set_skill_manager`, RT-175): the
     /// gateway's `/reload-skills` swaps this at runtime through `&self`
     /// (`Arc<OperantAgent>`), the same shape as `set_model`. The frozen
@@ -3211,23 +3216,22 @@ mod tests {
 
     #[serial]
     #[tokio::test]
-    async fn build_messages_injects_long_term_memory() {
+    async fn build_messages_injects_no_file_backed_memory_block() {
         use crate::agent::clients::openai::OpenAIModelClient;
         use crate::client::OpenAIClient;
 
         // (plan 11C3) the <long_term_memory> block is GONE — memory reaches
         // the prompt only through the provider's semantic recall. The old
         // MemoryManager-injected block is the behavior this test pinned and
-        // the plan deleted; with a manager attached and the provider absent,
-        // the prompt carries NO file-backed memory text.
-        let memory_manager = MemoryManager::new();
-        memory_manager
-            .store(
-                crate::memory::MemoryBlock::new("fact1", "fact", "User prefers concise answers")
-                    .importance(80),
-            )
-            .await;
-
+        // the plan deleted; the prompt carries NO file-backed memory text.
+        //
+        // RENAMED iter-2665. It was `build_messages_injects_long_term_memory`,
+        // which asserted the OPPOSITE of what it checked — a test whose name
+        // says "injects" while its only assertion is `!contains` is worse than
+        // no test, because the next reader trusts the name. The `MemoryManager`
+        // fixture it carried is gone with the field (RT-293(2)); there is no
+        // manager left to attach, so what remains is the contract that a
+        // memory block in the store never reaches the prompt.
         let db = Database::init(std::env::temp_dir().join("test_db.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
@@ -3236,8 +3240,7 @@ mod tests {
             ))),
             ToolRegistry::new(Duration::from_secs(1)),
             Arc::new(db),
-        )
-        .with_memory_manager(memory_manager);
+        );
 
         let messages = agent.build_messages("test-session").await.unwrap();
         let system: String = messages

@@ -542,6 +542,31 @@ and the counts are written once, after the earned closes.
 - Repairing the known-failing `audit-ledger-index.py` expectation set by any means
   other than the earned row closes (no bulk re-mark, no `--update`).
 
+## Actual iteration mapping (appended iter-2665)
+
+The tranche headers above name the iteration each tranche EXPECTED to land as.
+They are wrong, because a concurrent agent holds numbers between the moment a
+plan is published and the moment a tranche is claimed. The real mapping, read
+from `origin/main`:
+
+| tranche | expected | actually landed | commit |
+|---|---|---|---|
+| plan published | iter-2652 | **iter-2652** | `3ca9e344` |
+| T1 ledger sync | iter-2652 | **iter-2653** | `02df6303` |
+| T2 RT-542 pin | iter-2653 | **iter-2654** | `9b8c0102` |
+| T3 RT-545 wire | iter-2654 | **iter-2658** | landed by a peer |
+| T4 RT-547 pin | iter-2655 | **iter-2661** | landed by a peer |
+| T5a RT-544 errata | iter-2656 | **iter-2662** | landed by a peer |
+| T5b RT-552 guard | iter-2656 | **iter-2663** | landed by a peer |
+| T7 RT-527 palette | iter-2658 | **iter-2664** | landed by a peer |
+
+Two commits share the label `iter-2654` (the clippy cleanup and T2). Per the
+append-only rule that duplicate stays; the renumbering owner is the one who
+publishes next, and no tranche renumbers history.
+
+**Claim rule restated:** never take a number from a header. `git fetch origin`,
+read the top label, add one.
+
 ## Re-measuring after the run
 
 ```text

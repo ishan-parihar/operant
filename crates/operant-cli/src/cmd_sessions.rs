@@ -205,6 +205,11 @@ async fn cmd_list_filtered(config: &AppConfig, json: bool, interrupted_only: boo
                     "updated_at": s.updated_at.to_rfc3339(),
                     "employee_id": s.employee_id,
                     "message_count": s.message_count,
+                    // Both spellings: `status` for the machine-readable label a
+                    // script matches on, and the TUI's title-case rendering
+                    // for a human reading the JSON. RT-554.
+                    "status": s.status.api_label(),
+                    "status_label": s.status.label(),
                 })
             })
             .collect();
@@ -218,22 +223,28 @@ async fn cmd_list_filtered(config: &AppConfig, json: bool, interrupted_only: boo
     }
 
     println!(
-        "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8}",
-        "#", "Session ID", "Title", "Employee", "Updated At", "Messages"
+        "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8} {:>12}",
+        "#", "Session ID", "Title", "Employee", "Updated At", "Messages", "Status"
     );
-    println!("{}", "-".repeat(112));
+    println!("{}", "-".repeat(124));
 
     for (i, session) in sessions.iter().enumerate() {
         let title = session.title.as_deref().unwrap_or("(untitled)");
         let display_title = display_title(title);
         println!(
-            "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8}",
+            "{:<4} {:<36} {:<28} {:<12} {:<20} {:>8} {:>12}",
             i + 1,
             session.id,
             display_title,
             session.employee_id.as_deref().unwrap_or("-"),
             session.updated_at.to_rfc3339(),
             session.message_count,
+            // The row's own status, which the `--interrupted` filter above
+            // ALREADY filters on. Before iter-2665 the flag was read for the
+            // filter and never shown, so an operator could not tell an
+            // interrupted session from an idle one without running a second
+            // command. Same `label()` the TUI's session hub renders.
+            session.status.label(),
         );
     }
 

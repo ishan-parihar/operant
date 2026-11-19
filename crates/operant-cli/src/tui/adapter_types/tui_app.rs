@@ -644,9 +644,17 @@ impl TuiApp {
                 // the session. That used to be invisible — the caller ignored
                 // everything but an error, so two processes could both believe
                 // they owned one session.
-                match operant_core::active_sessions::claim_session_here(&session_id) {
-                    Ok(true) => {}
-                    Ok(false) => tracing::warn!(
+                //
+                // iter-2665 (RT-554): the MARKING variant, so a session whose
+                // owner died while claimed is flagged interrupted in the row the
+                // operator's `sessions list` reads. Before this the reclaim
+                // deleted the evidence and reported nothing.
+                match operant_core::active_sessions::claim_session_here_marking(
+                    &session_id,
+                    &self.app.config.database_path,
+                ) {
+                    Ok((true, _)) => {}
+                    Ok((false, _)) => tracing::warn!(
                         session_id = %session_id,
                         "another live process owns this session — the claim was refused"
                     ),
@@ -1729,9 +1737,16 @@ impl TuiApp {
             // the session. That used to be invisible — the caller ignored
             // everything but an error, so two processes could both believe
             // they owned one session.
-            match operant_core::active_sessions::claim_session_here(&session_id) {
-                Ok(true) => {}
-                Ok(false) => tracing::warn!(
+            //
+            // iter-2665 (RT-554): MARKING variant — a session whose owner died
+            // while claimed is flagged interrupted in the row `sessions list`
+            // shows, instead of the reclaim deleting the evidence silently.
+            match operant_core::active_sessions::claim_session_here_marking(
+                &session_id,
+                &self.app.config.database_path,
+            ) {
+                Ok((true, _)) => {}
+                Ok((false, _)) => tracing::warn!(
                     session_id = %session_id,
                     "another live process owns this session — the claim was refused"
                 ),

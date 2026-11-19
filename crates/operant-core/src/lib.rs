@@ -163,7 +163,15 @@ pub mod turn_summary;
 pub mod ui;
 pub mod user_question;
 pub mod verification;
-pub mod write_approval;
+// `write_approval` was DELETED (iter-2665). It was a second, complete
+// staged-write approval gate -- `gate`, `stage_write`, `list_pending`,
+// `get_pending`, `discard_pending`, `StagedWrite`, `GateDecision` -- with ZERO
+// callers anywhere in the workspace, and `GateDecision::Stage`, the variant that
+// would have routed a write into it, was constructed nowhere outside the module.
+// The live origin gate is `write_origin.rs` (`WRITE_ORIGIN` +
+// `is_background_review`), which is what every write path already consults. Two
+// answers to "how are background writes gated" is worse than one, so the
+// uncalled one is gone. RT-275.
 pub mod write_origin;
 
 /// The memory-wire git rev this binary was compiled against, read from the

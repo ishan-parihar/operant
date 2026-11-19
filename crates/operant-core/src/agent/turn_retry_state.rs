@@ -28,8 +28,12 @@
 //! guards), this implementation starts with the core set:
 //! - retry_count / max_retries
 //! - compress_attempted / rotate_attempted / fallback_attempted
-//! - restart_with_compressed / restart_with_rotated_credential
+//! - reasoning_param_attempted
 //!
+//! (iter-2665 removed `restart_with_compressed` / `restart_with_rotated_credential` /
+//! `restart_with_rebuilt_messages` and their `has_restart_signal` /
+//! `clear_restart_signals`: no production writer, no reader anywhere. The
+//! recovery they described runs through the one-shot guards above.)
 //! Additional provider-specific guards can be added later as gaps are identified.
 
 use std::fmt;
@@ -71,16 +75,15 @@ pub struct TurnRetryState {
     /// Whether model fallback has been attempted this turn.
     /// Prevents cascading fallback across all models.
     pub fallback_attempted: bool,
-
-    // ── Restart signals (set by error handlers, read by outer loop) ──
-    /// Signal: restart the LLM call with compressed messages.
-    pub restart_with_compressed: bool,
-    /// Signal: restart the LLM call with a rotated credential.
-    pub restart_with_rotated_credential: bool,
-    /// Signal: restart the LLM call with rebuilt messages (e.g., after
-    /// content filter stall or message corruption).
-    pub restart_with_rebuilt_messages: bool,
 }
+
+// iter-2665: the three `restart_with_*` signals lived here. They were a
+// complete restart protocol -- set by an error handler, read by an outer loop --
+// with no writer in production and no reader anywhere. The recovery paths they
+// described are actually driven by the one-shot guards above
+// (`compress_attempted`, `rotate_attempted`, `fallback_attempted`) and by
+// `may_retry_stream_failure`, which the run loop really calls. A signal nobody
+// sets and nobody reads is a claim that a restart path exists.}
 
 impl TurnRetryState {
     /// Create a fresh retry state for a new turn.
@@ -92,9 +95,6 @@ impl TurnRetryState {
             rotate_attempted: false,
             reasoning_param_attempted: false,
             fallback_attempted: false,
-            restart_with_compressed: false,
-            restart_with_rotated_credential: false,
-            restart_with_rebuilt_messages: false,
         }
     }
 
@@ -114,13 +114,6 @@ impl TurnRetryState {
         classified_retryable
     }
 
-    /// Returns true if any restart signal is set.
-    pub fn has_restart_signal(&self) -> bool {
-        self.restart_with_compressed
-            || self.restart_with_rotated_credential
-            || self.restart_with_rebuilt_messages
-    }
-
     /// Consume one retry from the budget. Returns false if exhausted.
     pub fn consume_retry(&mut self) -> bool {
         if self.is_exhausted() {
@@ -131,18 +124,10 @@ impl TurnRetryState {
         }
     }
 
-    /// Reset all restart signals (called after the outer loop processes them).
-    pub fn clear_restart_signals(&mut self) {
-        self.restart_with_compressed = false;
-        self.restart_with_rotated_credential = false;
-        self.restart_with_rebuilt_messages = false;
-    }
-
     /// Reset the retry state for a new LLM call within the same turn.
     /// Called when a retry succeeds or when the model returns a valid response.
     pub fn reset_on_success(&mut self) {
         self.retry_count = 0;
-        self.clear_restart_signals();
     }
 
     /// Whether this turn has burned its whole turn-level retry budget.
@@ -196,7 +181,6 @@ mod tests {
         assert_eq!(state.retry_count, 0);
         assert_eq!(state.max_retries, DEFAULT_MAX_RETRIES);
         assert!(!state.is_exhausted());
-        assert!(!state.has_restart_signal());
     }
 
     /// The defect this guards: a turn that alternates failure → success → failure
@@ -272,32 +256,17 @@ mod tests {
     }
 
     #[test]
-    fn test_restart_signals() {
-        let mut state = TurnRetryState::new(None);
-        assert!(!state.has_restart_signal());
-
-        state.restart_with_compressed = true;
-        assert!(state.has_restart_signal());
-
-        state.clear_restart_signals();
-        assert!(!state.has_restart_signal());
-    }
-
-    #[test]
     fn test_reset_on_success() {
         let mut state = TurnRetryState::new(None);
         state.retry_count = 3;
         state.compress_attempted = true;
         state.rotate_attempted = true;
-        state.restart_with_compressed = true;
 
         state.reset_on_success();
         assert_eq!(state.retry_count, 0);
         // Recovery guards are NOT reset (they're one-shot per turn)
         assert!(state.compress_attempted);
         assert!(state.rotate_attempted);
-        // Restart signals ARE reset
-        assert!(!state.restart_with_compressed);
     }
 
     #[test]

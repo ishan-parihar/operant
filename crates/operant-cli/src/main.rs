@@ -1740,7 +1740,10 @@ struct AgentCore {
     database: Arc<Database>,
     registry: ToolRegistry,
     agent_config: AgentConfig,
-    memory_manager: MemoryManager,
+    // `memory_manager: MemoryManager` was here and was DELETED (iter-2665).
+    // It existed to be handed to `OperantAgent::with_memory_manager`, which
+    // wrote a field NO agent method read. The live memory half of this struct
+    // is `memory_provider` below, which `prefetch`/`sync_turn` really call.
     /// Long-term memory provider. Attached to the agent so
     /// sync_turn/prefetch/session hooks actually fire — this was
     /// previously built-and-dropped (see docs/AUDIT_2026-08-02.md F1).
@@ -1786,7 +1789,7 @@ async fn build_agent_core(
     behavior: &BehaviorSettings,
     event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
 ) -> Result<AgentCore> {
-    let (memory_manager, memory_provider) = load_repo_memory_manager().await?;
+    let (_memory_manager, memory_provider) = load_repo_memory_manager().await?;
     build_agent_core_with_memory(
         config,
         system_prompt,
@@ -1795,7 +1798,6 @@ async fn build_agent_core(
         model_name,
         behavior,
         event_tx,
-        memory_manager,
         memory_provider,
         // This entry point serves ONE agent, so it has nothing to share.
         None,
@@ -1824,7 +1826,6 @@ async fn build_agent_core_with_memory(
     model_name: &str,
     behavior: &BehaviorSettings,
     event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
-    memory_manager: MemoryManager,
     memory_provider: Option<Arc<dyn MemoryProvider>>,
     // (iter-2366) `shared_client`: a caller-supplied model client, for a host
     // that builds several agents in one process. `OpenAIClient` owns its own
@@ -1977,7 +1978,6 @@ async fn build_agent_core_with_memory(
         database,
         registry,
         agent_config,
-        memory_manager,
         memory_provider,
         skill_manager,
         harness,
@@ -2401,7 +2401,7 @@ pub(crate) async fn create_runtime_agent_with_client(
     shared_client: Option<&OpenAIClient>,
 ) -> Result<OperantAgent> {
     let core = match memory {
-        Some((memory_manager, memory_provider)) => {
+        Some((_memory_manager, memory_provider)) => {
             build_agent_core_with_memory(
                 config,
                 system_prompt,
@@ -2410,7 +2410,6 @@ pub(crate) async fn create_runtime_agent_with_client(
                 &behavior.model,
                 behavior,
                 Some(event_tx.clone()),
-                memory_manager,
                 memory_provider,
                 shared_client,
             )
@@ -2483,7 +2482,6 @@ pub(crate) async fn create_runtime_agent_with_client(
             event_tx,
         )
         .with_context_caps(context_caps)
-        .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)
         .with_hook_registry_opt(core.hook_registry)
@@ -2610,7 +2608,6 @@ pub(crate) async fn create_agent_without_events(
             core.database,
         )
         .with_context_caps(context_caps)
-        .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
         .with_harness_prompt_slot_opt(core.harness_prompt_slot)
         .with_hook_registry_opt(core.hook_registry)
@@ -2979,11 +2976,13 @@ pub(crate) async fn load_memory_manager(
         return Ok((MemoryManager::with_storage_dir(storage_dir), None));
     }
     // (plan 11C3) memory-wire is the ONLY engine. The MemoryManager half of
-    // this pair is now inert plumbing the agent still accepts (kept so the
-    // D-5 threading compiles; nothing reads it into prompts anymore), and
-    // the one-time MEMORY.md/USER.md import runs inside the factory. The
-    // concrete provider is built here so the memory tools' global can hold
-    // the same handle the agent recalls through.
+    // this pair is inert plumbing: nothing reads it into prompts any more, and
+    // iter-2665 deleted the last consumer (`OperantAgent::with_memory_manager`
+    // wrote a field no agent method read). It is still CONSTRUCTED here because
+    // the one-time MEMORY.md/USER.md import runs inside its factory, so the
+    // import side effect is kept while the handle is discarded by every caller.
+    // The concrete provider is built here so the memory tools' global can hold
+    // the same handle the agent recalls through — that provider is the live half.
     let memory_manager = MemoryManager::with_storage_dir(storage_dir.clone());
 
     let cfg = operant_core::config::runtime_config();
@@ -4593,9 +4592,9 @@ mod tests {
         config.skills.memory_dir = dir.join("memory");
         std::fs::create_dir_all(&config.skills.root_dir).unwrap();
 
-        // The hoisted pair, exactly as the gateway constructs it once: one
-        // manager + one provider over the same store.
-        let memory_manager = MemoryManager::with_storage_dir(dir.clone());
+        // The hoisted provider, exactly as the gateway constructs it once. The
+        // manager that used to be hoisted beside it is gone (iter-2665): the
+        // provider is the half the agent reads.
         let memory_provider: Arc<dyn MemoryProvider> =
             operant_core::memory_provider::build_memory_provider("builtin", dir.clone());
 
@@ -4609,11 +4608,11 @@ mod tests {
                 &config.agent.model,
                 &config.agent,
                 None,
-                memory_manager.clone(),
                 Some(memory_provider.clone()),
                 // This test builds two SEPARATE cores deliberately, to prove the
                 // memory pair is what they share — so each gets its own client
-                // (iter-2366).
+                // (iter-2366). iter-2665: `memory_manager.clone()` was the arg
+                // above this line, for the field that is now deleted.
                 None,
             )
             .await
@@ -4634,26 +4633,12 @@ mod tests {
             "D-5: the core must use the caller-supplied provider, not a freshly constructed one"
         );
 
-        // The manager half must be shared state too (MemoryManager is all
-        // Arc<RwLock> inside, so a clone is the SAME state): what one build
-        // stores, the other must see. Two independent managers over one
-        // MEMORY.md is the clobber in the bug title.
-        core_one
-            .memory_manager
-            .store(
-                operant_core::memory::MemoryBlock::new("d5_probe", "fact", "hoisted pair probe")
-                    .importance(50),
-            )
-            .await;
-        assert_eq!(
-            core_two
-                .memory_manager
-                .search("hoisted pair probe")
-                .await
-                .len(),
-            1,
-            "D-5: the two cores must share ONE MemoryManager state; a fresh manager would see nothing"
-        );
+        // iter-2665: the "manager half must be shared state too" assertion that
+        // stood here is GONE with the field. `AgentCore.memory_manager` was
+        // write-only plumbing -- the D-5 property it was probing (one hoisted
+        // pair, shared by two core builds) is fully carried by the provider
+        // assertions above, which is the half the agent actually reads.
+        let _ = (&core_one, &core_two);
 
         let _ = std::fs::remove_dir_all(dir);
     }

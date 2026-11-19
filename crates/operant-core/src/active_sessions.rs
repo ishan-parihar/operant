@@ -312,12 +312,89 @@ pub fn session_presence(session_id: &str) -> Option<SessionPresence> {
 /// Returns whether the claim was recorded, so a caller can log a no-op instead
 /// of asserting a state it did not create.
 pub fn claim_session_here(session_id: &str) -> Result<bool, String> {
-    let (pruned, _kept) = prune_dead_presence();
+    claim_session_here_reporting(session_id, |_| {}).map(|r| r.0)
+}
+
+/// Claim `session_id`, and mark every session this call reclaimed as interrupted
+/// in `db_path`.
+///
+/// This is the shape the three PRODUCTION claim sites want (iter-2665, RT-554):
+/// the registry does not know about databases, and every one of those sites does
+/// hold a database path, so the pairing lives here once rather than being
+/// re-derived three times.
+///
+/// The mark is `mark_session_interrupted`'s guarded write, so a row that already
+/// recorded an outcome ("completed") is never reclassified, and a session that
+/// finished cleanly a moment before the scan keeps its own answer.
+///
+/// Returns `(claimed, reclaimed_session_ids)`. A database that will not open is
+/// NOT an error: the claim is the registry's job and must still happen, so the
+/// failure is logged and the ids are returned unmarked.
+pub fn claim_session_here_marking(
+    session_id: &str,
+    db_path: &std::path::Path,
+) -> Result<(bool, Vec<String>), String> {
+    let (claimed, reclaimed) = claim_session_here_reporting(session_id, |reclaimed| {
+        if reclaimed.is_empty() {
+            return;
+        }
+        match crate::database::Database::init(db_path.to_path_buf()) {
+            Ok(db) => {
+                let mut marked = 0usize;
+                for id in reclaimed {
+                    match db.mark_session_interrupted(id) {
+                        Ok(true) => marked += 1,
+                        Ok(false) => {} // already carried an outcome; leave it
+                        Err(e) => tracing::warn!(
+                            session_id = %id,
+                            error = %e,
+                            "could not flag a reclaimed session interrupted"
+                        ),
+                    }
+                }
+                if marked > 0 {
+                    tracing::info!(
+                        marked,
+                        "flagged sessions whose owning process died while claimed"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                path = %db_path.display(),
+                error = %e,
+                "could not open the database to flag reclaimed sessions interrupted"
+            ),
+        }
+    })?;
+    Ok((claimed, reclaimed))
+}
+
+/// `claim_session_here`, plus the session ids whose dead owner this call
+/// reclaimed.
+///
+/// Returns `(claimed, reclaimed_session_ids)`.
+///
+/// iter-2665 (RT-554): the registry has no database and must not grow one, so it
+/// REPORTS the reclaimed ids instead of marking them. The caller that does hold a
+/// `Database` writes `end_reason = 'interrupted'` for each id, which is what
+/// turns a crashed session from invisible into `RowStatus::Interrupted`. The
+/// registry keeps knowing only about pids, and the caller keeps owning the
+/// session row.
+pub fn claim_session_here_reporting(
+    session_id: &str,
+    mut on_reclaim: impl FnMut(&[String]),
+) -> Result<(bool, Vec<String>), String> {
+    let (pruned, _kept, reclaimed) = prune_dead_presence();
     if pruned > 0 {
         tracing::debug!(
             pruned,
+            reclaimed = ?reclaimed,
             "Pruned dead presence records before claiming a session"
         );
+        // Report BEFORE the claim: the ids are only meaningful for owners that
+        // are actually gone, and a claim that then fails still leaves the
+        // operator's rows correctly flagged.
+        on_reclaim(&reclaimed);
     }
     // (RT-522) A claim REFUSES when the session's current owner is ALIVE:
     // the old code overwrote the record unconditionally, so two processes
@@ -326,10 +403,10 @@ pub fn claim_session_here(session_id: &str) -> Result<bool, String> {
         && owner.pid != std::process::id()
         && process_is_running(owner.pid)
     {
-        return Ok(false);
+        return Ok((false, reclaimed));
     }
     register_presence(session_id, std::process::id())?;
-    Ok(true)
+    Ok((true, reclaimed))
 }
 
 /// Whether `session_id` is live in ANOTHER process.
@@ -342,17 +419,30 @@ pub fn session_is_live(session_id: &str) -> bool {
     session_presence(session_id).is_some_and(|p| process_is_running(p.pid))
 }
 
-/// Drop records whose process is gone, returning `(pruned, kept)`.
+/// Drop records whose process is gone, returning
+/// `(pruned, kept, pruned_session_ids)`.
 ///
 /// Best-effort: an unreadable entry is neither pruned nor kept, it is skipped,
 /// because corrupt presence data must not stop a relaunch.
-pub fn prune_dead_presence() -> (usize, usize) {
+///
+/// Returns `(pruned, kept, pruned_session_ids)`.
+///
+/// The IDS are the point of the third element (iter-2665, RT-554). This scan is
+/// the ONLY moment the evidence exists: the record it deletes is the proof that
+/// "this session's owner died while the session was live", and until now the
+/// scan threw that proof away as a bare count. A caller that holds a `Database`
+/// can mark those sessions interrupted before the evidence goes, which is what
+/// turns a crashed session from invisible into `RowStatus::Interrupted` — the
+/// same status the TUI's own teardown writes on a clean Ctrl+C, so the two paths
+/// agree on what the flag means.
+pub fn prune_dead_presence() -> (usize, usize, Vec<String>) {
     let dir = presence_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
-        return (0, 0);
+        return (0, 0, Vec::new());
     };
     let mut pruned = 0usize;
     let mut kept = 0usize;
+    let mut pruned_ids = Vec::new();
     for entry in entries.flatten() {
         let Some(presence) = presence_from_path(&entry.path()) else {
             continue;
@@ -360,11 +450,14 @@ pub fn prune_dead_presence() -> (usize, usize) {
         if process_is_running(presence.pid) {
             kept += 1;
         } else {
+            // Collect the id BEFORE the unlink: after the file is gone the id
+            // is unrecoverable, and it is the whole value of this return.
+            pruned_ids.push(presence.session_id);
             let _ = std::fs::remove_file(entry.path());
             pruned += 1;
         }
     }
-    (pruned, kept)
+    (pruned, kept, pruned_ids)
 }
 
 #[cfg(test)]
@@ -609,9 +702,17 @@ mod tests {
                 !session_is_live("sess-dead"),
                 "a stale record must not read as live"
             );
-            let (pruned, kept) = prune_dead_presence();
+            let (pruned, kept, pruned_ids) = prune_dead_presence();
             assert_eq!(pruned, 1, "the dead record must be pruned");
             assert_eq!(kept, 0, "nothing live to keep");
+            // iter-2665: the prune NAMES what it removed, so a caller holding a
+            // Database can mark those sessions interrupted before the record is
+            // gone. RT-554.
+            assert_eq!(
+                pruned_ids,
+                vec!["sess-dead".to_string()],
+                "the prune must name the session it reclaimed"
+            );
             assert!(session_presence("sess-dead").is_none());
         });
     }
@@ -729,9 +830,13 @@ mod tests {
             );
 
             // The prune inside claim must not eat the claim it just wrote.
-            let (pruned, kept) = prune_dead_presence();
+            let (pruned, kept, pruned_ids) = prune_dead_presence();
             assert_eq!(pruned, 0, "a live claim must never be pruned");
             assert_eq!(kept, 1, "this process's claim must survive");
+            assert!(
+                pruned_ids.is_empty(),
+                "a live claim must not be named as reclaimed"
+            );
         });
     }
 

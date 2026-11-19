@@ -91,9 +91,16 @@ impl App {
     /// another process owns puts two writers on one session's rows — the race
     /// the registry exists to prevent.
     pub(crate) fn claim_session(&self, session_id: &str) -> bool {
-        match operant_core::active_sessions::claim_session_here(session_id) {
-            Ok(true) => true,
-            Ok(false) => {
+        // iter-2665 (RT-554): MARKING variant. A session whose owner died while
+        // claimed is flagged interrupted in the row `sessions list` reads, so a
+        // crashed session stops being invisible and stops being indistinguishable
+        // from an idle one. This is the primitive every other claim goes through.
+        match operant_core::active_sessions::claim_session_here_marking(
+            session_id,
+            &self.config.database_path,
+        ) {
+            Ok((true, _)) => true,
+            Ok((false, _)) => {
                 tracing::warn!(
                     session_id = %session_id,
                     "another live process owns this session — the claim was refused"

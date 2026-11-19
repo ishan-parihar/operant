@@ -27,13 +27,18 @@ impl OperantTool for NotificationTool {
     }
 
     fn description(&self) -> &str {
-        "Send a notification to the user. Useful for alerting when background tasks complete."
+        // iter-2665 (RT-293(1)): this said "Send a notification to the user",
+        // and the result said `"delivered": true`. The body logs and returns;
+        // nothing is sent anywhere. The tool keeps its NAME (agents call it, and
+        // a rename is a model-visible break) but it states what it does.
+        "Log a notification intent for the operator. Records the message in the run log; \
+         it does not itself deliver anything. Useful for marking that a background task finished."
     }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema::from_type::<NotifyArgs>(
             "notify",
-            "Send a notification to the user with a message and optional title",
+            "Log a notification intent with a message and optional title",
         )
     }
 
@@ -47,15 +52,19 @@ impl OperantTool for NotificationTool {
 
         let title = args.get("title").and_then(|v| v.as_str());
 
-        info!(message = %message, title = ?title, "Sending notification");
+        info!(message = %message, title = ?title, "Notification intent logged");
 
+        // No `"delivered"` field (iter-2665). It was true only in the sense that
+        // the function had returned: the tool never hands the message to a sink.
+        // A model reading `delivered: true` reports to the operator that a notice
+        // went out, and that is a false statement the transcript preserves.
+        // `logged` is what actually happened and is checkable in the run log.
         ToolResult::success(
             "notify",
             json!({
-                "success": true,
+                "logged": true,
                 "message": message,
                 "title": title,
-                "delivered": true
             }),
         )
     }

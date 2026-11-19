@@ -4,7 +4,6 @@ use self::background_review::SelfEvolutionState;
 use self::iteration_budget::IterationBudget;
 use crate::client::Role;
 use crate::database::Database;
-use crate::memory::MemoryManager;
 use crate::observer::Observer;
 use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
@@ -129,7 +128,6 @@ impl OperantAgent {
             explicit_bust: std::sync::atomic::AtomicBool::new(false),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
-            memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             turn_end_bus: None,
@@ -245,7 +243,6 @@ impl OperantAgent {
             explicit_bust: std::sync::atomic::AtomicBool::new(false),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
-            memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             turn_end_bus: None,
@@ -376,11 +373,13 @@ impl OperantAgent {
         Arc::clone(&self.metrics)
     }
 
-    /// Attach a memory manager for long-term memory injection and session distillation.
-    pub fn with_memory_manager(mut self, memory_manager: MemoryManager) -> Self {
-        self.memory_manager = Some(memory_manager);
-        self
-    }
+    // `with_memory_manager` was DELETED (iter-2665). It set
+    // `memory_manager`, a field NO code ever read: the agent built a
+    // `MemoryManager` at construction and never consulted it again. The live
+    // memory path is the memory-wire provider (`MemoryWireProvider`), which
+    // `prefetch` and `sync_turn` call in the run loop. Three ways to say "use
+    // memory" where two are disconnected is how a reader picks the wrong one.
+    // RT-293(2).
 
     #[expect(
         clippy::expect_used,

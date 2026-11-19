@@ -3406,11 +3406,22 @@ impl Database {
     /// Returns whether a row was actually updated, so a caller can report a
     /// no-op instead of claiming a flag it did not set (an id that exists
     /// nowhere still writes nothing).
+    ///
+    /// **Only a row that has no `end_reason` yet is marked.** A session that
+    /// already ended for a real reason ("completed") keeps it: this flag means
+    /// "the owner died while the session was live", and overwriting a recorded
+    /// outcome with it would make the column mean "marked last" instead — the
+    /// exact ambiguity `clear_session_interrupted` is scoped to avoid on the
+    /// other side. Claim-time marking (RT-554) is what makes the guard
+    /// load-bearing: it now runs on paths that were not exits at all, so a
+    /// session that finished cleanly a moment before the reclaim scan must not
+    /// be reclassified.
     pub fn mark_session_interrupted(&self, session_id: &str) -> Result<bool> {
         let conn = self.lock_conn()?;
         let affected = conn
             .execute(
-                "UPDATE sessions SET end_reason = ?1 WHERE id = ?2",
+                "UPDATE sessions SET end_reason = ?1
+                 WHERE id = ?2 AND end_reason IS NULL",
                 params![Self::INTERRUPTED_END_REASON, session_id],
             )
             .map_err(|e| Error::Agent(format!("Failed to mark session interrupted: {}", e)))?;
@@ -6401,6 +6412,66 @@ mod tests {
             )
             .unwrap();
         assert_eq!(reason.as_deref(), Some("completed"));
+    }
+
+    /// The mirror of the test above. `mark_session_interrupted` is now called on
+    /// paths that are NOT exits — the claim-time reclaim scan (RT-554) marks a
+    /// session whose owner died while it was claimed — so it must not reclassify
+    /// a row that already recorded an outcome. Without the `end_reason IS NULL`
+    /// guard a session that finished cleanly one moment before the scan is
+    /// rewritten to "interrupted", which is a false statement about the
+    /// operator's own session and is not recoverable from the row.
+    #[test]
+    fn marking_interrupted_never_overwrites_a_real_end_reason() {
+        let db = test_db();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.save_session("done-2", None, "local", &now, &now)
+            .unwrap();
+        db.lock_conn()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET end_reason = 'completed' WHERE id = 'done-2'",
+                [],
+            )
+            .unwrap();
+
+        assert!(
+            !db.mark_session_interrupted("done-2").unwrap(),
+            "a row that already ended for a real reason must report nothing marked"
+        );
+        let reason: Option<String> = db
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT end_reason FROM sessions WHERE id = 'done-2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            reason.as_deref(),
+            Some("completed"),
+            "the recorded outcome must survive the mark"
+        );
+
+        // The other half: a row with no outcome IS marked, or the guard would be
+        // a blanket refusal and the interrupted flag would never be set at all.
+        db.save_session("live-2", None, "local", &now, &now)
+            .unwrap();
+        assert!(
+            db.mark_session_interrupted("live-2").unwrap(),
+            "a live row with no end_reason must take the flag"
+        );
+        let reason: Option<String> = db
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT end_reason FROM sessions WHERE id = 'live-2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason.as_deref(), Some("interrupted"));
     }
 
     #[test]

@@ -332,9 +332,16 @@ async fn test_notification_tool_returns_expected_content() {
 
     let parsed: serde_json::Value =
         serde_json::from_str(&result.content).expect("Result content must be valid JSON");
-    assert_eq!(parsed["success"], true);
+    // iter-2665: the payload used to carry `"success": true` AND
+    // `"delivered": true`. Both were asserted here, so the test itself was
+    // pinning a claim the tool cannot keep: nothing is handed to a sink. What
+    // is true, and checkable, is that the intent was recorded.
+    assert_eq!(parsed["logged"], true);
     assert_eq!(parsed["message"], "test message");
-    assert_eq!(parsed["delivered"], true);
+    assert!(
+        parsed.get("delivered").is_none(),
+        "the tool must not claim a delivery it never performs"
+    );
 }
 
 #[tokio::test]
