@@ -819,6 +819,22 @@ pub(crate) type PendingSurfaceQuestions =
 /// through both of them.
 pub static PENDING_SURFACE_QUESTIONS: OnceLock<PendingSurfaceQuestions> = OnceLock::new();
 
+/// Pending surface-op entries, keyed by the op's `surface_id`.
+///
+/// B3 (iter-2657): a button tap on a rendered surface arrives as
+/// `callback_data = "choice:<idx>"` (the same shape the clarify buttons
+/// use), which is useless without the choice ids that were offered. The
+/// `SurfaceRendered` arm registers the op here before sending the card, so
+/// the callback handler can resolve the index to the choice id the agent
+/// asked for. Removed when the surface's question resolves (the same
+/// `PENDING_SURFACE_QUESTIONS` intercept) or on the 120 s timeout, so the
+/// map never grows past the number of cards actually in flight.
+pub(crate) type PendingSurfaceOps =
+    std::sync::Mutex<Option<Arc<Mutex<HashMap<String, operant_core::ui::SurfaceOp>>>>>;
+
+/// Global store of pending surface ops (B3), keyed by `surface_id`.
+pub static PENDING_SURFACE_OPS: OnceLock<PendingSurfaceOps> = OnceLock::new();
+
 /// The answer a surface gets when nobody could answer it.
 ///
 /// The tool treats a dismissed prompt as a normal outcome ("user dismissed"), so
@@ -2472,6 +2488,7 @@ fn init_pending_permissions() {
     PENDING_PERMISSIONS.get_or_init(|| std::sync::Mutex::new(None));
     PENDING_USER_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
     PENDING_SURFACE_QUESTIONS.get_or_init(|| std::sync::Mutex::new(None));
+    PENDING_SURFACE_OPS.get_or_init(|| std::sync::Mutex::new(None));
 }
 
 /// Store the shared pending-permission map into the global.
@@ -7213,6 +7230,34 @@ pub async fn start_gateway(
                             .with_thread_id(thread_id)
                     };
                     let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                    // B3 (iter-2657): register the op so a button tap on this
+                    // card can resolve `choice:<idx>` back to the choice id the
+                    // agent asked for. Only interactive widgets need it; a
+                    // plain card registers nothing and the map stays small.
+                    let surface_id = op.surface_id().to_string();
+                    let interactive = op.widgets().iter().any(|w| {
+                        matches!(
+                            w,
+                            operant_core::ui::WidgetNode::ChoicePicker { .. }
+                                | operant_core::ui::WidgetNode::Confirm { .. }
+                        )
+                    });
+                    if interactive && let Some(global) = PENDING_SURFACE_OPS.get() {
+                        // Clone out the Arc under the (sync) guard, then drop
+                        // the guard BEFORE the .await on the inner tokio::Mutex
+                        // -- a std::sync::MutexGuard is !Send and cannot cross
+                        // an await inside a tokio::spawn.
+                        let map = {
+                            let mut guard = global.lock().unwrap_or_else(|e| e.into_inner());
+                            if guard.is_none() {
+                                *guard = Some(Arc::new(Mutex::new(HashMap::new())));
+                            }
+                            guard.as_ref().cloned()
+                        };
+                        if let Some(map) = map {
+                            map.lock().await.insert(surface_id, op.clone());
+                        }
+                    }
                 }
                 // A 429 classified mid-turn. Without this the turn looks
                 // stalled while the provider is rate-limiting it.
@@ -8391,6 +8436,73 @@ pub async fn start_gateway(
                                                     )
                                                     .await;
                                             }
+                                        return Ok(true);
+                                    }
+
+                                    // ── 1.6b Surface-card choice taps ──────────────
+                                    // A `choice:<idx>` tap on a rendered surface card.
+                                    // Resolved through PENDING_SURFACE_QUESTIONS (the
+                                    // structured shape, not clarify's bare String),
+                                    // reusing the same choice_callback marker the
+                                    // telegram adapter already synthesizes. Checked
+                                    // after the clarify branch so a clarify question
+                                    // keeps its precedence.
+                                    if let Some(cc) = msg.raw.get("choice_callback").cloned() {
+                                        let channel_key = format!("{platform}:{channel_id}");
+                                        let pending_map_clone = {
+                                            let global_surf =
+                                                crate::gateway_runner::PENDING_SURFACE_QUESTIONS.get();
+                                            global_surf
+                                                .and_then(|g| g.lock().ok())
+                                                .and_then(|mut guard| guard.take())
+                                        };
+                                        let mut resolved = false;
+                                        if let Some(pending_map) = pending_map_clone {
+                                            let idx = cc
+                                                .get("idx")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0) as usize;
+                                            let reply = {
+                                                let mut pending = pending_map.lock().await;
+                                                pending.remove(&channel_key)
+                                            };
+                                            if let Some(pending) = reply {
+                                                let answer =
+                                                    crate::gateway_runner::surface_reply_from_text(
+                                                        pending.choice_ids.as_deref(),
+                                                        None,
+                                                        &format!("{}", idx + 1),
+                                                    );
+                                                tracing::info!(
+                                                    channel = %channel_key,
+                                                    kind = %answer["kind"],
+                                                    "Routing surface-card tap (dispatch)"
+                                                );
+                                                let _ = pending.reply_tx.send(answer);
+                                                resolved = true;
+                                            }
+                                            if let Some(g) =
+                                                crate::gateway_runner::PENDING_SURFACE_QUESTIONS.get()
+                                                && let Ok(mut guard) = g.lock()
+                                            {
+                                                *guard = Some(pending_map);
+                                            }
+                                        }
+                                        // Drop the op registry entry too: the card is
+                                        // answered, so a stale lookup cannot leak into
+                                        // the next card with the same surface_id.
+                                        if resolved
+                                            && let Some(global) =
+                                                crate::gateway_runner::PENDING_SURFACE_OPS.get()
+                                        {
+                                            let map = global
+                                                .lock()
+                                                .ok()
+                                                .and_then(|g| g.as_ref().cloned());
+                                            if let Some(map) = map {
+                                                map.lock().await.clear();
+                                            }
+                                        }
                                         return Ok(true);
                                     }
 
