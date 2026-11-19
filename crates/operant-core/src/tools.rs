@@ -811,11 +811,6 @@ impl ToolRegistry {
         disabled.insert(toolset.to_string());
     }
 
-    pub async fn enable_toolset(&self, toolset: &str) {
-        let mut disabled = self.disabled_toolsets.write().await;
-        disabled.remove(toolset);
-    }
-
     pub async fn set_disabled_tools(&self, names: HashSet<String>) {
         let mut disabled = self.disabled_names.write().await;
         *disabled = names;

@@ -217,11 +217,6 @@ impl ProviderRegistry {
         self.fallback_chain.get(idx).map(|e| e.name.clone())
     }
 
-    pub fn active_model(&self) -> Option<String> {
-        let idx = self.active_index.read().map(|g| *g).unwrap_or(0);
-        self.fallback_chain.get(idx).map(|e| e.model.clone())
-    }
-
     /// Commit a switch to chain index `next` and report the entry.
     fn commit_switch(&self, next: usize) -> Option<ProviderEntry> {
         if let Ok(mut idx) = self.active_index.write() {

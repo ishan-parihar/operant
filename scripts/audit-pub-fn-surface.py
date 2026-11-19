@@ -162,6 +162,14 @@ def main() -> int:
     # 2. One census pass over the whole workspace. Production counts every
     #    identifier; test counts the removed `#[cfg(test)]` items only, so a
     #    name whose only callers are tests still reads as production-dead.
+    #
+    #    COUNTING BUG, found by the audit itself: the first draft did
+    #    `prod_counts.update(set(IDENT.findall(prod)))` -- a SET per file, which
+    #    collapses a definition and a call that live in the SAME file into one
+    #    hit. `agent_capabilities` (defined and called at acp/mod.rs:138 and :515)
+    #    therefore counted 1 and was reported dead. 382 candidates -> 379 when
+    #    fixed, and the 3 that dropped were exactly the same-file callers. Count
+    #    OCCURRENCES, not distinct names per file.
     prod_counts: collections.Counter = collections.Counter()
     test_counts: collections.Counter = collections.Counter()
     for path in ROOT.rglob("*.rs"):
@@ -169,13 +177,12 @@ def main() -> int:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        prod = strip_test_items(text)
-        prod_counts.update(set(IDENT.findall(prod)))
+        prod_counts.update(IDENT.findall(strip_test_items(text)))
         # For the test-side count, brace-match each attributed item too. This
         # is the mirror of strip_test_items; it is separate because the two
         # questions differ (what is production, vs what is test-only).
         for block in test_blocks(text):
-            test_counts.update(set(IDENT.findall(block)))
+            test_counts.update(IDENT.findall(block))
 
     # 3. A candidate is a name defined once (so no overload/trait ambiguity)
     #    whose PRODUCTION count is exactly 1 -- the definition itself.

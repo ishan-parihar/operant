@@ -499,11 +499,6 @@ impl ApprovalGuard {
         }
     }
 
-    /// Run only the hardline check against `command`.
-    pub fn check_hardline(&self, command: &str) -> Option<String> {
-        check_hardline_blocklist(command).map(String::from)
-    }
-
     /// Run only the dangerous pattern check against `command`.
     pub fn check_dangerous(&self, command: &str) -> Option<(String, RiskLevel)> {
         check_dangerous_patterns(command).map(|(c, r)| (c.to_string(), r))
