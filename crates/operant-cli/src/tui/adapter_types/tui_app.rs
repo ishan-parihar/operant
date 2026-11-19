@@ -3298,4 +3298,136 @@ mod attach_tests {
         server.abort();
         client.abort();
     }
+
+    /// RT-547: the attach path is REACHABLE from the entry points, and the
+    /// local path still builds.
+    ///
+    /// The row: "the thin client has no caller" — now `operant chat --attach`
+    /// is the caller (main.rs, the T2 pin) and the TUI's attach path exists.
+    /// What was missing is a pin at THIS seam: `TuiApp::attaching` is the one
+    /// constructor the entry point calls, and the two submit loops must route
+    /// through `submit_over_socket` iff a socket is attached. A refactor that
+    /// re-grew a local agent under the attach flag (or dropped the attach arm)
+    /// has to fail here.
+    #[test]
+    fn the_attach_entry_point_is_reachable_and_the_local_path_still_builds() {
+        let source = include_str!("tui_app.rs");
+
+        // (1) The one attach constructor: `attaching` sets the socket, and
+        // nothing else does — the entry point's whole reachability is this
+        // setter plus the builder chain in main.rs.
+        let setter = "pub fn attaching(mut self, socket: std::path::PathBuf) -> Self {";
+        assert!(
+            source.contains(setter),
+            "TuiApp::attaching must be the one attach constructor"
+        );
+        let attach_body = &source[source.find(setter).expect("the setter")..];
+        let attach_end = attach_body.find("\n    ///").unwrap_or(attach_body.len());
+        let attach_body = &attach_body[..attach_end];
+        assert!(
+            attach_body.contains("self.attach_socket = Some(socket);"),
+            "attaching() must set attach_socket — that is what every gate reads"
+        );
+
+        // (2) Both submit loops route an attached TUI through the socket and
+        // SKIP the local agent. Two call sites: the interactive loop and the
+        // one-shot loop. The gate's shape is `if self.attach_socket.is_some()`
+        // followed by `submit_over_socket`, and the local branch is the else.
+        let socket_calls = source.matches("self.attach_socket.is_some()").count();
+        assert!(
+            socket_calls >= 3,
+            "the attach gate must guard the run loop's local stack AND both \
+             submit loops, found {socket_calls} site(s)"
+        );
+        let submit_calls = source
+            .matches("self.submit_over_socket(input).await;")
+            .count();
+        assert!(
+            submit_calls >= 2,
+            "both submit loops (interactive and one-shot) must route through \
+             submit_over_socket when attached, found {submit_calls}"
+        );
+
+        // (3) The local agent construction is the ELSE of the attach gate —
+        // `None` under attach, the runtime otherwise. A refactor that builds
+        // the agent unconditionally would pass (1) and (2) and still cost the
+        // attached client a ~61 MiB runtime, so the shape is pinned here:
+        // the `let agent: Option<...> = if self.attach_socket.is_some()` block.
+        // Split the needle so this test's own source cannot satisfy it (the
+        // same discipline as the RT-519 database-open contract in
+        // gateway_api.rs): the anchor and the field read are joined at
+        // runtime.
+        let local_gate: &str = &[
+            "let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> = if self",
+            "\n            .attach_socket",
+        ]
+        .concat();
+        assert!(
+            source.contains(local_gate),
+            "the local agent must be built in the ELSE of the attach gate: \
+             {local_gate}"
+        );
+        let gate_at = source.find(local_gate).expect("the local gate");
+        // The window must cover the else branch: the `None` arm and the
+        // runtime construction sit ~465 chars apart (the else block opens
+        // with three lets), so slice to the else brace plus 400.
+        let gate_region_end = source[gate_at..]
+            .find("\n        } else {")
+            .map(|i| gate_at + i + 400)
+            .unwrap_or(source.len());
+        let gate_region = &source[gate_at..gate_region_end];
+        assert!(
+            gate_region.contains("None") && gate_region.contains("create_runtime_agent("),
+            "the attach gate must yield None (attached) or build the runtime \
+             (local) — got: {}",
+            &gate_region[..gate_region.len().min(400)]
+        );
+
+        // (4) The wire the submit path writes: a prompt when idle, a steer
+        // when the turn is streaming. One construction site each.
+        assert!(
+            source.contains(
+                "operant_core::session_protocol::WireMessage::Prompt { session_id, text }"
+            ),
+            "the submit path must send Prompt when the turn is not streaming"
+        );
+        assert!(
+            source.contains(
+                "operant_core::session_protocol::WireMessage::Steer { session_id, text }"
+            ),
+            "the submit path must send Steer while the turn is streaming"
+        );
+    }
+
+    /// RT-547: the reader task is the ONLY agent-event producer on the attach
+    /// path.
+    ///
+    /// The T2 pin covered the entry point in main.rs; this covers the TUI's
+    /// own half. The attach branch of `run` spawns the socket reader and
+    /// RETURNS before the local stack — the render receiver is fed by the
+    /// reader alone. A second producer (a local agent's event channel wired
+    /// beside it) would double-render every turn, so the seam is pinned.
+    #[test]
+    fn the_attached_tui_has_one_event_producer() {
+        let source = include_str!("tui_app.rs");
+
+        // The reader spawn: the attach branch of run() spawns the reconnect
+        // loop whose body reads the socket and sends `tx.send(event)`.
+        let spawn =
+            "let client = match operant_core::session_client::SessionClient::connect(&socket)";
+        assert!(
+            source.contains(spawn),
+            "the attach branch must spawn the socket reader through \
+             SessionClient::connect"
+        );
+        // The reader forwards into the SAME receiver the render layer drains
+        // (agent_tx). One producer on this path: the `tx.send(event)` inside
+        // the reader loop.
+        let forwards = source.matches("if tx.send(event).await.is_err()").count();
+        assert!(
+            forwards >= 1,
+            "the reader must forward the server's events into the render \
+             receiver: tx.send(event)"
+        );
+    }
 }
