@@ -290,6 +290,30 @@ candidate with a smaller window than the primary must produce a request whose
 
 **Severity 3. Medium risk** — touches the hot request-build path.
 
+## T7 AND T8 ARE DONE -- by iter-2679 (peer, `47c8dc7a`), verified 2026-11-19
+
+Neither tranche is to be re-done. The peer shipped both in one commit
+(`feat(iter-2679): F1 circuit breaker + F2 per-candidate max_tokens clamp`,
+468 insertions in `agent/fallback.rs`, 8 new tests) and the claims hold up
+against the tree:
+
+- **T7 (F1, the breaker) landed.** `struct PrimaryBreaker` at
+  `fallback.rs:236`, with `failure_threshold` (default 3) and
+  `cooldown_period` (default 60s) both configurable through
+  `with_breaker_threshold` / `with_breaker_cooldown`, documented at :231-232 as
+  "the primary fails N times in a row, it is skipped in favor of fallback
+  models until cooldown elapses".
+- **T8 (F2, per-candidate fit) landed, at all THREE call sites this plan named.**
+  `clamp_max_tokens_to_model` is defined at `fallback.rs:363` and called at
+  :484, :536 and :637 -- i.e. `try_models` (same-provider), and
+  `try_next_provider_chat` + `try_next_provider_streaming` (cross-provider),
+  which is exactly the coverage T8 specified. It is a no-op when the model has
+  no known ceiling or no `max_tokens` is set, which is the degradation T8
+  asked for.
+
+So T7 and T8 are CLOSED and the plan records them as such. **T9 is the next
+tranche in this family**, and it is not touched by iter-2679.
+
 ---
 
 # T9 — F3: a finite retry ceiling for unattended runs
