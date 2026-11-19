@@ -1301,15 +1301,32 @@ fn human_bytes(bytes: i64) -> String {
 /// TTS tool -- the flag switches off the operator-facing surface, not the
 /// dispatch (AGENTS.md design preference: "there is none to find"). Saying it
 /// disables the feature sent operators looking for a guard that does not exist.
-/// The honest line names what the flag actually does and where the real block
-/// is (tool policy).
+///
+/// A SECOND correction landed here (iter-2687) and is worth reading before
+/// editing this string again. iter-2686 fixed the false `enabled = true`
+/// promise but replaced it with a phrase naming "tool policy" -- and that
+/// names a surface that does not exist either. `tool_policy` is
+/// `SubAgentTool::with_parent_tool_policy` (tools/sub_agent_tool.rs), an
+/// internal sub-agent seam an operator cannot invoke. The real removal path is
+/// `operant tools disable tts` (cmd_tools.rs -> tool_state.json, which the
+/// RUNTIME reads since iter-1124). Each correction here has swapped one
+/// non-existent gate for another; the message now names a command that runs.
 fn tts_disabled_detail(cached: bool) -> &'static str {
     if cached {
         // The cache is warm, so the only thing standing between the operator and
         // TTS is the flag itself -- and the flag does NOT gate dispatch, so the
         // line must not imply it does. This is the case the old wording got
         // wrong: it promised `enabled = true` would "use it".
-        "(the phonon model is downloaded; [tts] enabled = false only marks the feature off in doctor/setup -- the tool stays active unless blocked via tool policy)"
+        //
+        // The previous correction (iter-2686) ended with "blocked via tool
+        // policy" and was still wrong: no such operator surface exists. `tool_policy`
+        // names `SubAgentTool::with_parent_tool_policy` (tools/sub_agent_tool.rs),
+        // an internal sub-agent seam, not something an operator can run. What
+        // actually removes the tool is `operant tools disable tts` (cmd_tools.rs),
+        // which writes tool_state.json -- the file the RUNTIME reads (iter-1124).
+        // Same defect class as the sentence it replaced: naming a gate that is
+        // not there.
+        "(the phonon model is downloaded; [tts] enabled = false only marks the feature off in doctor/setup -- the tool itself still works, disable it with `operant tools disable tts`)"
     } else {
         "(not configured \u{2014} run operant setup)"
     }
@@ -1531,18 +1548,29 @@ mod tts_doctor_message_tests {
     /// doctor printed `tts (not configured -- run operant setup)` for an operator
     /// whose Phonon checkpoint was fully downloaded, because the only condition
     /// it looked at was `[tts] enabled = false`. That advice sends them to a
-    /// wizard that downloads nothing they are missing, and it never mentions the
-    /// switch that would actually turn TTS on.
+    /// wizard that downloads nothing they are missing.
+    ///
+    /// The message was corrected twice after that. iter-2686 removed the false
+    /// "set `[tts] enabled = true` to use it" promise (`TtsTool::execute` never
+    /// reads the flag -- AGENTS.md, "Voice / TTS"), and iter-2687 removed the
+    /// "tool policy" pointer that replaced it, because that names no operator
+    /// surface either (`tool_policy` is `SubAgentTool::with_parent_tool_policy`,
+    /// an internal sub-agent seam). Each assertion below therefore describes the
+    /// CURRENT contract, not the pre-fix text.
     #[test]
     fn a_downloaded_checkpoint_that_is_switched_off_is_not_reported_as_unconfigured() {
         let cached = tts_disabled_detail(true);
         assert!(
-            cached.contains("disabled"),
-            "the disabled-but-provisioned message must say so: {cached}"
+            cached.contains("phonon model is downloaded"),
+            "the provisioned-but-off message must say the checkpoint is present: {cached}"
         );
         assert!(
-            cached.contains("enabled = true"),
-            "it must name the switch that turns TTS on: {cached}"
+            cached.contains("operant tools disable tts"),
+            "it must name the command that ACTUALLY removes the tool: {cached}"
+        );
+        assert!(
+            !cached.contains("enabled = true"),
+            "it must not claim `[tts] enabled` gates the tool -- TtsTool::execute never reads it: {cached}"
         );
         assert!(
             !cached.contains("not configured"),

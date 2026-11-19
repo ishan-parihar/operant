@@ -38,10 +38,27 @@ fn the_doctor_explains_what_enabled_actually_does() {
         "the honest line must say the flag switches the operator-facing surface, \
          not the dispatch"
     );
+}
+
+/// The line must name a REAL removal path (iter-2687).
+///
+/// This test previously asserted `CHECKS_TOOLS.contains("blocked via tool
+/// policy")`. That phrase names no operator surface: `tool_policy` is
+/// `SubAgentTool::with_parent_tool_policy` (`tools/sub_agent_tool.rs`), an
+/// internal sub-agent seam. The line therefore sent the operator looking for a
+/// second non-existent gate, which is the same defect iter-2686 was written to
+/// fix. The real path is `operant tools disable tts` (`cmd_tools.rs`), which
+/// writes `tool_state.json` -- the file the RUNTIME reads since iter-1124.
+#[test]
+fn the_doctor_names_a_removal_path_that_exists() {
     assert!(
-        CHECKS_TOOLS.contains("blocked via tool policy"),
-        "the real block is tool policy; the line must point there rather than at \
-         a dispatch guard that does not exist"
+        CHECKS_TOOLS.contains("operant tools disable tts"),
+        "the line must name a command the operator can actually run"
+    );
+    assert!(
+        !CHECKS_TOOLS.contains("blocked via tool policy"),
+        "`tool policy` is an internal SubAgentTool seam, not an operator \
+         surface -- do not point the operator at it again"
     );
 }
 
