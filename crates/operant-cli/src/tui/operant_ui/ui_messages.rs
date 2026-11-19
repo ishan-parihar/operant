@@ -551,6 +551,36 @@ fn render_agentgrep_output_body(content: &str, row_width: usize) -> Vec<Line<'st
     out
 }
 
+/// The settled-row body for a governed generative-UI card (B0, iter-2652).
+///
+/// The payload is the POST-SCRUB `SurfaceOp` serialised as JSON in `title`;
+/// the gate already ran inside the tool, so this renderer never re-checks.
+/// On a corrupt payload it renders the one-line reason rather than a blank
+/// row, so an unreadable surface is still legible.
+pub(crate) fn render_surface_message(
+    msg: &DisplayMessage,
+    width: u16,
+    _diff_mode: crate::tui::operant_app::config_shim::DiffDisplayMode,
+    _row_expanded: bool,
+) -> Vec<Line<'static>> {
+    let width = width.saturating_sub(4) as usize;
+    match msg
+        .title
+        .as_deref()
+        .map(|json| crate::tui::surface_widget::render_surface_op_json(json, width.max(1)))
+    {
+        Some(Ok(lines)) => lines,
+        Some(Err(reason)) => vec![Line::from(Span::styled(
+            reason,
+            Style::default().fg(rgb(255, 110, 110)).italic(),
+        ))],
+        None => vec![Line::from(Span::styled(
+            "(surface op missing)".to_string(),
+            Style::default().fg(dim_color()).italic(),
+        ))],
+    }
+}
+
 pub(crate) fn render_system_message(
     msg: &DisplayMessage,
     width: u16,

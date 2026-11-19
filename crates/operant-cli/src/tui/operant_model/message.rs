@@ -33,6 +33,21 @@ impl DisplayMessage {
         }
     }
 
+    /// A display-only row for a governed generative-UI card. Carries the
+    /// POST-SCRUB `SurfaceOp` as JSON in `title`, so the transcript renders
+    /// the widget tree as a widget rather than as a paragraph. `title` keeps
+    /// the cache key stable across reloads of the same op.
+    pub fn surface(op_json: impl Into<String>) -> Self {
+        Self {
+            role: "surface".to_string(),
+            content: String::new(),
+            tool_calls: Vec::new(),
+            duration_secs: None,
+            title: Some(op_json.into()),
+            tool_data: None,
+        }
+    }
+
     /// Create a system message.
     pub fn system(content: impl Into<String>) -> Self {
         Self {

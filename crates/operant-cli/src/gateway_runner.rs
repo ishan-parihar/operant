@@ -847,11 +847,21 @@ pub(crate) fn surface_reply_from_text(
             && n >= 1
             && n <= ids.len()
         {
+            // A confirm card's index reply is the boolean too: "1" on a
+            // Yes/No card means yes, not the choice id "yes".
+            if ids.len() == 2 && ids[0] == "yes" && ids[1] == "no" {
+                return serde_json::json!({ "kind": "confirm", "value": n == 1 });
+            }
             return serde_json::json!({ "kind": "choice", "choice_id": ids[n - 1] });
         }
         if let Some(labels) = labels
             && let Some(idx) = labels.iter().position(|l| l == trimmed)
         {
+            // A confirm card's ids are yes/no and its labels Yes/No, so the
+            // reply carries the boolean the model asked for.
+            if ids.len() == 2 && ids[0] == "yes" && ids[1] == "no" {
+                return serde_json::json!({ "kind": "confirm", "value": idx == 0 });
+            }
             return serde_json::json!({ "kind": "choice", "choice_id": ids[idx] });
         }
     }
@@ -7731,6 +7741,16 @@ pub async fn start_gateway(
                 operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => {
                     choices.iter().map(|c| c.label.clone()).collect()
                 }
+                // B0 (iter-2652): a confirm card is the two-label shape, so
+                // the text fallback shows "1. Yes / 2. No" and the existing
+                // index reply maps straight back to the boolean.
+                operant_core::ui::WidgetNode::Confirm { default, .. } => {
+                    if *default {
+                        vec!["Yes".into(), "No".into()]
+                    } else {
+                        vec!["No".into(), "Yes".into()]
+                    }
+                }
                 _ => Vec::new(),
             };
             let card = operant_core::ui::plain::render_plain(
@@ -7775,6 +7795,9 @@ pub async fn start_gateway(
                     choice_ids: match &req.body {
                         operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => {
                             Some(choices.iter().map(|c| c.id.clone()).collect())
+                        }
+                        operant_core::ui::WidgetNode::Confirm { .. } => {
+                            Some(vec!["yes".into(), "no".into()])
                         }
                         _ => None,
                     },

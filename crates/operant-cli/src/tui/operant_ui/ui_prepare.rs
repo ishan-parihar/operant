@@ -260,7 +260,7 @@ fn default_message_alignment(role: &str, centered: bool) -> ratatui::layout::Ali
     if centered
         && !matches!(
             role,
-            "tool" | "system" | "swarm" | "background_task" | "overnight" | "todos"
+            "tool" | "system" | "swarm" | "background_task" | "overnight" | "todos" | "surface"
         )
     {
         ratatui::layout::Alignment::Center
@@ -1907,6 +1907,26 @@ fn render_message_into(
                         acc.push_auto(line);
                     }
                 }
+            }
+        }
+        "surface" => {
+            let content_width = width.saturating_sub(4);
+            let cached = get_cached_message_lines(
+                msg,
+                content_width,
+                app.diff_mode(),
+                false,
+                render_surface_message,
+            );
+            let rows: Vec<Line<'static>> = cached
+                .into_iter()
+                .map(|line| align_if_unset(line, align))
+                .collect();
+            // A surface card has no authored plain-text mapping; the payload
+            // is JSON. Copy treats it as a UI row (UI_ROLES lists "surface"),
+            // so rows push as plain rows instead of claiming a copy mapping.
+            for line in rows {
+                acc.push_auto(line);
             }
         }
         "system" => {

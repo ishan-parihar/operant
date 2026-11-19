@@ -103,13 +103,6 @@ pub mod operant_render;
     )
 )]
 pub mod operant_render_core;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "lands before its cutover wiring (App-seam adaptation)"
-    )
-)]
 pub mod operant_ui;
 pub mod osc8;
 pub mod overlays;
@@ -127,6 +120,14 @@ pub mod space;
 pub mod stats_dialog;
 pub mod status_line;
 pub mod subagent_navigator;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "lands before its cutover wiring (App-seam adaptation)"
+    )
+)]
+pub mod surface_widget;
 pub mod terminal_setup;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;

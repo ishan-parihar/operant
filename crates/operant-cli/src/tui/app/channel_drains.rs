@@ -412,8 +412,29 @@ impl App {
             // The dialog answers with a LABEL; the model asked by ID. Capture
             // the id table here, where the request is still in scope, and
             // resolve after the user answers.
+            //
+            // B0 (iter-2652): the interactive kinds are no longer choice-only.
+            // `Confirm` maps to the dialog's two-option shape and `TextField`
+            // to its free-input mode, so the advertised "choice / confirm /
+            // text field" contract of `ui_request_input` is actually served.
             let choices = match &req.body {
                 operant_core::ui::WidgetNode::ChoicePicker { choices, .. } => choices.clone(),
+                operant_core::ui::WidgetNode::Confirm { default, .. } => {
+                    let first = if *default { "Yes" } else { "No" };
+                    let second = if *default { "No" } else { "Yes" };
+                    vec![
+                        operant_core::ui::ChoiceOption {
+                            id: "yes".into(),
+                            label: first.into(),
+                            description: None,
+                        },
+                        operant_core::ui::ChoiceOption {
+                            id: "no".into(),
+                            label: second.into(),
+                            description: None,
+                        },
+                    ]
+                }
                 _ => Vec::new(),
             };
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -424,10 +445,26 @@ impl App {
             };
             self.ask_user_dialog
                 .open_with_header(req.question, labels, header, reply_tx);
+            // B0 (iter-2652): hand the dialog the raw POST-SCRUB op so `[v]`
+            // can flip the header between the rendered card and the JSON the
+            // model actually emitted. The gate already scrubbed it, so this
+            // exposes no secret.
+            self.ask_user_dialog.header_op_json = serde_json::to_string(&req.op).ok();
+            let is_confirm = matches!(req.body, operant_core::ui::WidgetNode::Confirm { .. });
             let tool_reply = req.reply_tx;
             tokio::spawn(async move {
                 let answer = reply_rx.await.unwrap_or_default();
-                let _ = tool_reply.send(surface_reply_for(&choices, answer));
+                let reply = if is_confirm {
+                    // The dialog answered by label ("Yes"/"No"); the model
+                    // asked a boolean, so resolve the label back to it.
+                    serde_json::json!({
+                        "kind": "confirm",
+                        "value": answer == "Yes" || answer.eq_ignore_ascii_case("yes"),
+                    })
+                } else {
+                    surface_reply_for(&choices, answer)
+                };
+                let _ = tool_reply.send(reply);
             });
             true
         } else {

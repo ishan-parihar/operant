@@ -38,6 +38,12 @@ pub enum SystemMessageStyle {
     /// Idle recap notice (omp `RecapNotice` parity): dim italic — a
     /// transcript thought, not a status event.
     Recap,
+    /// A governed generative-UI card (the Surface IR). Carries the
+    /// POST-SCRUB `SurfaceOp` as JSON so the transcript can render the widget
+    /// tree as a widget instead of as a paragraph, and so a reloaded session
+    /// re-renders the card. The gate already ran inside the tool, so this
+    /// style never re-checks.
+    Surface(String),
 }
 
 /// A synthetic system annotation inserted between conversation messages.

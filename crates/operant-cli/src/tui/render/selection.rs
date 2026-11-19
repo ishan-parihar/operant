@@ -70,6 +70,8 @@ const UI_ROLES: &[&str] = &[
     "background_task",
     "system",
     "error",
+    // A governed generative-UI card is chrome: the row is drawn, not copied.
+    "surface",
 ];
 
 /// Whether wrapped line `line` is interface chrome: a row with no line map

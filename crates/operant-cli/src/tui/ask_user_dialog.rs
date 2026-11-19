@@ -58,6 +58,16 @@ pub struct AskUserDialogState {
     /// so the operator sees the FULL surface (a table the choice sits under)
     /// rather than a bare question.
     pub header: String,
+    /// Whether the header shows the raw JSON op instead of the rendered
+    /// card (B0, iter-2652; the plan's G2 `[v]` toggle). The raw form is
+    /// the POST-SCRUB op — the gate already ran, so showing it exposes the
+    /// masked strings, never the secrets.
+    pub show_raw: bool,
+    /// The POST-SCRUB op JSON behind `header`, when the surface supplied one
+    /// (`ui_request_input` does; `clarify` does not). `[v]` toggles between
+    /// the rendered card and this raw form; a dialog without one ignores
+    /// the toggle, because there is nothing rawer to show.
+    pub header_op_json: Option<String>,
 }
 
 impl AskUserDialogState {
@@ -93,8 +103,33 @@ impl AskUserDialogState {
         self.custom_text.clear();
         self.in_custom_input = self.options.is_none();
         self.header = header;
+        self.show_raw = false;
+        self.header_op_json = None;
         self.reply_tx = Some(reply_tx);
         self.visible = true;
+    }
+
+    /// Whether the header has a raw op to flip to. `clarify` (no header)
+    /// and any surface without JSON behind it answer false, so the `[v]`
+    /// key arm never claims a toggle that cannot do anything.
+    pub fn header_has_raw_op(&self) -> bool {
+        self.header_op_json.is_some()
+    }
+
+    /// Flip the header between the rendered card and the raw post-scrub op
+    /// JSON (B0, iter-2652; the plan's `[v]` raw toggle). The raw view is
+    /// what a bug report needs: the exact op the model emitted, not the
+    /// renderer's idea of it.
+    ///
+    /// A dialog without an op behind the header (`clarify`, or a surface
+    /// whose JSON failed to serialize) ignores the toggle rather than
+    /// flipping a flag nothing renders — the key arm gates on
+    /// [`Self::header_has_raw_op`] anyway, so this is the second lock on the
+    /// same door.
+    pub fn toggle_raw(&mut self) {
+        if self.header_op_json.is_some() {
+            self.show_raw = !self.show_raw;
+        }
     }
 
     /// Navigate selection up.
@@ -280,7 +315,33 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     // Header card (plan M3): the surface the choice sits under. Dim, so the
     // question below it stays the brightest thing in the dialog. Only drawn
     // when a surface supplied one — `clarify` passes none.
-    if !state.header.trim().is_empty() {
+    //
+    // B0 (iter-2652): `[v]` flips this between the rendered plain card and
+    // the raw POST-SCRUB op JSON — the form a bug report needs. The gate ran
+    // before the op got here, so the raw view only ever shows masked text.
+    if state.show_raw
+        && let Some(json) = state.header_op_json.as_deref()
+    {
+        for wrap_line in balanced_wrap(json, inner_w) {
+            write_line!(
+                row,
+                Line::from(Span::styled(
+                    wrap_line,
+                    Style::default()
+                        .fg(theme::dim_color())
+                        .bg(theme_colors::panel_bg())
+                ))
+            );
+            row += 1;
+            if row >= last_row {
+                return;
+            }
+        }
+        row += 1; // spacer between the card and the question
+        if row >= last_row {
+            return;
+        }
+    } else if !state.header.trim().is_empty() {
         for wrap_line in balanced_wrap(&state.header, inner_w) {
             write_line!(
                 row,
@@ -529,5 +590,90 @@ mod tests {
             Some(&["A".to_string(), "B".to_string()][..])
         );
         assert!(state.visible);
+    }
+
+    /// B0 (iter-2652): a fresh dialog has nothing raw to show, so the `[v]`
+    /// arm's predicate is false and the toggle is a no-op. A dialog opened
+    /// by `clarify` (no op JSON) must not claim the toggle.
+    #[test]
+    fn clarify_dialog_has_no_raw_op_to_toggle() {
+        let mut state = AskUserDialogState::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        state.open("Pick one".to_string(), None, tx);
+        assert!(
+            !state.header_has_raw_op(),
+            "clarify's dialog has no surface op; [v] must not claim one"
+        );
+        state.toggle_raw();
+        assert!(!state.show_raw, "a no-op toggle must not flip the flag");
+    }
+
+    /// B0 (iter-2652): the `[v]` toggle flips between the rendered card and
+    /// the raw POST-SCRUB op. The op JSON is whatever the caller serialized
+    /// (the gate ran upstream), so this test pins the MECHANICS: flip on,
+    /// flip off, and the raw view only ever shows what it was given.
+    #[test]
+    fn raw_toggle_flips_the_surface_header() {
+        let mut state = AskUserDialogState::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        state.open_with_header(
+            "Pick one".to_string(),
+            Some(vec!["A".to_string(), "B".to_string()]),
+            "1. A\n2. B".to_string(),
+            tx,
+        );
+        assert!(!state.show_raw);
+        assert!(!state.header_has_raw_op());
+        state.header_op_json = Some("{\"op\":\"create_surface\"}".to_string());
+        assert!(state.header_has_raw_op());
+        state.toggle_raw();
+        assert!(state.show_raw, "the toggle must flip ON");
+        state.toggle_raw();
+        assert!(!state.show_raw, "the toggle must flip OFF");
+    }
+
+    /// B0 (iter-2652): the `[v]` raw view must render the POST-SCRUB op —
+    /// feed a card whose op carries a scrubbed secret and assert the drawn
+    /// bytes contain the mask, never the key. This is the G0 promise: the
+    /// toggle cannot leak what the gate removed.
+    #[test]
+    fn raw_toggle_shows_scrubbed_op_never_the_secret() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut state = AskUserDialogState::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        state.open_with_header(
+            "Continue?".to_string(),
+            Some(vec!["yes".to_string(), "no".to_string()]),
+            "ready".to_string(),
+            tx,
+        );
+        // The post-scrub op: the gate already replaced the key.
+        state.header_op_json = Some(
+            "{\"op\":\"create_surface\",\"surface_id\":\"s1\",\"body\":{\"node\":\"text\",\"text\":\"[REDACTED]\"}}"
+                .to_string(),
+        );
+        state.show_raw = true;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|f| super::render_ask_user_dialog(&state, f.area(), f.buffer_mut()))
+            .unwrap();
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            drawn.contains("[REDACTED]"),
+            "the raw view must show the post-scrub op: {drawn:?}"
+        );
+        assert!(
+            !drawn.contains("sk-") && !drawn.contains("ghp_"),
+            "the raw view must never leak the secret: {drawn:?}"
+        );
     }
 }

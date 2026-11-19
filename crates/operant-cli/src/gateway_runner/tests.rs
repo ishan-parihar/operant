@@ -4469,3 +4469,37 @@ async fn a_command_turn_does_not_inherit_the_previous_chats_cron_origin() {
          the previous chat's origin routes its cron results into THAT chat"
     );
 }
+
+/// B0 (iter-2652): the gateway's confirm card round-trips. A Confirm body
+/// offers "1. Yes / 2. No" (or the reverse), and the reply must come back
+/// as `{"kind":"confirm","value":…}` — the boolean the model asked for —
+/// not as a choice id or a bare string.
+#[test]
+fn gateway_confirm_reply_round_trips_as_a_boolean() {
+    let ids = ["yes".to_string(), "no".to_string()];
+    let labels = ["Yes".to_string(), "No".to_string()];
+
+    let by_index = crate::gateway_runner::surface_reply_from_text(Some(&ids), Some(&labels), "1");
+    assert_eq!(by_index["kind"], "confirm");
+    assert_eq!(by_index["value"], true);
+
+    let by_label = crate::gateway_runner::surface_reply_from_text(Some(&ids), Some(&labels), "No");
+    assert_eq!(by_label["kind"], "confirm");
+    assert_eq!(by_label["value"], false);
+
+    // A non-answer is still text, never a silent "no".
+    let prose = crate::gateway_runner::surface_reply_from_text(Some(&ids), Some(&labels), "maybe");
+    assert_eq!(prose["kind"], "text");
+    assert_eq!(prose["value"], "maybe");
+}
+
+/// A choice card is untouched by the confirm arm: ids and labels that are
+/// not the yes/no pair still resolve to a choice id.
+#[test]
+fn gateway_choice_reply_is_unchanged_by_the_confirm_arm() {
+    let ids = ["a".to_string(), "b".to_string()];
+    let labels = ["alpha".to_string(), "beta".to_string()];
+    let reply = crate::gateway_runner::surface_reply_from_text(Some(&ids), Some(&labels), "2");
+    assert_eq!(reply["kind"], "choice");
+    assert_eq!(reply["choice_id"], "b");
+}
