@@ -3580,7 +3580,18 @@ pub fn persist_config_key_at(path: &Path, dotted: &str, raw_value: &str) -> Resu
 /// config, and the target's own mode is carried across.
 pub(crate) fn persist_restored_file(staged: &Path, target: &Path) -> Result<PathBuf> {
     if let Ok(mode) = std::fs::metadata(target).map(|meta| meta.permissions()) {
-        let _ = std::fs::set_permissions(staged, mode);
+        // RT-418's SECOND site: the surgical config writer above reports a
+        // failed mode carry-over, but this one -- the `operant import` /
+        // restore path -- discarded it. Same consequence as the writer's:
+        // the staged file stays owner-only and the rename puts that in place.
+        if let Err(e) = std::fs::set_permissions(staged, mode) {
+            tracing::warn!(
+                path = %target.display(),
+                error = %e,
+                "the restored file's original mode could not be carried over — the \
+                 replacement keeps the owner-only mode it was staged with"
+            );
+        }
     }
     std::fs::rename(staged, target).map_err(|error| {
         let _ = std::fs::remove_file(staged);
@@ -4489,7 +4500,14 @@ mod rt418_tests {
     #[test]
     fn the_config_mode_round_trip_reports_a_failed_carry_over() {
         let src = include_str!("config.rs");
-        let prod = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        // Slice at THIS test module, not the FIRST `#[cfg(test)]` in the
+        // file: `runtime_config_test_lock` (line ~3017) is also test-gated, so
+        // the old slice cut at char 133718 -- BEFORE both set_permissions
+        // sites it was written to guard. The guard passed vacuously and could
+        // not see either site, which is how the second one survived RT-418's
+        // fix. Every other source-contract test in this file has the same
+        // blind spot for anything below the first test-gated helper.
+        let prod = &src[..src.find("mod rt418_tests").unwrap_or(src.len())];
         let discarded = concat!("let _ = std::fs::set_permissions(&tmp, mode);", "");
         assert_eq!(
             prod.matches(discarded).count(),
@@ -4501,6 +4519,26 @@ mod rt418_tests {
             prod.matches(reported).count(),
             1,
             "the mode carry-over's failure must be reported"
+        );
+        // RT-418 had a SECOND site. `persist_restored_file` -- the
+        // `operant import` / restore path -- carried the same discarded
+        // result, and a test that only looked for `&tmp` read the writer's
+        // fix as the whole fix. Both writers report; assert both, keyed on
+        // the function that owns each, so a third site cannot hide the same way.
+        let restored = concat!(
+            "if let Err(e) = std::fs::set_permissions(staged, mode)",
+            ""
+        );
+        assert_eq!(
+            prod.matches(restored).count(),
+            1,
+            "the restore path's mode carry-over's failure must be reported too"
+        );
+        // And neither site may discard it -- count BOTH variable spellings.
+        assert_eq!(
+            prod.matches(concat!("let _ = std::fs::set_permissions(", "")).count(),
+            0,
+            "no set_permissions result may be discarded"
         );
         let consequence = concat!("keeps the owner-only mode it was created", " with");
         assert_eq!(

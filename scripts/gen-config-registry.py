@@ -95,6 +95,15 @@ TOP_LEVEL_SECTIONS = [
     "providers",
     "cli",
     "observability",
+    # iter-2693: `ui` was the LAST hand-maintained entry missing. The struct
+    # landed in iter-2638 with `[ui] generative_enabled` documented in
+    # `operant.example.toml`, and because this list is hand-written the
+    # generator emitted the `ui` section key (from the AppConfig walk) but
+    # never its child -- so `operant config` parked `ui.generative_enabled`
+    # wholesale for any operator who also carried an unknown key. The comment
+    # above `bare_top_level_keys()` already learned this lesson for bare keys;
+    # this list is the same ratchet and needs the same treatment.
+    "ui",
 ]
 
 # Bare top-level keys: an `AppConfig` field whose type is a scalar or an enum,
