@@ -3518,6 +3518,244 @@ async fn a_cancel_stops_the_running_turn_and_says_which() {
     }
 }
 
+// ── RT-545: the wire round-trips (T3, iter-2655) ─────────────────────────
+
+/// Start a `GatewaySessionHandler` over a real bound socket and return
+/// (server task, socket path, the inner handler). The T3 wire tests share
+/// this shape with `the_gateway_session_socket_serves_two_clients_on_one_process`
+/// — bind, wait for the file, then drive `SessionClient`.
+async fn spawn_session_socket(
+    dir: &std::path::Path,
+    handler: GatewaySessionHandler,
+) -> (
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+    std::path::PathBuf,
+) {
+    let socket = dir.join("t3-session.sock");
+    let server = tokio::spawn(operant_core::session_server::run_session_socket(
+        std::sync::Arc::new(handler),
+        socket.clone(),
+    ));
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(socket.exists(), "the server must bind its socket");
+    (server, socket)
+}
+
+/// RT-545: a CANCEL crosses the wire and stops the turn it names.
+///
+/// The row asked for "a protocol test that a prompt, its events and a cancel
+/// round-trip over the socket" (written against ACP). The surface that shipped
+/// is the session socket: the client sends `WireMessage::Cancel`, the server
+/// raises the slot's interrupt flag, and the reply decodes to the
+/// "the turn was cancelled" arm. Mutation: point the client at a stale
+/// socket path and the connect fails; delete the reply arm and the decode
+/// panics.
+#[tokio::test]
+async fn a_cancel_crosses_the_wire_and_stops_the_turn() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let gateway = slow_echo_handler(&dir, 0);
+    let session_handler = GatewaySessionHandler {
+        handler: Some(std::sync::Arc::clone(&gateway)),
+        bus: std::sync::Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
+    };
+    // The turn is RUNNING: it holds the slot and the set names it.
+    gateway
+        .running_session
+        .lock()
+        .expect("the lock")
+        .insert("s1".to_string(), 0);
+
+    let (server, socket) = spawn_session_socket(dir.path(), session_handler).await;
+    let mut client = operant_core::session_client::SessionClient::connect(&socket)
+        .await
+        .expect("the client must connect");
+
+    client
+        .send(&WireMessage::Cancel {
+            session_id: "s1".to_string(),
+            turn_id: None,
+        })
+        .await
+        .expect("the cancel must be written");
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(10), client.recv())
+        .await
+        .expect("the server must answer within ten seconds")
+        .expect("the reply must be read")
+        .expect("the cancel must be answered");
+    match reply {
+        WireMessage::Error { message, .. } => assert_eq!(
+            message, "the turn was cancelled",
+            "a cancel that stopped a turn must say so"
+        ),
+        other => panic!("a cancel must be answered with one error, got {other:?}"),
+    }
+    assert!(
+        gateway
+            .slots
+            .slot_for("s1")
+            .agent
+            .interrupt_flag()
+            .is_triggered(),
+        "the cancel must raise the slot's interrupt flag — that is what ends the turn"
+    );
+
+    server.abort();
+}
+
+/// RT-545: a STEER crosses the wire into the slot's steer queue.
+///
+/// A steer reaches the RUNNING turn between iterations; the reply decodes to
+/// the accepted arm, and the text lands in the slot's live queue where the
+/// turn drains it. Mutation: break the wire encode and the send fails.
+#[tokio::test]
+async fn a_steer_crosses_the_wire_into_the_slot_queue() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let gateway = slow_echo_handler(&dir, 0);
+    let session_handler = GatewaySessionHandler {
+        handler: Some(std::sync::Arc::clone(&gateway)),
+        bus: std::sync::Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
+    };
+    // Seeded as running so the steer is addressed at a live turn (the
+    // RT-550 pattern): the handler reads the queue, not the set, but a
+    // running turn is the case the row names.
+    gateway
+        .running_session
+        .lock()
+        .expect("the lock")
+        .insert("s1".to_string(), 0);
+
+    let (server, socket) = spawn_session_socket(dir.path(), session_handler).await;
+    let mut client = operant_core::session_client::SessionClient::connect(&socket)
+        .await
+        .expect("the client must connect");
+
+    client
+        .send(&WireMessage::Steer {
+            session_id: "s1".to_string(),
+            text: "focus on the parser".to_string(),
+        })
+        .await
+        .expect("the steer must be written");
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(10), client.recv())
+        .await
+        .expect("the server must answer within ten seconds")
+        .expect("the reply must be read")
+        .expect("the steer must be answered");
+    match reply {
+        WireMessage::Error { message, .. } => assert_eq!(
+            message, "steered the running turn",
+            "an accepted steer must say so"
+        ),
+        other => panic!("a steer must be answered with one error, got {other:?}"),
+    }
+    let queue = gateway.slots.slot_for("s1").agent.steer_queue_handle();
+    assert_eq!(
+        queue.try_lock().expect("the queue").as_slice(),
+        ["focus on the parser".to_string()],
+        "the text must reach the agent's live steer queue"
+    );
+
+    server.abort();
+}
+
+/// RT-545: a QUEUE crosses the wire into the next-turn queue, bounded.
+///
+/// A queue parks a message for the NEXT turn in a session the daemon has
+/// loaded. The known-session gate is satisfied by binding a slot first (the
+/// same `bind_slot_to_session` the turn entry runs); the reply decodes to the
+/// bounded-accept arm, and past the cap the refusal names the cap. Mutation:
+/// raise the cap and the refusal arm never fires.
+#[tokio::test]
+async fn a_queue_crosses_the_wire_into_the_next_turn_queue() {
+    use operant_core::session_protocol::WireMessage;
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let gateway = slow_echo_handler(&dir, 0);
+    // The session the daemon has loaded: the slot is bound the way a turn
+    // binds it, so `live_session_ids` knows the name.
+    let slot = gateway.slots.slot_for("s1");
+    gateway.bind_slot_to_session(slot, "s1", "t3-test").await;
+
+    let session_handler = GatewaySessionHandler {
+        handler: Some(std::sync::Arc::clone(&gateway)),
+        bus: std::sync::Arc::new(SessionBus::new()),
+        socket_inflight: std::sync::Arc::default(),
+    };
+    let (server, socket) = spawn_session_socket(dir.path(), session_handler).await;
+    let mut client = operant_core::session_client::SessionClient::connect(&socket)
+        .await
+        .expect("the client must connect");
+
+    // One queue parks one message and says how deep the queue is.
+    client
+        .send(&WireMessage::Queue {
+            session_id: "s1".to_string(),
+            text: "after this turn".to_string(),
+        })
+        .await
+        .expect("the queue must be written");
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(10), client.recv())
+        .await
+        .expect("the server must answer within ten seconds")
+        .expect("the reply must be read")
+        .expect("the queue must be answered");
+    match reply {
+        WireMessage::Error { message, .. } => assert_eq!(
+            message, "queued for the next turn (1 waiting)",
+            "an accepted queue must say how deep the queue is"
+        ),
+        other => panic!("a queue must be answered with one error, got {other:?}"),
+    }
+
+    // Past the per-session cap the answer is a refusal, not a longer queue.
+    {
+        let mut map = gateway.next_turn_queue.lock().expect("the next-turn queue");
+        // Fill to EXACTLY the cap: one more is then past it under a correct
+        // `>=` check, while an off-by-one `>` check would admit it.
+        map.insert(
+            "s1".to_string(),
+            (0..super::MAX_QUEUED_PER_SESSION)
+                .map(|i| format!("filler-{i}"))
+                .collect(),
+        );
+    }
+    client
+        .send(&WireMessage::Queue {
+            session_id: "s1".to_string(),
+            text: "one too many".to_string(),
+        })
+        .await
+        .expect("the second queue must be written");
+    let refusal = tokio::time::timeout(std::time::Duration::from_secs(10), client.recv())
+        .await
+        .expect("the server must answer within ten seconds")
+        .expect("the reply must be read")
+        .expect("the refusal must be answered");
+    match refusal {
+        WireMessage::Error { message, .. } => assert!(
+            message.contains(&format!(
+                "the queue holds {} messages already",
+                super::MAX_QUEUED_PER_SESSION
+            )),
+            "past the cap the answer must name the cap, got: {message}"
+        ),
+        other => panic!("the refusal must be an error, got {other:?}"),
+    }
+
+    server.abort();
+}
+
 /// Wait for a condition the TURN TASK sets.
 ///
 /// A prompt spawns the turn and returns, so the slot bookkeeping appears a few
