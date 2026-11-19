@@ -414,6 +414,8 @@ pub fn heal_config(config: &mut crate::config::AppConfig) -> Vec<Healed> {
     heal_proxy(&mut config.proxy, &mut out);
     heal_observability(&mut config.observability, &mut out);
     heal_logging(&mut config.logging, &mut out);
+    heal_kernel(&mut config.tools.kernel, &mut out);
+    heal_bylaws(&mut config.bylaws, &mut out);
 
     out
 }
@@ -645,6 +647,117 @@ fn heal_proxy(proxy: &mut operant_config::schema::ProxyConfig, out: &mut Vec<Hea
     }
 }
 
+/// `[bylaws]` — the org-wide default budget's three STRING knobs.
+///
+/// The reader (`cronjobs/scheduler.rs`) tests `basis == "usd"` and
+/// `mode != "hard"`, so an unknown `basis` silently counts TOKENS and an
+/// unknown `mode` silently behaves as `soft`. A typo therefore does not fail;
+/// it quietly changes what the cap means, which is the worst of the three
+/// outcomes (a hard cap becomes advisory, or a USD cap becomes a token cap).
+fn heal_bylaws(bylaws: &mut crate::config::BylawsSettings, out: &mut Vec<Healed>) {
+    let budget = &mut bylaws.budget;
+    let basis = budget.basis.trim().to_ascii_lowercase();
+    if !matches!(basis.as_str(), "tokens" | "usd") {
+        out.push(Healed::missing(
+            "bylaws.budget.basis",
+            "tokens | usd",
+            "basis is not 'tokens' or 'usd', so the cap would silently count tokens",
+        ));
+        budget.basis = "tokens".to_string();
+    } else if basis != budget.basis {
+        budget.basis = basis;
+    }
+    let mode = budget.mode.trim().to_ascii_lowercase();
+    if !matches!(mode.as_str(), "soft" | "hard") {
+        out.push(Healed::missing(
+            "bylaws.budget.mode",
+            "soft | hard",
+            "mode is not 'soft' or 'hard', so the cap would silently behave as soft (warn, do not refuse)",
+        ));
+        budget.mode = "soft".to_string();
+    } else if mode != budget.mode {
+        budget.mode = mode;
+    }
+    let window = budget.window.trim().to_ascii_lowercase();
+    if !matches!(window.as_str(), "daily" | "weekly" | "monthly") {
+        out.push(Healed::missing(
+            "bylaws.budget.window",
+            "daily | weekly | monthly",
+            "window is not daily/weekly/monthly, so the cap would roll on an unknown schedule",
+        ));
+        budget.window = "daily".to_string();
+    } else if window != budget.window {
+        budget.window = window;
+    }
+    // A negative cap is not "ungoverned" (that is 0) and not a real cap; the
+    // reader subtracts from it, so it would refuse every run from the first.
+    if budget.cap < 0.0 {
+        out.push(Healed::missing(
+            "bylaws.budget.cap",
+            "0",
+            "cap is negative, so the seat would be over budget before it starts (0 = ungoverned)",
+        ));
+        budget.cap = 0.0;
+    }
+}
+
+/// `[tools.kernel]` — the sidecar's bridge and pyskill knobs.
+///
+/// The two enums in this section (`tools.kernel.pyskill`,
+/// `tools.kernel.tool_bridge`) are serde-parsed, so a bad value fails the load
+/// and needs no heal row. What heals here are the NUMERIC caps and the
+/// "enabled with an empty allowlist" pair: `tool_bridge` is deny-by-default, so
+/// `enabled = true` with no entries reads as on and permits nothing, which is the
+/// same silent no-op shape the proxy section had.
+fn heal_kernel(kernel: &mut crate::config::KernelSettings, out: &mut Vec<Healed>) {
+    let bridge = &mut kernel.tool_bridge;
+    if bridge.enabled && bridge.allowlist.is_empty() {
+        out.push(Healed::missing(
+            "tools.kernel.tool_bridge.allowlist",
+            "a tool name",
+            "tool_bridge is enabled with an empty allowlist, so no bridged call is permitted",
+        ));
+        bridge.enabled = false;
+    }
+    // A cap of zero is a valid "no bridged calls" but only when the bridge is
+    // off; zero AND enabled is the contradiction, and clamping to 1 keeps the
+    // switch meaningful.
+    if bridge.enabled && bridge.max_calls_per_exec == 0 {
+        out.push(Healed::missing(
+            "tools.kernel.tool_bridge.max_calls_per_exec",
+            "1",
+            "max_calls_per_exec is 0 while the bridge is enabled, so every cell would fail",
+        ));
+        bridge.max_calls_per_exec = 1;
+    }
+    if bridge.per_call_timeout_secs == 0 {
+        out.push(Healed::missing(
+            "tools.kernel.tool_bridge.per_call_timeout_secs",
+            "1",
+            "per_call_timeout_secs is 0, so every bridged call would time out instantly",
+        ));
+        bridge.per_call_timeout_secs = 1;
+    }
+    // Blank import prefixes name no module; the list is an allowlist, so a
+    // blank entry is a typo that silently matches nothing.
+    if kernel
+        .pyskill
+        .allowed_imports
+        .iter()
+        .any(|prefix| prefix.trim().is_empty())
+    {
+        out.push(Healed::missing(
+            "tools.kernel.pyskill.allowed_imports",
+            "an import prefix",
+            "pyskill.allowed_imports holds a blank entry, so that prefix matches no module",
+        ));
+        kernel
+            .pyskill
+            .allowed_imports
+            .retain(|p| !p.trim().is_empty());
+    }
+}
+
 /// `[logging]` — the level name.
 ///
 /// The level is parsed case-insensitively by the logger, but an unknown name
@@ -830,6 +943,71 @@ mod tests {
         let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
         assert!(
             keys.contains(&"observability.runtime_trace_mode"),
+            "{keys:?}"
+        );
+    }
+
+    /// `[bylaws.budget]`'s three STRING knobs are read with `==` and `!=`, so
+    /// an unknown value silently flips what the cap means rather than failing.
+    #[test]
+    fn an_unknown_budget_basis_becomes_tokens() {
+        let mut config = crate::config::AppConfig::default();
+        config.bylaws.budget.basis = "dollars".to_string();
+        let rows = heal_config(&mut config);
+        assert_eq!(config.bylaws.budget.basis, "tokens");
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"bylaws.budget.basis"), "{keys:?}");
+    }
+
+    /// A typo'd `mode` would silently behave as `soft` — a hard cap becoming
+    /// advisory is the dangerous direction, so the heal must name it.
+    #[test]
+    fn an_unknown_budget_mode_becomes_soft_and_is_named() {
+        let mut config = crate::config::AppConfig::default();
+        config.bylaws.budget.mode = "stricter".to_string();
+        let rows = heal_config(&mut config);
+        assert_eq!(config.bylaws.budget.mode, "soft");
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"bylaws.budget.mode"), "{keys:?}");
+    }
+
+    /// A negative cap is not "ungoverned" (that is 0) and not a real cap.
+    #[test]
+    fn a_negative_budget_cap_becomes_ungoverned() {
+        let mut config = crate::config::AppConfig::default();
+        config.bylaws.budget.cap = -5.0;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.bylaws.budget.cap, 0.0);
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"bylaws.budget.cap"), "{keys:?}");
+    }
+
+    /// `[tools.kernel.tool_bridge]` is DENY-by-default: enabled with no
+    /// allowlist reads as on and permits nothing.
+    #[test]
+    fn an_enabled_bridge_with_no_allowlist_is_disabled() {
+        let mut config = crate::config::AppConfig::default();
+        config.tools.kernel.tool_bridge.enabled = true;
+        config.tools.kernel.tool_bridge.allowlist.clear();
+        let rows = heal_config(&mut config);
+        assert!(!config.tools.kernel.tool_bridge.enabled);
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(
+            keys.contains(&"tools.kernel.tool_bridge.allowlist"),
+            "{keys:?}"
+        );
+    }
+
+    /// A zero per-call timeout fails every bridged call instantly.
+    #[test]
+    fn a_zero_bridge_timeout_becomes_one_second() {
+        let mut config = crate::config::AppConfig::default();
+        config.tools.kernel.tool_bridge.per_call_timeout_secs = 0;
+        let rows = heal_config(&mut config);
+        assert_eq!(config.tools.kernel.tool_bridge.per_call_timeout_secs, 1);
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(
+            keys.contains(&"tools.kernel.tool_bridge.per_call_timeout_secs"),
             "{keys:?}"
         );
     }

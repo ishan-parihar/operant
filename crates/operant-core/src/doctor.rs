@@ -643,8 +643,92 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
         cat,
         format!(
             "{} = {} (the minimum level the logger emits)",
-            "logging.level",
-            config.logging.level
+            "logging.level", config.logging.level
+        ),
+    ));
+
+    // `[agent.ponytail]` — the posture switch, the level and the two axes the
+    // docs separate ON PURPOSE (iter-2196: `enabled` gates INJECTION, `update`
+    // gates the CONTENT refresh). A doctor that reported only `enabled` would
+    // make "posture off" and "content refresh off" indistinguishable, which
+    // is the exact confusion that change was made to remove.
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {:?} ({}, content refresh {}. 'enabled' gates prompt injection only; 'update' gates the content refresh.)",
+            "agent.ponytail.default_level",
+            config.agent.ponytail.default_level,
+            if config.agent.ponytail.enabled { "enabled" } else { "disabled" },
+            if config.agent.ponytail.update { "on" } else { "off" },
+        ),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {:?} (skills-only unless 'always_on'; changing it invalidates the prompt cache)",
+            "agent.ponytail.inject", config.agent.ponytail.inject
+        ),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {} (whether the installed integration is refreshed against upstream's tags at startup)",
+            "agent.ponytail.update",
+            config.agent.ponytail.update
+        ),
+    ));
+
+    // `[bylaws.budget]` — the org-wide default a seat runs under when no
+    // `seat_budgets` row overrides it. Reported because `cap = 0` is the
+    // UNGOVERNED default and a non-zero cap silently changes what every seat
+    // may spend: an operator who set one and forgot should see it here.
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} basis / {} cap / {} mode / {} window (cap 0 = ungoverned, the default)",
+            "bylaws.budget.basis",
+            "bylaws.budget.cap",
+            "bylaws.budget.mode",
+            "bylaws.budget.window",
+        ),
+    ));
+
+    // `[tools.kernel]` — the bridge is DENY-by-default, so an enabled bridge
+    // with no allowlist would permit nothing. The heal already repairs it; the
+    // doctor reports the config that reached it.
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {:?} over {} allowlisted tool(s); {}",
+            "tools.kernel.tool_bridge.allowlist",
+            config.tools.kernel.tool_bridge.enabled,
+            config.tools.kernel.tool_bridge.allowlist.len(),
+            "deny-by-default: an empty allowlist permits no bridged call",
+        ),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {} calls/exec, {}s per call",
+            "tools.kernel.tool_bridge.max_calls_per_exec",
+            config.tools.kernel.tool_bridge.max_calls_per_exec,
+            config.tools.kernel.tool_bridge.per_call_timeout_secs
+        ),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {}s (a bridged call that runs longer is treated as failed; 0 is healed to 1)",
+            "tools.kernel.tool_bridge.per_call_timeout_secs",
+            config.tools.kernel.tool_bridge.per_call_timeout_secs
+        ),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {} prefix(es) (empty = every reference denied)",
+            "tools.kernel.pyskill.allowed_imports",
+            config.tools.kernel.pyskill.allowed_imports.len()
         ),
     ));
 

@@ -2857,6 +2857,8 @@ pub struct KernelToolBridge {
     /// Hard cap on bridged calls per executed cell; excess yields structured
     /// partial results so long sweeps degrade instead of hanging.
     pub max_calls_per_exec: usize,
+    /// Seconds one bridged call may run before the kernel treats it as failed.
+    /// 0 is healed to 1: a zero timeout would fail every call instantly.
     pub per_call_timeout_secs: u64,
 }
 
@@ -4538,10 +4540,7 @@ mod rt418_tests {
         // result, and a test that only looked for `&tmp` read the writer's
         // fix as the whole fix. Both writers report; assert both, keyed on
         // the function that owns each, so a third site cannot hide the same way.
-        let restored = concat!(
-            "if let Err(e) = std::fs::set_permissions(staged, mode)",
-            ""
-        );
+        let restored = concat!("if let Err(e) = std::fs::set_permissions(staged, mode)", "");
         assert_eq!(
             prod.matches(restored).count(),
             1,
@@ -4549,7 +4548,8 @@ mod rt418_tests {
         );
         // And neither site may discard it -- count BOTH variable spellings.
         assert_eq!(
-            prod.matches(concat!("let _ = std::fs::set_permissions(", "")).count(),
+            prod.matches(concat!("let _ = std::fs::set_permissions(", ""))
+                .count(),
             0,
             "no set_permissions result may be discarded"
         );

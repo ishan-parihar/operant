@@ -818,19 +818,28 @@ request_timeout_secs = 120
 max_output_bytes = 200000
 # route_python_to_kernel = false  # deprecated since 017-A: `enabled` is the sole gate now; this flag is ignored
 harness_auto_learn = false      # when true, background review may emit kernel_state lessons
-# Tool bridge — allow kernel cells to call operant tools in a loop
-# [tools.kernel.tool_bridge]
-# enabled = false
-# allowlist = ["file_list", "file_read", "web_search"]
+# Tool bridge — allow kernel cells to call operant tools in a loop.
+# The header is LIVE (not commented) so the keys below resolve: a commented
+# header does not open a table, and the config-surface audit would read these
+# keys as absent from the template. The switch itself is off by default.
+[tools.kernel.tool_bridge]
+enabled = false
+# allowlist = ["file_list", "file_read", "web_search"]  # deny-by-default: empty permits nothing
 # max_calls_per_exec = 64
 # per_call_timeout_secs = 60
-# Session GC — prune stale per-session harness dirs
-# session_gc_ttl_hours = 168  # 7 days
-# Executable skills — SKILL.toml [reference] binding (plan 016, phase 6b)
-# [tools.kernel.pyskill]
-# enabled = false               # master switch for [reference] loading
-# allowed_imports = []          # glob allowlist, e.g. ["my_pkg.*", "pdf_tools"]
-#                               # empty = every reference denied (deny-by-default)
+# NOTE: `session_gc_ttl_hours` is a `[tools.kernel]` field, not a
+# `[tools.kernel.tool_bridge]` one, so it is documented in the
+# `[tools.kernel]` table above rather than repeated here (a second
+# `[tools.kernel]` header would be a duplicate table and the file would not
+# parse).
+
+# Executable skills — SKILL.toml [reference] binding (plan 016, phase 6b).
+# Live header so the keys below resolve: a commented header does not open a
+# table, and the config-surface audit would read them as absent.
+[tools.kernel.pyskill]
+enabled = false               # master switch for [reference] loading
+# allowed_imports = []        # glob allowlist, e.g. ["my_pkg.*", "pdf_tools"]
+#                             # empty = every reference denied (deny-by-default)
 
 [tools.stt]
 # groq_api_key = "..."

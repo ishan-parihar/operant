@@ -83,6 +83,26 @@ NO_HEAL_SUFFIXES = {
     "string": "a string: there is no range to violate",
     "bool": "a bool: both values are meaningful",
     "list": "a list: emptiness is the only state and it means 'none'",
+    # The same four IDEAS under the names the config actually uses. The suffix
+    # test is a HEURISTIC over the leaf name, so a bool called `update` or an
+    # `enabled` switch matched nothing and read as an unhealed key: a
+    # false positive that costs a pointless heal row. `enabled`/`update`/
+    # `disabled` are switches (both values meaningful, like `bool`);
+    # `allowlist`/`imports` are lists (like `list`); `cap`/`window`/`basis`/
+    # `mode`/`level`/`scope`/`backend` are names or enumerations the reader
+    # interprets, never ranges.
+    "enabled": "a switch: both values are meaningful",
+    "disabled": "a switch: both values are meaningful",
+    "update": "a switch: both values are meaningful",
+    "allowlist": "a list: emptiness is the only state and it means 'none'",
+    "imports": "a list: emptiness is the only state and it means 'none'",
+    "cap": "a ceiling the reader interprets, not a value to clamp",
+    "window": "a schedule name the reader interprets",
+    "basis": "a unit name the reader interprets",
+    "mode": "a mode name the reader interprets",
+    "level": "a level name the reader interprets",
+    "scope": "a scope name the reader interprets",
+    "backend": "a backend name the reader interprets",
 }
 
 # Keys the operator never discovers from the template: provenance, or written
@@ -95,6 +115,22 @@ NO_TEMPLATE = {
 # Keys no doctor row can meaningfully report.
 NO_DOCTOR = {
     "config_path": "provenance, not configuration",
+}
+
+# Keys whose reader is a serde-parsed ENUM, so an out-of-domain value is a HARD
+# LOAD ERROR rather than a silent default. There is nothing to heal: the config
+# does not load, and the operator is told which key by the parse error. A heal
+# row here would be dead code that claims to repair a state the process never
+# reaches.
+#
+# The rule for adding one: the FIELD TYPE must be a serde enum with no
+# `#[serde(other)]` fallback arm. Check the type in config.rs, not the field
+# name. A `String` field is NOT eligible: any string parses, so the reader is
+# the one that decides what an unknown value means, and that reader is where
+# the heal belongs.
+NO_HEAL_KEYS = {
+    "agent.ponytail.default_level": "PonytailLevel is a serde enum; a bad value fails the load",
+    "agent.ponytail.inject": "PonytailInject is a serde enum; a bad value fails the load",
 }
 
 # ── THE BASELINE ───────────────────────────────────────────────────
@@ -684,7 +720,8 @@ def missing_surfaces(dotted: str, note: str, heal: set[str], template: set[str],
     # 2. the heal entry.
     if not any(dotted == k or dotted.startswith(k + ".") for k in heal):
         if not any(leaf.endswith(s) or dotted.endswith(s) for s in NO_HEAL_SUFFIXES):
-            out.append("heal")
+            if dotted not in NO_HEAL_KEYS:
+                out.append("heal")
 
     # 3. the template.
     if dotted not in template and leaf not in template:
