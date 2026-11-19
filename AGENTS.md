@@ -662,7 +662,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   **Slack is OUTBOUND-ONLY**: operant can post to Slack, but there is no
   Socket Mode WebSocket in this tree — `start()` logs and returns, and
   nothing opens a `wss://` connection, so Slack messages never reach the
-  agent. Its `handle_update` parser is dead code (no caller feeds it).
+  agent.
   WhatsApp (Graph API), Email (SMTP) and SMS (Twilio) are also
   OUTBOUND-ONLY: they send through the provider's API and receive nothing.
   Webhooks is INBOUND-ONLY:
@@ -870,7 +870,7 @@ operant/
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
 │       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
-│       │   ├── tui/           # 73 TUI modules (350 .rs files) — (app, render, prompt_input, dialogs)
+│       │   ├── tui/           # 74 TUI modules (351 .rs files) — (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode
 │       │   ├── config.rs      # CLI config

@@ -44,7 +44,7 @@ graph TD
 | Crate | Lines (Rust) | What it is | Why it is its own crate |
 |---|---|---|---|
 | `operant-api` | 3,403 | The contracts every other crate agrees on: tool, provider, session, memory, channel, VAD, schema traits. No implementations, no heavy dependencies. | The compiler stops one part importing another directly, so the boundaries hold under pressure instead of only in the design document. |
-| `operant-core` | 244,960 | The product: the agent loop (`agent/`), the tool registry and every builtin (`tools/`), memory, MCP client + server, context management, the channel adapters (`gateway/`), the org layer, the database. | This is where the product lives, and it changes more than anything else here. |
+| `operant-core` | 244,960 | The product: the agent loop (`agent/`), the tool registry and every builtin (`tools/`), memory, MCP client, context management, the channel adapters (`gateway/`), the org layer, the database. | This is where the product lives, and it changes more than anything else here. |
 | `operant-cli` | 245,335 | Every command a human types (`main.rs`, `cmd_*.rs`), the TUI (342 files under `tui/`), the gateway daemon, autonomous mode, the dashboard, the ACP server. | The interface changes fastest and breaks nobody when it does. |
 | `operant-os` | 4,881 | The operating layer: the supervisor, the organs, the policy and enforcement contracts, the archive, the run environment. | Persistence and bookkeeping are a different concern from reasoning, and they fail differently. |
 | `operant-harness` | 7,896 | How capabilities register themselves: claims, discovery, effects, swaps, composition-as-data, the WASM provider. | Extension is a mechanism with its own rules, and it is the part that has to stay stable while features move. |
@@ -77,9 +77,13 @@ one library page per seam, each naming the modules that implement it.
   It is the only crate that knows about the agent loop.
 - `operant-cli` depends on everything and is depended on by nothing. That is
   deliberate: the library crates must not know a terminal exists.
-- `operant-harness` and `operant-plugins` are reached through `operant-core`'s
-  plugin host (`crates/operant-core/src/plugins/`), never the reverse. A plugin
-  cannot import the harness; the host hands it a capability slot.
+- `operant-harness` is reached through `operant-core`'s plugin handle
+  (`crates/operant-core/src/plugins/`), never the reverse. A plugin cannot
+  import the harness; the host hands it a capability slot.
+- `operant-plugins` (the Extism WASM host) is reached through `operant-cli`
+  behind the `plugins-wasm` feature, never through `operant-core`. A non-CLI
+  embedder of `operant-core` does not get WASM plugins — `operant-core`'s
+  `Cargo.toml` carries no `operant-plugins` dependency.
 - `operant-os` holds the schedule and the org organs, and is consumed by
   `operant-core`'s org layer (`crates/operant-core/src/org/`) — the Holon
   boundary described in [library/org.md](library/org.md).
