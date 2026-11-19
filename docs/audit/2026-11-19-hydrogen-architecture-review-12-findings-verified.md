@@ -110,6 +110,17 @@ Fix shape: make `max_tool_result_share` the budget TARGET inside
 the persisted row, and collapse the two compaction trimmers behind one
 helper.
 
+**Fixed iter-2688 (73b15aba):** `guard_tool_result` now accepts a
+`persisted_key: Option<&str>`. When the evidence layer persisted the full
+text (`compress_tool_result` returned a marker), the caller passes
+`Some(key)` and the guard's marker names `evidence_recall "<key>"` — the
+same pointer the evidence layer's own marker emits. When nothing stored the
+result, `None` keeps the re-run advice as the honest fallback. The
+`archived` gate at the marker-attach site still drops the promise when the
+archive write fails, so the pointer is never a lie. Regression tests:
+`a_persisted_tool_result_names_the_recall_key_not_a_rerun` and
+`an_unpersisted_tool_result_keeps_the_rerun_advice` (both pass).
+
 ### F7 — config surface split across three crates — CONFIRMED with nuance (Cross-crate, Severity 2)
 
 Three crates carry config types:
@@ -192,12 +203,12 @@ Silent no-op.
 
 | id | class | severity | locality | verdict |
 |----|-------|----------|----------|---------|
-| F1 | bottleneck | 3 | local | CONFIRMED |
-| F2 | integration gap | 3 | local | CONFIRMED |
-| F3 | bottleneck | 3 | cross-crate | CONFIRMED |
+| F1 | bottleneck | 3 | local | CONFIRMED — FIXED iter-2679 (47c8dc7a) |
+| F2 | integration gap | 3 | local | CONFIRMED — FIXED iter-2679 (47c8dc7a) |
+| F3 | bottleneck | 3 | cross-crate | CONFIRMED — FIXED iter-2680 (75284a07) |
 | F4 | integration gap | 3 | local (pref-owned) | CONFIRMED |
 | F5 | redundancy | 2 | cross-crate | REFUTED (doc-only) |
-| F6 | redundancy | 3 | local | CONFIRMED |
+| F6 | redundancy | 3 | local | CONFIRMED — FIXED iter-2688 (73b15aba) |
 | F7 | fragmentation | 2 | cross-crate | CONFIRMED (two systems, not three copies) |
 | F8 | fragmentation | 2 | cross-crate | CONFIRMED as doc-drift + wiring note |
 | F9 | fragmentation | 2 | cross-crate | CONFIRMED |
