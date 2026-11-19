@@ -486,8 +486,8 @@ def doctor_keys() -> set[str]:
     return keys_in(DOCTOR.read_text(encoding="utf-8"))
 
 
-def _struct_fields(src: str, struct: str) -> set[str]:
-    """The field names of one `struct <name> { .. }` body in `src`.
+def _struct_body(src: str, struct: str) -> str:
+    """The BODY of one `struct <name> { .. }` in `src`, brace-matched.
 
     Brace-matched rather than regex-bounded: a settings struct contains nested
     `#[serde]` attributes and doc comments, and a non-greedy `.*?` stops at the
@@ -495,7 +495,7 @@ def _struct_fields(src: str, struct: str) -> set[str]:
     """
     m = re.search(rf"\bpub\s+struct\s+{re.escape(struct)}\s*\{{", src)
     if not m:
-        return set()
+        return ""
     depth, i = 1, m.end()
     while i < len(src) and depth:
         if src[i] == "{":
@@ -503,8 +503,82 @@ def _struct_fields(src: str, struct: str) -> set[str]:
         elif src[i] == "}":
             depth -= 1
         i += 1
-    body = src[m.end():i - 1]
-    return set(re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:", body))
+    return src[m.end():i - 1]
+
+
+def _struct_fields(src: str, struct: str) -> set[str]:
+    """The field names of one `struct <name> { .. }` body in `src`."""
+    return set(re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:", _struct_body(src, struct)))
+
+
+# Types an AppConfig field can name that are NOT section structs: the std and
+# serde containers, and the scalar wrappers. They have no named fields of their
+# own, so treating them as sections would add nothing and only cost a scan.
+NOT_A_SECTION_TYPE = {
+    "Option",
+    "Vec",
+    "String",
+    "HashMap",
+    "BTreeMap",
+    "HashSet",
+    "BTreeSet",
+    "Box",
+    "Arc",
+    "Rc",
+    "Cow",
+    "PathBuf",
+    "Path",
+    "Some",
+    "Result",
+}
+
+
+def _struct_fields_in_workspace(struct: str) -> set[str]:
+    """The fields of `struct <name>`, found in any workspace source file.
+
+    `_struct_fields` reads ONE source string. A section struct does not have to
+    live in `config.rs`: `AdvisorConfig` is in `crates/operant-core/src/advisor.rs`
+    and `ProvidersConfig` is in `crates/operant-config/src/providers.rs`, so a
+    config.rs-only scan can never match their fields. The scan is memoized per
+    struct name because the same type is looked up once per unresolved name and
+    the tree walk is not free.
+    """
+    if struct in _WORKSPACE_STRUCT_CACHE:
+        return _WORKSPACE_STRUCT_CACHE[struct]
+    found: set[str] = set()
+    for path in _workspace_sources():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if f"struct {struct}" not in text:
+            continue
+        fields = _struct_fields(text, struct)
+        if fields:
+            found = fields
+            break
+    _WORKSPACE_STRUCT_CACHE[struct] = found
+    return found
+
+
+_WORKSPACE_STRUCT_CACHE: dict[str, set[str]] = {}
+
+
+def _workspace_sources() -> list[pathlib.Path]:
+    """Every `.rs` file under the workspace's `crates/` directories.
+
+    Cached at module level: the list does not change during a run, and the walk
+    runs once per unresolved section type without it.
+    """
+    global WORKSPACE_SOURCES
+    if WORKSPACE_SOURCES is None:
+        WORKSPACE_SOURCES = [
+            p for p in (ROOT / "crates").glob("*/src/**/*.rs") if p.is_file()
+        ]
+    return WORKSPACE_SOURCES
+
+
+WORKSPACE_SOURCES: list[pathlib.Path] | None = None
 
 
 def added_keys() -> set[str]:
@@ -539,16 +613,60 @@ def added_keys() -> set[str]:
         return here
 
     # section -> struct name (AppConfig's field type), then the base's fields.
-    section_struct = dict(
-        re.findall(r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*([A-Z][A-Za-z0-9]*[Ss]ettings)\b", base.stdout)
-    )
+    #
+    # The type pattern was `[A-Z][A-Za-z0-9]*[Ss]ettings` until iter-2714, which
+    # matched ONLY `*Settings` / `*settings` types. Six AppConfig sections are
+    # typed `*Config` (`proxy`, `advisor`, `recap`, `providers`, `observability`,
+    # `compression`), so every field of those six sections was invisible to the
+    # comparison: their keys read as "added by this change" on EVERY branch,
+    # forever, and no amount of surfacing them could turn the gate green. That
+    # is the same "the gate cannot see the thing it gates" failure this file's
+    # own `key_prefixes` comment records, one level down.
+    #
+    # The type is captured as a WHOLE PATH and reduced to its last segment, so
+    # both spellings work: `BehaviorSettings` (unqualified, the common case)
+    # and `crate::advisor::AdvisorConfig` (qualified). A pattern anchored on the
+    # leading `[A-Z]` captured `crate` for the qualified form, and one that
+    # REQUIRED a leading `::` missed the unqualified form entirely — between
+    # them they made every section invisible in one direction or the other.
+    #
+    # Scoped to the AppConfig body: a whole-file scan collects every field of
+    # every struct in config.rs, which defeats the point of matching the owning
+    # struct.
+    appconfig_body = _struct_body(base.stdout, "AppConfig")
+    section_struct = {
+        field: ty.rsplit("::", 1)[-1]
+        for field, ty in re.findall(
+            r"\bpub\s+([a-z_][a-z0-9_]*)\s*:\s*([A-Za-z0-9_:]+)", appconfig_body
+        )
+        if ty.rsplit("::", 1)[-1][:1].isupper()
+    }
     base_fields: set[str] = set()
     for struct in set(section_struct.values()):
+        if struct in NOT_A_SECTION_TYPE:
+            continue
         base_fields |= _struct_fields(base.stdout, struct)
     # The AppConfig fields are their own names. Scoped to the AppConfig body:
     # a whole-file scan collects every field in every struct (262 of them),
     # which defeats the point of matching the owning struct.
     base_fields |= _struct_fields(base.stdout, "AppConfig")
+    # A section struct can live in ANOTHER file (`AdvisorConfig` is in
+    # `advisor.rs`, `ProvidersConfig` in `operant-config`). config.rs is the
+    # only file the old code read, so those fields were unmatchable no matter
+    # what the pattern said. Resolve each unresolved type by scanning the
+    # workspace's own sources for `pub struct <name>`.
+    #
+    # "Unresolved" means the config.rs scan produced NO fields for it, not
+    # "the name does not appear in config.rs": `AdvisorConfig` is NAMED there
+    # (it is the type of the `advisor` field) while its `struct` body lives in
+    # `advisor.rs`. A substring test on the name skipped exactly the types this
+    # loop exists to resolve.
+    for name in set(section_struct.values()):
+        if name in NOT_A_SECTION_TYPE:
+            continue
+        if _struct_fields(base.stdout, name):
+            continue  # the config.rs scan above already read its body
+        base_fields |= _struct_fields_in_workspace(name)
     return {dotted for dotted in here if dotted.rsplit(".", 1)[-1] not in base_fields}
 
 

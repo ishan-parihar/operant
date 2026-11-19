@@ -413,6 +413,7 @@ pub fn heal_config(config: &mut crate::config::AppConfig) -> Vec<Healed> {
     heal_rate_limit(&mut config.client.rate_limit, &mut out);
     heal_proxy(&mut config.proxy, &mut out);
     heal_observability(&mut config.observability, &mut out);
+    heal_logging(&mut config.logging, &mut out);
 
     out
 }
@@ -641,6 +642,26 @@ fn heal_proxy(proxy: &mut operant_config::schema::ProxyConfig, out: &mut Vec<Hea
             "proxy scope is 'services' with no selector, so the proxy would match nothing",
         ));
         proxy.scope = operant_config::schema::ProxyScope::default();
+    }
+}
+
+/// `[logging]` — the level name.
+///
+/// The level is parsed case-insensitively by the logger, but an unknown name
+/// matches no directive, so the process logs NOTHING while looking configured
+/// — the same shape as a typo'd observer backend.
+fn heal_logging(log: &mut crate::config::LoggingSettings, out: &mut Vec<Healed>) {
+    const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+    let level = log.level.trim().to_ascii_lowercase();
+    if !LEVELS.contains(&level.as_str()) {
+        out.push(Healed::missing(
+            "logging.level",
+            LEVELS.join(" | "),
+            "logging level is not a level name, so the logger would emit nothing",
+        ));
+        log.level = "info".to_string();
+    } else if level != log.level {
+        log.level = level;
     }
 }
 

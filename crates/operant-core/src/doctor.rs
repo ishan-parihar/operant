@@ -636,6 +636,18 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
         }
     }
 
+    // `[logging]` — the level the logger actually uses. Reported as a value so
+    // a `debug` run can be confirmed from `operant doctor` rather than inferred
+    // from which lines appeared.
+    items.push(CheckResult::ok(
+        cat,
+        format!(
+            "{} = {} (the minimum level the logger emits)",
+            "logging.level",
+            config.logging.level
+        ),
+    ));
+
     // The two-span retry policy's own values (`[agent.retry]`). A large span of
     // 1 s is a busy loop against a dead provider (the heal clamps it, but a
     // config that reaches the doctor with it is worth naming); a ceiling below

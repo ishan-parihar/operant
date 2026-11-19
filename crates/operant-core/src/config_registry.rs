@@ -255,7 +255,7 @@ pub const CONFIG_KEYS: &[(&str, &str, &str)] = &[
     ("integrations.herdr.enabled", "true }", "Report this Operant's lifecycle state (working / idle / blocked) and session identity to the Herdr pane that owns it. On by default: without it a Herdr pane running Operant looks like a plain terminal, which is what made Operant invisible in `herdr agent list`. Turn it off to keep Operant out of Herdr's sidebar entirely."),
     ("keybindings", "None", "`[keybindings]` is parsed so the file still loads, then ignored: the TUI dispatch does not read overrides yet (RT-3). `load` warns once when set."),
     ("logging.format", "<LoggingSettings::default()>", "<no note>"),
-    ("logging.level", "<LoggingSettings::default()>", "<no note>"),
+    ("logging.level", "<LoggingSettings::default()>", "The minimum level the logger emits: \"trace\" | \"debug\" | \"info\" | \"warn\" | \"error\". The value is case-insensitive; an unknown name is healed to \"info\" rather than silently logging nothing."),
     ("logging.log_file", "<LoggingSettings::default()>", "<no note>"),
     ("logging.with_file", "<LoggingSettings::default()>", "<no note>"),
     ("logging.with_line_number", "<LoggingSettings::default()>", "<no note>"),

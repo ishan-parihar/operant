@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggingSettings {
+    /// The minimum level the logger emits: "trace" | "debug" | "info" | "warn" |
+    /// "error". The value is case-insensitive; an unknown name is healed to
+    /// "info" rather than silently logging nothing.
     pub level: String,
     pub format: String,
     pub log_file: Option<String>,
