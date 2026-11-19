@@ -5981,12 +5981,48 @@ wonderful_unknown_key = 42
         path
     }
 
-    fn with_current_dir<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-        let current = std::env::current_dir().unwrap();
-        std::env::set_current_dir(path).unwrap();
+    /// Run `f` with the process's current directory set to `path`, restoring it
+    /// afterwards on EVERY path -- including a panic.
+    ///
+    /// Two things this has to get right, both MEASURED:
+    ///
+    /// 1. **The restore must survive a panic.** The original body was
+    ///    `set_current_dir(path)` / `f()` / `set_current_dir(current)`, so a panic
+    ///    inside `f` left the process cwd pointing at the test's tempdir -- which
+    ///    the caller then deletes. Every later `git` child in the process died with
+    ///    `fatal: Unable to read current working directory: No such file or
+    ///    directory`, which surfaced as unrelated `checkpoint_tool` failures (11
+    ///    tests) rather than as the config test that actually panicked.
+    ///
+    /// 2. **The caller must hold the env lock, and must delete its tempdir only
+    ///    after the cwd is back.** Both are documented at the call sites below.
+    ///
+    /// The guard restores on drop, so the ordering in (2) is automatic: the
+    /// returned guard's `Drop` runs before the caller's `temp_dir` PathBuf drops.
+    fn with_current_dir<T>(path: &Path, f: impl FnOnce() -> T) -> (T, CwdRestore) {
+        let current = std::env::current_dir().expect("read the cwd before chdir");
+        std::env::set_current_dir(path).expect("chdir into the test dir");
+        let restore = CwdRestore { previous: current };
         let result = f();
-        std::env::set_current_dir(current).unwrap();
-        result
+        (result, restore)
+    }
+
+    /// Restores the process cwd on drop. See `with_current_dir`.
+    ///
+    /// Held by the CALLER, not dropped inside the helper: the cwd must stay put
+    /// for as long as the caller's test body runs, and the caller's tempdir
+    /// must not be deleted while the process is still standing in it.
+    #[must_use]
+    struct CwdRestore {
+        previous: std::path::PathBuf,
+    }
+
+    impl Drop for CwdRestore {
+        fn drop(&mut self) {
+            // A cwd that no longer exists cannot be restored; the next
+            // `current_dir()` fails instead, which is the honest outcome.
+            let _ = std::env::set_current_dir(&self.previous);
+        }
     }
 
     fn set_env(name: &str, value: &str) -> Option<OsString> {
@@ -6589,8 +6625,21 @@ wonderful_unknown_key = 42
         // A REAL path, not `memory://`: the sidecar's parent is the config's
         // own parent, so every `memory://` test would share one sidecar and
         // read each other's parked keys.
-        let path =
-            std::env::temp_dir().join(format!("operant-lifeos-probe-{}.toml", std::process::id()));
+        //
+        // The name carries a NANOS stamp as well as the pid. `std::process::id()`
+        // alone is unique ACROSS processes but constant WITHIN one, and the whole
+        // lib suite is ONE process -- so two tests deriving a sidecar from the
+        // same pid-and-name pattern shared the file and read each other's parked
+        // keys. MEASURED: this test failed under parallelism and passed alone,
+        // which is the signature of exactly that.
+        let path = std::env::temp_dir().join(format!(
+            "operant-lifeos-probe-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
         let cfg = parse_config_str(with_key, &path).expect("a stale key is parked, not fatal");
         assert!(
             !crate::redaction::redact_sensitive_text(&format!("{:?}", cfg.tools))
@@ -6661,9 +6710,11 @@ wonderful_unknown_key = 42
         )
         .unwrap();
 
-        let loaded = with_current_dir(&dir, || load_app_config(None)).unwrap();
+        let (loaded, _cwd) = with_current_dir(&dir, || load_app_config(None));
+        let loaded = loaded.unwrap();
         assert_eq!(loaded.source.unwrap().file_name().unwrap(), "operant.toml");
         assert_eq!(loaded.config.agent.model, "gpt-4.1-mini");
+        drop(_cwd); // back to the real cwd BEFORE the tempdir is deleted
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -6676,8 +6727,10 @@ wonderful_unknown_key = 42
         std::fs::write(dir.join("operant.toml"), "[agent]\nmodel = \"wrong\"\n").unwrap();
         std::fs::write(&explicit, "[agent]\nmodel = \"right\"\n").unwrap();
 
-        let loaded = with_current_dir(&dir, || load_app_config(Some(&explicit))).unwrap();
+        let (loaded, _cwd) = with_current_dir(&dir, || load_app_config(Some(&explicit)));
+        let loaded = loaded.unwrap();
         assert_eq!(loaded.config.agent.model, "right");
+        drop(_cwd); // back to the real cwd BEFORE the tempdir is deleted
         let _ = std::fs::remove_dir_all(dir);
     }
 

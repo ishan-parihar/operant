@@ -1527,6 +1527,16 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn edge_without_the_cli_errors_with_the_install_hint() {
+        // The crate-wide environment lock, NOT only `#[serial_test::serial]`.
+        // They are two different locks and they do not exclude each other: a
+        // `serial` test excludes other `serial` tests and nothing else, so the
+        // 60 tests that hold `test_env_lock_blocking()` ran straight through this
+        // empty-`PATH` window. MEASURED: `checkpoint_tool`'s git-backed tests
+        // then fail `mgr.ensure_checkpoint(...)` because `Command::new("git")`
+        // cannot resolve the binary -- 11 tests, only under parallelism, and
+        // the failure reads as a broken checkpoint feature rather than as a
+        // missing `PATH`. Any test that mutates the environment holds this lock.
+        let _env_guard = crate::platform::test_env_lock();
         let tool = TtsTool::new();
         let Some(original) = std::env::var_os("PATH") else {
             return;
@@ -1605,6 +1615,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn a_google_api_key_configured_by_auth_is_visible_to_gemini_tts() {
+        // Crate-wide environment lock, for the same reason as the test above:
+        // `#[serial_test::serial]` and `test_env_lock()` are different locks.
+        let _env_guard = crate::platform::test_env_lock();
         // BOTH vars are captured, whatever they are. An earlier version of this
         // test returned early when `GEMINI_API_KEY` was unset -- which is the
         // normal case on a machine that configured Google through

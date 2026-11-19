@@ -1888,6 +1888,40 @@ mod tests {
     use super::*;
     use crate::agent::clients::openai::OpenAIModelClient;
 
+    /// Moves the process cwd for the duration of a scope and restores it on
+    /// EVERY exit path, including a panic.
+    ///
+    /// A manual `set_current_dir(x)` / body / `set_current_dir(home)` sequence
+    /// restores on the happy path only. That is not enough for a test that both
+    /// MOVES the cwd and ASSERTS: the assertion is the part that fails when the
+    /// feature regresses, and a skipped restore leaves the process standing in
+    /// a tempdir the test then deletes. Every later `git` child in the process
+    /// then dies with `fatal: Unable to read current working directory`, which
+    /// shows up as unrelated failures in whatever test happens to run next --
+    /// MEASURED as 11 `checkpoint_tool` failures caused by one config test.
+    ///
+    /// Hold the crate-wide environment lock for as long as the guard lives.
+    #[must_use]
+    struct ChdirGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl ChdirGuard {
+        fn enter(path: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().expect("read the cwd before chdir");
+            std::env::set_current_dir(path).expect("chdir into the test dir");
+            Self { previous }
+        }
+    }
+
+    impl Drop for ChdirGuard {
+        fn drop(&mut self) {
+            // A deleted cwd cannot be restored; the next `current_dir()` fails
+            // loudly instead of silently returning a wrong path.
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
+
     /// (A1-agent-loop HIGH-1 and HIGH-2) The two per-turn cells that
     /// `run()` never cleared, and the turn-start reset that now does.
     ///
@@ -2675,10 +2709,20 @@ mod tests {
         // with every other cwd/env-reading serial test.
         let dir = tempfile::tempdir().expect("tempdir");
         let work = dir.path().join("work");
-        let xdg = dir.path().join("xdg");
-        let ctx = xdg.join("operant").join("context");
+        // The owner's global context lives under the OPERANT HOME, not under
+        // `XDG_CONFIG_HOME`. This test planted it at `$XDG/operant/context`
+        // because that is where it went when the test was written; iter-1137
+        // consolidated nine resolvers into `platform::operant_home()`, which
+        // reads `OPERANT_HOME` / `HERMES_HOME` and NEVER `XDG_CONFIG_HOME`
+        // (measured: zero reads of that variable in platform.rs). So the test
+        // set a variable nothing reads and then asserted the file it planted
+        // was loaded -- it could only ever pass if some OTHER test's leftover
+        // HERMES_HOME happened to point at a directory containing that exact
+        // marker. It is a STALE test, not a broken feature.
+        let home = dir.path().join("home");
+        let ctx = home.join("context");
         std::fs::create_dir_all(&work).expect("work dir");
-        std::fs::create_dir_all(&ctx).expect("xdg context dir");
+        std::fs::create_dir_all(&ctx).expect("owner context dir");
         std::fs::write(
             work.join("AGENTS.md"),
             "R07 LEGACY WORKSPACE MARKER — stale protocol",
@@ -2687,14 +2731,32 @@ mod tests {
         std::fs::write(ctx.join("global.md"), "R07 OWNER GLOBAL MARKER")
             .expect("planted global file");
 
-        let home = std::env::current_dir().expect("cwd");
-        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_current_dir(&work).expect("chdir");
-        // SAFETY: #[serial] — no other test runs while these are set.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
+        let prev_home = std::env::var_os("HERMES_HOME");
+        // The crate-wide environment lock, NOT only `#[serial_test::serial]`.
+        // They are two different locks and do not exclude each other, so the
+        // comment that used to claim `#[serial]` keeps other tests out was false:
+        // the 60 tests holding `test_env_lock_blocking()` ran straight through
+        // this cwd move. MEASURED: when an assertion here failed, the cwd stayed
+        // inside a tempdir the test then deleted, and every later git child died
+        // with "fatal: Unable to read current working directory".
+        let _env_guard = crate::platform::test_env_lock_blocking();
+        // A guard, not a manual restore: `set_current_dir(home)` at the end of
+        // the body is skipped by any panic, and this assertion is exactly the
+        // one that fails when the feature regresses. The guard's `Drop` runs on
+        // the unwind, so a failing test cannot poison the cwd for every test
+        // that follows it.
+        let _cwd = ChdirGuard::enter(&work);
+        // SAFETY: serialised by the crate's environment lock.
+        unsafe { std::env::set_var("HERMES_HOME", &home) };
         unsafe { std::env::set_var("HOLON_RUN_DIR", dir.path().join("run")) };
 
-        let db = Database::init(std::env::temp_dir().join("test_r07_context_gate.sqlite")).unwrap();
+        // Absolute per-test path -- a bare relative filename resolves against a
+        // process cwd this test deliberately moves, so it landed inside `work`
+        // and was then removed by the tempdir drop.
+        let db = Database::init(
+            std::env::temp_dir().join(format!("test_r07_context_gate_{}.sqlite", std::process::id())),
+        )
+        .unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -2711,21 +2773,24 @@ mod tests {
 
         unsafe { std::env::remove_var("HOLON_RUN_DIR") };
         let personal = agent.load_context_file_prompt();
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HERMES_HOME", v),
+                None => std::env::remove_var("HERMES_HOME"),
+            }
+        }
+        // The cwd comes back via `_cwd`'s Drop, which also runs on a panic.
+        drop(_cwd);
+        let _ = std::fs::remove_file(std::env::temp_dir().join(format!(
+            "test_r07_context_gate_{}.sqlite",
+            std::process::id()
+        )));
+
         assert!(
             personal.contains("R07 LEGACY WORKSPACE MARKER")
                 && personal.contains("R07 OWNER GLOBAL MARKER"),
             "personal mode keeps both sources: {personal}"
         );
-
-        // restore the shared process state for the tests that follow
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
-        std::env::set_current_dir(home).expect("restore cwd");
-        let _ = std::fs::remove_file(std::env::temp_dir().join("test_r07_context_gate.sqlite"));
     }
 
     #[test]
@@ -3263,7 +3328,19 @@ mod tests {
     #[serial]
     #[tokio::test]
     async fn build_messages_under_threshold_is_ladder_noop() {
-        let db = Database::init(std::path::PathBuf::from("ladder-noop-test.sqlite")).unwrap();
+        // The database path must be ABSOLUTE and per-test. A bare relative
+        // filename resolves against the PROCESS cwd, which under `cargo test` is
+        // the workspace root -- so the file landed somewhere nothing cleans up
+        // and the test's own precondition (a writable cwd) was never
+        // established. It passed from the repo root by accident, because the
+        // git-ignored `ladder-*.sqlite` files happen to sit there, and failed
+        // everywhere else. MEASURED at iter-2704: `Database::init` returned
+        // "unable to open database file: ladder-noop-test.sqlite" from any
+        // other cwd. Holding the TempDir for the test's scope is what makes the
+        // cleanup real; dropping it early deletes the database underneath the
+        // agent.
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(db_dir.path().join("ladder-noop.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -3335,7 +3412,9 @@ mod tests {
             conv.len()
         }
 
-        let db = Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
+        // Absolute per-test path -- see `build_messages_under_threshold_is_ladder_noop`.
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(db_dir.path().join("micro-compact.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
@@ -4086,7 +4165,9 @@ mod tests {
     #[serial]
     #[tokio::test]
     async fn build_messages_over_threshold_runs_preflight_ladder() {
-        let db = Database::init(std::path::PathBuf::from("ladder-fire-test.sqlite")).unwrap();
+        // Absolute per-test path -- see `build_messages_under_threshold_is_ladder_noop`.
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(db_dir.path().join("ladder-fire.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
                 advertised_skills_token_budget: 0,
@@ -4202,8 +4283,9 @@ mod tests {
             }
         }
 
-        let db =
-            Database::init(std::path::PathBuf::from("precompress-insert-test.sqlite")).unwrap();
+        // Absolute per-test path -- see `build_messages_under_threshold_is_ladder_noop`.
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(db_dir.path().join("precompress-insert.sqlite")).unwrap();
         let provider = Arc::new(InsightProvider {
             calls: std::sync::atomic::AtomicUsize::new(0),
         });
