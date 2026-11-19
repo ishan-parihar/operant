@@ -519,6 +519,67 @@ fn check_config_resilience(config: &AppConfig, items: &mut Vec<CheckResult>) {
         ));
     }
 
+    // `[proxy]` — the three shapes that read as "configured" but route
+    // nothing. Each is a real operator-visible failure: the proxy looks on and
+    // the traffic goes direct, or a service selector silently matches no one.
+    // The heal pass repairs these at load; the doctor reports the config that
+    // REACHED it, which is the only place the operator sees the original.
+    if config.proxy.enabled && !config.proxy.has_any_proxy_url() {
+        items.push(CheckResult::warn(
+            cat,
+            "proxy.enabled is true but none of http_proxy / https_proxy / all_proxy is set — every request would go direct".to_string(),
+        ));
+    }
+    if config.proxy.enabled
+        && config.proxy.scope == operant_config::schema::ProxyScope::Services
+        && config.proxy.normalized_services().is_empty()
+    {
+        items.push(CheckResult::warn(
+            cat,
+            "proxy.scope = \"services\" with an empty proxy.services list — the proxy would apply to no service".to_string(),
+        ));
+    }
+    if config.proxy.no_proxy.iter().any(|h| h.trim().is_empty()) {
+        items.push(CheckResult::warn(
+            cat,
+            "proxy.no_proxy holds a blank entry — that bypass matches no host".to_string(),
+        ));
+    }
+    // The doctor names the `[proxy]` fields it can SEE, so `operant doctor` is
+    // where an operator checks a proxy host they typed rather than inferring it
+    // from traffic that silently went direct. Each key is a BARE quoted literal
+    // (the convention the `[agent.retry]` rows below use) because that is what
+    // the doctor surface IS: the config-surface audit matches a quoted key, so a
+    // key spelled only inside a longer format string is prose, not a surface.
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {}", "proxy.enabled", config.proxy.enabled),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.scope", config.proxy.scope),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.http_proxy", config.proxy.http_proxy),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.https_proxy", config.proxy.https_proxy),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.all_proxy", config.proxy.all_proxy),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.no_proxy", config.proxy.no_proxy),
+    ));
+    items.push(CheckResult::ok(
+        cat,
+        format!("{} = {:?}", "proxy.services", config.proxy.services),
+    ));
+
     // The two-span retry policy's own values (`[agent.retry]`). A large span of
     // 1 s is a busy loop against a dead provider (the heal clamps it, but a
     // config that reaches the doctor with it is worth naming); a ceiling below

@@ -87,6 +87,30 @@ bucket_capacity = 60
 # Token refill rate (tokens per second)
 bucket_refill_rate = 1.0
 
+# [proxy] — outbound HTTP/HTTPS/SOCKS5 for provider and tool clients, applied
+# at startup by `apply_startup_proxy`. Disabled by default: with `enabled =
+# false` every request goes direct, which is the right default for a machine
+# that is not behind a proxy.
+#
+# `scope` decides WHERE the proxy applies:
+#   "zeroclaw" (default) — all Operant-managed HTTP traffic.
+#   "environment"        — the same, and the proxy is ALSO exported as
+#                          HTTP_PROXY/HTTPS_PROXY/NO_PROXY for child processes.
+#   "services"           — only the service keys listed in `services` below.
+#   "none"               — resolve the proxy but apply it to nothing.
+#
+# A blank URL is DROPPED at load (the scheme then falls through to the next
+# one); a malformed URL refuses to load, because guessing the intended host
+# would send traffic somewhere you did not ask for.
+[proxy]
+enabled = false
+# scope = "zeroclaw"
+# http_proxy = "http://127.0.0.1:7890"
+# https_proxy = "http://127.0.0.1:7890"
+# all_proxy = "socks5://127.0.0.1:1080"
+# no_proxy = ["localhost", "127.0.0.1", ".internal.example"]
+# services = ["openai", "anthropic"]
+
 [agent]
 model = "gpt-4"
 max_iterations = 20

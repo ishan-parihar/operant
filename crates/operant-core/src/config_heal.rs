@@ -411,6 +411,7 @@ pub fn heal_config(config: &mut crate::config::AppConfig) -> Vec<Healed> {
     heal_gateway(&mut config.gateway, &mut out);
     heal_tool_search(&mut config.tools.tool_search, &mut out);
     heal_rate_limit(&mut config.client.rate_limit, &mut out);
+    heal_proxy(&mut config.proxy, &mut out);
 
     out
 }
@@ -557,6 +558,91 @@ fn heal_gateway(gateway: &mut crate::config::GatewaySettings, out: &mut Vec<Heal
     let _ = &gateway.session_retention_days;
 }
 
+/// `[proxy]` — the outbound proxy's shape.
+///
+/// The values themselves are validated at startup by
+/// `apply_startup_proxy` (`ProxyConfig::validate`), which REJECTS a malformed
+/// URL rather than healing it, because a silently rewritten proxy URL would
+/// send traffic somewhere the operator did not ask for. What heals here is the
+/// one combination that is not a bad value but a bad PAIR: `enabled` with no
+/// URL at all, and `scope = "services"` with no selector. Both make the proxy
+/// do nothing while reading as configured, so the operator sees "proxy on" and
+/// gets direct traffic.
+fn heal_proxy(proxy: &mut operant_config::schema::ProxyConfig, out: &mut Vec<Healed>) {
+    // Every scheme field is a URL the operator typed. A malformed one is
+    // DROPPED, not rewritten: `validate()` rejects it at startup, but the heal
+    // pass runs first, so a bad URL would otherwise survive into the validated
+    // config and refuse to load. Dropping it degrades to "that scheme uses the
+    // next fallback", which is the safe direction — the alternative (guessing
+    // the intended host) would send traffic somewhere unasked.
+    for field in [
+        ("proxy.http_proxy", &mut proxy.http_proxy),
+        ("proxy.https_proxy", &mut proxy.https_proxy),
+        ("proxy.all_proxy", &mut proxy.all_proxy),
+    ] {
+        let keep = field.1.as_deref().and_then(|raw| {
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
+        if keep.is_none() && field.1.is_some() {
+            out.push(Healed::missing(
+                field.0,
+                "a proxy URL",
+                "a blank proxy URL was dropped, so that scheme falls through to the next one",
+            ));
+        }
+        *field.1 = keep;
+    }
+    // A `no_proxy` entry that names nothing is the same shape as the other two:
+    // the operator asked to bypass a host and the bypass silently matches no
+    // one, so traffic they expected to go direct goes through the proxy.
+    // An empty LIST is meaningful ("bypass nothing") and stays; a list whose
+    // entries are all blank strings is a typo.
+    if proxy.no_proxy.iter().any(|h| h.trim().is_empty()) {
+        out.push(Healed::missing(
+            "proxy.no_proxy",
+            "a host name",
+            "no_proxy holds an empty entry, so that bypass matches no host",
+        ));
+        proxy.no_proxy.retain(|h| !h.trim().is_empty());
+    }
+    // A `services` entry that names nothing is the same shape as a blank
+    // `no_proxy` host: the selector list reads as configured and matches no
+    // one. The empty LIST stays (it means "no selectors", which pairs with a
+    // non-`services` scope); blank ENTRIES inside it are typos.
+    if proxy
+        .services
+        .iter()
+        .any(|selector| selector.trim().is_empty())
+    {
+        out.push(Healed::missing(
+            "proxy.services",
+            "a service key",
+            "services holds a blank entry, so that selector matches no service",
+        ));
+        proxy.services.retain(|s| !s.trim().is_empty());
+    }
+    if proxy.enabled && !proxy.has_any_proxy_url() {
+        out.push(Healed::missing(
+            "proxy.enabled",
+            "false",
+            "proxy is enabled but no proxy URL is set, so every request would go direct",
+        ));
+        proxy.enabled = false;
+    }
+    if proxy.enabled
+        && proxy.scope == operant_config::schema::ProxyScope::Services
+        && proxy.normalized_services().is_empty()
+    {
+        out.push(Healed::missing(
+            "proxy.scope",
+            "\"zeroclaw\"",
+            "proxy scope is 'services' with no selector, so the proxy would match nothing",
+        ));
+        proxy.scope = operant_config::schema::ProxyScope::default();
+    }
+}
+
 /// `[tools.tool_search]` — a percentage and two token budgets.
 fn heal_tool_search(search: &mut crate::config::ToolSearchSettings, out: &mut Vec<Healed>) {
     // A threshold above 100 would let the catalog listing claim more than the
@@ -655,6 +741,72 @@ mod tests {
         assert!(second.is_empty(), "second heal moved: {second:?}");
         // The default IS already in range, so the first pass is empty too.
         assert!(first.is_empty(), "default config healed: {first:?}");
+    }
+
+    /// `[proxy]` enabled with no URL is the shape that reads as "proxied"
+    /// and routes direct. The heal turns it OFF rather than inventing a URL,
+    /// because guessing a host would send traffic somewhere unasked.
+    #[test]
+    fn proxy_enabled_without_a_url_is_disabled_and_named() {
+        let mut config = crate::config::AppConfig::default();
+        config.proxy.enabled = true;
+        let rows = heal_config(&mut config);
+        assert!(!config.proxy.enabled, "enabled must turn off");
+        let row = rows
+            .iter()
+            .find(|r| r.key == "proxy.enabled")
+            .expect("the heal must name the key it changed");
+        assert!(!row.why.is_empty() && !row.new.is_empty(), "{row:?}");
+    }
+
+    /// A blank URL is a typo, not a setting: the scheme is dropped so it falls
+    /// through to the next one instead of refusing to load.
+    #[test]
+    fn blank_proxy_urls_are_dropped_and_named() {
+        let mut config = crate::config::AppConfig::default();
+        config.proxy.http_proxy = Some("   ".to_string());
+        config.proxy.https_proxy = Some("http://127.0.0.1:7890".to_string());
+        let rows = heal_config(&mut config);
+        assert_eq!(config.proxy.http_proxy, None, "the blank URL must go");
+        assert_eq!(
+            config.proxy.https_proxy.as_deref(),
+            Some("http://127.0.0.1:7890"),
+            "a real URL must survive"
+        );
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"proxy.http_proxy"), "{keys:?}");
+    }
+
+    /// `scope = "services"` with no selector matches nothing, so the scope
+    /// falls back to the default rather than silently proxying nothing.
+    #[test]
+    fn proxy_services_scope_without_selectors_falls_back() {
+        let mut config = crate::config::AppConfig::default();
+        config.proxy.enabled = true;
+        config.proxy.all_proxy = Some("http://127.0.0.1:7890".to_string());
+        config.proxy.scope = operant_config::schema::ProxyScope::Services;
+        let rows = heal_config(&mut config);
+        assert_eq!(
+            config.proxy.scope,
+            operant_config::schema::ProxyScope::default(),
+            "an empty services scope must fall back"
+        );
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"proxy.scope"), "{keys:?}");
+    }
+
+    /// Blank entries in `no_proxy` / `services` match no host and no service.
+    #[test]
+    fn blank_proxy_list_entries_are_dropped() {
+        let mut config = crate::config::AppConfig::default();
+        config.proxy.no_proxy = vec!["localhost".to_string(), "  ".to_string()];
+        config.proxy.services = vec!["openai".to_string(), String::new()];
+        let rows = heal_config(&mut config);
+        assert_eq!(config.proxy.no_proxy, vec!["localhost".to_string()]);
+        assert_eq!(config.proxy.services, vec!["openai".to_string()]);
+        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
+        assert!(keys.contains(&"proxy.no_proxy"), "{keys:?}");
+        assert!(keys.contains(&"proxy.services"), "{keys:?}");
     }
 
     #[test]
