@@ -149,14 +149,14 @@ carries `updated_at` so a reader that finds it stale can say so. The path
 resolves through the one home resolver (`HERMES_HOME` → the sticky profile
 → `~/.operant`).
 
-## Admin commands (`admin.rs`) — UNWIRED
+## Admin commands — REMOVED
 
-`gateway/admin.rs` holds `handle_admin_command` (sessions, channels,
-broadcast, shutdown, help), extracted verbatim from `gateway/mod.rs`. **No
-production path routes an admin command here** (RT-333): every caller is in
-this crate's test module, so nothing an operator types reaches this handler.
-The per-arm behavior is real and tested; wiring the dispatch is a product
-decision, not a bug fix.
+The `handle_admin_command` function was deleted iter-2695. It was
+`pub`-exported but had zero production callers — every caller was in a
+`#[cfg(test)]` block. The per-arm behavior (sessions, channels, broadcast,
+shutdown, help) was real and tested but unreachable from the gateway
+dispatch loop. If admin commands are needed again, resurrect from git
+history.
 
 ## Commands + subscriptions
 

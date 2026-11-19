@@ -21,8 +21,7 @@ measurement), `crates/operant-core/src/redaction.rs` (`RedactPatterns`,
 (`check_url_safety` / `ssrf_verdict` — this module's *other* half,
 `osv_check` / `check_osv`, has no production callers and must not be wired
 up), `crates/operant-core/src/write_origin.rs` (`TASK_ORIGIN`),
-`crates/operant-core/src/write_approval.rs` (staged writes — also has zero
-production callers), `crates/operant-core/src/tool_guardrails.rs`,
+`crates/operant-core/src/tool_guardrails.rs`,
 `crates/operant-core/src/tools/file_tools.rs` (path guards, `holon_command_fence`),
 `crates/operant-cli/src/hardening.rs` (startup process hardening),
 `crates/operant-api/src/glob.rs` (the `*`-only matcher behind the two
@@ -338,17 +337,15 @@ the whole population today. Registration does validate (rejects absolute
 paths and `..`), so a plugin could not widen the guard except by valid
 relative paths.
 
-### `write_approval.rs` and `write_origin.rs` — the write seams
+### `write_origin.rs` — the write seam
 
 `write_origin.rs` carries `TASK_ORIGIN` as a `tokio::task_local!`; the
 background review brackets its own writes with
 `.scope(TaskOrigin::BackgroundReview, …)` and the skill write guard reads it
 to tell a human-written turn from a machine-written review.
 
-`write_approval.rs` is a staged-writes registry. It is **not wired**: no
-production caller, default off, and the module rustdoc names the gate as
-developer tooling, not a live enforcement layer. Do not point operators at
-it — there is nothing to toggle.
+(`write_approval.rs` was deleted iter-2665 — it was a staged-writes registry
+with zero production callers.)
 
 `env_probe.rs` / the `env_probe` tool reports secret-looking env-variable
 NAMES and their source only, never values.

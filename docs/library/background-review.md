@@ -8,7 +8,6 @@ writes ([security.md](security.md)).
 
 Source: `crates/operant-core/src/agent/background_review.rs`,
 `crates/operant-core/src/write_origin.rs`,
-`crates/operant-core/src/write_approval.rs`,
 `crates/operant-core/src/curator/` (the lifecycle manager it feeds).
 
 ## The mechanism

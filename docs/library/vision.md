@@ -11,7 +11,6 @@ registry ([tools.md](tools.md)).
 Source: `crates/operant-core/src/tools/vision_tool.rs` (`vision_analyze`),
 `crates/operant-core/src/tools/video_analysis_tool.rs` (`video_analyze`),
 `crates/operant-core/src/tools/image_generation_tool.rs` (`image_generate`),
-`crates/operant-config/src/schema/media.rs` (multimodal types),
 `crates/operant-core/src/model_roles.rs` (the `Vision` slot),
 `crates/operant-core/src/config.rs` (`[vision]`,
 `[auxiliary_models.vision]`).
@@ -119,12 +118,9 @@ invisible to them; change the env and restart.
 
 Setting `[auxiliary_models.vision].model` in the TUI is the
 `/model vision <id>` path (`ModelSlot::Vision` → `ALL_SLOTS`), and it
-persists to the config file. `[multimodal]` in
-`crates/operant-config/src/schema/media.rs` (`max_images` 16,
-`max_image_size_mb` 20, `allow_remote_fetch` false, `vision_provider`,
-`vision_model`) is a **separate, unread surface**: nothing outside that
-crate constructs a `MultimodalConfig`, so none of those keys change what
-`vision_analyze` does.
+persists to the config file. (The `[multimodal]` config types were
+deleted iter-2680 — the multimodal schema was removed as dead code, so
+none of those keys change what `vision_analyze` does.)
 
 ## Surfaces
 

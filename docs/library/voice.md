@@ -11,12 +11,9 @@ store ([gateway.md](gateway.md)), the model message path
 
 Source: `crates/operant-core/src/tools/tts_tool.rs` (dispatch + the
 built-ins), `crates/operant-core/src/tools/phonon.rs` (the Phonon engine
-wrapper), `crates/operant-core/src/tools/tts_provider.rs` (the trait and
-error type), `crates/operant-core/src/tools/tts_registry.rs`
-(`TtsPluginRegistry`), `crates/operant-core/src/tools/tts_command_provider.rs`
-(`CommandProvider`), `crates/operant-core/src/tools/transcription_tool.rs`
-(STT), `crates/operant-cli/src/tui/operant_model/transcription.rs`
-(the `<transcription>` wrapper),
+wrapper). (The TTS registry/command-provider split was consolidated into
+`tts_tool.rs`; the old `tts_registry.rs` and `tts_command_provider.rs`
+files were removed.)
 `crates/operant-cli/src/gateway_runner/enrichment.rs` (Telegram voice
 download + transcribe), `crates/operant-cli/src/gateway_runner.rs`
 (audio delivery), `crates/operant-api/src/vad.rs` (the VAD seam),
@@ -73,9 +70,7 @@ rule: a caller that left the provider at its default adopts
 The dispatch (tts_tool.rs): `edge` (keyless, via the `edge-tts` CLI — but
 not local; `pip install edge-tts`), `elevenlabs`,
 `openai`, `minimax`, `mistral`, `gemini`, `xai`, `neutts`, `kittentts`,
-`piper` (local binaries/Python) and `phonon` (local, GGUF, default) — plus
-custom shell commands (`tts_command_provider.rs`) and plugin providers
-via the registry (`tts_registry.rs`).
+`piper` (local binaries/Python) and `phonon` (local, GGUF, default).
 
 `edge` was a stub until iter-2546: it returned `success: true` with a message
 about the Python dependency and **no audio**. It now shells out to the
