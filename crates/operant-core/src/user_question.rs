@@ -112,16 +112,15 @@ pub fn try_send_user_question(
     }
 }
 
-/// The last of the plan's `tests=0` candidates.
-///
-/// `has_user_question_sender` was here until iter-2767. Its doc claimed the
-/// clarify tool calls it; it does not. `ClarifyTool` decides by ATTEMPTING the
-/// send -- `try_send_user_question` returns `Some(reply_rx)` when a receiver
-/// exists and `None` otherwise, which carries the same information, so the
-/// predicate was a second implementation of a decision already made.
-///
-/// Removed rather than kept-with-a-note because a `pub` accessor that every
-/// caller reaches past is where the next caller's wrong assumption starts.
+// NOTE (iter-2767): `has_user_question_sender` was here until now. Its doc
+// claimed the clarify tool calls it; it does not. `ClarifyTool` decides by
+// ATTEMPTING the send -- `try_send_user_question` returns `Some(reply_rx)` when
+// a receiver exists and `None` otherwise, which carries the same information,
+// so the predicate was a second implementation of a decision the code already
+// makes. Deleted rather than kept-with-a-note because a `pub` accessor that
+// every caller reaches past is where the next caller's wrong assumption starts.
+// (A `//` comment, not `///`: there is no item left for a doc comment to attach
+// to, and clippy's empty_line_after_doc_comments caught exactly that.)
 
 #[cfg(test)]
 mod tests {

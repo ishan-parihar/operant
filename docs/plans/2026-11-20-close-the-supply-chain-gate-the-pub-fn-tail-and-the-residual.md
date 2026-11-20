@@ -55,6 +55,35 @@ That is the whole shape of the work: **one `cargo update`, not a migration.**
 
 ### T1 — the lockfile bump (clears 22 of 39)
 
+**LANDED iter-2762 (`5af57d19`).** Cleared **24** advisories, not 22 -- and the reason is
+the most important thing in this plan.
+
+The step as written was impossible: `git check-ignore -v Cargo.lock` reports
+`.gitignore:137:*.lock`. A broad `*.lock` rule, added in iter-900 (c2807a1b, "adopt the
+project-kb documentation genome") for the kb's flock artifacts, had been swallowing
+`Cargo.lock` ever since. Commit c97ac195 then deleted it -- correctly, because a
+tracked-but-ignored file is a contradiction.
+
+**That made the gate's central claim false.** Its own header says it audits "the
+committed lockfile", and the ledger's RT-10 rows say it twice. No lockfile was committed,
+so the gate audited whatever `cargo audit` resolved on the BUILDING machine -- a verdict
+no fresh clone reproduces. `git archive HEAD | tar -t` confirms a fresh clone has no
+Cargo.lock at all.
+
+Fixed with the narrow negation, not the broad rewrite:
+
+```
+*.lock          # kb flock artifacts -- unchanged, still ignores them
+!Cargo.lock     # the one file the broad rule must not catch
+```
+
+Verified both directions: `Cargo.lock` is now visible to git; an arbitrary `*.lock` is
+still ignored (checked with two throwaway names).
+
+**Gate effect: 39 new advisories -> 15.**
+
+
+
 1. `cargo update -p zstd-safe -p zstd -p zstd-sys -p pulldown-cmark -p webpki-roots
    -p rustls-webpki -p quinn-udp -p tokio -p rmcp -p rustix`
 2. `cargo check --workspace --all-targets` — the whole point of a lockfile bump is that
@@ -68,6 +97,33 @@ That is the whole shape of the work: **one `cargo update`, not a migration.**
 per-crate decisions. Do not force it.
 
 ### T2 — triage the 18 `extism`-locked advisories
+
+**LANDED iter-2763 (`129acfb2`).** The 15 remaining advisories are all `wasmtime`
+(13) + `wasmtime-wasi` (2), via `extism 1.41.0`. **Gate now GREEN: seen=20 allowlist=20
+new=0 stale=0.**
+
+Reachability was MEASURED, not assumed. Two facts bound the whole set:
+
+1. `operant-plugins` never names a wasmtime type. It builds an `extism::Plugin`
+   (runtime.rs:349) and calls two exports, so exposure is exactly "what a plugin's own
+   WASM can make the host do".
+2. extism pulls `wasmtime-wasi` with `features = ["p1"]` ONLY
+   (extism-1.41.0/Cargo.toml:137). The p2 and wasip3 layers are not compiled.
+
+That resolves five of the fifteen without judgement calls:
+
+| advisory | disposition | evidence |
+|---|---|---|
+| 0567, 0570 | **not applicable** | "abort in builds WITHOUT the `threads` / `gc` feature" -- `cargo tree -e features -i wasmtime` shows both ENABLED here |
+| 0587 | **not applicable** | `os = ["windows"]` in the advisory's own affected data |
+| 0420, 0571 | **not applicable** | p2/wasip3 and wasi-http layers, neither compiled (p1 only) |
+| 0379 | **not applicable** | aarch64 codegen defect; this host is x86_64 |
+| 0378, 0422, 0423, 0424, 0566, 0568, 0569, 0572, 0573 | **accepted** | genuine wasmtime 49 bugs; each needs the plugin WASM to act adversarially, and the operator installs plugins deliberately. Blast radius is the host process, not a privilege boundary. No fix exists here. |
+
+Regression: the gate's own test gains case 5, asserting `Cargo.lock` is not gitignored
+AND that `.gitignore` names it explicitly. RED-proven both branches.
+
+
 
 All 13 `wasmtime` + 2 `wasmtime-wasi` advisories reach the workspace through
 `extism 1.41.0` → `operant-plugins`. `extism` 1.41.0 is its latest release and pins
@@ -91,6 +147,11 @@ accepted-and-recorded advisory does that. This mirrors RT-616's handling of
 
 ### T3 — `rustix` (folded into T1, kept here for the reasoning)
 
+**LANDED inside iter-2762's bump.** `rustix 1.1.4 -> 1.1.6`. Nothing to allowlist, and
+the reasoning below is why.
+
+
+
 `RUSTSEC-2026-0486` covers `rustix::fs::{getxattr,listxattr,...}` for `>=1.0.0, <1.1.6`.
 The lock has **two** `rustix`: `0.38.44` and `1.1.4`. Only the **1.1.4** one is affected;
 0.38.44 is in the advisory's `unaffected` range (`<1.0.0`), which predates the `Buffer`
@@ -111,6 +172,25 @@ accepted advisory with the unreachable-analysis reasoning T2 uses.
 
 ### T4 — the pub-fn tail (104 candidates)
 
+**LANDED iter-2767 (`49001811`).** The `tests=0` half is now EMPTY: the auditor reports
+exactly one tests=0 candidate, and it is deleted.
+
+**DELETED: `has_user_question_sender` (user_question.rs).** Acid-proven DEAD; 0 references
+in `operant-cli`, `operant-os`, `operant-harness`, `operant-api`.
+
+Its doc claimed the clarify tool calls it. It does not. `ClarifyTool` decides by
+ATTEMPTING the send -- `try_send_user_question` returns `Some(reply_rx)` when a receiver
+exists and `None` otherwise, which is the same information. The predicate was a second
+implementation of a decision the code already makes.
+
+The static it read (`USER_QUESTION_TX`) stays live at :79 and :101. This deleted the
+accessor, not the cell.
+
+Guard: `the_pub_fn_batch_stay_dead` now 27 needles (was 26); the new one RED-proven by
+re-adding the definition shape and restoring byte-identically. 4/4 pass.
+
+
+
 The campaign's own plan (`2026-11-20-close-the-pub-fn-surface-queue-...`) names T5 as
 "the remaining `tests=0` candidates". Most of T5's named functions are already gone.
 The live tail is whatever `scripts/audit-pub-fn-surface.py` reports, and it must be
@@ -126,6 +206,21 @@ clippy gate (a deleted setter can orphan a field — MEASURED iter-2760, `verify
 reference, or whose deletion orphans a field, is KEPT and recorded in `ACCOUNTED_FOR`.
 
 ### T5 — documentation staleness (cheap, closes the last doctor finding)
+
+**LANDED iter-2764 (`08c1a7ec`).** `genome handoff --write` regenerated the handoff zone,
+and `genome doctor` now reports **`healthy`**.
+
+The hand-written prose above it claimed "Release line `0.2.1`"; `Cargo.toml` says `0.3.0`
+and `check-doc-claims.sh` agrees. A whole minor version stale, in the document whose own
+header warns that the prose is the part that goes stale -- the warning was right and the
+prose drifted anyway, because nothing derived it. The bullet now names the deriving
+command.
+
+Note on that commit: its SUBJECT is wrong (a peer's iter-2764 message) because two agents
+wrote commit bodies to the same `/tmp/m2764.txt` seconds apart. Content is correct and
+nothing was lost; recorded in iter-2766 rather than amended, per the no-rewrite rule.
+
+
 
 1. `./scripts/genome handoff --write` regenerates `docs/handoff/STATE.md` from `HEAD`,
    closing the doctor finding.
