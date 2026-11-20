@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as TokioTcpListener;
-use tokio::sync::{Mutex as AsyncMutex, RwLock, oneshot};
+use tokio::sync::{RwLock, oneshot};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
@@ -134,17 +134,6 @@ impl OAuthToken {
             // No expiry information — assume valid
             true
         }
-    }
-
-    /// Returns the remaining seconds until expiry, or `None` if unknown.
-    pub fn remaining_seconds(&self) -> Option<u64> {
-        self.expires_at.map(|exp| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64();
-            if exp > now { (exp - now) as u64 } else { 0 }
-        })
     }
 }
 
@@ -649,10 +638,6 @@ impl TokenStorage {
     }
 
     /// Check if tokens exist on disk (may be expired).
-    pub fn has_tokens(&self) -> bool {
-        self.tokens_path().exists()
-    }
-
     /// Get the file modification time of the tokens file in nanoseconds.
     pub fn tokens_file_mtime_ns(&self) -> Option<i64> {
         file_mtime_ns(&self.tokens_path())
@@ -1054,80 +1039,6 @@ impl OAuthProvider {
 
     // -- Authorization URL ------------------------------------------------
 
-    /// Build the authorization URL for the PKCE flow.
-    ///
-    /// Returns `(auth_url, code_verifier, state, redirect_port)`.
-    pub async fn build_authorization_url(&self) -> Result<(String, String, String, u16)> {
-        let metadata = {
-            let cached = self.metadata.read().await;
-            if let Some(meta) = cached.as_ref() {
-                meta.clone()
-            } else {
-                drop(cached);
-                // Load from disk or discover
-                let meta = self
-                    .storage
-                    .load_metadata()
-                    .or({
-                        // Try to discover
-                        None
-                    })
-                    .unwrap_or({
-                        // Default structure; discovery will be attempted on first auth
-                        OAuthMetadata {
-                            issuer: None,
-                            authorization_endpoint: None,
-                            token_endpoint: None,
-                        }
-                    });
-                *self.metadata.write().await = Some(meta.clone());
-                meta
-            }
-        };
-
-        let client_info = self.get_or_create_client_info().await?;
-
-        // Pick port
-        let port = self.config.redirect_port.unwrap_or(0);
-        let actual_port = if port == 0 { find_free_port() } else { port };
-        let redirect_uri = format!("http://127.0.0.1:{}/callback", actual_port);
-
-        // Generate PKCE parameters
-        let code_verifier = generate_code_verifier();
-        let code_challenge = compute_code_challenge(&code_verifier);
-        let state = generate_state();
-
-        // Build authorization URL
-        let auth_endpoint = match metadata.authorization_endpoint {
-            Some(ref url) => url.clone(),
-            None => format!("{}/authorize", self.server_url.trim_end_matches('/')),
-        };
-
-        let auth_url = Url::parse_with_params(
-            &auth_endpoint,
-            &[
-                ("response_type", "code"),
-                ("client_id", &client_info.client_id),
-                ("redirect_uri", &redirect_uri),
-                ("code_challenge", &code_challenge),
-                ("code_challenge_method", "S256"),
-                ("state", &state),
-            ],
-        )
-        .map_err(|e| Error::Agent(format!("Failed to build authorization URL: {}", e)))?;
-
-        // If we have a scope, add it
-        let auth_url = if let Some(scope) = &self.config.scope {
-            let mut url = auth_url;
-            url.query_pairs_mut().append_pair("scope", scope);
-            url
-        } else {
-            auth_url
-        };
-
-        Ok((auth_url.to_string(), code_verifier, state, actual_port))
-    }
-
     // -- Token exchange ---------------------------------------------------
 
     /// Exchange an authorization code for tokens.
@@ -1448,48 +1359,30 @@ impl OAuthProvider {
 
         Err(OAuthError::NoToken.into())
     }
-
-    /// Load cached metadata from disk into memory.
-    pub async fn load_cached_metadata(&self) {
-        if self.metadata.read().await.is_none()
-            && let Some(meta) = self.storage.load_metadata()
-        {
-            *self.metadata.write().await = Some(meta);
-        }
-    }
-
-    /// Load cached client info from disk into memory.
-    pub async fn load_cached_client_info(&self) {
-        if self.client_info.read().await.is_none()
-            && let Some(info) = self.storage.get_client_info().await
-        {
-            *self.client_info.write().await = Some(info);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // OAuthManager
 // ---------------------------------------------------------------------------
 
+// The entry used to carry FOUR fields beyond the provider: `config`,
+// `last_mtime_ns`, `lock` and `_pending_401`. They were read ONLY by
+// `invalidate_if_disk_changed` and `handle_401` (deleted iter-2732 as part of
+// the mcp_oauth dead-surface batch), so removing those two methods orphaned the
+// whole mtime-invalidation + 401-dedup machinery. What is left is the one thing
+// the live path needs: a per-server provider cache. The doc comment above the
+// manager still describes mtime invalidation and 401 dedup as features; they
+// were never reachable, and the fields are gone with them.
 struct ProviderEntry {
     server_url: String,
-    config: McpOAuthConfig,
     provider: RwLock<Option<OAuthProvider>>,
-    last_mtime_ns: RwLock<i64>,
-    lock: AsyncMutex<()>,
-    _pending_401: AsyncMutex<HashMap<String, oneshot::Sender<bool>>>,
 }
 
 impl ProviderEntry {
-    fn new(server_url: String, config: McpOAuthConfig, provider: OAuthProvider) -> Self {
+    fn new(server_url: String, _config: McpOAuthConfig, provider: OAuthProvider) -> Self {
         Self {
             server_url,
-            config,
             provider: RwLock::new(Some(provider)),
-            last_mtime_ns: RwLock::new(0),
-            lock: AsyncMutex::new(()),
-            _pending_401: AsyncMutex::new(HashMap::new()),
         }
     }
 }
@@ -1600,86 +1493,6 @@ impl OAuthManager {
             .cloned()
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
-    /// Check if the tokens file on disk has been modified externally.
-    ///
-    /// If the mtime has changed, forces the provider to re-read from disk
-    /// on the next token access.
-    ///
-    /// Returns `true` if the cache was invalidated.
-    pub async fn invalidate_if_disk_changed(&self, server_url: &str) -> bool {
-        let url = server_url.to_string();
-        let entry = {
-            let entries = self
-                .entries
-                .lock()
-                .expect("entries mutex poisoned — programmer error");
-            entries.get(&url).cloned()
-        };
-        let entry = match entry {
-            Some(e) => e,
-            None => return false,
-        };
-
-        let _guard = entry.lock.lock().await;
-        let storage = TokenStorage::new(&url);
-        let current_mtime = storage.tokens_file_mtime_ns().unwrap_or(0);
-        let last_mtime = *entry.last_mtime_ns.read().await;
-
-        if current_mtime != 0 && current_mtime != last_mtime {
-            *entry.last_mtime_ns.write().await = current_mtime;
-            let provider = OAuthProvider::new(url.clone(), entry.config.clone());
-            *entry.provider.write().await = Some(provider);
-            info!("MCP OAuth: tokens file changed for {}, forcing reload", url);
-            return true;
-        }
-
-        false
-    }
-
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
-    #[allow(unused_variables)]
-    pub async fn handle_401(&self, server_url: &str, failed_access_token: Option<&str>) -> bool {
-        let entry = {
-            let entries = self
-                .entries
-                .lock()
-                .expect("entries mutex poisoned — programmer error");
-            entries.get(server_url).cloned()
-        };
-        let entry = match entry {
-            Some(e) => e,
-            None => return false,
-        };
-
-        let _guard = entry.lock.lock().await;
-
-        let storage = TokenStorage::new(server_url);
-        let current_mtime = storage.tokens_file_mtime_ns().unwrap_or(0);
-        let last_mtime = *entry.last_mtime_ns.read().await;
-
-        if current_mtime != 0 && current_mtime != last_mtime {
-            *entry.last_mtime_ns.write().await = current_mtime;
-            return true;
-        }
-
-        let provider_guard = entry.provider.read().await;
-        if let Some(ref provider) = *provider_guard {
-            match provider.refresh_token().await {
-                Ok(_) => return true,
-                Err(_) => return false,
-            }
-        }
-
-        false
-    }
-
     /// Remove a server from the cache AND delete its tokens from disk.
     ///
     /// RT-457: the storage's result was discarded and the "removed from
@@ -1714,13 +1527,6 @@ static MANAGER: OnceLock<OAuthManager> = OnceLock::new();
 /// Return the process-wide `OAuthManager` singleton.
 pub fn get_manager() -> &'static OAuthManager {
     MANAGER.get_or_init(OAuthManager::new)
-}
-
-/// Reset the singleton (test-only helper).
-pub fn reset_manager_for_tests() {
-    // OnceLock doesn't support reset, so this is a best-effort test helper.
-    // In practice, tests should use separate server URLs.
-    info!("MCP OAuth manager reset requested (OnceLock cannot be reset)");
 }
 
 #[cfg(test)]
@@ -1886,16 +1692,14 @@ mod tests {
 
     #[test]
     fn state_match_is_accepted() {
-        verify_state("expected-abc", Some("expected-abc"))
-            .expect("a matching state must pass");
+        verify_state("expected-abc", Some("expected-abc")).expect("a matching state must pass");
     }
 
     #[test]
     fn missing_state_is_refused() {
         // A callback that dropped the state parameter is as unsafe as a wrong
         // one; both are forged/truncated callbacks.
-        let err = verify_state("expected-abc", None)
-            .expect_err("a missing state must be an error");
+        let err = verify_state("expected-abc", None).expect_err("a missing state must be an error");
         assert!(err.to_string().contains("CSRF"), "got: {err}");
     }
 
