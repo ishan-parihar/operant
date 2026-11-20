@@ -150,7 +150,16 @@ pub fn subject_for(tool_name: &str) -> Option<Subject> {
         | "aft_status"
         | "tool_search"
         | "tool_describe"
-        | "tool_call" => Subject::ToolResult,
+        | "tool_call"
+        // (iter-2716) The Surface IR tools (plan 2026-11-18 M2, iters 2638/2640)
+        // were added to `builtin_tool_names()` without a classify arm, so
+        // `every_registered_builtin_tool_classifies` has been red since the
+        // tools landed: their results bypassed the compression layer
+        // entirely (classify()==None -> Compressed::unchanged). The render
+        // result is a structured card and the request-input result is a
+        // human answer -- both are tool results the layer should see.
+        | "ui_render_surface"
+        | "ui_request_input" => Subject::ToolResult,
         // An unknown tool: the layer leaves its payload alone.
         _ => return None,
     })

@@ -351,7 +351,14 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "mcp_management",
         "memory_search",
         "memory_store",
-        "notification",
+        // (iter-2716, Hydrogen round-2 F3) `notify`, not `notification`: the
+        // registered tool is `NotificationTool` whose `name()` is "notify"
+        // (tools/notification_tool.rs:26), so the old literal here made
+        // `operant tools disable notification` write a name the runtime never
+        // matches -- a silent no-op. `classify.rs` keeps "notification" as a
+        // phantom alias for the evidence layer; the disable/list surface now
+        // advertises the real name only.
+        "notify",
         "osv_check",
         "patch",
         "process",

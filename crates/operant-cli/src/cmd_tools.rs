@@ -252,10 +252,25 @@ fn handle_disable(config: &AppConfig, names: Vec<String>) -> Result<()> {
 
     let mut disabled = operant_core::tools::tool_state::load_disabled_tools(config);
     for name in &names {
+        // (iter-2716, Hydrogen round-2 F3) The disable surface must write the
+        // name the REGISTRY stamps, not a guess: `notify` is registered as
+        // "notify" (tools/notification_tool.rs:26) while the old advertised
+        // list said "notification", so `operant tools disable notification`
+        // wrote a name `ToolRegistry::is_disabled` never compares equal to --
+        // a silent no-op the operator could not see. Canonicalise the OLD
+        // literal onto the registered name so a pinned prompt or muscle memory
+        // using the pre-iter-2716 spelling still disables the real tool.
+        let canonical = notification_name_alias(name);
+        if canonical != name {
+            println!(
+                "note: '{name}' is the retired spelling; disabling '{canonical}' (the registered name)."
+            );
+        }
+        let name: &str = canonical;
         if disabled.contains(name) {
             println!("Tool '{}' was already disabled.", name);
         } else {
-            disabled.insert(name.clone());
+            disabled.insert(name.to_string());
             println!("Tool '{}' disabled.", name);
         }
     }
@@ -263,4 +278,18 @@ fn handle_disable(config: &AppConfig, names: Vec<String>) -> Result<()> {
     operant_core::tools::tool_state::save_disabled_tools(config, &disabled)
         .map_err(anyhow::Error::msg)?;
     Ok(())
+}
+
+/// (iter-2716, Hydrogen round-2 F3) Canonicalise a tool name the operator typed
+/// onto the name the registry stamps. Today the only retired spelling is
+/// `notification` -> `notify` (the tool's own `fn name()`, registered since
+/// iter-1231; the advertised list carried the wrong literal until this
+/// iteration). An unknown name resolves to itself, so the caller's
+/// "was already disabled" / insert logic is unchanged for every other tool.
+fn notification_name_alias(name: &str) -> &str {
+    if name == "notification" {
+        "notify"
+    } else {
+        name
+    }
 }
