@@ -124,7 +124,9 @@ use diagram_pane::{
 };
 // [port-source] ui.rs:143 — see the output_style [port-decision] in the excision block:
 // the child file lives at operant_app/output_style.rs, so this is a re-rooted re-export.
-pub(crate) use crate::tui::operant_app::output_style::adapt_buffer_for_emoji_preference;
+// (iter-2727: the `pub(crate) use adapt_buffer_for_emoji_preference` re-export that
+// sat here is GONE -- its one caller, `render/mod.rs:193`, names the function by its
+// full path, so the re-export had no consumer and clippy warned `unused_imports`.)
 // [port-source] ui.rs:144-152 — pinned_ui child FLIPPED live at the cutover:
 // ui_pinned.rs is on disk (45KB); SidePanelDebugStats / SidePanelMermaidProbe /
 // SidePanelMermaidProbeRect / debug_probe_side_panel_mermaid reach the parent through

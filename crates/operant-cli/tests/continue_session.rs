@@ -473,7 +473,7 @@ fn a_marker_for_a_session_absent_from_the_store_offers_a_command_that_cannot_wor
         "{}{}",
         accepted
             .as_ref()
-            .map(|o| stdout(o))
+            .map(stdout)
             .unwrap_or_else(|e| e.to_string()),
         accepted
             .as_ref()
