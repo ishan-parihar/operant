@@ -153,6 +153,18 @@ pub fn materialise(
         }
         visible.push(tool.clone());
     }
+    // (iter-2726, Hydrogen round-2 F10) The model-visible array is part of
+    // the cacheable request prefix (anthropic.rs caches the system block and
+    // the tool array is hashed into the client-side PrefixDigest). `catalog`
+    // is built from the registry's `HashMap::values()`, so its order is
+    // unspecified and can differ between two builds of the SAME registry
+    // state -- and the materialised tail inherits that order. Sorting the
+    // final array by name makes the tools block byte-stable for a given
+    // (registry, turn) pair, so an unchanged prefix is actually REUSED
+    // instead of reading as a miss. Idempotence is preserved: materialise is
+    // a no-op second pass, so the sort cannot reorder anything it did not
+    // build.
+    visible.sort_by(|a, b| a.name.cmp(&b.name));
     visible
 }
 
@@ -226,9 +238,16 @@ mod tests {
 
         // Unrelated turn: nothing materialises, so the model-visible list is
         // exactly the bridge output and no mcp_* name is present.
+        // (iter-2726: materialise now returns the array sorted by name, so
+        // compare as SETS here -- the byte-stability contract is pinned by
+        // materialised_array_is_byte_stable_across_catalog_order.)
         let out = materialise("what is the capital of France?", base.clone(), &cat);
         assert!(names(&out).iter().all(|n| !n.starts_with("mcp_")));
-        assert_eq!(names(&out), names(&base));
+        let mut out_names = names(&out);
+        let mut base_names = names(&base);
+        out_names.sort_unstable();
+        base_names.sort_unstable();
+        assert_eq!(out_names, base_names);
 
         // Relevant turn: the matching deferred tool appears.
         let out = materialise("please open a pull request on the repo", base, &cat);
@@ -410,5 +429,36 @@ mod tests {
         );
         // A short turn still never re-adds the whole catalog.
         assert!(generic.len() < cat.len() + base.len());
+    }
+
+    /// (iter-2726, Hydrogen round-2 F10) The materialised array must be
+    /// byte-stable for a given (registry, turn) pair: the tools block is part
+    /// of the cacheable request prefix (the anthropic cache_control range and
+    /// the client-side PrefixDigest both hash it), and `catalog` arrives in
+    /// `HashMap::values()` order, which is unspecified and can differ between
+    /// two builds of the SAME registry state. A PROMPT-CACHE STABILITY test:
+    /// two SHUFFLED catalogs (same tools, different order) must materialise to
+    /// the SAME array, or an unchanged prefix reads as a miss and the whole
+    /// conversation after it re-encodes at full price.
+    #[test]
+    fn materialised_array_is_byte_stable_across_catalog_order() {
+        let cat = catalog();
+        let turn = "please open a pull request on the repo";
+        let first = materialise(turn, assembled(), &cat);
+
+        // Same tools, reversed order: a second registry build over the same
+        // state can legitimately produce this.
+        let mut shuffled = cat.clone();
+        shuffled.reverse();
+        let second = materialise(turn, assembled(), &shuffled);
+
+        assert_eq!(
+            names(&first),
+            names(&second),
+            "the tools array changed with catalog order: the cacheable prefix is not stable"
+        );
+        // And the sort did not break idempotence.
+        let twice = materialise(turn, first.clone(), &cat);
+        assert_eq!(names(&first), names(&twice));
     }
 }
