@@ -81,12 +81,12 @@ ACCOUNTED_FOR = {
 # Shapes the census structurally cannot see AND shapes the ACID TEST cannot see.
 # `scripts/audit-pub-fn-surface.py` scans the WHOLE workspace, so a pub fn called
 # only from operant-cli has a caller and is not a candidate -- the census is right.
-# `.acid.py`, however, compiles `operant-core --lib` ONLY. A function whose sole
+# `scripts/acid-test-pub-fn.py`, however, compiles `operant-core --lib` ONLY. A function whose sole
 # caller lives in operant-cli therefore compiles clean under the mutation and is
 # reported DEAD, which is WRONG: it is alive, just not from inside its own crate.
 #
 # MEASURED iter-2757: `with_holon_opt` (gateway/webhook.rs) was reported DEAD by
-# `.acid.py` while `gateway_runner.rs:5631` calls it in the same tree. The CLI
+# `scripts/acid-test-pub-fn.py` while `gateway_runner.rs:5631` calls it in the same tree. The CLI
 # verification (`cargo check -p operant-cli --bin operant --tests`, exit 0) is what
 # caught it -- and every T4 deletion was re-checked by grepping operant-cli for the
 # name before commit (0 references for all 17 deleted functions).

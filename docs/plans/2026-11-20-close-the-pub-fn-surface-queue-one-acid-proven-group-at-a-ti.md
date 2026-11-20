@@ -230,7 +230,7 @@ a doc correction if the header claims a caller.
 
 So T4's real count is **4 of 5**.
 
-**Tooling gap found:** `.acid.py`'s definition regex does not skip over a doc comment
+**Tooling gap found:** `scripts/acid-test-pub-fn.py`'s definition regex does not skip over a doc comment
 that sits between an attribute and the `fn`. `is_session_expired` was reported `SKIP
 (no pub fn match)` and had to be proven by hand. Any future candidate whose attribute
 block is followed by `///` before the signature will be silently skipped and read as

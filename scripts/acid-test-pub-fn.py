@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 ENV = {
     "LOCAL_DIR": str(ROOT / "local"),
     "LIBCLANG_PATH": str(ROOT / "local/libclang_extract/usr/lib/x86_64-linux-gnu"),
@@ -45,7 +45,10 @@ def sha(b: bytes) -> str:
 def main() -> int:
     specs = sys.argv[1:]
     if not specs:
-        print("usage: .acid.py <file>::<fn> ...", file=sys.stderr)
+        print(
+            "usage: acid-test-pub-fn.py <file>::<fn> [...]",
+            file=sys.stderr,
+        )
         return 2
 
     files = [s.rsplit("::", 1)[0] for s in specs]
@@ -55,6 +58,11 @@ def main() -> int:
         return 2
 
     verdicts = []
+    # Set when a restore fails. Checked AFTER the loop rather than returning
+    # from inside `finally`: a `return` there aborts the whole run and discards
+    # every verdict already collected, which is the opposite of what a failed
+    # restore needs (you want the results you DID get, plus the alarm).
+    restore_failed = False
     for spec in specs:
         if "::" not in spec:
             print(f"BAD SPEC {spec} (want <file>::<fn>)", file=sys.stderr)
@@ -115,10 +123,14 @@ def main() -> int:
             path.write_bytes(original)
             if sha(path.read_bytes()) != digest:
                 print(f"RESTORE FAILED for {rel}", file=sys.stderr)
-                return 3
+                restore_failed = True
 
     for verdict, fn, rel in verdicts:
         print(f"{verdict}  {fn}  ({rel})")
+
+    if restore_failed:
+        print("ABORTED: a restore failed; treat every verdict above as unproven.", file=sys.stderr)
+        return 3
 
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True
