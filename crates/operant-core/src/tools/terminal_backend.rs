@@ -25,6 +25,15 @@ pub struct CommandOutput {
     pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// (iter-2727, Hydrogen round-2 F9) Whether a backend cut this stream at
+    /// its output cap. Set at the truncation site by each backend, so the
+    /// terminal tool reports the cut from the STRUCT, not by sniffing the
+    /// text for `[output truncated]` / `...[truncated]` markers -- a command
+    /// that legitimately prints a marker was misclassified as cut, and a
+    /// future marker wording would silently stop being detected. `false` for
+    /// an uncut stream; backends that cannot observe the cut (none today)
+    /// leave the default.
+    pub truncated: bool,
 }
 
 /// Name fragments that mark an environment variable as credential-bearing.
@@ -179,6 +188,9 @@ impl TerminalBackend for LocalBackend {
 
         let mut stdout_output = String::new();
         let mut stderr_output = String::new();
+        // (iter-2727, F9) Set at the truncation sites below, so the tool reads
+        // the cut off the struct instead of sniffing the text for markers.
+        let mut truncated = false;
 
         if let Some(stdout) = stdout_handle {
             let mut reader = BufReader::new(stdout).lines();
@@ -193,8 +205,10 @@ impl TerminalBackend for LocalBackend {
                     let cut = truncate_at_char_boundary(&line, remaining.min(line.len()));
                     stdout_output.push_str(&line[..cut]);
                     stdout_output.push_str("\n[output truncated]");
+                    truncated = true;
                 } else {
                     stdout_output.push_str("\n[output truncated]");
+                    truncated = true;
                     break;
                 }
             }
@@ -224,6 +238,7 @@ impl TerminalBackend for LocalBackend {
             exit_code: status.code(),
             stdout: stdout_output,
             stderr: stderr_output,
+            truncated,
         })
     }
 
@@ -372,13 +387,17 @@ impl TerminalBackend for DockerBackend {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         // Truncate output
-        let stdout = if stdout.len() > max_output {
+        // (iter-2727, F9) The cut is reported on the struct, not only in the
+        // text: `truncated` is true iff either stream was shortened here.
+        let stdout_was_cut = stdout.len() > max_output;
+        let stderr_was_cut = stderr.len() > max_output / 4;
+        let stdout = if stdout_was_cut {
             let cut = truncate_at_char_boundary(&stdout, max_output);
             format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout
         };
-        let stderr = if stderr.len() > max_output / 4 {
+        let stderr = if stderr_was_cut {
             let cut = truncate_at_char_boundary(&stderr, max_output / 4);
             format!("{}...[truncated]", &stderr[..cut])
         } else {
@@ -390,6 +409,7 @@ impl TerminalBackend for DockerBackend {
             exit_code: output.status.code(),
             stdout,
             stderr,
+            truncated: stdout_was_cut || stderr_was_cut,
         })
     }
 
@@ -538,13 +558,17 @@ impl TerminalBackend for SshBackend {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         // Truncate output
-        let stdout = if stdout.len() > max_output {
+        // (iter-2727, F9) The cut is reported on the struct, not only in the
+        // text: `truncated` is true iff either stream was shortened here.
+        let stdout_was_cut = stdout.len() > max_output;
+        let stderr_was_cut = stderr.len() > max_output / 4;
+        let stdout = if stdout_was_cut {
             let cut = truncate_at_char_boundary(&stdout, max_output);
             format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout
         };
-        let stderr = if stderr.len() > max_output / 4 {
+        let stderr = if stderr_was_cut {
             let cut = truncate_at_char_boundary(&stderr, max_output / 4);
             format!("{}...[truncated]", &stderr[..cut])
         } else {
@@ -556,6 +580,7 @@ impl TerminalBackend for SshBackend {
             exit_code: output.status.code(),
             stdout,
             stderr,
+            truncated: stdout_was_cut || stderr_was_cut,
         })
     }
 

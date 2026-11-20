@@ -329,16 +329,36 @@ impl TerminalTool {
         // the command's output, and the model cannot tell "the command
         // produced 200 000 characters" from "the command produced 1 MB and
         // the tool cut it at 200 000".
-        let truncated = if output_was_cut(&output.stdout) {
-            Some(format!(
-                "stdout was cut at the {}-byte output cap — the command produced more than this envelope carries",
-                run.max_output
-            ))
-        } else if output_was_cut(&output.stderr) {
-            Some(format!(
-                "stderr was cut at the {}-byte output cap — the command produced more than this envelope carries",
-                run.max_output / 4
-            ))
+        // (iter-2727, Hydrogen round-2 F9) The cut is read off the STRUCT the
+        // backends now stamp at the truncation site, not sniffed out of the
+        // text for `[output truncated]` / `...[truncated]` markers: a command
+        // that legitimately PRINTS a marker was misclassified as cut, and a
+        // marker rewording would silently stop being detected. The per-stream
+        // detail (which cap, which stream) is kept by checking which stream
+        // still ends with its marker -- the struct says THAT the cut happened;
+        // the marker says WHICH stream carried it.
+        let truncated = if output.truncated {
+            if output_was_cut(&output.stdout) {
+                Some(format!(
+                    "stdout was cut at the {}-byte output cap — the command produced more than this envelope carries",
+                    run.max_output
+                ))
+            } else if output_was_cut(&output.stderr) {
+                Some(format!(
+                    "stderr was cut at the {}-byte output cap — the command produced more than this envelope carries",
+                    run.max_output / 4
+                ))
+            } else {
+                // The struct says a stream was cut but neither stream ends
+                // with its marker (e.g. a backend that reports the flag
+                // without appending the text). Still surface the cut --
+                // dropping it would hide the truncation the struct exists to
+                // report.
+                Some(format!(
+                    "output was cut at the {}-byte output cap — the command produced more than this envelope carries",
+                    run.max_output
+                ))
+            }
         } else {
             None
         };
@@ -598,5 +618,46 @@ mod tests {
         assert_eq!(v["exit_code"], 0);
         assert!(v["stdout"].as_str().unwrap_or_default().contains("aaaa"));
         assert!(v["runtime"].as_str().unwrap_or_default().contains("local"));
+    }
+
+    /// (iter-2727, Hydrogen round-2 F9) A command that legitimately PRINTS a
+    /// truncation marker must NOT read as truncated. The old sniff-the-text
+    /// classifier keyed on the marker alone, so `echo '[output truncated]'`
+    /// produced an envelope claiming the tool had cut output that arrived in
+    /// full. The struct field is set only at the backend's own truncation
+    /// site, so a printed marker cannot move it.
+    #[tokio::test]
+    async fn a_command_that_prints_a_truncation_marker_is_not_reported_as_cut() {
+        let backend = terminal_backend::LocalBackend;
+        let env_vars = HashMap::new();
+        // A generous cap: nothing is cut, the marker is just text.
+        let run = TerminalRun {
+            command: "echo '[output truncated]'",
+            use_shell: false,
+            cwd: None,
+            env_vars: &env_vars,
+            timeout: Duration::from_secs(10),
+            max_output: 4096,
+        };
+        let rtk = RtkInputs {
+            mode: false,
+            location: None,
+        };
+
+        let result = TerminalTool::run(&backend, &run, &rtk).await;
+
+        assert!(result.success, "the command must still run");
+        let v: Value = serde_json::from_str(&result.content).unwrap();
+        assert!(
+            v.get("truncated").is_none(),
+            "a printed marker is not a cut: got {:?}",
+            v["truncated"]
+        );
+        assert!(
+            v["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("[output truncated]")
+        );
     }
 }
