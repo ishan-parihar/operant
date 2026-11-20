@@ -5857,13 +5857,23 @@ wonderful_unknown_key = 42
         // still hold is that the unknown key does NOT take effect — a stale
         // key that silently bound is the defect these tests were written for.
         //
-        // A path of this test's OWN (iter-2364): `unknown_sidecar_for` keys on
-        // the DIRECTORY only, so two configs in one directory share one sidecar
-        // and `write_parked_sidecar` OVERWRITES. Parking a config named
-        // `bogus.toml` in the test CWD made every such test read and write the
-        // same file, so an assertion could pass on another test's parked keys.
-        let path =
-            std::env::temp_dir().join(format!("operant-harness-park-{}.toml", std::process::id()));
+        // A path of this test's OWN, inside this test's OWN directory.
+        //
+        // (iter-2364: the first fix made the CONFIG path unique. It did not
+        // fix the sidecar, because `unknown_sidecar_for` keys on the DIRECTORY
+        // with the CONSTANT name `operant.unknown.toml` -- so every config in
+        // one directory shares ONE sidecar and `write_parked_sidecar`
+        // OVERWRITES. iter-2711's nanos stamp did not help either: it made the
+        // config unique, not the sidecar.)
+        //
+        // (iter-2733: own the DIRECTORY, not just the name. Two configs in one
+        // directory still collide on the sidecar whatever their names are, so
+        // the precondition has to go away rather than be made rarer. MEASURED:
+        // this test failed under parallelism and passed alone -- the signature
+        // of a shared resource, and the reason a nanosecond stamp on the config
+        // name was not enough.)
+        let dir = tempfile::tempdir().expect("this test's own directory");
+        let path = dir.path().join("operant.toml");
         let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.harness.enabled, "the known key beside it still binds");
         let parked =
@@ -5966,11 +5976,12 @@ enabled = true
 wonderful_unknown_key = 42
 "#;
         // Parking contract: parked, not fatal — but never effective.
-        // Own sidecar path, same reason as `harness_settings_roundtrip`: one
-        // sidecar per directory is one sidecar too many for parallel tests
-        // (iter-2364).
-        let path =
-            std::env::temp_dir().join(format!("operant-pk-park-{}.toml", std::process::id()));
+        // Own DIRECTORY, same reason as `harness_settings_roundtrip`: one
+        // sidecar per directory is one sidecar too many for parallel tests,
+        // and (iter-2364) a unique CONFIG NAME does not help because the
+        // sidecar's name is a constant (iter-2733).
+        let dir = tempfile::tempdir().expect("this test's own directory");
+        let path = dir.path().join("operant.toml");
         let cfg = parse_config_str(bogus, &path).expect("an unknown key is parked, not fatal");
         assert!(cfg.pk.enabled, "the known key beside it still binds");
         let parked =
@@ -6674,20 +6685,16 @@ wonderful_unknown_key = 42
         // own parent, so every `memory://` test would share one sidecar and
         // read each other's parked keys.
         //
-        // The name carries a NANOS stamp as well as the pid. `std::process::id()`
-        // alone is unique ACROSS processes but constant WITHIN one, and the whole
-        // lib suite is ONE process -- so two tests deriving a sidecar from the
-        // same pid-and-name pattern shared the file and read each other's parked
-        // keys. MEASURED: this test failed under parallelism and passed alone,
-        // which is the signature of exactly that.
-        let path = std::env::temp_dir().join(format!(
-            "operant-lifeos-probe-{}-{}.toml",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
+        // (iter-2733: OWN THE DIRECTORY, not just a unique name. The sidecar's
+        // name is a CONSTANT (`operant.unknown.toml`) and `unknown_sidecar_for`
+        // keys on the DIRECTORY, so a nanos-stamped CONFIG name still lands in
+        // the shared `$TMP/operant.unknown.toml` beside every other test's.
+        // MEASURED: this test failed under parallelism and passed alone, which
+        // is the signature of a shared resource -- and the stamp was already
+        // there and did not help. The precondition goes away instead of being
+        // made rarer.)
+        let dir = tempfile::tempdir().expect("this test's own directory");
+        let path = dir.path().join("operant.toml");
         let cfg = parse_config_str(with_key, &path).expect("a stale key is parked, not fatal");
         assert!(
             !crate::redaction::redact_sensitive_text(&format!("{:?}", cfg.tools))
