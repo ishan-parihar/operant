@@ -857,9 +857,9 @@ operant/
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
 │   │   │   │   ├── sourcehound.rs # web_search/scrape/extract/crawl + MCP seam (subprocess)
 │   │   │   │   ├── aft_tools.rs   # 20 AFT IDE tools
-│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire/builtin)
+│   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire; the file-backed provider is deleted)
 │   │   │   ├── memory_wire.rs # MemoryWireProvider (in-process, catch_unwind)
-│   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
+│   │   │   ├── memory_provider.rs # memory-wire only (BuiltinProvider deleted)
 │   │   │   ├── context_management.rs # Tiered eviction + decay curve
 │   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
 │   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/WhatsApp/Email/SMS/Webhook)
@@ -1641,7 +1641,10 @@ MUST know before touching the render layer:
   vestige removed, anthropic Send fix, workspace fmt normalization (see
   docs/RUST_BEST_PRACTICES_PLAN.md)
 - agentmemory integration: TDG memory removed → `AgentMemoryProvider`
-  (REST + auto-spawn :3111) + BuiltinProvider fallback (feature-gated)
+  (REST + auto-spawn :3111) + a file-backed `BuiltinProvider` fallback. **Both were later
+  deleted**: memory-wire is now the only engine (see "Memory" under Design Preferences
+  above), and `build_memory_provider` ignores its `provider_name` argument. Kept as the
+  historical record of what the agentmemory integration originally added.
 - igs-rust integration: web_scrape/web_extract + igs browser provider (keyless)
 - iter-69: Verify operant with OpenCode API + mimo-v2.5-free model (test only)
 - iter-68: MCP SSE transport — all hermes-agent gaps closed

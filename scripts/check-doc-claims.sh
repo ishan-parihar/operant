@@ -410,6 +410,70 @@ PY
   [ $? -ne 0 ] && fail=1
 fi
 
+# --- deleted symbols must not be named as live in the Architecture tree -----
+# AGENTS.md's tree is a code inventory, and the claim a reader takes from a
+# tree line is that the thing named there is part of the code. A tree line that
+# names a symbol as a co-equal of the file it describes is claiming that symbol
+# is live -- and when the symbol is later deleted, the line keeps claiming it.
+# The check above proves the tree's PATHS exist; it says nothing about the
+# trailing comment, which is where this drift lives. Observed 2026-11-20:
+# memory_provider.rs # memory-wire + BuiltinProvider, while the same file said
+# twice that BuiltinProvider was REMOVED and the code agreed. The gate passed.
+#
+# This derives the fact from the code instead: a symbol the tree comment
+# presents as the file's co-equal (`# memory-wire + BuiltinProvider`) or as the
+# file's own module (`# Foo (…)`) that no longer appears anywhere in crates/ is
+# drift. It is deliberately narrow: only symbols that follow a `+` or lead the
+# comment, and only PascalCase identifiers, so a comment naming an external
+# crate as a tool ("Clap enum") or a mechanism cannot trip it.
+#
+# The pattern is the builtin.rs shape `# memory-wire + BuiltinProvider` and the
+# direct form `# MemoryWireProvider (...)`, both of which name THIS module's
+# contents. Generic prose words are excluded by requiring the `+` operator or
+# the leading position plus a backticked or bare PascalCase ident.
+if [ -f AGENTS.md ]; then
+  python3 - <<'PY' || fail=1
+import pathlib, re, sys
+
+tree = pathlib.Path("AGENTS.md").read_text(errors="ignore")
+candidates = set()
+for line in tree.splitlines():
+    if not re.match(r'^[\u2502\u251c\u2514\u2500 ]', line):
+        continue
+    if '#' not in line:
+        continue
+    c = line.split('#', 1)[1].strip()
+    # `# a + Symbol [b]` -- the symbol after a `+` is a co-equal of the file
+    for m in re.finditer(r'\+\s*`?([A-Z][A-Za-z0-9]+)`?', c):
+        candidates.add((m.group(1), line.strip()))
+    # `# Symbol (…)` at the START of the comment -- the file's primary type
+    m = re.match(r'^`?([A-Z][A-Za-z0-9]+)`?\s*\(', c)
+    if m:
+        candidates.add((m.group(1), line.strip()))
+
+code = ""
+for p in pathlib.Path("crates").rglob("*.rs"):
+    code += p.read_text(errors="ignore")
+
+# A deleted symbol survives in the code as the COMMENT that explains its
+# deletion: memory_provider.rs still says "BuiltinProvider is deleted" twice.
+# Checking the raw text would therefore pass the exact drift this guards
+# against. Strip Rust comments first, so only live code counts as evidence.
+code = re.sub(r'/\*.*?\*/', '', code, flags=re.S)
+code = re.sub(r'//[^\n]*', '', code)
+
+dead = sorted((s, ln) for s, ln in candidates
+              if not re.search(r'\b' + re.escape(s) + r'\b', code))
+if dead:
+    print("DRIFT Architecture tree names a symbol the code no longer has:")
+    for s, ln in dead:
+        print(f"       {s}  in: {ln}")
+    sys.exit(1)
+print(f"OK    Architecture tree named symbols: {len(candidates)} checked, all exist in the code")
+PY
+  [ $? -ne 0 ] && fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
   say ""
   say "docs-check: all AGENTS.md code-surface claims match the code"
