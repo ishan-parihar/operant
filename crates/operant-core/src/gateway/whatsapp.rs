@@ -14,10 +14,16 @@ use super::*;
 
 /// WhatsApp adapter — receives messages via webhook, sends via WhatsApp
 /// Cloud API. Requires `whatsapp_token` in config.
+///
+/// Inbound verification is NOT this struct's job: the `hub.verify_token`
+/// handshake is served by `crate::gateway::webhook`, which compares the
+/// caller's token against its own configured `webhooks_secret`. A
+/// `verify_token` field here was write-only from the day it was added —
+/// `with_verify_token` was its only setter and nothing ever read it
+/// (iter-2757 deleted the setter, which is what made the compiler notice).
 pub struct WhatsAppAdapter {
     enabled: bool,
     token: Option<String>,
-    verify_token: Option<String>,
     phone_number_id: Option<String>,
 }
 
@@ -26,7 +32,6 @@ impl WhatsAppAdapter {
         Self {
             enabled,
             token: None,
-            verify_token: None,
             phone_number_id: None,
         }
     }
