@@ -63,7 +63,7 @@ fn the_three_dead_pub_fns_stay_deleted() {
 
 /// The pub-fn batch, deleted after the auditor reported them (iter-2753).
 ///
-/// Twenty-six needles, one per deleted definition: the tests=0 half of the
+/// Twenty-seven needles, one per deleted definition: the tests=0 half of the
 /// peer plan `2026-11-20-close-the-pub-fn-surface-queue-*` plus the
 /// candidates the same scan surfaced at this tip (structural_check, evaluate,
 /// session_parent, historian_system_prompt, list_subagents).
@@ -86,7 +86,7 @@ fn the_three_dead_pub_fns_stay_deleted() {
 fn the_pub_fn_batch_stays_deleted() {
     let root = workspace_root();
 
-    let dead: [(&str, &str); 26] = [
+    let dead: [(&str, &str); 27] = [
         (
             "crates/operant-core/src/skill_usage.rs",
             concat!("pub fn ", "all_records", "_mut"),
@@ -190,6 +190,10 @@ fn the_pub_fn_batch_stays_deleted() {
         (
             "crates/operant-core/src/gateway_session.rs",
             concat!("pub fn ", "is", "_session_expired"),
+        ),
+        (
+            "crates/operant-core/src/user_question.rs",
+            concat!("pub fn ", "has", "_user_question_sender"),
         ),
     ];
 

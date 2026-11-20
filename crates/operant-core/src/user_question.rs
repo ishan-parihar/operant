@@ -112,12 +112,16 @@ pub fn try_send_user_question(
     }
 }
 
-/// Check whether a user-question sender is registered (i.e. whether the
-/// TUI is running). Used by the clarify tool to decide whether to block
-/// (TUI mode) or return immediately (CLI mode).
-pub fn has_user_question_sender() -> bool {
-    USER_QUESTION_TX.get().is_some()
-}
+/// The last of the plan's `tests=0` candidates.
+///
+/// `has_user_question_sender` was here until iter-2767. Its doc claimed the
+/// clarify tool calls it; it does not. `ClarifyTool` decides by ATTEMPTING the
+/// send -- `try_send_user_question` returns `Some(reply_rx)` when a receiver
+/// exists and `None` otherwise, which carries the same information, so the
+/// predicate was a second implementation of a decision already made.
+///
+/// Removed rather than kept-with-a-note because a `pub` accessor that every
+/// caller reaches past is where the next caller's wrong assumption starts.
 
 #[cfg(test)]
 mod tests {
