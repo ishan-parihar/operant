@@ -8,7 +8,6 @@ use clap::Subcommand;
 use operant_core::config::AppConfig;
 use operant_core::kanban::{KanbanDb, KanbanManager, TaskStatus};
 use operant_core::text_slice::char_prefix;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum NotifyAction {
@@ -220,16 +219,13 @@ pub enum KanbanSubcommand {
     },
 }
 
-fn kanban_dir(config: &AppConfig) -> PathBuf {
-    config
-        .database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf()
-}
-
 fn open_db(config: &AppConfig, board_slug: &str) -> Result<KanbanDb, anyhow::Error> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    // The manager's OWN app-config constructor, not a local copy of its path
+    // rule. `KanbanManager::from_app_config` derives the kanban directory from
+    // the main database path, and this file carried a byte-equivalent private
+    // `kanban_dir()` beside it — so the same rule lived in two places and the
+    // core one had no caller at all (found by the pub-fn surface audit).
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     mgr.open_board(board_slug)
         .context("Failed to open kanban database")
 }
@@ -308,7 +304,7 @@ pub async fn handle_kanban_command(
 }
 
 async fn cmd_list_boards(config: &AppConfig, json: bool) -> Result<()> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     let boards = mgr.list_boards().context("Failed to list boards")?;
 
     if json {
@@ -345,7 +341,7 @@ async fn cmd_list_boards(config: &AppConfig, json: bool) -> Result<()> {
 }
 
 async fn cmd_create_board(config: &AppConfig, slug: &str) -> Result<()> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     mgr.create_board(slug)
         .with_context(|| format!("Failed to create board '{}'", slug))?;
     println!("Created kanban board: {}", slug);
@@ -353,7 +349,7 @@ async fn cmd_create_board(config: &AppConfig, slug: &str) -> Result<()> {
 }
 
 async fn cmd_delete_board(config: &AppConfig, slug: &str) -> Result<()> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     mgr.delete_board(slug)
         .with_context(|| format!("Failed to delete board '{}'", slug))?;
     println!("Deleted kanban board: {}", slug);
@@ -361,7 +357,7 @@ async fn cmd_delete_board(config: &AppConfig, slug: &str) -> Result<()> {
 }
 
 async fn cmd_list(config: &AppConfig, board_slug: &str, json: bool) -> Result<()> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     let db = mgr
         .open_board(board_slug)
         .context("Failed to open kanban database")?;
@@ -687,7 +683,7 @@ async fn cmd_stats(config: &AppConfig, board_slug: &str) -> Result<()> {
 }
 
 async fn cmd_init(config: &AppConfig, board_slug: &str) -> Result<()> {
-    let mgr = KanbanManager::new(kanban_dir(config));
+    let mgr = KanbanManager::from_app_config(&config.database_path);
     mgr.open_board(board_slug)
         .context("Failed to initialize kanban database")?;
     let path = mgr.resolve_path(board_slug);

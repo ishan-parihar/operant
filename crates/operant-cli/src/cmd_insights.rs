@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use operant_core::agent::insights::InsightsEngine;
 use operant_core::config::AppConfig;
 use operant_core::database::Database;
 
@@ -20,28 +21,27 @@ pub async fn handle_insights_command(config: &AppConfig, cmd: InsightsSubcommand
     }
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "both unwraps sit inside the `!sessions.is_empty()` branch"
-)]
-async fn cmd_sessions(config: &AppConfig, _days: u64) -> Result<()> {
+/// The session-insights report, rendered by the engine's terminal formatter.
+///
+/// This command used to bypass `InsightsEngine` entirely and print two session
+/// counts, while `docs/library/observability.md` named `operant insights` as a
+/// surface of the insights engine — so the documented surface showed none of
+/// the engine's output, and the engine's own terminal renderer had no caller
+/// at all. The pub-fn surface audit is what surfaced it: `format_terminal`
+/// had exactly one reference in the workspace, its own definition.
+async fn cmd_sessions(config: &AppConfig, days: u64) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;
-    let total = db
-        .get_session_count()
-        .context("Failed to get session count")?;
-    println!("Total sessions: {}", total);
-    let sessions = db.list_sessions(50).context("Failed to list sessions")?;
-    if sessions.is_empty() {
-        println!("No sessions recorded yet.");
-        return Ok(());
+    let engine = InsightsEngine::new(&db);
+    let report = engine.generate(days as u32, None);
+
+    // RT-294: a FAILED query must not read as an empty window. The engine
+    // names the failure on the report, so a broken database stays
+    // distinguishable from a quiet week — and the report is still printed,
+    // because a partial report is more useful than none.
+    if let Some(err) = &report.error {
+        eprintln!("warning: {err}");
     }
-    let recent_count = sessions.len();
-    let msg_sum: i64 = sessions.iter().map(|s| s.message_count as i64).sum();
-    println!("Recent sessions (last {}): {}", 50, recent_count);
-    println!("Total messages in recent sessions: {}", msg_sum);
-    if !sessions.is_empty() {
-        println!("First recorded: {}", sessions.last().unwrap().created_at);
-        println!("Last recorded:  {}", sessions.first().unwrap().updated_at);
-    }
+
+    println!("{}", engine.format_terminal(&report));
     Ok(())
 }

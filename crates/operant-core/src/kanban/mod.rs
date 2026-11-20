@@ -41,12 +41,23 @@ impl KanbanManager {
 
     /// Convenience: construct a manager from the main app database path.
     /// The kanban directory is the parent of the main database file.
+    ///
+    /// This is the ONE place that rule lives. `cmd_kanban.rs` and
+    /// `dashboard_server.rs` each carried a byte-equivalent private copy beside
+    /// it, which left this constructor with no caller at all (found by the
+    /// pub-fn surface audit) — so the rule existed three times and the
+    /// canonical one was the dead one.
     pub fn from_app_config(db_path: &Path) -> Self {
         let kanban_dir = db_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         Self::new(kanban_dir)
+    }
+
+    /// The directory holding the board databases.
+    pub fn kanban_dir(&self) -> &Path {
+        &self.kanban_dir
     }
 
     /// Resolve the database file path for a given board slug.

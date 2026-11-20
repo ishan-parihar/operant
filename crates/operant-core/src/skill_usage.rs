@@ -268,11 +268,6 @@ impl UsageTelemetry {
         &self.records
     }
 
-    /// Return all records (mutable).
-    pub fn all_records_mut(&mut self) -> &mut Vec<UsageRecord> {
-        &mut self.records
-    }
-
     /// Return the number of records.
     pub fn len(&self) -> usize {
         self.records.len()

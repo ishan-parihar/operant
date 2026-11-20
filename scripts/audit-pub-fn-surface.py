@@ -58,6 +58,16 @@ ACCOUNTED_FOR = {
     "add_mirror_rule": "compat shim for the retired gateway mirror rules; the setter survives so an old config still parses and the deprecation warning fires (RT-136 class)",
     "with_mirror_rule": "builder companion to add_mirror_rule, same retired-mirror compat surface",
     "set_status_path": "the cron/agent status path is configured once and never re-read; kept because the config surface names it",
+    # The inverse of a mirror rule: a pub API whose pair IS live and whose
+    # absence would be an asymmetric surface. `disable_tool` is called (tests
+    # and the tool_search/name_recovery paths); `enable_tool` is its exact
+    # inverse over the same `disabled_names` set, so deleting it leaves the
+    # registry able to disable a tool and unable to re-enable one in-process.
+    # The PRODUCTION path for both is `set_disabled_tools` (which REPLACES the
+    # whole set, from `apply_disabled_tools`), so nothing is broken today --
+    # but a lone `disable` with no inverse is the kind of asymmetry that bites
+    # the next caller who reaches for the obvious name.
+    "enable_tool": "the inverse of the live `disable_tool` over the same disabled_names set; the production path is set_disabled_tools (REPLACE semantics, applied by tools/tool_state.rs), so this is the symmetric in-process API rather than a dead end -- deleting one half of a disable/enable pair is a worse surface than keeping it (iter-2753 decision)",
 }
 
 # Shapes the census structurally cannot see. Recorded so the next run is

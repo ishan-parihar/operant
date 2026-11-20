@@ -90,11 +90,14 @@ pub fn build_app(
     port: u16,
     session_token: Option<String>,
 ) -> Router {
-    let kanban_dir = config
-        .database_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // The manager's OWN app-config constructor. The dashboard carried its own
+    // copy of the same `database_path.parent()` rule beside the core helper
+    // (found by the pub-fn surface audit: `from_app_config` had no caller).
+    // `KanbanManager::new` still takes the directory for the cases that HAVE
+    // one already (a resolved board path, a test tempdir).
+    let kanban_dir = KanbanManager::from_app_config(&config.database_path)
+        .kanban_dir()
+        .to_path_buf();
 
     let state = DashboardState {
         start_time: Instant::now(),

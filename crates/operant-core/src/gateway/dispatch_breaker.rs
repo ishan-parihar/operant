@@ -85,17 +85,6 @@ impl FailureClass {
             FailureClass::Wedged => "wedged",
         }
     }
-
-    /// Parse the stored key back. Unknown strings map to `Wedged` — an
-    /// unrecognized row can only ever have been written by a future
-    /// version, and treating it as the catch-all is the safe reading.
-    pub fn from_str_key(s: &str) -> Self {
-        match s {
-            "transport" => FailureClass::Transport,
-            "auth" => FailureClass::Auth,
-            _ => FailureClass::Wedged,
-        }
-    }
 }
 
 /// The classifier's input: the platform adapter's error, already rendered.

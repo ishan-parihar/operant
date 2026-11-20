@@ -41,6 +41,16 @@ reference is a machine-local checkout, not a repo path).
 Surfaces: the `insights` tool (agent-callable), `operant insights`
 (operator), and the stats dialog's `~/.operant/stats.jsonl` feed.
 
+`operant insights sessions` renders through the engine's own
+`format_terminal` — the SAME renderer shape the tool uses via
+`format_gateway`. It did not until iter-2753: the command bypassed the
+engine and printed two session counts, while this page already named it
+as an engine surface, and the terminal renderer had no caller at all
+(the pub-fn surface audit is what caught it: one reference, its own
+definition). The engine's failure note is printed to stderr and the
+report still renders, so a broken database stays distinguishable from a
+quiet week (RT-294).
+
 ## Logging
 
 `[logging]` config; the interactive TUI defaults to
@@ -67,8 +77,9 @@ live log, `--level` and `--component` filter, and `operant logs follow`
 tails it like `tail -f`. `operant status` summarizes version, model,
 data dir, ESTOP state and harness mount counters (`--json` for
 scripts, `--deep` to add the API-key status). `operant insights
-sessions` walks the session history, and the `insights` tool answers
-the same questions from inside a turn. `operant dashboard server`
+sessions` renders the engine's report for the last N days (default 7),
+and the `insights` tool answers the same questions from inside a turn.
+`operant dashboard server`
 serves the four-route status view on port 9119 and opens a browser;
 `--stop` and `--status` manage the pid file. The `[observability]`
 section selects an observer backend (`none` default, anything else

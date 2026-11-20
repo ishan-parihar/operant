@@ -180,28 +180,6 @@ impl GuardScanner {
     pub fn scan_directory(&self, path: &Path, source: &str) -> ScanResult {
         scan_skill(path, source)
     }
-
-    /// Run structural checks only (file count, total size, binary files, symlinks).
-    pub fn structural_check(&self, path: &Path) -> Vec<SecurityFinding> {
-        check_structure(path)
-    }
-
-    /// Resolve a source identifier to a trust level.
-    pub fn determine_trust(source: &str) -> TrustLevel {
-        resolve_trust_level(source)
-    }
-
-    /// Evaluate the final install verdict given a trust level and scan verdict.
-    ///
-    /// This applies the same policy matrix as the Python `should_allow_install`.
-    pub fn evaluate(trust_level: TrustLevel, scan_verdict: ScanVerdict) -> Verdict {
-        evaluate_install_policy(trust_level, scan_verdict)
-    }
-
-    /// Human-friendly report of a scan result.
-    pub fn format_report(&self, result: &ScanResult) -> String {
-        format_scan_report(result)
-    }
 }
 
 impl Default for GuardScanner {

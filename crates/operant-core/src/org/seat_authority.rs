@@ -123,11 +123,6 @@ impl SeatApprover {
         }
     }
 
-    /// The seat every resolution is attributed to.
-    pub fn approver_of(&self, _employee_id: &str) -> String {
-        self.approver_id.clone()
-    }
-
     /// Resolve an escalation by approving it. The permission channel has
     /// already unblocked the waiting tool call; this records the verdict
     /// the caller surfaces.
