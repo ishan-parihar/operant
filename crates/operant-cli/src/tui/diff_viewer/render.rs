@@ -33,7 +33,14 @@ use crate::tui::vendor::style::theme;
 /// with the detail pane focused the key fell through to `_ => {}` and did
 /// NOTHING while the footer still promised it. See `footer_hint`, which adds
 /// that clause only where the key dispatches.
-pub(crate) const FOOTER_HINT: &str = " tab switch pane  ·  ↑↓ navigate  ·  pgup/pgdn/wheel scroll";
+/// (iter-2716) `↑↓` was the whole navigation claim until the handler gained
+/// `Up | Char('k')` / `Down | Char('j')` in both panes. RT-273's pin
+/// (`the_diff_viewers_footer_only_names_keys_it_dispatches`) reads THIS constant
+/// and asserts every clause names a dispatched arm; the vim pair is the clause
+/// that direction of the contract had never had to catch, because it was the
+/// footer that was wrong, not the handler.
+pub(crate) const FOOTER_HINT: &str =
+    " tab switch pane  ·  ↑↓/j/k navigate  ·  pgup/pgdn/wheel scroll";
 
 /// The footer for the state's CURRENT pane: the shared claims, plus the clause
 /// only that pane dispatches. A footer is a contract, so a clause must not

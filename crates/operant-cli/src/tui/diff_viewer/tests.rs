@@ -327,7 +327,7 @@ fn the_diff_viewers_footer_only_names_keys_it_dispatches() {
     /// is pinned by `the_space_clause_rides_the_pane_that_dispatches_it`.
     const CLAIMS: &[(&str, &str, &str)] = &[
         ("tab switch pane", "Tab", "KeyCode::Tab"),
-        ("↑↓ navigate", "Up/Down", "KeyCode::Up"),
+        ("navigate", "Up/Down", "KeyCode::Up"),
         ("pgup/pgdn", "PageUp/PageDown", "KeyCode::PageUp"),
     ];
 
@@ -568,4 +568,33 @@ fn the_word_level_diff_backgrounds_follow_an_override() {
     for role in ALL_ROLES {
         assert!(!role.key().is_empty());
     }
+}
+
+/// (iter-2716) The footer must name every key the handler dispatches for
+/// navigation, in BOTH directions.
+///
+/// RT-273 asked "does the footer name a key with no arm"; iter-2714 was the
+/// mirror -- the handler gained `Up | Char('k')` / `Down | Char('j')` in both
+/// panes and the footer kept saying `↑↓` alone. An under-claiming footer is not
+/// a lie the way a phantom key is, but it is the same defect: a footer that
+/// does not describe the surface, and hides a working dialect from the
+/// operator. Assert both spellings are advertised.
+#[test]
+fn the_diff_viewers_footer_names_the_vim_pair() {
+    let footer = super::render::FOOTER_HINT;
+    let handler = include_str!("../app/key_handling.rs");
+
+    for chord in ["↑↓", "j/k"] {
+        assert!(
+            footer.contains(chord),
+            "the footer must name {chord}: the handler dispatches it in both \
+             panes -- {footer:?}"
+        );
+    }
+    // The handler side: the pair must actually be dispatched, so the footer
+    // is not over-claiming.
+    assert!(
+        handler.contains("Char('j')") && handler.contains("Char('k')"),
+        "the footer claims the vim pair, but the handler has no j/k arm"
+    );
 }

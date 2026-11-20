@@ -209,12 +209,13 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
     // advertised a selection that does not exist: the operator picked a row,
     // pressed Enter, and got a closed dialog exactly as if they had pressed Esc.
     //
-    // The claim was the defect, so the claim goes rather than a selection
-    // mechanism being invented to honour it (the audit's phantom-capability
-    // rule: this is a browsing overlay, not a chooser). Navigation and closing
-    // are what the keys do, and that is what the footer now says.
+    // (iter-2716) The footer named the arrows and not the vim pair, which the
+    // handler DOES dispatch (`KeyCode::Up | Char('k')` / `Down | Char('j')`).
+    // A hint is a claim about what the surface accepts, so it under-describing
+    // the handler is the same defect class as RT-273's footer advertising a key
+    // with no arm -- the mirror image of it. Name both, or name neither.
     Paragraph::new(Line::from(vec![Span::styled(
-        "  \u{2191}\u{2193} navigate  Esc close",
+        "  \u{2191}\u{2193}/j/k navigate  Esc close",
         Style::default().fg(theme_colors::muted()),
     )]))
     .style(Style::default().bg(theme_colors::panel_bg()))

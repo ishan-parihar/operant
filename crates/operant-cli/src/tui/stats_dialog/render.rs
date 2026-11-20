@@ -51,8 +51,12 @@ pub fn render_stats_dialog(state: &StatsDialogState, area: Rect, buf: &mut Buffe
         StatsTab::CostHeatmap => render_cost_heatmap(data, content_area, buf),
         StatsTab::Models => render_models(state, content_area, buf),
     }
+    // (iter-2716) `↑↓ scroll` was the whole claim until `handle_stats_dialog_key`
+    // gained `Up | Char('k')` / `Down | Char('j')` beside it. Same class as
+    // RT-273, mirrored: a footer is a contract with the operator, so a key the
+    // surface accepts and the footer does not name is a dialect they never find.
     Paragraph::new(Line::from(vec![Span::styled(
-        " tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll",
+        " tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓/j/k scroll",
         Style::default()
             .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),

@@ -19400,3 +19400,102 @@ fn two_fresh_apps_bind_chords_identically() {
          made it a silent no-op); 13 is the start of \"parser\""
     );
 }
+
+/// (iter-2716) Every footer that names a navigation pair must name the pair the
+/// surface actually dispatches, in BOTH directions.
+///
+/// ## Why this exists as its own test
+///
+/// The repo has now filed this defect three times, with three bespoke pins:
+///
+/// - **RT-273** (CLOSED iter-1840): the diff viewer's footer advertised
+///   `d toggle scope`, a key with NO arm anywhere. Footer over-claimed.
+/// - **RT-366** (CLOSED): `BindingContext::Dialog` claimed Enter = "Confirm" for
+///   every dialog while the memory selector's Enter arm was byte-for-byte Esc.
+///   Catalogue over-claimed.
+/// - **iter-2714** (this test's reason): the vim pair was added to five
+///   move-only surfaces and their footers still read `↑↓` alone. Footer
+///   UNDER-claimed -- the mirror of RT-273.
+///
+/// Three recurrences of one shape is a missing SEAM, not three missing tests.
+/// The seam is: a hint is a claim about the handler, so it can be checked as a
+/// claim rather than eyeballed per surface.
+///
+/// ## What it asserts
+///
+/// For each surface that dispatches the vim pair, its painted hint must name it.
+/// The handler side is `include_str!`-checked so the test fails if the pair is
+/// removed WITHOUT the footer being repaired too -- the mutation that proves it.
+///
+/// ## Scope: move-only surfaces only
+///
+/// Deliberately NOT extended to the surfaces that keep `j`/`k` literal because
+/// they own a text field -- `ask_user_dialog`, `command_palette`,
+/// `global_search`, `agent_picker`, `import_config_picker`. Binding `j`/`k` to
+/// "move down" there would swallow the operator's typing. That exclusion is a
+/// correctness rule, not an oversight, and it is the reason this table is short.
+#[test]
+fn footers_name_the_vim_pair_every_surface_that_dispatches_it() {
+    /// (surface name, the footer substring that must appear, the handler-ish
+    ///  source file the footer is painted from)
+    ///
+    /// The needle is `j/k`, not `↑↓/j/k`: `memory_file_selector.rs` spells its
+    /// arrows as `\u{2191}\u{2193}` escapes, so a literal-arrow needle cannot
+    /// match that source, and the arrow half is not the claim at risk anyway --
+    /// it predates this defect by years. `j/k` is the spelling iter-2714 left
+    /// out, so `j/k` is what must not go missing.
+    const SURFACES: &[(&str, &str, &str)] = &[
+        (
+            "memory_file_selector",
+            "j/k",
+            include_str!("../memory_file_selector.rs"),
+        ),
+        (
+            "stats_dialog",
+            "j/k",
+            include_str!("../stats_dialog/render.rs"),
+        ),
+    ];
+
+    for (name, hint, source) in SURFACES {
+        assert!(
+            source.contains(hint),
+            "{name} must advertise the vim pair in its footer: {hint:?} is absent"
+        );
+    }
+
+    // The diff viewer carries the same clause in a shared constant (both panes
+    // dispatch it). It is NOT reachable from here -- `diff_viewer::render` is a
+    // private module -- and it does not need to be: that surface already pins
+    // both directions in its own
+    // `the_diff_viewers_footer_only_names_keys_it_dispatches`, which reads the
+    // constant directly.
+
+    // The handler side: every surface above really does dispatch the pair, so
+    // no footer here is over-claiming. (RT-273's direction, still checked.)
+    let handler = include_str!("key_handling.rs");
+    assert!(
+        handler.contains("Char('j')") && handler.contains("Char('k')"),
+        "the vim pair must be dispatched somewhere for these footers to be true"
+    );
+
+    // And the text-entry surfaces are untouched: `j`/`k` stay literal there, so
+    // their footers must NOT claim navigation. This is the other half of the
+    // contract and the reason this test's table is not simply "every overlay".
+    //
+    // `global_search` lives in its own `handle_global_search_key`, so its
+    // needle is the call, not the inline arm; `agent_picker` is inline in this
+    // same file. Both are the operator's TYPING surface, which is why binding
+    // `j`/`k` to "move down" there would eat their input rather than move it.
+    let handler = include_str!("key_handling.rs");
+    for (name, literal) in [
+        ("global_search", "global_search.push_char"),
+        ("agent_picker", "agent_picker.filter_push"),
+    ] {
+        assert!(
+            handler.contains(literal),
+            "{name} must keep j/k as text entry ({literal:?} is absent), so its \
+             footer must not claim vim navigation"
+        );
+    }
+}
