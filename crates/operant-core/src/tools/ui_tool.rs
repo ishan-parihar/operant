@@ -864,8 +864,25 @@ mod tests {
         assert_eq!(parsed["surface_id"], "s2");
     }
 
+    /// An unattended run (cron) is refused with an UNATTENDED message.
+    ///
+    /// (iter-2745: this test must hold the same lock as its five siblings.)
+    /// The assertion is on a SPECIFIC refusal string, but `execute` runs the
+    /// GATE before the unattended guard (ui_tool.rs:546 reads
+    /// `crate::config::runtime_config()`, then :558 checks `unattended`), and the
+    /// gate's first check is the kill switch (`ui/gate.rs:72`). So when
+    /// `render_refuses_when_disabled` holds `GenEnabledGuard` with the flag set
+    /// false, this test read the process-global WITHOUT the lock, got
+    /// `UiRefusal::Disabled` back, and the error said "generative UI is disabled"
+    /// -- no "unattended" substring, so the assertion failed. MEASURED: passes
+    /// alone, fails in the full suite, which is the signature of a shared global.
+    /// The `GenEnabledGuard` comment already states the rule ("the lock is what
+    /// makes the window closed rather than merely narrow"); this test simply did
+    /// not take it. The tool's gate order is CORRECT and stays: an operator who
+    /// disabled generative UI should get "disabled", not "unattended".
     #[tokio::test]
     async fn request_refuses_unattended() {
+        let _guard = GenEnabledGuard::set(true);
         let tool = UiRequestInputTool;
         let context = ToolContext::default()
             .with_metadata("transport", "tui")
