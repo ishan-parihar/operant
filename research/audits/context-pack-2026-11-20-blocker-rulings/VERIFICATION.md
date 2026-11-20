@@ -187,3 +187,67 @@ queues (the pub-fn acid tests and the wasmtime triage).
 Every one of R1–R4. The reviewer's role was to recommend; the ruling is the owner's. The
 pack gives the operator a per-row recommendation, its confidence, and the one measurement
 that would change it — which is the most an external review can hand over.
+
+---
+
+## Part 7 — what the round produced beyond advice (both fixed and pushed)
+
+The round found two things the campaign did not already know, and both are now closed
+rather than reported. That is the round's actual yield.
+
+### 7.1 The AGENTS.md self-contradiction (Part 5, finding 3) — FIXED, iter-2774
+
+The tree said `memory_provider.rs # memory-wire + BuiltinProvider` and
+`memory_tools.rs # memory_* tools (memory-wire/builtin)` while the same file said twice
+that BuiltinProvider was REMOVED and the code agreed. Corrected in both places, and the
+iteration-history line was left historically true with the later deletion appended rather
+than rewritten to look like the present.
+
+**The deeper finding: no gate could see it.** `check-doc-claims.sh` already validated
+the tree, but only that each named PATH exists. The drift lived in the trailing comment.
+Proven by mutation: reintroduce the exact drift, run the gate, get exit 0 and "all
+AGENTS.md code-surface claims match the code".
+
+Fixed by extending the gate with a deleted-symbol guard, mutation-proven both ways:
+
+| run | expected | observed |
+|---|---|---|
+| clean tree | pass | `OK  Architecture tree named symbols: 5 checked, all exist in the code` |
+| drift reintroduced | fail, naming the line | `DRIFT  BuiltinProvider in: <the tree line>`, exit 1 |
+
+The guard took three attempts, and two of its failures are the transferable lesson:
+
+1. **too broad** — flagged `Clap` in `main.rs # CLI entry point, Clap enum, agent
+   setup`. Clap is an external crate the comment names as a tool, not a symbol the file
+   owns. Narrowed to symbols after a `+` or leading the comment as `Foo (...)`.
+2. **passed the exact drift it exists to catch** — a deleted symbol survives in the code
+   as the *comment explaining its deletion* (`memory_provider.rs` says "BuiltinProvider is
+   deleted" twice). Checking raw text therefore found the symbol present. Fixed by
+   stripping Rust comments before checking, so only live code is evidence.
+
+Both failures were caught by testing the guard against a reintroduced defect rather than
+trusting it. The second one is the generalizable point: **a detector that reads the same
+artefact the drift lives in is not a detector.**
+
+### 7.2 Two red gates became one (Part 5, finding 4) — MEASURED, not fixed
+
+Re-measured against the current tip rather than the pack tip: iter-2763 triaged and
+allowlisted the 15 wasmtime advisories, so the supply-chain gate is green
+(`seen=20 allowlist=20 new=0 stale=0`), and iter-2767 cut the `tests=0` tail from 14 to 5.
+The pub-fn gate still exits 1 with 103 candidates. STATE.md and ASK.md now say this
+instead of copying the stale pack-tip reading.
+
+The reviewer's underlying point stands and is now a documented open item: the project has
+been pushing past a red gate on the strength of fleet rule 7 without anyone deciding
+whether `plugins-wasm` (extism, pinning wasmtime 49.0.3) should stay enabled. That is a
+product decision, not a code fix, and it belongs with the other four rulings.
+
+### 7.3 The as-sent record — CORRECTED (see CORRECTION.md)
+
+`PACK-AS-SENT.md` is a record, not a reconstruction: I rebuilt the pack twice after the
+send, so the exact as-sent bytes are gone. The file says so, lists the per-section byte
+deltas, and names the fix as mechanical — preserve the blob or hash it before the
+rebuild, and make the drift gate compare against that preserved copy.
+
+**A documented mistake is not a prevented one.** I wrote the warning and then repeated
+the mistake twenty minutes later. That is why 7.1's guard is a gate and not a note.
