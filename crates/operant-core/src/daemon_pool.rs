@@ -99,14 +99,6 @@ where
     }
 }
 
-/// Convenience: spawn with the default label.
-pub fn spawn_anonymous<F>(fut: F)
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    spawn(DEFAULT_LABEL, fut);
-}
-
 /// Wait (up to `timeout`) for all daemons whose label matches `prefix` to
 /// finish. Intended for tests; never call from production paths. Returns
 #[expect(

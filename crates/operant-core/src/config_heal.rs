@@ -33,8 +33,6 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
 /// One change the loader made to a config value.
 ///
 /// `key` is the dotted path an operator can pass to `operant config notes`,
@@ -369,16 +367,6 @@ pub fn merge_parked(raw: &str, parked: &toml::Value) -> Option<String> {
     }
 
     toml::to_string_pretty(&doc).ok()
-}
-
-/// Render a parked value the way the loader would show it.
-pub fn render_parked(parked: &Value) -> String {
-    match parked {
-        Value::Object(_) | Value::Array(_) => {
-            toml::to_string_pretty(parked).unwrap_or_else(|_| "<complex>".to_string())
-        }
-        other => other.to_string(),
-    }
 }
 
 /// The reason strings the heal tables pass. One place, so a test can assert

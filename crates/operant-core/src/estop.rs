@@ -71,11 +71,6 @@ pub struct EstopState {
     pub engaged_at: Option<u64>,
 }
 
-/// Path of the ESTOP sentinel under the active operant data directory.
-pub fn sentinel_path() -> PathBuf {
-    sentinel_path_in(&active_root())
-}
-
 /// Path of the ESTOP sentinel under an explicit root (used by tests).
 pub fn sentinel_path_in(root: &Path) -> PathBuf {
     root.join(SENTINEL_NAME)

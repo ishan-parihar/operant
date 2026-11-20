@@ -68,6 +68,14 @@ ACCOUNTED_FOR = {
     # but a lone `disable` with no inverse is the kind of asymmetry that bites
     # the next caller who reaches for the obvious name.
     "enable_tool": "the inverse of the live `disable_tool` over the same disabled_names set; the production path is set_disabled_tools (REPLACE semantics, applied by tools/tool_state.rs), so this is the symmetric in-process API rather than a dead end -- deleting one half of a disable/enable pair is a worse surface than keeping it (iter-2753 decision)",
+    # The G6 extension point. The FIELD it sets is read at two live sites in
+    # the same impl block (`harness_adapters.rs` install paths: the
+    # SeamToolPayload materialization and the `pool.*` row-config fallback),
+    # so this is an extension point awaiting its caller, not an orphan -- the
+    # census counts the SETTER's call sites, and it has none, so the field it
+    # feeds reads as uncalled. Recorded rather than deleted because deleting
+    # the setter would strand a permanently-None field behind two live reads.
+    "with_pool_factory": "the G6 tool-seam extension point. `ToolSeam::pool_tool_factory` is READ at harness_adapters.rs:79 (SeamToolPayload materialization) and :95 (pool.* row-config fallback); no production caller has needed the hook yet. The census counts the SETTER's call sites (zero), not the field's reads (two), so it reads as callerless -- kept because deleting it strands a permanently-None field behind live reads (iter-2754 decision)",
 }
 
 # Shapes the census structurally cannot see. Recorded so the next run is

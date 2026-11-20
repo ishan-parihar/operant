@@ -150,14 +150,6 @@ impl ResolvedWindow {
             Self::automatic()
         }
     }
-
-    /// Clamp the caller's requested output cap to what this route accepts.
-    ///
-    /// `None` when the model's own ceiling is unknown — the fitter then
-    /// applies [`UNKNOWN_MODEL_OUTPUT_CEILING`] itself.
-    pub fn output_ceiling(&self) -> Option<usize> {
-        self.max_output
-    }
 }
 
 impl Default for ResolvedWindow {

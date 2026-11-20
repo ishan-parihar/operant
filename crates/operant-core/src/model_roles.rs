@@ -306,16 +306,6 @@ impl ModelSlot {
         }
     }
 
-    /// The slot's single model, when it holds exactly one. `None` for an
-    /// unassigned slot and for the two list-shaped ones.
-    pub fn single_model(self, cfg: &AppConfig) -> Option<String> {
-        let ids = self.assigned_models(cfg);
-        match ids.len() {
-            1 => Some(ids.into_iter().next().unwrap_or_default()),
-            _ => None,
-        }
-    }
-
     /// The dotted config path this slot's model is written to, in the shape
     /// `config::persist_config_key` takes (`agent.model`,
     /// `auxiliary_models.vision.model`, …).

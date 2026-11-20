@@ -114,12 +114,6 @@ impl AccessibilityNode {
     pub fn is_interactive(&self) -> bool {
         INTERACTIVE_ROLES.contains(&self.role.as_str())
     }
-
-    /// Whether this node has visible text content.
-    pub fn has_text(&self) -> bool {
-        self.name.as_ref().is_some_and(|n| !n.is_empty())
-            || self.value.as_ref().is_some_and(|v| !v.is_empty())
-    }
 }
 
 impl AccessibilityTree {

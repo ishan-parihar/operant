@@ -769,19 +769,12 @@ impl MemoryManager {
 // (iter-148: uuid_simple deleted — use uuid::Uuid::new_v4() instead,
 // already in deps. Was a hand-rolled time-based pseudo-UUID.)
 
-/// Returns the active memory provider name from config (the
-/// `config.memory.provider` value, or `"disabled"` when memory is turned
-/// off). memory-wire is the only engine; any other spelling is accepted
-/// and warns but still routes to memory-wire (see `build_memory_provider`).
-pub fn resolve_memory_provider() -> String {
-    use crate::config::runtime_config;
-    let cfg = runtime_config();
-    if cfg.memory.enabled {
-        cfg.memory.provider.clone()
-    } else {
-        "disabled".to_string()
-    }
-}
+// (iter-2753) `resolve_memory_provider()` was deleted here. It returned
+// `config.memory.provider` (or "disabled"), and nothing called it: the
+// live read is `cmd_doctor/checks_tools.rs::detect_memory_provider`, and the
+// engine itself is resolved once in `memory_provider::build_memory_provider`,
+// which ignores the name argument and always builds memory-wire (plan 11C3).
+// Three names for one answer, where the middle one had no caller.
 
 #[cfg(test)]
 mod tests {

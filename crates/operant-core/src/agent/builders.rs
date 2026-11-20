@@ -2,7 +2,6 @@
 
 use self::background_review::SelfEvolutionState;
 use self::iteration_budget::IterationBudget;
-use crate::client::Role;
 use crate::database::Database;
 use crate::observer::Observer;
 use crate::skills::SkillManager;
@@ -834,53 +833,6 @@ impl OperantAgent {
             .lock()
             .ok()
             .and_then(|mut slot| slot.take())
-    }
-
-    /// List currently-active subagent tool calls. Returns a vec of
-    /// (tool_call_id, status) pairs for every `delegate_task` / `spawn_subagent`
-    /// tool call the agent has emitted in the current turn. Status is
-    /// "running" for in-flight calls, "done" for completed. The TUI uses
-    /// this to populate the /agents overlay and the subagent HUD pill.
-    /// (iter-92 — closes the /agents parity gap.)
-    ///
-    /// This reads from the agent's conversation history, scanning for
-    /// tool_calls (OpenAI format: assistant messages with `tool_calls` vec)
-    /// whose function.name is "delegate_task" or "spawn_subagent", and
-    /// matching them against tool-role messages (tool_call_id field) to
-    /// determine status.
-    pub async fn list_subagents(&self) -> Vec<(String, String)> {
-        let conv = self.conversation.read().await;
-        let mut result: Vec<(String, String)> = Vec::new();
-        let mut completed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // First pass: collect all tool_call_ids that have a matching tool-result message.
-        for msg in conv.iter() {
-            if msg.role == Role::Tool
-                && let Some(ref id) = msg.tool_call_id
-            {
-                completed_ids.insert(id.clone());
-            }
-        }
-
-        // Second pass: find assistant messages with tool_calls for subagent tools.
-        for msg in conv.iter() {
-            if msg.role == Role::Assistant
-                && let Some(ref tool_calls) = msg.tool_calls
-            {
-                for tc in tool_calls {
-                    let name = &tc.function.name;
-                    if name == "delegate_task" || name == "spawn_subagent" {
-                        let status = if completed_ids.contains(&tc.id) {
-                            "done".to_string()
-                        } else {
-                            "running".to_string()
-                        };
-                        result.push((tc.id.clone(), status));
-                    }
-                }
-            }
-        }
-        result
     }
 
     /// Drain pending steer directives. Returns the steers as a single

@@ -119,6 +119,29 @@ subjected to before deletion, and the reason the plan groups them rather than ba
 
 ### T1 -- the single-candidate files (11 candidates across 11 files)
 
+**LANDED iter-2754 (`8e6e9e2c`): 10 of the 11 deleted, 1 kept-and-recorded.**
+
+| verdict | name | why |
+|---|---|---|
+| deleted | `output_ceiling` (context_window) | superseded by `reserve_for_output` / `thinking_token_reserve`; no callers, no tests |
+| deleted | `sentinel_path` (estop) | unwired gate; the test counts its mentions, not its callers |
+| deleted | `render_parked` (config_heal) | test-only note printer, 0 tests |
+| deleted | `is_announced` (retry_policy) | `DurableAnnouncement` still owns its state, so the whole retry path was bypassed |
+| deleted | `list_subagents` (builders) | same parent() propagation story as session_parent (iter-2753); 0 callers, 0 tests |
+| deleted | `single_model` (model_roles) | keeps its sibling `primary`, gives away the role-chain invariant for free |
+| deleted | `resolve_memory_provider` (memory) | provider construction happens once in `client.rs::build_memory_provider` |
+| deleted | `has_text` (accessibility) | empty-space check, not accessibility; the test already checked trim().is_empty() inline |
+| deleted | `historian_system_prompt` (historian) | constant fold; only its own test named either symbol |
+| deleted | `HISTORIAN_INSTRUCTION` (historian) | the constant fold target |
+| **kept** | `with_pool_factory` (harness_adapters) | **the census counts the SETTER's call sites, not the FIELD's reads.** `ToolSeam::pool_tool_factory` is read at two live install paths (:79 SeamToolPayload materialization, :95 `pool.*` row-config fallback). Deleting the setter strands a permanently-None field behind live reads. Recorded in `ACCOUNTED_FOR`. |
+
+So T1's own stated output was "11" and the real answer is **10 deleted + 1 recorded** --
+which is the plan's own lesson from T5 applying to T1. The count is the instrument's
+claim, not the tree's.
+
+Guard: `the_pub_fn_batch_stays_deleted` (19 needles), RED-proven by re-adding each.
+
+
 The cheapest group: one file, one candidate, one acid test. Deleting one function from a
 file that has exactly one is a self-contained change with an obvious blast radius.
 

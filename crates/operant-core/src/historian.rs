@@ -34,25 +34,15 @@
 use crate::client::Message;
 use crate::context_management::tool_group_starts;
 
-/// The system prompt for a fold.
-///
-/// Deliberately narrow: the model's whole job is to compress ONE closed span
-/// into a short factual paragraph that preserves what a later reader needs —
-/// decisions, constraints, open threads. It is not asked to evaluate, to advise,
-/// or to continue anything, because a compartment is reference material, not
-/// instruction.
-pub fn historian_system_prompt() -> &'static str {
-    "You compress one closed stretch of a coding session into a short factual \
-     reference paragraph. Preserve: what was decided, what constraint was \
-     established, what is still open. Drop: pleasantries, retries that reached \
-     nothing, and anything already stated more precisely elsewhere. Write prose, \
-     no headings, no bullets, at most 150 words. Do not advise, do not continue \
-     the work, do not address the reader."
-}
-
-/// The user-role instruction that carries the span.
-pub const HISTORIAN_INSTRUCTION: &str =
-    "Compress the stretch above into one factual reference paragraph.";
+// (iter-2753) `historian_system_prompt()` and `HISTORIAN_INSTRUCTION` were
+// deleted here. They were the two halves of the model call the iter-2404 note
+// in `agent/compress.rs` removed: that rung folded a closed span and returned
+// the message list UNCHANGED, so a stored summary was never read back into a
+// request -- a paid model call whose output no request ever saw. The prompts
+// survived the rung because nothing fails when a `pub fn` has no caller, and
+// the acid test proved them dead. The STORE and the PURE LOGIC below stay, for
+// the reason that note already gives: a future design that keys compartments to
+// stable ids can reuse them unchanged, and it will need a prompt of its own.
 
 /// Token ceiling on the rendered span one fold call may carry.
 ///

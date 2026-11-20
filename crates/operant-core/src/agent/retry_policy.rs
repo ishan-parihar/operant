@@ -62,6 +62,17 @@ use std::time::{Duration, Instant};
 pub enum RetryDecision {
     /// Re-issue after this delay. `announced` is true for a large-span retry,
     /// which is the one the operator should see.
+    ///
+    /// READ BY NOBODY in production (iter-2753). `RetryDecision::is_announced`
+    /// was the only reader and it was deleted as callerless; the live
+    /// announcement is `run.rs`'s own `in_large_span &&
+    /// config.retry.announce_large_span`, which computes the same condition
+    /// from the attempt count instead of from this field. The flag is kept
+    /// because it is part of this enum's PUBLIC shape and every test compares
+    /// the whole value; deleting it is a breaking change to a public type that
+    /// belongs in its own iteration, not in a callerless-method sweep. A future
+    /// reader who wires the announcement through the decision instead of
+    /// recomputing it is the fix.
     Retry { delay: Duration, announced: bool },
     /// Stop: the ladder is out of small-span attempts AND the ceiling (if any)
     /// has been reached. The caller surfaces the last error.
@@ -79,18 +90,6 @@ impl RetryDecision {
             Self::Retry { delay, .. } => Some(*delay),
             Self::Stop { .. } => None,
         }
-    }
-
-    /// Whether this decision is a large-span retry the operator should see.
-    #[must_use]
-    pub fn is_announced(&self) -> bool {
-        matches!(
-            self,
-            Self::Retry {
-                announced: true,
-                ..
-            }
-        )
     }
 }
 

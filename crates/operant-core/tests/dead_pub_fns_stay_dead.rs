@@ -29,6 +29,8 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 /// A re-added definition of any of the three A7 deletions is the regression.
+/// Kept separate from `the_pub_fn_batch_stays_deleted` below because this is
+/// the ORIGINAL A7 trio; the other holds the iter-2753/2754 batches.
 #[test]
 fn the_three_dead_pub_fns_stay_deleted() {
     let root = workspace_root();
@@ -59,7 +61,12 @@ fn the_three_dead_pub_fns_stay_deleted() {
     }
 }
 
-/// The second batch, deleted after the auditor reported them (iter-2753).
+/// The pub-fn batch, deleted after the auditor reported them (iter-2753).
+///
+/// Nineteen needles, one per deleted definition: the tests=0 half of the
+/// peer plan `2026-11-20-close-the-pub-fn-surface-queue-*` plus the
+/// candidates the same scan surfaced at this tip (structural_check, evaluate,
+/// session_parent, historian_system_prompt, list_subagents).
 ///
 /// Every one was acid-proven dead the same way A7 proved its three: drop the
 /// `pub`, `cargo check -p operant-core --lib`, restore. Three of them were
@@ -67,16 +74,19 @@ fn the_three_dead_pub_fns_stay_deleted() {
 /// three times (the core helper plus one private copy each in `cmd_kanban.rs`
 /// and `dashboard_server.rs`), so the canonical one was the dead one; those
 /// two call sites now route through the core helper, which is why the name
-/// moved from the "dead" list to a live caller.
+/// moved from the "dead" list to a live caller. `format_terminal` was the
+/// same shape (docs/library/observability.md named `operant insights` as an
+/// engine surface while the command bypassed the engine), so it is WIRED and
+/// live-verified, not deleted.
 ///
 /// `enable_tool` is deliberately NOT in this list: it is the symmetric half of
 /// the live `disable_tool`, and the audit's verdict for it was a DECISION, not
 /// a deletion.
 #[test]
-fn the_second_batch_of_dead_pub_fns_stays_deleted() {
+fn the_pub_fn_batch_stays_deleted() {
     let root = workspace_root();
 
-    let dead: [(&str, &str); 9] = [
+    let dead: [(&str, &str); 19] = [
         (
             "crates/operant-core/src/skill_usage.rs",
             concat!("pub fn ", "all_records", "_mut"),
@@ -112,6 +122,46 @@ fn the_second_batch_of_dead_pub_fns_stays_deleted() {
         (
             "crates/operant-core/src/database.rs",
             concat!("pub fn ", "child", "_sessions"),
+        ),
+        (
+            "crates/operant-core/src/context_window.rs",
+            concat!("pub fn ", "output", "_ceiling"),
+        ),
+        (
+            "crates/operant-core/src/estop.rs",
+            concat!("pub fn ", "sentinel", "_path()"),
+        ),
+        (
+            "crates/operant-core/src/config_heal.rs",
+            concat!("pub fn ", "render", "_parked"),
+        ),
+        (
+            "crates/operant-core/src/agent/retry_policy.rs",
+            concat!("pub fn ", "is", "_announced"),
+        ),
+        (
+            "crates/operant-core/src/agent/builders.rs",
+            concat!("pub async fn ", "list", "_subagents"),
+        ),
+        (
+            "crates/operant-core/src/model_roles.rs",
+            concat!("pub fn ", "single", "_model"),
+        ),
+        (
+            "crates/operant-core/src/memory.rs",
+            concat!("pub fn ", "resolve_memory", "_provider"),
+        ),
+        (
+            "crates/operant-core/src/accessibility.rs",
+            concat!("pub fn ", "has", "_text"),
+        ),
+        (
+            "crates/operant-core/src/historian.rs",
+            concat!("pub fn ", "historian", "_system_prompt"),
+        ),
+        (
+            "crates/operant-core/src/daemon_pool.rs",
+            concat!("pub fn ", "spawn", "_anonymous"),
         ),
     ];
 
