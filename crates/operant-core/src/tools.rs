@@ -302,11 +302,6 @@ pub enum ToolExposure {
 }
 
 impl ToolExposure {
-    /// Whether the tool is offered directly in the tools array.
-    pub fn is_direct(self) -> bool {
-        matches!(self, ToolExposure::Direct)
-    }
-
     /// Whether the tool is reachable only through the deferred bridge.
     pub fn is_deferred(self) -> bool {
         matches!(self, ToolExposure::Deferred)

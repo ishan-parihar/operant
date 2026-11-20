@@ -222,16 +222,6 @@ impl AccountRecord {
         self
     }
 
-    /// Record the access token's absolute lifetime.
-    pub fn with_lifetime(
-        mut self,
-        issued_at: DateTime<Utc>,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Self {
-        self.issued_at = Some(issued_at);
-        self.expires_at = expires_at;
-        self
-    }
 }
 
 /// The serialized index: accounts plus their insertion order.
@@ -277,13 +267,13 @@ impl AccountStore {
 
     /// The default location, `<operant home>/accounts.json`
     /// (`$HERMES_HOME`, the active profile, or `~/.operant`).
+    ///
+    /// Kept as the documented location even though no caller builds a store
+    /// this way yet: every production and test path passes an explicit
+    /// `AccountStore::new(path)`, and the deleted `with_default_path` was the
+    /// only caller of this method (iter-2755).
     pub fn default_path() -> PathBuf {
         crate::platform::operant_home().join(STORE_FILENAME)
-    }
-
-    /// A store rooted at [`AccountStore::default_path`].
-    pub fn with_default_path() -> Self {
-        Self::new(AccountStore::default_path())
     }
 
     /// Where the index lives.
