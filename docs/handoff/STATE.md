@@ -13,10 +13,16 @@ If a bullet here disagrees with a command's output, the command wins.
 
 ## Where the project stands
 
-- Release line `0.2.1`. `origin/main` carries the autonomous defect sweep of
-  2026-10-19/20, from iter-980 onward and still growing: each a separate pushed
-  commit with a mutation-checked regression test. **Do not copy a count from
-  here** — derive it, per RG-008's law:
+- Release line `0.3.0` (derive it: `scripts/check-doc-claims.sh` reports
+  `version: 0.3.0` and checks AGENTS.md agrees; `Cargo.toml` is the source).
+  **This bullet said `0.2.1` until iter-2764** — a whole minor version stale,
+  in a document whose own header warns that the prose is the part that goes
+  stale. The header's rule held and the prose still drifted, because nothing
+  derived it. Do not copy a version from here either; run the check.
+- `origin/main` carries the autonomous defect sweep of 2026-10-19/20, from
+  iter-980 onward and still growing: each a separate pushed commit with a
+  mutation-checked regression test. **Do not copy a count from here** — derive
+  it, per RG-008's law:
   `git log origin/main --oneline | rg 'iter-9[89][0-9]|iter-1[0-9]{3}' | wc -l`.
   The summary of what the sweep found, how each was proven, and what remains
   open is [`docs/audit/2026-10-20-the-defect-sweep-session-summary.md`](../audit/2026-10-20-the-defect-sweep-session-summary.md).
@@ -271,20 +277,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=e1b70431bd17 -->
-## Handoff — 2026-11-18
+<!-- genome:zone handoff sha=e68171775212 -->
+## Handoff — 2026-11-20
 
-Repo branch `main`, HEAD `413a7a88398dab7c838dbca4179a8dce2a95b6b2`. Working tree dirty (10 paths).
+Repo branch `HEAD`, HEAD `129acfb2e0bd23a4c678c6594c857cbdaa7110d3`. Working tree dirty (2 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-## iter-2600 — DUPLICATE LABEL (cosmetic, append-only)
-- Two commits carry iter-2600: `305db6a7` (peer, RT-597 config keys) and `b4c9de72` (mine, AGENTS.md rule 12).
-- Cause: concurrent derivation in a shared worktree. I derived iter-2600 from origin/main at 20:20:50 (top was iter-2599), committed, and a peer committed their own iter-2600 before either pushed.
-- Per AGENTS.md "If a duplicate label reaches origin/main, do not rewrite history": both stay, no force-push, no renumber. Next free label is iter-2601.
-- **2026-11-18T03:25** · `jcode` — iter-2605: grounded the onboarding plan -- audited the real setup/doctor/secret/seat surface against origin/main @ 3d8defbb, found the proposal named a crate that does not exist, and planned 4 tranches instead of a subsystem
+msg.is_channel_post` → 3 and 4/4 admin_gate_tests passing. What is missing is
+the ATTRIBUTION: that commit's message does not mention it. Cause: I had green
+tests and then went to read a peer's report instead of staging. In a shared
+tree, uncommitted verified work is not yours yet. Stage the moment tests go
+green.
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
