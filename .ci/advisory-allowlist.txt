@@ -54,3 +54,80 @@ unmaintained|RUSTSEC-2026-0543|chrono@0.4.45
 # RT-615. paste 1.0.15 is a build-time proc-macro token-pasting helper with no
 # runtime code path, no exploit and no maintained replacement.
 unmaintained|RUSTSEC-2024-0436|paste@1.0.15
+#
+# --- wasmtime 49.0.3 / wasmtime-wasi 49.0.3 (iter-2763, RT-617) --------------
+# FIFTEEN advisories, ONE root cause: every one of them is in wasmtime 49.0.3,
+# which reaches the workspace only through extism 1.41.0 -> operant-plugins.
+# extism 1.41.0 IS its latest release and pins wasmtime 49, so there is no
+# semver path (`cargo update -p wasmtime` locks 0 packages). A fix needs an
+# extism release that moves off 49.
+#
+# REACHABILITY, measured rather than assumed. `operant-plugins` never names a
+# wasmtime type: it constructs `extism::Plugin` (runtime.rs:349) and calls two
+# exports. So the exposure is exactly "what a plugin's own WASM can make the
+# host do", and the answer is bounded by two facts:
+#
+#  1. extism pulls wasmtime-wasi with `features = ["p1"]` ONLY
+#     (extism-1.41.0/Cargo.toml:137). The p2 and wasip3 layers are not
+#     compiled, so neither are the advisories that live in them.
+#  2. The plugin host loads from `~/.operant/plugins`, and the signature policy
+#     defaults to `disabled` (config.rs::default_plugin_signature_mode), so an
+#     unsigned plugin loads. The operator chooses what goes in that directory.
+#
+# Per-advisory disposition against those facts:
+#
+# RUSTSEC-2026-0567  Abort in builds WITHOUT the `threads` feature.
+# RUSTSEC-2026-0570  Abort in builds WITHOUT the `gc` feature.
+#   NOT APPLICABLE HERE, and the check is mechanical rather than editorial:
+#   `cargo tree -e features -i wasmtime` shows BOTH `threads` and `gc` enabled
+#   in this workspace, and both advisories are about builds where the feature
+#   is absent. Recorded as accepted because cargo-audit cannot express
+#   "unaffected by feature selection"; a build that turned either feature off
+#   WOULD become affected, which is why the reason is written here.
+#
+# RUSTSEC-2026-0587  WASI filesystem sandbox escape via a drive-prefixed path.
+#   os = ["windows"] in the advisory's own affected data. This host is Linux.
+#
+# RUSTSEC-2026-0420  wasip3 UDP send to a receive-only address.
+# RUSTSEC-2026-0571  wasmtime-wasi-http HTTP/2 empty-body heap growth.
+#   Both live in the p2/wasip3 and wasi-http layers, neither compiled (p1 only,
+#   above). The plugin bridge exposes two host functions of its own
+#   (`zc_http_request`, `zc_env_read`), not wasi-http.
+#
+# RUSTSEC-2026-0379  Cranelift aarch64 br_table miscompile.
+#   x86_64 host; an aarch64-only codegen defect.
+#
+# THE REMAINING NINE (0378, 0422, 0423, 0424, 0566, 0568, 0569, 0572, 0573)
+#   are genuine wasmtime 49 bugs in the component-model / GC / async paths
+#   (type confusion, stale GC base pointer, unbounded host memory growth,
+#   panics on malformed guest behaviour). ACCEPTED, because:
+#   (a) every one of them needs the plugin's WASM to do something
+#       adversarial, and the operator installs plugins deliberately;
+#   (b) the blast radius is the host PROCESS, which for a tool/observer plugin
+#       is the operant process itself -- real, but not a privilege boundary,
+#       since the same operator can run any binary;
+#   (c) no fix exists here: the only remedy is an extism release off
+#       wasmtime 49, and none has shipped.
+#
+# WHAT WOULD CHANGE THIS VERDICT: an extism release that moves to
+# wasmtime >= 48.0.10 / >= 49.0.7, or a decision to default `plugins-wasm` off.
+# The second reverses a documented design preference (AGENTS.md: ON by default)
+# and is the operator's call, not a triage outcome.
+#
+# Every entry below names one advisory so a version change or a new advisory
+# fails the gate again rather than being absorbed silently.
+vulnerability|RUSTSEC-2026-0378|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0379|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0420|wasmtime-wasi@49.0.3
+vulnerability|RUSTSEC-2026-0422|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0423|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0424|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0566|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0567|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0568|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0569|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0570|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0571|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0572|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0573|wasmtime@49.0.3
+vulnerability|RUSTSEC-2026-0587|wasmtime-wasi@49.0.3

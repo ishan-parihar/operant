@@ -114,4 +114,19 @@ out="$(PATH="$TMP/bin:$PATH" FAKE_AUDIT_FINDINGS="$KNOWN" \
 echo "$out" | grep -q "allowlist not found" || fail "4. a missing allowlist did not fail clearly: $out"
 echo "$out" | grep -q "update" || fail "4. the failure did not name the fix: $out"
 
+# ── 5. Cargo.lock is NOT gitignored (iter-2762) ────────────────────────────
+# The gate's header says it audits "the committed lockfile". Between iter-900
+# and iter-2762 a broad `*.lock` rule silently swallowed Cargo.lock, so the
+# gate audited whatever cargo resolved on the BUILDING machine -- a verdict no
+# fresh clone reproduces. This asserts the invariant directly, in the gate's own
+# test, so it cannot regress silently again.
+repo="$(cd "$SCRIPTS_DIR/.." && pwd)"
+if git -C "$repo" check-ignore -q Cargo.lock 2>/dev/null; then
+    fail "5. Cargo.lock is gitignored again -- the gate has nothing committed to audit"
+fi
+# And the broad rule must still be doing its original job for other lock files.
+if ! grep -qE '^!?Cargo\.lock$' "$repo/.gitignore"; then
+    fail "5. .gitignore no longer names Cargo.lock explicitly; a broad *.lock rule can swallow it again"
+fi
+
 echo "PASS: supply-chain gate"
