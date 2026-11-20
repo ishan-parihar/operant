@@ -3931,11 +3931,13 @@ mod tests {
 
         // The CALLER: a non-admin, different user, on the same platform.
         let pins = Arc::new(crate::gateway_runner::SessionPins::default());
-        let mut cfg = AppConfig::default();
         // Point the honesty gate (`open_stored_transcript`) at the SAME temp DB
         // the victim transcript lives in — otherwise it reads the default home
         // and reports "no stored conversation" before the ownership gate runs.
-        cfg.database_path = db_path.clone();
+        let cfg = AppConfig {
+            database_path: db_path.clone(),
+            ..AppConfig::default()
+        };
         let ctx = CommandContext::new(
             Some(&gw),
             &cfg,
@@ -3990,9 +3992,11 @@ mod tests {
 
         // The caller IS an admin: the ownership gate is exempt.
         let pins = Arc::new(crate::gateway_runner::SessionPins::default());
-        let mut cfg = AppConfig::default();
         // Same temp DB the victim transcript lives in (see the non-admin test).
-        cfg.database_path = db_path.clone();
+        let cfg = AppConfig {
+            database_path: db_path.clone(),
+            ..AppConfig::default()
+        };
         let ctx = CommandContext::new(Some(&gw), &cfg, true, "admin", "telegram", "admin-chan")
             .with_session_pins(Some(Arc::clone(&pins)))
             .with_session_key("telegram:admin-chan:admin");

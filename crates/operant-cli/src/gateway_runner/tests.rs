@@ -3798,19 +3798,13 @@ async fn a_queue_crosses_the_wire_into_the_next_turn_queue() {
     server.abort();
 }
 
-/// Wait for a condition the TURN TASK sets.
-///
-/// A prompt spawns the turn and returns, so the slot bookkeeping appears a few
-/// polls later — the handle map this replaced was filled synchronously.
-async fn turn_state<F: FnMut() -> bool>(mut ready: F) -> bool {
-    for _ in 0..300 {
-        if ready() {
-            return true;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    ready()
-}
+// (iter-2776) `turn_state` -- a bounded async poll helper for "wait until a
+// turn task publishes its slot state" -- is DELETED here. Its doc said it
+// replaced a handle map filled synchronously, but the call sites it was written
+// for now each carry their own bounded wait (a `timeout`, or a
+// `Instant < deadline` loop that reports WHICH key never registered). A single
+// 300-poll helper with no way to name the thing it was waiting for is the
+// weaker version of both. Nothing called it.
 
 /// iter-2318: the cap is GIVEN BACK when the turn ends.
 ///
@@ -4476,6 +4470,10 @@ async fn publishing_without_a_subscriber_retains_no_ring() {
 /// Mutation-proven: deleting the guard in `handle_runtime_command` makes the
 /// first assertion fail.
 #[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "test-only: the crate's std env lock serialises process-env mutation across the whole test"
+)]
 async fn a_disabled_session_search_stops_the_gateway_search_command() {
     let _env_lock = crate::config::test_env_lock();
     let dir = tempfile::tempdir().expect("tempdir");

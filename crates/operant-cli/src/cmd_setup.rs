@@ -1598,7 +1598,7 @@ mod tests {
         }
         for name in builtins {
             assert!(
-                values.contains(&name),
+                values.contains(name),
                 "the wizard omits {name:?}, which the tool can dispatch to"
             );
         }

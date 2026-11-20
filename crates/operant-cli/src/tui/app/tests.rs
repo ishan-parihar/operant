@@ -4265,11 +4265,13 @@ fn vim_navigation_works_on_move_only_surfaces_and_not_on_text_entry() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     type Opener = fn(&mut crate::tui::app::App);
+    /// Reads the cursor/selection back out of an opened move-only overlay.
+    type CursorRead = fn(&crate::tui::app::App) -> u32;
 
     // Move-only: a list or a scroll region, no text field. Each entry is
     // (surface, opener, read-the-cursor) -- the read is what makes the
     // assertion about MOVEMENT rather than about the key being consumed.
-    let move_only: &[(&str, Opener, fn(&crate::tui::app::App) -> u32)] = &[
+    let move_only: &[(&str, Opener, CursorRead)] = &[
         (
             "memory_file_selector",
             |app| {
@@ -5009,10 +5011,7 @@ fn right_click_names_the_pointed_at_message_when_a_tool_row_intervenes() {
             row: screen_row(body_row(needle)),
             modifiers: KeyModifiers::empty(),
         });
-        app.context_menu_state
-            .as_ref()
-            .map(|state| state.kind)
-            .clone()
+        app.context_menu_state.as_ref().map(|state| state.kind)
     };
 
     // Message 0 sits ABOVE the tool row, so its display index and app index
@@ -11783,6 +11782,13 @@ mod rename_on_load_tests {
         );
     }
 
+    // iter-2776: this test's `#[test]` was lost in iter-1457, when the old
+    // `a_bare_rename_starts_on_the_first_row_once_the_list_arrives` body was
+    // REWRITTEN in place and the attribute above the old name did not travel
+    // with the new one. The function compiled as dead code for ~1300
+    // iterations, so the `rename_on_list_load` flag's consume-once contract
+    // was asserted by nobody. Restored, and the assertion below passes.
+    #[test]
     fn a_bare_rename_no_longer_opens_modal_state_but_hints() {
         // TUI-8 behavior under the hub (plan 2026-10-28 iter-B): the old
         // modal's inline rename arm is gone; a bare `/rename` surfaces the
@@ -17117,7 +17123,8 @@ fn enter_steers_the_paste_not_the_token() {
 #[test]
 fn no_wholesale_text_writer_can_leave_an_orphan_payload() {
     let big = "1\n2\n3\n4\n5\n";
-    let writers: Vec<(&str, Box<dyn Fn(&mut PromptInputState)>)> = vec![
+    type Writer = (&'static str, Box<dyn Fn(&mut PromptInputState)>);
+    let writers: Vec<Writer> = vec![
         (
             "replace_text",
             Box::new(|s: &mut PromptInputState| s.replace_text("replaced".to_string())),
@@ -18815,7 +18822,7 @@ mod subagent_navigator_tests {
             Some(child.as_str()),
             "the grandchild's parent within the walk is the delegation that spawned it"
         );
-        let _ = mark_completed(&grandchild, "ok");
+        mark_completed(&grandchild, "ok");
     }
 
     #[test]
@@ -18880,7 +18887,7 @@ fn the_header_title_never_widens_the_row_past_the_pre_change_literal() {
 /// This pins the one number both must use.
 #[test]
 fn the_arrows_and_the_painter_agree_on_the_composers_width() {
-    let mut app = make_app();
+    let app = make_app();
     for area_width in [20u16, 40, 60, 80, 96, 110, 120, 160, 200] {
         app.last_input_area
             .set(ratatui::layout::Rect::new(0, 0, area_width, 12));
@@ -18952,7 +18959,7 @@ fn the_render_path_publishes_a_usable_input_area_width() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let mut app = make_app();
+    let app = make_app();
     // Before any draw the cell is zero, by design.
     assert_eq!(app.last_input_area.get().width, 0, "no frame yet");
 
@@ -19277,7 +19284,7 @@ async fn a_second_surface_request_waits_while_the_dialog_is_open() {
     let mut app = make_app();
 
     // No dialog yet: the first card is taken and opens the dialog.
-    let (first_tx, mut first_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (first_tx, first_rx) = tokio::sync::mpsc::unbounded_channel();
     app.surface_request_rx = Some(first_rx);
     let (first_reply_tx, first_reply_rx) = tokio::sync::oneshot::channel();
     first_tx
@@ -19293,7 +19300,7 @@ async fn a_second_surface_request_waits_while_the_dialog_is_open() {
     );
 
     // A second card arrives while that dialog is still up.
-    let (second_tx, mut second_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (second_tx, second_rx) = tokio::sync::mpsc::unbounded_channel();
     app.surface_request_rx = Some(second_rx);
     let (second_reply_tx, _second_reply_rx) = tokio::sync::oneshot::channel();
     second_tx

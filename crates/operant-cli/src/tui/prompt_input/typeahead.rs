@@ -481,36 +481,17 @@ static SKILL_MENTION_SNAPSHOT: std::sync::OnceLock<std::sync::RwLock<Vec<(String
 /// expansion resolves against (`build_skill_invocation_message_in` takes the
 /// same roots).
 ///
-/// **The pool-plus-vendor-roots form. It CANNOT see `[skills] extra_roots`
-/// or the project root** — see [`register_invocable_skills_in`], which is
-/// what every production path now uses. It is kept because a caller that
-/// genuinely has no resolver (the typeahead tests, and any surface holding
-/// only two root arguments) still needs a way to populate the snapshot; a
-/// surface that CAN resolve roots must use the `_in` form, or it will narrow
-/// the popup the moment configuration carries a root this form omits.
+/// ONE registration entry point. (iter-2776) The two-argument wrapper that sat
+/// here concatenated the pool and the vendor roots and stopped, so it could not
+/// see `[skills] extra_roots`; nothing called it, and every test plus the boot
+/// path use this `_in` form. Keeping two forms was how a caller could narrow
+/// the popup the moment configuration carried a root the short form omitted.
 ///
 /// One pool for both name tiers — `/skill <Tab>` and the `$` mention popup —
-/// so the popup can never be a SUBSET of what the expander would run. A
-/// vendor skill typed in full always resolved; before this it simply never
-/// appeared in the popup, which read as "not installed".
-#[cfg(test)]
-pub fn register_invocable_skills(
-    skills_dir: &std::path::Path,
-    vendor_roots: &[std::path::PathBuf],
-    bundle_names: Vec<String>,
-) {
-    let _guard = SKILL_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    set_invocable_skills(skills_dir, vendor_roots, bundle_names);
-}
-
-/// The same registration over a RESOLVED root list.
+/// so the popup can never be a SUBSET of what the expander would run.
 ///
-/// The two-argument form above concatenates the pool and the vendor roots and
-/// stops there, so it cannot see `[skills] extra_roots`; this is the form the
-/// boot path uses, and it is the only one that makes the popup's name set
-/// equal to the set the `$` expander will run.
+/// Takes a RESOLVED [`operant_core::skills::SkillRoots`], so this is the form
+/// that makes the popup's name set equal to the set the `$` expander will run.
 pub fn register_invocable_skills_in(
     roots: &operant_core::skills::SkillRoots,
     bundle_names: Vec<String>,

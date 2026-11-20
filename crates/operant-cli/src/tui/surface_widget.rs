@@ -615,8 +615,7 @@ pub fn render_surface_op_json(op_json: &str, width: usize) -> Result<Vec<Line<'s
 mod tests {
     use super::*;
     use operant_core::ui::{
-        BarDatum, ChartKind, ChoiceOption, DiffLine, KeyValue, ListItem, SemanticTone, TableColumn,
-        TableRow, TimelineStep, WidgetNode,
+        BarDatum, ChartKind, ChoiceOption, SemanticTone, TableColumn, TableRow, WidgetNode,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

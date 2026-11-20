@@ -4978,7 +4978,7 @@ mod tests {
         // and the call is a tail `return`, so nothing after it runs.
         let guard = "if let Some(socket) = attach_socket.clone()";
         assert!(
-            source.contains(&guard),
+            source.contains(guard),
             "the Chat arm must guard the attach path on the resolved socket: {guard}"
         );
         let call = format!("cmd_chat_attach(&{}, ", "socket");
@@ -4995,7 +4995,7 @@ mod tests {
         // seam is the body, not the file.
         let signature = "async fn cmd_chat_attach(";
         let start = source
-            .find(&signature)
+            .find(signature)
             .unwrap_or_else(|| panic!("cmd_chat_attach must exist: {signature}"));
         let after = &source[start..];
         // The body ends at the next top-level `async fn` / `fn` / `pub` item

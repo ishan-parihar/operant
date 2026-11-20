@@ -768,7 +768,7 @@ mod syntax_theme_tests {
     #[test]
     fn the_scope_selectors_match_real_rust_tokens() {
         let matched = role_for_scope_stack(
-            &ScopeStack::from_str("source.rust meta.function.rust keyword.control.rust")
+            ScopeStack::from_str("source.rust meta.function.rust keyword.control.rust")
                 .expect("valid stack")
                 .as_slice(),
         );
@@ -779,7 +779,7 @@ mod syntax_theme_tests {
         );
 
         let comment = role_for_scope_stack(
-            &ScopeStack::from_str("source.rust comment.line.double-slash.rust")
+            ScopeStack::from_str("source.rust comment.line.double-slash.rust")
                 .expect("valid stack")
                 .as_slice(),
         );

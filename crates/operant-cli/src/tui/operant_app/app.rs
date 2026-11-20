@@ -455,13 +455,16 @@ pub(crate) enum PanelSurface {
     Settings,
 }
 
-/// Which panel a command opens, if any.
-pub(crate) fn panel_for_command(name: &str) -> Option<PanelSurface> {
-    PANEL_COMMANDS
-        .iter()
-        .find(|(command, _)| *command == name)
-        .map(|(_, surface)| *surface)
-}
+// (iter-2776) `panel_for_command` -- the "which panel does this command open"
+// lookup -- is DELETED here. It had no caller in the binary: the crossover is a
+// DATA table (`PANEL_COMMANDS`) plus a test suite that pins the table against
+// the registered commands, and no production path ever asked for the panel of a
+// command name. The two siblings it sat between are kept and are NOT dead:
+// `PanelSurface`/`PANEL_COMMANDS` are read by six invariant tests (every panel
+// command is still registered, still has a help row, is in both catalogue
+// views). Deleting the function is what unblocks `PANEL_COMMANDS` being a
+// published table; wiring the lookup back belongs with whatever surface opens a
+// panel, which does not exist yet.
 
 /// Every non-hidden slash command with its one-line description, in
 /// registration order. The `/help` overlay uses this to list commands its

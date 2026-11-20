@@ -997,11 +997,11 @@ struct WidgetsState {
     /// every transcript line re-wrapped, so anchors (keyed by absolute line) are
     /// meaningless and must be flushed for one clean global re-layout.
     anchors_area_width: u16,
-    /// When the SwarmStatus dock was last engaged (placed or anchored). Lets the
-    /// inline swarm strip keep standing down through brief dock dropouts instead
-    /// of popping back for a few frames (which resizes the bottom chrome and
-    /// bounces the transcript).
-    swarm_dock_last_engaged: Option<Instant>,
+    // (iter-2776) `swarm_dock_last_engaged: Option<Instant>` is deleted from
+    // here with the swarm-strip stand-down trio in `mod.rs`: it recorded when the
+    // SwarmStatus dock was last engaged so the inline strip could stay down
+    // through brief dock dropouts, and the strip has had no renderer since
+    // iter-591 excised `render_swarm_strip`.
 }
 
 impl Default for WidgetsState {
@@ -1013,7 +1013,6 @@ impl Default for WidgetsState {
             anchors: Vec::new(),
             settlement: self::info_widget_settle::SettlementTracker::default(),
             anchors_area_width: 0,
-            swarm_dock_last_engaged: None,
         }
     }
 }
@@ -1087,60 +1086,23 @@ pub fn calculate_placements(
     );
     state.anchors = outcome.anchors;
     state.placements = outcome.visible.clone();
-    if swarm_dock_engaged(state) {
-        state.swarm_dock_last_engaged = Some(Instant::now());
-    }
     outcome.visible
 }
 
-/// How long the inline swarm strip keeps standing down after the SwarmStatus
-/// dock disengages. The dock's placement naturally churns while content
-/// streams past it (hidden-in-place blinks, anchor abandonment, re-homing a
-/// few frames later). Each strip appearance adds a row to the bottom chrome
-/// and shoves the whole transcript up, so reacting instantly turns that churn
-/// into visible up/down flicker. Standing down through a short linger converts
-/// the churn into "strip stays hidden"; a genuine dock removal only delays the
-/// strip's return by this much, once.
-const SWARM_STRIP_STAND_DOWN_LINGER: Duration = Duration::from_millis(2000);
-
-/// Whether the SwarmStatus dock widget is engaged: either actually placed, or
-/// hidden-in-place behind a live anchor (a wide transcript line is momentarily
-/// covering its slot and it will pop back into the same spot).
-fn swarm_dock_engaged(state: &WidgetsState) -> bool {
-    state.enabled
-        && (state
-            .placements
-            .iter()
-            .any(|p| p.kind == WidgetKind::SwarmStatus)
-            || state
-                .anchors
-                .iter()
-                .any(|a| a.placement.kind == WidgetKind::SwarmStatus))
-}
-
-/// Whether the inline swarm strip (above the status line) should stand down
-/// because the SwarmStatus dock widget (margin HUD) is showing - or was very
-/// recently showing - the same agents.
-///
-/// The strip is built before widget placement runs each frame, so this checks
-/// the previous frame's state, like `widget_visible_facts`. Engagement
-/// includes hidden-in-place anchors, and disengagement is debounced by
-/// [`SWARM_STRIP_STAND_DOWN_LINGER`]: both exist so the dock's frame-to-frame
-/// placement churn cannot toggle the strip row on and off, which resizes the
-/// bottom chrome and makes the whole transcript jump up and down (flicker).
-/// One frame of overlap when the dock first appears is visually harmless.
-pub(crate) fn swarm_strip_stands_down_for_dock() -> bool {
-    let guard = get_or_init_state();
-    let Some(state) = guard.as_ref() else {
-        return false;
-    };
-    if swarm_dock_engaged(state) {
-        return true;
-    }
-    state
-        .swarm_dock_last_engaged
-        .is_some_and(|at| at.elapsed() < SWARM_STRIP_STAND_DOWN_LINGER)
-}
+// (iter-2776) The inline swarm-strip stand-down trio -- `swarm_strip_stands_down_for_dock`,
+// its `swarm_dock_engaged` helper and `SWARM_STRIP_STAND_DOWN_LINGER` -- is DELETED here.
+// It was live code for a surface that stopped existing in iter-591, when the
+// SwarmTile-bound strip renderers (`render_swarm_strip`, `render_swarm_strip_vertical`,
+// `SwarmStripHint`, ...) were excised. Nothing has called
+// `swarm_strip_stands_down_for_dock` since; the only mention left in the tree was a
+// mechanical rename-list COMMENT in `tui/operant_ui/mod.rs`, which is not a caller.
+//
+// The tell was not the function, it was the state: `WidgetsState::swarm_dock_last_engaged`
+// was still WRITTEN every frame (in `place_widgets`) and only ever READ by the
+// deleted predicate, so the debounce timestamp accumulated and cleared for
+// nobody. It is deleted with them. The
+// flicker the trio existed to prevent cannot happen while there is no strip row to
+// flicker. Re-adding it belongs with the strip renderers, not on its own.
 
 /// Forget the per-frame placement/anchor state because the widget render pass
 /// was skipped this frame (idle animation takeover, or no widget data at all).
@@ -1152,7 +1114,6 @@ pub(crate) fn note_widget_pass_skipped() {
     if let Some(state) = guard.as_mut() {
         state.placements.clear();
         state.anchors.clear();
-        state.swarm_dock_last_engaged = None;
     }
 }
 

@@ -62,13 +62,15 @@ pub fn is_active_status(status: &str) -> bool {
     matches!(status, "running" | "streaming" | "thinking")
 }
 
-/// Cadence for active-agent spinner frames.
+/// Cadence for active-agent spinner frames, in milliseconds.
 ///
-/// Keep this aligned with the TUI redraw interval. 80 ms matches the primary
-/// status spinner and avoids the visibly stepped motion of the old 125 ms
-/// cadence without redrawing faster than the glyph can change.
-/// [port-source] swarm_gallery.rs:57-62
-pub const STRIP_SPINNER_FRAME_MS: u64 = 80;
+/// (iter-2776) This was `STRIP_SPINNER_FRAME_MS = 80` until one measurement
+/// showed it described nothing: `current_swarm_spinner_frame` derived the
+/// frame from a hardcoded `120` so the strip and the memory spinner share one
+/// animation policy, and the 80 the constant promised was left read by nobody
+/// since iter-686. It is now the number the code actually uses, so a future
+/// cadence change lands in one place instead of silently drifting again.
+const STRIP_SPINNER_FRAME_MS: u64 = 120;
 
 /// Frames for the inline status spinner used by active agents on the strip.
 /// [port-source] swarm_gallery.rs:65-66
@@ -87,7 +89,7 @@ pub fn current_swarm_spinner_frame() -> usize {
     }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_millis() / 120) as usize)
+        .map(|d| (d.as_millis() / u128::from(STRIP_SPINNER_FRAME_MS)) as usize)
         .unwrap_or(0)
 }
 

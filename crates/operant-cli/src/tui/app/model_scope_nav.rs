@@ -238,7 +238,6 @@ mod tests {
 
 #[cfg(test)]
 mod scope_kind_tests {
-    use super::*;
     use crate::tui::app::tests::make_app;
     use crate::tui::model_scope::ModelScope;
     use crate::tui::operant_app::tui_fns::{InlineInteractiveState, PickerKind};

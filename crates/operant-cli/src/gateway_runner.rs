@@ -9822,6 +9822,10 @@ mod pending_permissions_tests {
     /// matching by tool-call id alone gave any local process the authority to
     /// approve a tool waiting for a human on Telegram.
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises pending-permission store installation across the whole test"
+    )]
     async fn a_channel_owned_approval_is_refused_on_the_socket() {
         let _guard = permissions_test_guard();
         let store = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));

@@ -278,10 +278,6 @@ fn all_entries_returns_expected_settings() {
     // HashMap has no single-line editor, so `Widget::None`/`Unsupported` are
     // omitted by design. The drawn count is therefore BELOW the live count, and
     // the gap is the honest-omission set.
-    let live_rows = operant_core::config_registry::SETTING_ROWS
-        .iter()
-        .filter(|row| row.live)
-        .count();
     let drawable = operant_core::config_registry::SETTING_ROWS
         .iter()
         .filter(|row| {
@@ -602,17 +598,16 @@ fn the_settings_list_paints_the_selected_row_on_a_short_terminal() {
     // selected tab is painted. Walking `all_entries` linearly would step off the
     // end of the first tab and blame the window.
     let panel = all_entries(&screen);
-    let total = panel.len();
 
-    for step in 0..total {
+    for (step, entry) in panel.iter().enumerate() {
         // Put the panel index on screen: select the tab that owns it, then the
         // row within that tab.
-        let target_tab = panel[step].tab;
+        let target_tab = entry.tab;
         screen.select_tab(target_tab);
         let in_tab = screen.visible_entries();
         let idx_in_tab = in_tab
             .iter()
-            .position(|entry| entry.key == panel[step].key)
+            .position(|candidate| candidate.key == entry.key)
             .expect("the row is on its own tab");
         screen.selected_idx = idx_in_tab;
 
@@ -933,7 +928,7 @@ fn a_registry_setting_driven_from_the_panel_actually_changes() {
 }
 
 /// A plain Enter, for the handlers that take a `KeyEvent`.
-fn KEY_ENTER() -> crossterm::event::KeyEvent {
+fn key_enter() -> crossterm::event::KeyEvent {
     crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Enter,
         crossterm::event::KeyModifiers::NONE,
@@ -970,7 +965,7 @@ fn enter_on_a_number_row_opens_the_editor() {
 
     let mut config = AppConfig::default();
     let mut settings = Settings::default();
-    let handled = super::handle_settings_key(&mut screen, &mut config, &mut settings, KEY_ENTER());
+    let handled = super::handle_settings_key(&mut screen, &mut config, &mut settings, key_enter());
     assert!(handled, "Enter is a handled key");
     assert_eq!(
         screen.edit_field.as_deref(),

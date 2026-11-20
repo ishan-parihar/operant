@@ -356,10 +356,14 @@ impl Default for CommandRegistry {
 /// and for any caller that needs the raw map rather than a `CommandRegistry`.
 /// The production dispatch path goes through [`CommandRegistry::new`] +
 /// [`CommandRegistry::resolve`], which build the same map internally.
-#[expect(
-    dead_code,
-    reason = "exercised by the commands.rs test suite; the production dispatch path goes through CommandRegistry"
-)]
+///
+/// (iter-2742 moved the one production caller to `CommandRegistry`, so the
+/// test suite in this same file is now the only caller -- and in a BINARY crate
+/// a test-only caller does not count as a use, so `dead_code` fires. That is
+/// why the `allow` below is unconditional rather than an `#[expect]`: the lint
+/// is on for every build, so an expectation would only ever warn as unfulfilled
+/// (which is exactly what it did, until iter-2776 measured both branches).
+#[allow(dead_code)]
 pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
     let mut map = HashMap::new();
     for cmd in COMMAND_REGISTRY {

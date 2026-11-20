@@ -1864,7 +1864,7 @@ mod tests {
             "walk a nested json document",
         );
 
-        let config = config_with_roots(&pool, &[extra.clone()]);
+        let config = config_with_roots(&pool, std::slice::from_ref(&extra));
         let ranked = ranked_skill_search(&config, "json-explore");
 
         // Presence, not an exact count: the operator's own vendor roots may
@@ -2033,9 +2033,13 @@ mod tests {
         );
         // A dead symlink INSIDE a root that does resolve: the WALK reports it,
         // which is the channel `list_skills` reads via `manager.issues()`.
-        std::os::unix::fs::symlink(extra.join("does-not-exist"), extra.join("dead-skill"));
+        // The link is created on a filesystem that permits it; a failure here
+        // means the assertion below is measuring the wrong thing, so it must
+        // not be silently dropped (iter-2776: `unused_must_use`).
+        std::os::unix::fs::symlink(extra.join("does-not-exist"), extra.join("dead-skill"))
+            .expect("a dead symlink must be creatable in the test root");
 
-        let config = config_with_roots(&pool, &[extra.clone()]);
+        let config = config_with_roots(&pool, std::slice::from_ref(&extra));
         let mut manager = crate::skill_roots::skill_manager(&config);
         let _ = manager.load_all();
 
@@ -2090,7 +2094,7 @@ mod tests {
             "a skill the operator did not author",
         );
 
-        let config = config_with_roots(&pool, &[extra.clone()]);
+        let config = config_with_roots(&pool, std::slice::from_ref(&extra));
 
         // THE REAL PRODUCTION PATH. Not the resolver called directly: a
         // test that built its own manager would pass even if every one of

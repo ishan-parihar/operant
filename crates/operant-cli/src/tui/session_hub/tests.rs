@@ -1855,7 +1855,7 @@ fn preview_pane(
     h.selected = row_idx;
     terminal
         .draw(|f| {
-            super::render::render_session_hub(f, &h, f.area(), &mut ctx);
+            super::render::render_session_hub(f, h, f.area(), &mut ctx);
         })
         .unwrap();
     buffer_rows(terminal.backend().buffer())

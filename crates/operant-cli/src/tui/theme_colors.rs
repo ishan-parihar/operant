@@ -1800,7 +1800,7 @@ pub(crate) mod tests {
             let Ok(src) = std::fs::read_to_string(path) else {
                 continue;
             };
-            for (role_key, _fname) in &by_role {
+            for role_key in by_role.keys() {
                 let Some(names) = aliases.get(role_key) else {
                     continue;
                 };
@@ -1873,11 +1873,6 @@ pub(crate) mod tests {
             }
         }
 
-        let dead: Vec<&str> = all_roles
-            .iter()
-            .filter(|role| readers.get(role.key()).copied().unwrap_or(0) == 0)
-            .map(|role| role.key())
-            .collect();
         // ONE deliberate exception, recorded rather than wired.
         //
         // `MdCodeBlock`'s frozen default (200,200,195) is byte-identical to the
