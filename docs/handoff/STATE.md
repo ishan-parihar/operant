@@ -277,20 +277,20 @@ record touched by more than one commit was amended in place.
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=96ee34d01266 -->
+<!-- genome:zone handoff sha=80c57d746c5a -->
 ## Handoff — 2026-11-20
 
-Repo branch `HEAD`, HEAD `49001811b3aec3005fa939bf89316c51764422c2`. Working tree dirty (4 paths).
+Repo branch `HEAD`, HEAD `c4ba03acdd82a362065d18c34fe87ae25d6ca7c2`. Working tree dirty (3 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-msg.is_channel_post` → 3 and 4/4 admin_gate_tests passing. What is missing is
-the ATTRIBUTION: that commit's message does not mention it. Cause: I had green
 tests and then went to read a peer's report instead of staging. In a shared
 tree, uncommitted verified work is not yours yet. Stage the moment tests go
 green.
+- **2026-11-20T21:15** — iter-2769 (docs+fix): the plugin signature default moves from Disabled to Permissive (T1 of the iter-2765 plan). The defect: SignatureMode::default() was Disabled, and enforce_signature_policy returns Ok(Unsigned) for that mode BEFORE any tracing::warn! -- an unsigned plugin loaded and the operator was told NOTHING, a check the operator cannot tell was skipped. Permissive still LOADS the plugin and warns naming it (unsigned) or the untrusted publisher key, so it is the only mode that changes what the operator KNOWS without changing what RUNS; Strict was rejected because refusing every existing unsigned install is a migration, not a default. THE SMALL HALF WAS THE ENUM, THE LOAD-BEARING HALF WAS THE CALL SITES: PluginHost::new and Watcher::new each passed SignatureMode::Disabled EXPLICITLY, so moving the default alone changes nothing -- the watcher's per-scan enforce_signature_policy re-verification above all, which is where a manifest that changed on disk since first load is checked. Both now pass SignatureMode::default(). Tests updated in the same commit (iter-2769): test_signature_mode_default_is_disabled becomes ..._is_permissive, plus test_permissive_warns_and_still_loads_an_unsigned_plugin and test_strict_refuses_an_unsigned_plugin as a PAIR -- asserting only that Permissive LOADS would also pass for Disabled, which is precisely the difference under test. MUTATION-PROVEN: moving #[default] back to Disabled fails the new test by name (left: Disabled, right: Permissive). DELIBERATELY NOT CHANGED: PluginHost::parse_signature_mode and plugin_tools.rs's parallel parser still map empty/unrecognized config strings to Disabled, pinned by configured_mode_reaches_the_host_and_the_key_set_is_honoured -- that is a parse decision about an unusable CONFIG STRING, not the in-code default; silently promoting a typo to Permissive would hide the typo. FLEET: forward-renumbered from iter-2767 to 2769/2770/2771 per RG-021 (a peer took 2767 and 2768 while this was in flight); two follow-ups existed purely to correct the in-source citations of the old label and one stale line number the label change made wrong. GATES ALL GREEN: supply-chain seen=20 allowlist=20 new=0; check-doc-claims all match; genome lint 0 errors; config-surface 0 new; config-keys ok; audit-ledger-index OK. HONEST REACH: provenance is now VISIBLE; wasmtime is NOT patched -- signature mode answers who wrote this, not whether the runtime is patched.
+- **2026-11-20T21:17** — LABEL COLLISION (append-only, not fixed by rewrite): iter-2772 is on origin/main twice -- dd11c24e (my worklog entry) and 41056700 (a peer's context-pack round 4, pushed in the same minute). Both labels read iter-2772 because both agents ran the origin-label lookup at the same moment before either pushed. Per fleet rules a duplicate label is a cosmetic defect, not an incident: renumbering published history would destroy the audit, so both commits stay as landed. Iteration numbering continues; the collision is noted here rather than force-pushed away. Lesson for the next agent: the lookup and the push are not atomic, so a peer landing between them is a RACE, not a misread -- the forward-renumber must happen BEFORE the push, after a fresh fetch.
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
