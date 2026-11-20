@@ -563,17 +563,20 @@ impl MemoryManager {
         self.session_messages.read().await.clone()
     }
 
-    /// Get messages from a specific session
-    pub async fn get_session_messages_by_id(&self, session_id: &str) -> Vec<Message> {
-        // In a real implementation, this would load from persistent storage
-        // For now, we only have the current session in memory
-        if let Some(current) = self.current_session.read().await.clone()
-            && current == session_id
-        {
-            return self.session_messages.read().await.clone();
-        }
-        Vec::new()
-    }
+    // THREE methods were DELETED here (iter-2724), each proven dead the only
+    // way that counts -- the `pub` removed, `cargo check -p operant-core
+    // --lib` reporting "methods `get_session_messages_by_id`, `get_by_type`,
+    // and `build_memory_context` are never used":
+    //   * `get_session_messages_by_id` -- only ever served the CURRENT
+    //     session; every other id returned an empty Vec. A lookup that cannot
+    //     look anything up.
+    //   * `get_by_type` -- a `long_term` filter no caller made.
+    //   * `build_memory_context` -- built a `<memory_context>` block from the
+    //     FILE-BACKED manager's `long_term` map. The LIVE memory-context path
+    //     is the memory-wire recall in `agent/run.rs` (`<memory_context>`
+    //     tags, `neutralize_wrapper_tag`, run.rs:4350-4395) and it never came
+    //     through here. Two mechanisms build the same-named block and only one
+    //     runs -- the orphan is the file-backed one.
 
     /// Store a memory block.
     /// When `storage_dir` is set, automatically persists to MEMORY.md on disk.
@@ -613,17 +616,6 @@ impl MemoryManager {
                         .iter()
                         .any(|t| t.to_lowercase().contains(&query_lower))
             })
-            .cloned()
-            .collect()
-    }
-
-    /// Get memories by type
-    pub async fn get_by_type(&self, block_type: &str) -> Vec<MemoryBlock> {
-        self.long_term
-            .read()
-            .await
-            .values()
-            .filter(|m| m.block_type == block_type)
             .cloned()
             .collect()
     }
@@ -762,27 +754,6 @@ impl MemoryManager {
             self.dirty.store(true, Ordering::Release);
         }
         removed
-    }
-
-    /// Build context from memory (for injection into prompts)
-    pub async fn build_memory_context(&self, max_tokens: usize) -> String {
-        let important_memories = self.get_important(70).await;
-        let mut context = String::new();
-        let mut tokens_used = 0;
-
-        for memory in important_memories {
-            let memory_text = format!("[{}] {}\n", memory.block_type, memory.content);
-            let memory_tokens = crate::context_management::estimate_tokens(&memory_text);
-
-            if tokens_used + memory_tokens > max_tokens {
-                break;
-            }
-
-            context.push_str(&memory_text);
-            tokens_used += memory_tokens;
-        }
-
-        context
     }
 
     /// Clear all memories (use with caution)
