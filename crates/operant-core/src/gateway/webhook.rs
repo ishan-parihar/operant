@@ -274,12 +274,6 @@ impl WebhookAdapter {
         self
     }
 
-    /// Mount the Holon notion arm (docs/agentic-os phase F / H8).
-    pub fn with_holon(mut self, hook: HolonHook) -> Self {
-        self.holon = Some(hook);
-        self
-    }
-
     /// The gateway factory passes the hook through the shared GatewayConfig;
     /// naming it for that call site reads better than `map` at a distance.
     pub fn with_holon_opt(mut self, hook: Option<HolonHook>) -> Self {

@@ -278,12 +278,6 @@ impl Gateway {
         }
     }
 
-    /// Configure the delivery ledger capacity (default 500).
-    pub fn with_delivery_ledger_capacity(mut self, max: usize) -> Self {
-        self.delivery_ledger = DeliveryLedger::new(max);
-        self
-    }
-
     /// Access the per-session turn lease.
     pub fn turn_lease(&self) -> &TurnLease {
         &self.turn_lease

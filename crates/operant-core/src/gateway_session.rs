@@ -1888,28 +1888,6 @@ impl PersistentSessionStore {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    /// Check if a session is expired (for background expiry watcher).
-    pub fn is_session_expired(&self, session_key: &str) -> bool {
-        let config = self
-            .config
-            .read()
-            .expect("session entries/config read lock poisoned — programmer error")
-            .clone();
-        let entries = self
-            .entries
-            .read()
-            .expect("session entries/config read lock poisoned — programmer error");
-        if let Some(entry) = entries.get(session_key) {
-            self.should_reset(entry, &config.reset_policy).is_some()
-        } else {
-            false
-        }
-    }
-
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Mark recently-active sessions as resumable after an unexpected exit.
     pub fn suspend_recently_active(&self, max_age_seconds: u64) -> u32 {
         let cutoff = SystemTime::now() - Duration::from_secs(max_age_seconds);

@@ -43,12 +43,6 @@ impl WhatsAppAdapter {
         self.phone_number_id = phone_number_id;
         self
     }
-
-    /// Set the verify token for webhook handshake.
-    pub fn with_verify_token(mut self, verify_token: Option<String>) -> Self {
-        self.verify_token = verify_token;
-        self
-    }
 }
 
 /// WhatsApp's per-message character limit.
