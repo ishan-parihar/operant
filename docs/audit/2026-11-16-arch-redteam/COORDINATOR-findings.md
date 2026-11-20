@@ -11,13 +11,13 @@ than relaying a worker's claim. It exists so the synthesis can distinguish
 
 ## Contents
 
-1. [C-1 — HIGH — `theme_files::dir()` bypasses the one-home resolver](#c-1--high--theme_files::dir()-bypasses-the-one-home-resolver)
+1. [C-1 — HIGH — `theme_files::dir()` bypasses the one-home resolver](#c-1--high--theme_filesdir-bypasses-the-one-home-resolver)
 2. [C-2 — MEDIUM — dashboard session token fails open to a constant](#c-2--medium--dashboard-session-token-fails-open-to-a-constant)
 3. [C-3 — LOW — cron reclaim scan swallows its own DB error](#c-3--low--cron-reclaim-scan-swallows-its-own-db-error)
 4. [C-4 — verified clean](#c-4--verified-clean-recorded-so-it-is-not-re-reported)
 5. [C-5 — the `anyhow`-in-library-crates claim, measured](#c-5--the-anyhow-in-library-crates-claim-measured)
 6. [C-6 — the A5 V2 "ungated mcp serve" finding, CALIBRATED DOWN](#c-6--the-a5-v2-ungated-mcp-serve-finding-calibrated-down-to-high)
-7. [C-7 — the A5 findings I graded ABOVE A5's own grade](#c-7--the-a5-findings-i-graded-above-a5-s-own-grade)
+7. [C-7 — the A5 findings I graded ABOVE A5's own grade](#c-7--the-a5-findings-i-graded-above-a5s-own-grade)
 
 ---
 

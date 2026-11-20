@@ -35,15 +35,15 @@ conflicting pair), `--debug-tui`, `--no-mouse`,
 
 ### The count, and where it comes from
 
-**`Commands` has 52 variants**, derived from the enum body in
+**`Commands` has 53 variants**, derived from the enum body in
 `crates/operant-cli/src/main.rs` by parsing its top-level comma-separated
 variants with the doc comments stripped. Each variant has exactly one
 dispatch arm in `main()`; `main()` also has a `None` arm that launches
-the TUI, so the binary has 52 named subcommands plus the default TUI
+the TUI, so the binary has 53 named subcommands plus the default TUI
 launch.
 
 Some variants carry their own subcommand enum, so the LEAF count is much
-higher than 52. Derived from the same files:
+higher than 53. Derived from the same files:
 
 | Command | Its subcommands (count) |
 |---|---|
@@ -223,7 +223,7 @@ nor a handler, and which no other library page names.
 
 | Module | What it is |
 |---|---|
-| `commands.rs` | The TUI slash-command TABLE: a static `COMMAND_REGISTRY` slice of `CommandDef` (name, description, aliases, args hint, `cli_only` / `gateway_only` gating) plus a runtime handler map. **90 slash commands**, derived from `CommandDef::new(` in the registry. The gateway carries a SECOND table of **62** in `gateway_commands.rs`; since iter-2742 both are `CommandDef` from `operant-core/src/command_router.rs` and both resolve through the same `resolve_command` (separate TABLES over ONE contract). This is what a session resolves; the CLI subcommands above are the shell surface, and the two are separate because their audiences differ. |
+| `commands.rs` | The TUI slash-command TABLE: a static `COMMAND_REGISTRY` slice of `CommandDef` (name, description, aliases, args hint, `cli_only` / `gateway_only` gating) plus a runtime handler map. **84 slash commands**, derived from the `CommandDef::new(` entries in the slice (`commands.rs:38-277`; the six further `CommandDef::new` sites in the `#[cfg(test)]` module are fixtures, not registry entries). The gateway carries a SECOND table of **61** in `gateway_commands.rs`; since iter-2742 both are `CommandDef` from `operant-core/src/command_router.rs` and both resolve through the same `resolve_command` (separate TABLES over ONE contract). This is what a session resolves; the CLI subcommands above are the shell surface, and the two are separate because their audiences differ. |
 | `operant-core/src/command_router.rs` | The ONE shared slash-command contract both registries build on: `CommandDef` (static metadata), `CommandResult` (the structured intent a handler returns), `CommandContext`, `CommandHandler`, `CommandRegistry` (name/alias resolution + handler dispatch) and `resolve_command` / `CommandMatch` (the three-state text classifier). It exists because three surfaces carried three types and three classifiers that had drifted — `/effort` resolved in the gateway but not the TUI registry, and `/memory` was a different command on each side (Hydrogen round-2 F4, iter-2742). Behaviour stays host-bound; identity (name, aliases, category, arg hint) is what this module owns. |
 | `gateway_api.rs` | The daemon's read-only session API (`GET /api/sessions`, `/api/sessions/:id/messages`, `/api/subagents`) in one axum route group, token-gated with the dashboard's discipline, loopback-bound. Read-only on purpose: the daemon already holds the single-writer flock. |
 | `gateway_runner/allocator.rs` | Arena cap + debounced `malloc_trim` for the long-lived daemon (vendored from jcode). Without it glibc's one-arena-per-core retained ~94 MB on an idle connection. |
@@ -240,8 +240,8 @@ nor a handler, and which no other library page names.
 
 Type `/` in the TUI or a channel and `commands.rs` resolves it — through
 `command_router.rs`'s shared `resolve_command`, which the gateway's
-`gateway_commands.rs` table also feeds. **90 commands** are in the TUI
-table and **62** in the gateway table, spanning session control (`/new`, `/branch`,
+`gateway_commands.rs` table also feeds. **84 commands** are in the TUI
+table and **61** in the gateway table, spanning session control (`/new`, `/branch`,
 `/compress`, `/undo`, `/retry`), model and behaviour (`/model`,
 `/provider`, `/reasoning`, `/yolo`, `/verbose`, `/skin`), management
 (`/skills`, `/mcp`, `/plugins`, `/tools`, `/cron`, `/kanban`, `/curator`,
@@ -274,13 +274,13 @@ corpus.
 
 ## Intention
 
-The CLI is the operator's whole relationship with the harness: 52
+The CLI is the operator's whole relationship with the harness: 53
 subcommands, each one thin, each one delegating to the library that owns
 the mechanism, so a fix to a mechanism lands once and every command that
 touches it gets it. The two registries (shell subcommands and slash
 commands) are separate because their audiences are: one is a script or a
 human at a prompt, the other is a human or an agent inside a live session.
-The slash-command question is the opposite shape: two TABLES (90 TUI + 62
+The slash-command question is the opposite shape: two TABLES (84 TUI + 61
 gateway) over ONE contract, `command_router.rs`, because a command's
 identity is not host-bound while its behaviour is.
 The support modules exist because the alternative was worse: `gateway_api`
