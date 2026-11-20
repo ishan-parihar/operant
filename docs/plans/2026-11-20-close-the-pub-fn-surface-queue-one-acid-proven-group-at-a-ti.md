@@ -164,6 +164,24 @@ same pass count.
 
 ### T2 -- the `tools.rs` pair and the `oauth/store.rs` pair (4 candidates)
 
+**LANDED iter-2756 (`3860c388`): 3 deleted, 1 kept-and-documented.**
+
+| verdict | name | why |
+|---|---|---|
+| deleted | `is_direct` (tools.rs) | `ToolExposure` has THREE states and production discriminates `Direct` with `== ToolExposure::Direct` (tools.rs:859/918/990) and a `match` (tool_search.rs:115) -- never this predicate. Its sibling `is_deferred` IS live with 4 call sites, which is exactly why the pair looked alive. |
+| deleted | `with_lifetime` (oauth/store.rs) | `issued_at` / `expires_at` are `pub` fields assigned directly at store.rs:417-418; the builder was never reached. |
+| deleted | `with_default_path` (oauth/store.rs) | pure wrapper over `default_path()`; every production AND test path passes an explicit `AccountStore::new(path)`. |
+| **kept** | `default_path` (oauth/store.rs) | **no caller either**, but it is the DOCUMENTED account-store location and the deleted `with_default_path` was its only referrer. Deleting both would erase the answer to "where does the account store live" with nothing in its place. A comment now names the iter-2755 deletion so the next reader knows the accessor is intentional. |
+
+The rewritten T2 header above lists 4 candidates (enable_tool, is_direct,
+with_default_path, with_lifetime). `enable_tool` was already **ACCOUNTED_FOR** in
+iter-2753, so T2's real accounting is **3 deleted + 1 kept + 1 accounted = 4 named**.
+
+Guard: `the_pub_fn_batch_stay_dead` now 22 needles (was 19); the 3 new ones RED-proven
+by re-adding each definition shape. 4/4 pass; lib checks clean.
+
+
+
 Two files, two candidates each. `tools.rs` is the tool registry -- the highest-traffic
 file in the crate -- so `enable_tool` / `is_direct` are the two candidates most likely to
 have a caller the census missed (a trait method or a `matches!` arm). Acid-test first;
@@ -179,6 +197,14 @@ call site in `EXCLUDED_SHAPES`.
 
 ### T3 -- the three `skills_guard.rs` candidates (3)
 
+**ALREADY LANDED -- nothing left to do.** Verified 2026-11-20 against origin `3860c388`:
+`determine_trust`, `format_report` and `structural_check` all have **0 definitions** in
+`crates/` (grep `fn <name>(`). iter-2753 deleted them. The doc-header correction this
+section anticipated is also moot: with no functions left, there is no public surface to
+claim a consumer.
+
+
+
 `determine_trust`, `format_report`, `structural_check`. A security-scanning module whose
 public surface has no production caller is a real finding (the module's own doc may claim
 a `skills_guard` integration that does not exist -- the same class as the
@@ -191,6 +217,29 @@ exist is more expensive than the dead code).
 a doc correction if the header claims a caller.
 
 ### T4 -- the `gateway/*` candidates (5)
+
+**LANDED iter-2757 (`e9dbd113`): 4 deleted, 1 already gone.**
+
+| verdict | name | why |
+|---|---|---|
+| deleted | `is_session_expired` (gateway_session.rs) | **its doc claimed a consumer that does not exist.** The comment said "for background expiry watcher" -- no such watcher is anywhere in the tree (only this line and an unrelated field comment at :381). The live consumer is `should_reset` at :978. A dead wrapper whose doc points at an unbuilt consumer is the false-claim class, and it is the single most expensive thing this group found. **The acid script SKIPS it**: a doc comment sits between the `#[expect]` attribute and `pub fn`, so the regex misses the definition. Proven by hand -- mutating `pub` to private compiles clean with one `never used`, file byte-identical after restore. |
+| deleted | `with_verify_token` (gateway/whatsapp.rs) | sibling `with_phone_number_id` IS live (gateway_runner.rs:5591); this one is not. Both set a `pub Option` field, so the asymmetry is invisible from the call site. |
+| deleted | `with_holon` (gateway/webhook.rs) | `with_holon_opt` is the live one (gateway_runner.rs:5631). Two setters, one field, one caller. |
+| deleted | `with_delivery_ledger_capacity` (gateway/mod.rs) | pure builder over `DeliveryLedger::new(max)`; no caller. |
+| already gone | `from_str_key` (gateway/dispatch_breaker.rs) | 0 definitions before this iteration started. |
+
+So T4's real count is **4 of 5**.
+
+**Tooling gap found:** `.acid.py`'s definition regex does not skip over a doc comment
+that sits between an attribute and the `fn`. `is_session_expired` was reported `SKIP
+(no pub fn match)` and had to be proven by hand. Any future candidate whose attribute
+block is followed by `///` before the signature will be silently skipped and read as
+"not a candidate". Worth fixing in the auditor before the next tranche.
+
+Guard: 26 needles (was 22); the 4 new ones RED-proven by re-adding each definition shape
+and restoring byte-identically. 4/4 pass; lib + CLI bin/tests checks clean.
+
+
 
 `with_verify_token` (`gateway/whatsapp.rs`), `with_holon` (`gateway/webhook.rs`),
 `is_session_expired` (`gateway_session.rs`), `with_delivery_ledger_capacity`

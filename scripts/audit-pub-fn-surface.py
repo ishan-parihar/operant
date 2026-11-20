@@ -78,6 +78,22 @@ ACCOUNTED_FOR = {
     "with_pool_factory": "the G6 tool-seam extension point. `ToolSeam::pool_tool_factory` is READ at harness_adapters.rs:79 (SeamToolPayload materialization) and :95 (pool.* row-config fallback); no production caller has needed the hook yet. The census counts the SETTER's call sites (zero), not the field's reads (two), so it reads as callerless -- kept because deleting it strands a permanently-None field behind live reads (iter-2754 decision)",
 }
 
+# Shapes the census structurally cannot see AND shapes the ACID TEST cannot see.
+# `scripts/audit-pub-fn-surface.py` scans the WHOLE workspace, so a pub fn called
+# only from operant-cli has a caller and is not a candidate -- the census is right.
+# `.acid.py`, however, compiles `operant-core --lib` ONLY. A function whose sole
+# caller lives in operant-cli therefore compiles clean under the mutation and is
+# reported DEAD, which is WRONG: it is alive, just not from inside its own crate.
+#
+# MEASURED iter-2757: `with_holon_opt` (gateway/webhook.rs) was reported DEAD by
+# `.acid.py` while `gateway_runner.rs:5631` calls it in the same tree. The CLI
+# verification (`cargo check -p operant-cli --bin operant --tests`, exit 0) is what
+# caught it -- and every T4 deletion was re-checked by grepping operant-cli for the
+# name before commit (0 references for all 17 deleted functions).
+#
+# The rule: an acid DEAD verdict is only sufficient when the CLI is also checked.
+# The cheap correct form is the grep above, not a second full build.
+#
 # Shapes the census structurally cannot see. Recorded so the next run is
 # quieter AND so nobody re-derives them. A name on a candidate line that
 # matches one of these is a census artifact, not a dead function.
