@@ -37,7 +37,7 @@ struct LoadedPlugin {
 impl PluginHost {
     /// Create a new plugin host with the given plugins directory.
     ///
-    /// (iter-2767: `SignatureMode::default()` rather than `Disabled` spelled out.
+    /// (iter-2769: `SignatureMode::default()` rather than `Disabled` spelled out.
     /// This line USED to pass `Disabled` explicitly, which would have pinned the
     /// old behaviour no matter what `Default` said -- the exact trap this plan
     /// named before touching the enum.)

@@ -18,7 +18,7 @@ pub enum SignatureMode {
     Strict,
     /// Warn but allow plugins that are unsigned or fail verification.
     ///
-    /// (iter-2767: THIS IS THE DEFAULT, and the reasoning matters because the
+    /// (iter-2769: THIS IS THE DEFAULT, and the reasoning matters because the
     /// alternative is not obviously wrong.)
     ///
     /// The other two modes are both defensible and both are worse here:
@@ -500,7 +500,7 @@ capabilities = ["tool"]
 
     #[test]
     fn test_signature_mode_default_is_permissive() {
-        // (iter-2767) WAS `..._default_is_disabled` asserting `Disabled`. The
+        // (iter-2769) WAS `..._default_is_disabled` asserting `Disabled`. The
         // default moved because `Disabled` loads an unsigned plugin silently:
         // `enforce_signature_policy` returns `Ok(Unsigned)` at :225 BEFORE any
         // `tracing::warn!`, so the operator gets no signal that provenance was
@@ -515,7 +515,7 @@ capabilities = ["tool"]
 
     #[test]
     fn test_permissive_warns_and_still_loads_an_unsigned_plugin() {
-        // The behaviour that justifies the default (iter-2767): an unsigned
+        // The behaviour that justifies the default (iter-2769): an unsigned
         // plugin is LOADED -- not refused, not skipped -- and the caller can
         // see that it was unsigned. Asserting only the load would pass for
         // `Disabled` too, which is the whole difference being tested here.
