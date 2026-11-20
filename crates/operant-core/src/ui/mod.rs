@@ -286,11 +286,6 @@ impl SurfaceOp {
             Self::SealSurface { .. } => Vec::new(),
         }
     }
-
-    /// Whether this op is the one that creates the surface.
-    pub fn is_create(&self) -> bool {
-        matches!(self, Self::CreateSurface { .. })
-    }
 }
 
 /// A labelled pair, the unit of a `KeyValueGrid` and of a metric row.
@@ -659,25 +654,21 @@ impl WidgetNode {
         }
     }
 
-    /// Mutable children, if any — the string-leaf scrub walk.
-    pub fn children_mut(&mut self) -> Vec<&mut WidgetNode> {
-        match self {
-            Self::Row { children } | Self::Column { children } => children.iter_mut().collect(),
-            Self::Card { child, .. } | Self::Tabs { child, .. } | Self::Modal { child, .. } => {
-                vec![child]
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// Whether any node in this subtree is [`Provenance::AgentSynthesis`].
-    ///
-    /// Only `CreateSurface` and `UpdateComponents`-style containers carry
-    /// provenance at the op level, so this checks the op's declared
-    /// provenance plus every node — see [`SurfaceOp::is_synthesized`].
-    pub fn has_unverified(&self) -> bool {
-        false
-    }
+    // TWO methods were DELETED here (iter-2745):
+    //   * `children_mut` -- a mutable children walk. Its doc says "the
+    //     string-leaf scrub walk", but no scrub walk called it; the live
+    //     scrubber is `SurfaceOp::string_leaves` (below), which recurses over
+    //     `widgets()` itself.
+    //   * `has_unverified` -- a STUB that returned a hardcoded `false`. Its own
+    //     doc pointed at `SurfaceOp::is_synthesized`, which is the real check
+    //     and is live (4 call sites in gateway_runner, agent_events and
+    //     channel_drains). Two names, one behaviour, only one reachable -- the
+    //     same shape as the memory-context orphan (iter-2727): a reader who
+    //     greps "is this surface unverified?" found a confident answer that
+    //     was a constant.
+    // Both were proven dead by the acid test: the `pub` removed and
+    // `cargo check -p operant-core --lib` reporting "methods ... are never
+    // used".
 }
 
 impl SurfaceOp {
@@ -1021,12 +1012,7 @@ pub fn check_capabilities(op: &SurfaceOp, caps: &SurfaceCapabilities) -> Surface
     Ok(())
 }
 
-impl WidgetNode {
-    /// Whether this widget is a [`WidgetNode::TextField`].
-    pub fn is_text_field(&self) -> bool {
-        matches!(self, Self::TextField { .. })
-    }
-}
+impl WidgetNode {}
 
 impl SurfaceOp {
     /// Every widget this op carries, as one tree a renderer can draw.
