@@ -366,7 +366,25 @@ for p in pathlib.Path("crates/operant-core/src/tools").rglob("*.rs"):
 
 b = pathlib.Path("crates/operant-core/src/tools/builtin.rs").read_text(errors="ignore")
 m = re.search(r'fn builtin_tool_names\(\)[^{]*\{(.*?)\n\}', b, re.S)
-listed = len(set(re.findall(r'"([a-z0-9_]+)"', m.group(1)))) if m else -1
+
+
+def strip_comments(s):
+    """Remove comments before counting quoted names.
+
+    The body carries comments that QUOTE tool names -- builtin.rs explains, at
+    the entry for `notify`, that the registered name is "notify" and not
+    "notification", and mentions the literal "notification" in prose. A bare
+    `\"([a-z0-9_]+)\"` over the whole body counted that comment word as a 68th
+    tool, so the gate reported a drift on every run and the page's correct "67"
+    looked wrong. Two agents could "fix" that in opposite directions: edit the
+    doc to 68 (corrupting a correct number) or edit the gate. This strips the
+    comments so the count is of CODE, which is what the claim is about.
+    """
+    s = re.sub(r'/\*.*?\*/', '', s, flags=re.S)
+    return re.sub(r'//[^\n]*', '', s)
+
+
+listed = len(set(re.findall(r'"([a-z0-9_]+)"', strip_comments(m.group(1))))) if m else -1
 
 problems = []
 if listed < 0:
