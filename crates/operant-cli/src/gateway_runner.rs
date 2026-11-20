@@ -7822,6 +7822,18 @@ pub async fn start_gateway(
                 Some(id) if !id.is_empty() => session_channels_for_uq.lock().await.get(id).cloned(),
                 _ => None,
             };
+            // (iter-2728, Hydrogen round-2 F2) The asking transport breaks a
+            // pinned/slot TIE: when both name a channel, the one whose
+            // platform equals the transport the ASKING agent was serving wins.
+            // Without this the drain could deliver a telegram question to a
+            // discord turn that happened to run last -- the process-global
+            // `current_channel` cell deciding by recency, which is the
+            // iter-2528 H-3 failure one hop further in. `None` transport (a
+            // host that predates the field) keeps the old resolution exactly.
+            let pinned = match (req.transport.as_deref(), pinned) {
+                (Some(t), Some(p)) if p.0 != t => None,
+                (_, p) => p,
+            };
             let slot_channel = current_channel_for_uq.lock().await.clone();
             let channel_info =
                 resolve_turn_channel(req.session_id.as_deref(), pinned, slot_channel);

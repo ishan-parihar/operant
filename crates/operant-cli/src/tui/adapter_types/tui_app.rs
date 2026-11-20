@@ -1582,6 +1582,9 @@ impl TuiApp {
                             // The debug mock drives events with no session
                             // behind them, so there is none to name.
                             session_id: None,
+                            // (iter-2728, F2) The debug mock has no transport
+                            // either -- it is the TUI's own simulation.
+                            transport: None,
                             reply_tx,
                         });
                     }

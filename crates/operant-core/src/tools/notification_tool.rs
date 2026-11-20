@@ -42,13 +42,17 @@ impl OperantTool for NotificationTool {
         )
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let message = match args.get("message").and_then(|v| v.as_str()) {
             Some(m) => m,
             None => {
                 return ToolResult::error("notify", "message is required");
             }
         };
+        // (iter-2728) The approval path below reads the asking transport off
+        // this context; the notify path itself does not, so touch it here to
+        // keep the parameter honest on both arms.
+        let _ = context.get("transport");
 
         let title = args.get("title").and_then(|v| v.as_str());
 
@@ -125,9 +129,12 @@ impl OperantTool for ApprovalTool {
             full_request,
             Some(vec!["approve".to_string(), "deny".to_string()]),
             // (A3-gateway H-3) The asking session, so an approval prompt
-            // reaches the chat that raised it. `context` is currently
-            // `_context` in this impl -- it has to be named to be read.
+            // reaches the chat that raised it.
             context.resolved_session_id().map(str::to_string),
+            // (iter-2728, Hydrogen round-2 F2) The asking transport, so the
+            // gateway's multi-transport drain can tell a telegram approval
+            // from a discord one without the process-global channel cell.
+            context.get("transport").map(str::to_string),
         ) {
             match reply_rx.await {
                 Ok(answer) => {

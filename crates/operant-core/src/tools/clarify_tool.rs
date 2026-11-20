@@ -96,6 +96,20 @@ impl OperantTool for ClarifyTool {
             args.question.clone(),
             choices.clone(),
             session_id,
+            // (iter-2728, Hydrogen round-2 F2) The asking TRANSPORT travels
+            // with the question, the same way it rides `SurfaceRequest` for
+            // `ui_request_input`. Both tools target the same HITL seam; before
+            // this the two channels disagreed -- the surface channel resolved
+            // per-host via `agent.transport`, this one was a bare
+            // process-global OnceLock whose drainers could not tell a tui
+            // question from a telegram one except by the process-global
+            // `current_channel` cell (the iter-2528 H-3 failure). Passing the
+            // transport lets a receiver route by (session, transport) without
+            // consulting that cell. The TUI drain ignores it (single session
+            // by construction); the gateway drain keys its pending map by
+            // `platform:channel_id` and now sees the platform the ASKING agent
+            // was serving.
+            context.get("transport").map(str::to_string),
         ) {
             match reply_rx.await {
                 Ok(answer) => {

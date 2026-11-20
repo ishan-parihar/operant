@@ -42,6 +42,21 @@ pub struct UserQuestionRequest {
     /// `None` is every caller with no session to name: the one-shot paths,
     /// the TUI's debug mock, and tests that construct a request directly.
     pub session_id: Option<String>,
+    /// (iter-2728, Hydrogen round-2 F2) The transport the ASKING agent was
+    /// serving: "tui", "telegram", "discord", ... -- the same
+    /// `agent.transport()` the surface channel's `SurfaceRequest` carries.
+    /// `None` for a process with no transport concept (the one-shot CLI) and
+    /// for tests that construct a request directly.
+    ///
+    /// A drainer that serves ONE transport (the TUI) ignores it. A drainer
+    /// that serves MANY (the gateway) can use it to tell a question raised
+    /// inside a telegram turn from one raised inside a discord turn WITHOUT
+    /// consulting the process-global `current_channel` cell -- which is the
+    /// iter-2528 H-3 failure that motivated threading `session_id` through in
+    /// the first place. The cell is still the fallback for a request that
+    /// carries no transport (a host that predates this field), so adding it
+    /// changes nothing for existing callers.
+    pub transport: Option<String>,
     /// Oneshot reply channel — the user's answer flows back here.
     pub reply_tx: oneshot::Sender<String>,
 }
@@ -72,12 +87,14 @@ pub fn try_send_user_question(
     question: String,
     choices: Option<Vec<String>>,
     session_id: Option<String>,
+    transport: Option<String>,
 ) -> Option<oneshot::Receiver<String>> {
     let (reply_tx, reply_rx) = oneshot::channel();
     let req = UserQuestionRequest {
         question,
         choices,
         session_id,
+        transport,
         reply_tx,
     };
     // Try to get the sender. If it's not set (CLI mode), return None.
@@ -129,6 +146,8 @@ mod tests {
             "which database?".to_string(),
             Some(vec!["primary".to_string(), "replica".to_string()]),
             Some("gw_abc123".to_string()),
+            // (iter-2728, F2) The transport rides the same hop.
+            Some("telegram".to_string()),
         );
         assert!(
             reply.is_some(),
@@ -141,6 +160,12 @@ mod tests {
             Some("gw_abc123"),
             "the asking session must reach the receiver; losing it is what \\
              routes the question to a chat that never asked"
+        );
+        assert_eq!(
+            req.transport.as_deref(),
+            Some("telegram"),
+            "the asking transport must reach the receiver; losing it is what \\
+             lets a recency-based cell route the question to the wrong platform"
         );
         assert_eq!(req.question, "which database?");
         assert_eq!(
