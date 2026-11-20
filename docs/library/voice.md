@@ -19,6 +19,20 @@ download + transcribe), `crates/operant-cli/src/gateway_runner.rs`
 (audio delivery), `crates/operant-api/src/vad.rs` (the VAD seam),
 `crates/operant-core/src/config.rs` (`[tts]`, `[tools.stt]`).
 
+## Contents
+
+1. [The shape of the surface](#the-shape-of-the-surface)
+2. [`text_to_speech` — the dispatch](#text_to_speech--the-dispatch)
+3. [Vendor pins: MiniMax and Gemini](#vendor-pins-minimax-and-gemini)
+4. [The two extension registries](#the-two-extension-registries)
+5. [`transcribe_audio` — the STT path](#transcribe_audio--the-stt-path)
+6. [How audio leaves the process](#how-audio-leaves-the-process)
+7. [Configuration](#configuration)
+8. [Surfaces](#surfaces)
+9. [VAD](#vad)
+10. [Failure modes](#failure-modes)
+11. [Intention](#intention)
+
 ## The shape of the surface
 
 Voice in operant is **tool-shaped**, not an interactive mode. The agent

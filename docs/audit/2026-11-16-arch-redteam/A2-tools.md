@@ -7,6 +7,16 @@ Every citation is `git show origin/main:<path>` + line number.
 Slice: `crates/operant-core/src/tools.rs`, `crates/operant-core/src/tools/**`,
 `crates/operant-core/src/aft_bridge.rs`, `crates/operant-core/src/tool_guardrails.rs`.
 
+## Contents
+
+1. [Direct-execute inventory](#direct-execute-inventory)
+2. [Verified](#verified)
+3. [Asserted](#asserted)
+4. [Lean cuts](#lean-cuts)
+5. [Rust discipline](#rust-discipline)
+6. [Finding summary](#finding-summary)
+7. [Coverage](#coverage)
+
 ---
 
 ## DIRECT-EXECUTE INVENTORY

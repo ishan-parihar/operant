@@ -223,7 +223,8 @@ nor a handler, and which no other library page names.
 
 | Module | What it is |
 |---|---|
-| `commands.rs` | The slash-command registry: a static `COMMAND_REGISTRY` slice of `CommandDef` (name, description, aliases, args hint, `cli_only` / `gateway_only` gating) plus a runtime handler map. **84 slash commands**, derived from `CommandDef::new(` in the registry. This is what a session resolves; the CLI subcommands above are the shell surface, and the two are deliberately separate registries. |
+| `commands.rs` | The TUI slash-command TABLE: a static `COMMAND_REGISTRY` slice of `CommandDef` (name, description, aliases, args hint, `cli_only` / `gateway_only` gating) plus a runtime handler map. **90 slash commands**, derived from `CommandDef::new(` in the registry. The gateway carries a SECOND table of **62** in `gateway_commands.rs`; since iter-2742 both are `CommandDef` from `operant-core/src/command_router.rs` and both resolve through the same `resolve_command` (separate TABLES over ONE contract). This is what a session resolves; the CLI subcommands above are the shell surface, and the two are separate because their audiences differ. |
+| `operant-core/src/command_router.rs` | The ONE shared slash-command contract both registries build on: `CommandDef` (static metadata), `CommandResult` (the structured intent a handler returns), `CommandContext`, `CommandHandler`, `CommandRegistry` (name/alias resolution + handler dispatch) and `resolve_command` / `CommandMatch` (the three-state text classifier). It exists because three surfaces carried three types and three classifiers that had drifted — `/effort` resolved in the gateway but not the TUI registry, and `/memory` was a different command on each side (Hydrogen round-2 F4, iter-2742). Behaviour stays host-bound; identity (name, aliases, category, arg hint) is what this module owns. |
 | `gateway_api.rs` | The daemon's read-only session API (`GET /api/sessions`, `/api/sessions/:id/messages`, `/api/subagents`) in one axum route group, token-gated with the dashboard's discipline, loopback-bound. Read-only on purpose: the daemon already holds the single-writer flock. |
 | `gateway_runner/allocator.rs` | Arena cap + debounced `malloc_trim` for the long-lived daemon (vendored from jcode). Without it glibc's one-arena-per-core retained ~94 MB on an idle connection. |
 | `gateway_runner/enrichment.rs` | Telegram photo / voice / document arms of the turn handler, split out of `gateway_runner.rs` so that file does one job. |
@@ -237,8 +238,10 @@ nor a handler, and which no other library page names.
 
 ## Surfaces — the slash commands inside a session
 
-Type `/` in the TUI or a channel and `commands.rs` resolves it. 84
-commands are registered, spanning session control (`/new`, `/branch`,
+Type `/` in the TUI or a channel and `commands.rs` resolves it — through
+`command_router.rs`'s shared `resolve_command`, which the gateway's
+`gateway_commands.rs` table also feeds. **90 commands** are in the TUI
+table and **62** in the gateway table, spanning session control (`/new`, `/branch`,
 `/compress`, `/undo`, `/retry`), model and behaviour (`/model`,
 `/provider`, `/reasoning`, `/yolo`, `/verbose`, `/skin`), management
 (`/skills`, `/mcp`, `/plugins`, `/tools`, `/cron`, `/kanban`, `/curator`,
@@ -277,6 +280,9 @@ the mechanism, so a fix to a mechanism lands once and every command that
 touches it gets it. The two registries (shell subcommands and slash
 commands) are separate because their audiences are: one is a script or a
 human at a prompt, the other is a human or an agent inside a live session.
+The slash-command question is the opposite shape: two TABLES (90 TUI + 62
+gateway) over ONE contract, `command_router.rs`, because a command's
+identity is not host-bound while its behaviour is.
 The support modules exist because the alternative was worse: `gateway_api`
 so five surfaces could share ONE session record instead of five readers of
 one database, `skill_roots` so five surfaces could not disagree about
