@@ -62,6 +62,7 @@ pub mod binary_updater;
 pub mod blast_radius;
 pub mod browser_provider;
 pub mod client;
+pub mod command_router;
 pub mod config;
 pub mod config_backup;
 pub mod config_heal;

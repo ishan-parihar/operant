@@ -4,187 +4,28 @@
 //! All slash commands are defined here and consumed by the CLI chat loop,
 //! gateway dispatchers, and any other interactive context.
 //!
-//! The registry provides:
-//! - Static command metadata definitions (name, description, category, aliases)
-//! - Dynamic handler registration for runtime dispatch
-//! - Help text formatting organized by category
-//! - Command resolution (name + alias → canonical name)
+//! The shared contract — [`CommandDef`], [`CommandResult`], [`CommandContext`],
+//! [`CommandHandler`], [`CommandRegistry`], and the [`resolve_command`] text
+//! classifier — lives in `operant_core::command_router` (iter-2736, Hydrogen
+//! round-2 F4). This module re-exports those types so every existing
+//! `crate::commands::CommandResult` / `CommandRegistry` import keeps working,
+//! and owns the TUI's STATIC COMMAND REGISTRY table plus the TUI-only helpers
+//! (`TuiCategory`, `tui_category`, `TuiSlashCommand`). The gateway owns its
+//! own static table in `gateway_commands.rs`; both build a core
+//! [`CommandRegistry`] from their respective tables.
+
+// Re-export the shared contract types from core so every existing
+// `crate::commands::CommandResult` / `CommandDef` / `CommandHandler` import
+// keeps working. `CommandRegistry` is NOT re-exported — this module defines
+// a TUI newtype of that name (pre-loaded with the TUI table).
+//
+// `CommandMatch` and `resolve_command` are NOT re-exported here: the TUI
+// does not classify text as commands (its intercept is a hand-written match
+// in `tui/app/commands.rs`). The gateway re-exports them from
+// `gateway_commands.rs` for `gateway_runner`'s inbound loop.
+pub use operant_core::command_router::{CommandContext, CommandDef, CommandHandler, CommandResult};
 
 use std::collections::HashMap;
-use std::fmt;
-
-use anyhow::Result;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/// Context provided to a command handler on execution.
-#[derive(Debug, Default)]
-pub struct CommandContext<'a> {
-    /// The raw argument string following the command name.
-    pub args: &'a str,
-}
-
-/// Rich result type for slash command execution.
-///
-/// Instead of just returning a string, commands express their *intent* as data.
-/// The TUI (or gateway) interprets the variant to perform the side effect.
-/// This decouples command logic from the runtime environment.
-///
-/// Ported from the Claurst `CommandResult` pattern, adapted for Operant's TUI.
-#[must_use]
-#[non_exhaustive]
-pub enum CommandResult {
-    // ── Display ────────────────────────────────────────────────────────────
-    /// Display a message to the user (does NOT go to the model).
-    Message(String),
-
-    // ── Conversation ───────────────────────────────────────────────────────
-
-    // ── Configuration ──────────────────────────────────────────────────────
-
-    // ── Overlay / UI ───────────────────────────────────────────────────────
-
-    // ── Session state ──────────────────────────────────────────────────────
-
-    // ── Clipboard ──────────────────────────────────────────────────────────
-
-    // ── Shell ──────────────────────────────────────────────────────────────
-    /// Run a shell command (e.g. /setup spawns an interactive subprocess).
-    ShellCommand(Vec<String>),
-    // ── Exit ───────────────────────────────────────────────────────────────
-}
-
-impl CommandResult {
-    /// Convenience: create a Message variant.
-    pub fn message(text: impl Into<String>) -> Self {
-        Self::Message(text.into())
-    }
-}
-
-impl fmt::Debug for CommandResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(s) => write!(f, "Message({:?})", s),
-            Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
-        }
-    }
-}
-
-impl fmt::Display for CommandResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(s) => write!(f, "{}", s),
-            Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
-        }
-    }
-}
-
-impl From<String> for CommandResult {
-    fn from(s: String) -> Self {
-        Self::Message(s)
-    }
-}
-
-impl From<&str> for CommandResult {
-    fn from(s: &str) -> Self {
-        Self::Message(s.to_string())
-    }
-}
-
-/// A slash command handler that can be registered in the [`CommandRegistry`].
-///
-/// Implementations should be stateless or use interior mutability, since the
-/// same handler may be called multiple times.
-// `async_trait` puts a bare `#[must_use]` on every async method it
-// generates, and this one returns a `Result` — which is ALREADY
-// `#[must_use]`. The lint's own suggestion (give the attribute a message)
-// cannot be applied to a macro-generated attribute, so the duplication is
-// expected here.
-#[allow(
-    clippy::double_must_use,
-    reason = "async_trait's generated #[must_use] on a Result-returning method"
-)]
-#[async_trait::async_trait]
-pub trait CommandHandler: Send + Sync {
-    /// Execute this command with the given context.
-    /// Returns a [`CommandResult`] expressing the command's intent as data.
-    async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult;
-}
-
-// ---------------------------------------------------------------------------
-// CommandDef — static metadata
-// ---------------------------------------------------------------------------
-
-/// Metadata-only command definition.
-///
-/// This struct is `const`-compatible so the built-in registry can be a static
-/// slice. Handler functions are registered separately at runtime via
-/// [`CommandRegistry::register_handler`].
-#[derive(Debug, Clone)]
-pub struct CommandDef {
-    /// Canonical name (without the leading slash).
-    pub name: &'static str,
-    /// One-line human-readable description.
-    pub description: &'static str,
-    /// Alternative names that resolve to this command.
-    pub aliases: &'static [&'static str],
-    /// Argument hint shown in help (e.g. `"<prompt>"`, `"<key> <value>"`).
-    pub args_hint: &'static str,
-    /// Only available in interactive CLI (not in gateway/messaging).
-    pub cli_only: bool,
-    /// Only available in messaging platforms (not in CLI).
-    pub gateway_only: bool,
-    /// Config dotpath that gates this command in gateway mode.
-    /// When set on a `cli_only` command, the command becomes available
-    /// in the gateway if the config value is truthy.
-    pub gateway_config_gate: Option<&'static str>,
-}
-
-impl CommandDef {
-    /// Create a new command definition with minimal fields.
-    pub const fn new(name: &'static str, description: &'static str) -> Self {
-        Self {
-            name,
-            description,
-            aliases: &[],
-            args_hint: "",
-            cli_only: false,
-            gateway_only: false,
-            gateway_config_gate: None,
-        }
-    }
-
-    /// Set aliases for this command.
-    pub const fn with_aliases(mut self, aliases: &'static [&'static str]) -> Self {
-        self.aliases = aliases;
-        self
-    }
-
-    /// Set the argument hint.
-    pub const fn with_args(mut self, hint: &'static str) -> Self {
-        self.args_hint = hint;
-        self
-    }
-
-    /// Mark this command as CLI-only.
-    pub const fn cli_only(mut self) -> Self {
-        self.cli_only = true;
-        self
-    }
-
-    /// Mark this command as gateway-only.
-    pub const fn gateway_only(mut self) -> Self {
-        self.gateway_only = true;
-        self
-    }
-
-    pub const fn with_config_gate(mut self, gate: &'static str) -> Self {
-        self.gateway_config_gate = Some(gate);
-        self
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Built-in command registry (static)
@@ -439,61 +280,45 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
 // CommandRegistry — runtime dispatch
 // ---------------------------------------------------------------------------
 
-/// A registry that maps command names to metadata and handlers.
+/// The TUI's slash-command registry: a thin newtype over the shared core
+/// [`operant_core::command_router::CommandRegistry`], pre-loaded with the
+/// TUI's static [`COMMAND_REGISTRY`] table.
 ///
-/// The registry is built at startup from the static [`COMMAND_REGISTRY`] slice
-/// and can be extended with additional commands from plugins.
-///
-/// # Example
-///
-/// ```ignore
-/// let mut registry = CommandRegistry::new();
-/// registry.register_handler("status", Box::new(StatusHandler::new(config)));
-/// let result = registry.execute("status", "").await;
-/// match result {
-///     CommandResult::Message(text) => println!("{}", text),
-///     CommandResult::Error(e) => eprintln!("Error: {}", e),
-///     _ => { /* handle other intents */ }
-/// }
-/// ```
-pub struct CommandRegistry {
-    /// Maps canonical names and aliases to command definitions.
-    defs: HashMap<&'static str, &'static CommandDef>,
-    /// Maps canonical command names to their handler implementations.
-    handlers: HashMap<String, Box<dyn CommandHandler>>,
-}
+/// The shared registry type lives in `operant_core::command_router`
+/// (iter-2736, Hydrogen round-2 F4). The TUI owns its static table here;
+/// the gateway owns its own in `gateway_commands.rs`. Both build a core
+/// registry from their respective tables, so name/alias resolution and
+/// handler dispatch have ONE implementation. This newtype exists only to
+/// provide the TUI-convenient `CommandRegistry::new()` (no arguments —
+/// the table is implicit); the core type takes the table as a parameter
+/// because the gateway's table is different.
+pub struct CommandRegistry(operant_core::command_router::CommandRegistry);
 
 impl CommandRegistry {
-    /// Create a new registry pre-populated with all built-in commands.
+    /// Create a new registry pre-populated with all TUI built-in commands.
     pub fn new() -> Self {
-        let defs = build_command_map();
-        Self {
-            defs,
-            handlers: HashMap::new(),
-        }
+        Self(operant_core::command_router::CommandRegistry::new(
+            COMMAND_REGISTRY,
+        ))
     }
 
     /// Register a handler for the given canonical command name.
     ///
-    /// Returns an error if the name does not match any known command definition.
-    pub fn register_handler(&mut self, name: &str, handler: Box<dyn CommandHandler>) -> Result<()> {
-        // Validate that this is a known canonical command (not just an alias).
-        if !self.defs.contains_key(name) {
-            anyhow::bail!(
-                "Unknown command '{}'. Cannot register handler without a matching CommandDef.",
-                name
-            );
-        }
-        self.handlers.insert(name.to_string(), handler);
-        Ok(())
+    /// Returns an error if the name does not match any known command
+    /// definition (canonical or alias).
+    pub fn register_handler(
+        &mut self,
+        name: &str,
+        handler: Box<dyn CommandHandler>,
+    ) -> Result<(), String> {
+        self.0.register_handler(name, handler)
     }
 
     /// Resolve a command name (or alias) to its canonical name.
     ///
     /// Returns `None` if no command matches.
     pub fn resolve(&self, name: &str) -> Option<&'static str> {
-        let trimmed = name.trim().trim_start_matches('/');
-        self.defs.get(trimmed).map(|def| def.name)
+        self.0.resolve(name)
     }
 
     /// Execute a slash command by its canonical name.
@@ -502,22 +327,16 @@ impl CommandRegistry {
     /// If the command has no registered handler, a fallback `Message` variant
     /// is returned with a helpful description.
     pub async fn execute(&self, name: &str, args: &str) -> CommandResult {
-        let canonical = self.resolve(name).unwrap_or(name);
-        let ctx = CommandContext { args };
+        self.0.execute(name, args).await
+    }
 
-        match self.handlers.get(canonical) {
-            Some(handler) => handler.execute(&ctx).await,
-            None => {
-                if let Some(def) = self.defs.get(canonical) {
-                    CommandResult::message(format!(
-                        "Command /{} is not yet wired to a handler. Description: {}",
-                        def.name, def.description
-                    ))
-                } else {
-                    CommandResult::message(format!("Unknown command: /{}", name))
-                }
-            }
-        }
+    /// Whether a handler is registered for `name` (canonical or alias).
+    #[expect(
+        dead_code,
+        reason = "exercised by the commands.rs test suite; the production dispatch path goes through execute()"
+    )]
+    pub fn is_wired(&self, name: &str) -> bool {
+        self.0.is_wired(name)
     }
 }
 
@@ -532,6 +351,15 @@ impl Default for CommandRegistry {
 // ---------------------------------------------------------------------------
 
 /// Build a canonical-name → CommandDef lookup map that also includes aliases.
+///
+/// Retained for the test suite (which pins alias resolution and table size)
+/// and for any caller that needs the raw map rather than a `CommandRegistry`.
+/// The production dispatch path goes through [`CommandRegistry::new`] +
+/// [`CommandRegistry::resolve`], which build the same map internally.
+#[expect(
+    dead_code,
+    reason = "exercised by the commands.rs test suite; the production dispatch path goes through CommandRegistry"
+)]
 pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
     let mut map = HashMap::new();
     for cmd in COMMAND_REGISTRY {
@@ -1148,5 +976,75 @@ mod tests {
             panic!("expected Message");
         };
         assert!(text.contains("not yet wired"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F4 falsifier: TUI and gateway registries share the core contract
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod f4_parity {
+    //! Hydrogen round-2 F4 falsifier (iter-2736): the TUI and the gateway
+    //! used to carry TWO different `CommandDef` types and TWO `resolve_command`
+    //! implementations. They now share the core `command_router` contract.
+    //! This test pins the shared identity: a command present in BOTH registries
+    //! resolves to the same canonical name, and `execute()` on an unwired
+    //! command produces the same `CommandResult` from either side — proving
+    //! the dispatch is the SAME code, not two copies that happen to agree.
+    use super::*;
+
+    #[test]
+    fn the_tui_and_gateway_resolve_help_to_the_same_canonical() {
+        let tui = CommandRegistry::new();
+        let gateway = operant_core::command_router::CommandRegistry::new(
+            crate::gateway_commands::COMMAND_REGISTRY,
+        );
+        // `help` is in both registries; both must resolve it identically.
+        assert_eq!(tui.resolve("help"), Some("help"));
+        assert_eq!(gateway.resolve("help"), Some("help"));
+        // Aliases too: the TUI's `?`/`h` and the gateway's name match.
+        assert_eq!(tui.resolve("h"), Some("help"));
+        assert_eq!(gateway.resolve("help"), Some("help"));
+    }
+
+    #[test]
+    fn both_registries_produce_the_same_fallback_for_an_unwired_command() {
+        // `help` is registered in both tables but has no handler in either
+        // (the TUI intercepts it in `handle_tui_command`; the gateway in
+        // `handle_command`). The registry's own fallback must be identical:
+        // the core `execute()` produces it, not two copies.
+        let tui = CommandRegistry::new();
+        let gateway = operant_core::command_router::CommandRegistry::new(
+            crate::gateway_commands::COMMAND_REGISTRY,
+        );
+        let tui_result = futures::executor::block_on(tui.execute("help", ""));
+        let gateway_result = futures::executor::block_on(gateway.execute("help", ""));
+        // Both fall through to the same "not yet wired" Message.
+        let CommandResult::Message(tui_text) = &tui_result else {
+            panic!("TUI fallback must be a Message");
+        };
+        let CommandResult::Message(gw_text) = &gateway_result else {
+            panic!("gateway fallback must be a Message");
+        };
+        assert_eq!(
+            tui_text, gw_text,
+            "the TUI and gateway must produce the SAME fallback for an unwired command"
+        );
+        assert!(tui_text.contains("not yet wired"));
+    }
+
+    #[test]
+    fn the_gateway_resolves_a_command_the_tui_does_not_have() {
+        // `effort` is gateway-only (the TUI has its own effort picker, not a
+        // registry entry). The shared classifier resolves it in the gateway
+        // table and reports it as unknown in the TUI table — ONE classifier,
+        // two tables.
+        let gateway = operant_core::command_router::CommandRegistry::new(
+            crate::gateway_commands::COMMAND_REGISTRY,
+        );
+        let tui = CommandRegistry::new();
+        assert_eq!(gateway.resolve("effort"), Some("effort"));
+        assert_eq!(tui.resolve("effort"), None);
     }
 }

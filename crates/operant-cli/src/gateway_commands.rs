@@ -3,8 +3,17 @@
 //! This module provides the canonical set of built-in Telegram bot commands
 //! for the Operant gateway. It handles command resolution, admin gating, and
 //! generates the JSON payload used by Telegram's `setMyCommands` API.
+//!
+//! The shared `CommandDef` / `CommandMatch` / `resolve_command` contract lives
+//! in `operant_core::command_router` (iter-2736, Hydrogen round-2 F4). This
+//! module owns the gateway's STATIC COMMAND REGISTRY table and the sync
+//! `handle_command` dispatch; the live, session-scoped execution lives in
+//! `gateway_runner::handle_runtime_command`. Both build on the core types, so
+//! name/alias resolution and the three-state text classifier have ONE
+//! implementation across the TUI and the gateway.
 
 use chrono::Utc;
+pub use operant_core::command_router::{CommandDef, CommandMatch, resolve_command};
 use operant_core::config::{AppConfig, ToolProgressMode};
 use operant_core::gateway::Gateway;
 use operant_core::interrupt::InterruptFlag;
@@ -197,233 +206,102 @@ impl<'a> CommandContext<'a> {
 pub type NextTurnQueue =
     std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>>;
 
-/// Definition of a single Telegram bot command.
-#[derive(Debug)]
-pub struct CommandDef {
-    /// Primary command name (e.g. "start", "help").
-    pub name: &'static str,
-    /// Short description shown in the bot's command menu.
-    pub description: &'static str,
-    /// Alternative names that also resolve to this command.
-    pub aliases: &'static [&'static str],
-    /// Display category for grouping in `/help`.
-    pub category: &'static str,
-    /// Argument hint shown in usage (e.g. "`<name>`", "" for none).
-    pub args_hint: &'static str,
-    /// Whether this command requires admin privileges.
-    pub admin_only: bool,
-}
-
 /// Static registry of all built-in Telegram bot commands.
 ///
 /// Grouped by category. Order determines display order in `/help`.
+///
+/// The entries use the shared core [`CommandDef`] builder
+/// (`CommandDef::new(name, desc).with_category(...).with_args(...)`) so the
+/// gateway and the TUI define commands with the SAME type. `admin_only` is
+/// set via `.admin_only()` where required.
 pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // ── Session ──────────────────────────────────────────────
-    CommandDef {
-        name: "new",
-        description: "Start a new session",
-        aliases: &["reset", "clear"],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "stop",
-        description: "Stop current task",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "status",
-        description: "Show session status",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "retry",
-        description: "Retry last response",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "undo",
-        description: "Undo last action",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "resume",
-        description: "Resume a saved session",
-        aliases: &["continue"],
-        category: "Session",
-        args_hint: "[name]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "session",
-        // Wave 2 (ORGANISM-ARCHITECTURE §2): show or switch the cast
-        // employee this conversation executes as. Binding is a
-        // conversation act, not an authority act — the bylaws still gates
-        // every tool consult under the bound employee's policy at run
-        // time, so an operator cannot /session their way past a lockdown
-        // row.
-        description: "Show the employee this session runs as, or bind a new one",
-        aliases: &["use"],
-        category: "Session",
-        args_hint: "[employee]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "title",
-        description: "Set session title",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[name]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "branch",
-        description: "Fork into new session",
-        aliases: &["fork"],
-        category: "Session",
-        args_hint: "[name]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "rollback",
-        description: "Rollback to checkpoint",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[number]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "compress",
-        description: "Compress session context",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[focus topic]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "background",
-        description: "Run task in background",
-        aliases: &["bg", "btw"],
-        category: "Session",
-        args_hint: "<prompt>",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "agents",
-        description: "Show active agents",
-        aliases: &["tasks"],
-        category: "Session",
-        args_hint: "",
-        // iter-2632: process-wide state, admin-only like restart/pause/platform.
-        // The handler prints every active session's id, platform and user id, so
-        // a non-admin caller could enumerate other users' sessions -- which is
-        // also the input the `/resume` ownership gate (iter-2621) exists to
-        // protect. Listing them to everyone defeated the gate one command later.
-        admin_only: true,
-    },
-    CommandDef {
-        name: "subagents",
-        description: "List background subagents this gateway dispatched",
-        aliases: &["subagent"],
-        category: "Session",
-        args_hint: "",
-        // iter-2632: same reasoning as `agents` -- the goals and result snippets
-        // belong to whatever session dispatched them, not to every caller.
-        admin_only: true,
-    },
-    CommandDef {
-        name: "todos",
-        description: "Show this chat's todo list",
-        aliases: &["todo"],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "steer",
-        description: "Steer conversation direction",
-        aliases: &[],
-        category: "Session",
-        args_hint: "<prompt>",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "goal",
-        description: "Manage session goals",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[text|pause|resume|clear|status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "subgoal",
-        description: "Manage sub-goals",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[text|remove N|clear]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "topic",
-        description: "Switch conversation topic",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[off|help|session-id]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "whoami",
-        description: "Show user identity",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "profile",
-        description: "Show active profile",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "sethome",
-        description: "Set home session",
-        aliases: &["set-home"],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "queue",
-        description: "Queue a prompt for next turn",
-        aliases: &["q"],
-        category: "Session",
-        args_hint: "<prompt>",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "restart",
-        description: "Restart the gateway",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: true,
-    },
+    CommandDef::new("new", "Start a new session")
+        .with_aliases(&["reset", "clear"])
+        .with_category("Session"),
+    CommandDef::new("stop", "Stop current task").with_category("Session"),
+    CommandDef::new("status", "Show session status").with_category("Session"),
+    CommandDef::new("retry", "Retry last response").with_category("Session"),
+    CommandDef::new("undo", "Undo last action").with_category("Session"),
+    CommandDef::new("resume", "Resume a saved session")
+        .with_aliases(&["continue"])
+        .with_category("Session")
+        .with_args("[name]"),
+    // Wave 2 (ORGANISM-ARCHITECTURE §2): show or switch the cast
+    // employee this conversation executes as. Binding is a
+    // conversation act, not an authority act — the bylaws still gates
+    // every tool consult under the bound employee's policy at run
+    // time, so an operator cannot /session their way past a lockdown
+    // row.
+    CommandDef::new(
+        "session",
+        "Show the employee this session runs as, or bind a new one",
+    )
+    .with_aliases(&["use"])
+    .with_category("Session")
+    .with_args("[employee]"),
+    CommandDef::new("title", "Set session title")
+        .with_category("Session")
+        .with_args("[name]"),
+    CommandDef::new("branch", "Fork into new session")
+        .with_aliases(&["fork"])
+        .with_category("Session")
+        .with_args("[name]"),
+    CommandDef::new("rollback", "Rollback to checkpoint")
+        .with_category("Session")
+        .with_args("[number]"),
+    CommandDef::new("compress", "Compress session context")
+        .with_category("Session")
+        .with_args("[focus topic]"),
+    CommandDef::new("background", "Run task in background")
+        .with_aliases(&["bg", "btw"])
+        .with_category("Session")
+        .with_args("<prompt>"),
+    // iter-2632: process-wide state, admin-only like restart/pause/platform.
+    // The handler prints every active session's id, platform and user id, so
+    // a non-admin caller could enumerate other users' sessions -- which is
+    // also the input the `/resume` ownership gate (iter-2621) exists to
+    // protect. Listing them to everyone defeated the gate one command later.
+    CommandDef::new("agents", "Show active agents")
+        .with_aliases(&["tasks"])
+        .with_category("Session")
+        .admin_only(),
+    // iter-2632: same reasoning as `agents` -- the goals and result snippets
+    // belong to whatever session dispatched them, not to every caller.
+    CommandDef::new(
+        "subagents",
+        "List background subagents this gateway dispatched",
+    )
+    .with_aliases(&["subagent"])
+    .with_category("Session")
+    .admin_only(),
+    CommandDef::new("todos", "Show this chat's todo list")
+        .with_aliases(&["todo"])
+        .with_category("Session"),
+    CommandDef::new("steer", "Steer conversation direction")
+        .with_category("Session")
+        .with_args("<prompt>"),
+    CommandDef::new("goal", "Manage session goals")
+        .with_category("Session")
+        .with_args("[text|pause|resume|clear|status]"),
+    CommandDef::new("subgoal", "Manage sub-goals")
+        .with_category("Session")
+        .with_args("[text|remove N|clear]"),
+    CommandDef::new("topic", "Switch conversation topic")
+        .with_category("Session")
+        .with_args("[off|help|session-id]"),
+    CommandDef::new("whoami", "Show user identity").with_category("Session"),
+    CommandDef::new("profile", "Show active profile").with_category("Session"),
+    CommandDef::new("sethome", "Set home session")
+        .with_aliases(&["set-home"])
+        .with_category("Session"),
+    CommandDef::new("queue", "Queue a prompt for next turn")
+        .with_aliases(&["q"])
+        .with_category("Session")
+        .with_args("<prompt>"),
+    CommandDef::new("restart", "Restart the gateway")
+        .with_category("Session")
+        .admin_only(),
     // RT-177: the estop gate (gateway/mod.rs::route_message) rejects every
     // inbound message with "Resume with `operant resume`" — an instruction a
     // channel user cannot follow. Command dispatch runs BEFORE that gate
@@ -434,388 +312,170 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // TAKEN (resume a saved session, above). The first draft of this change
     // duplicated the name; the RT-178 uniqueness guard is what catches that
     // shape now.
-    CommandDef {
-        name: "pause",
-        description: "Pause operant globally (new work only)",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[reason]",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "unpause",
-        description: "Resume operant from a global pause",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "sessions",
-        description: "Browse previous sessions",
-        aliases: &[],
-        category: "Session",
-        args_hint: "",
-        admin_only: false,
-    },
+    CommandDef::new("pause", "Pause operant globally (new work only)")
+        .with_category("Session")
+        .with_args("[reason]")
+        .admin_only(),
+    CommandDef::new("unpause", "Resume operant from a global pause")
+        .with_category("Session")
+        .admin_only(),
+    CommandDef::new("sessions", "Browse previous sessions").with_category("Session"),
     // ── Config ───────────────────────────────────────────────
-    CommandDef {
-        name: "model",
-        description: "Switch AI model",
-        aliases: &["provider"],
-        category: "Config",
-        args_hint: "[model] [--provider name]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "reasoning",
-        description: "Toggle reasoning display",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[level|show|hide]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "effort",
-        description: "Set reasoning effort (the TUI /effort picker, over this channel)",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[off|minimal|low|medium|high|xhigh|status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "plan",
-        description: "Toggle plan mode (read-only: gated tools are denied, not prompted)",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[on|off|status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "context",
-        description: "Show this session's context occupancy (messages, tokens, window)",
-        aliases: &[],
-        category: "Session",
-        args_hint: "[status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "export",
-        description: "Export this session's transcript to a markdown file",
-        aliases: &["transcript"],
-        category: "Session",
-        args_hint: "[path]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "memory",
-        description: "Show the live memory engine, or recall entries for a query",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[query]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "footer",
-        description: "Toggle message footer",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[on|off|status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "yolo",
-        description: "Toggle YOLO mode (auto-approves destructive tool prompts for this channel)",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[on|off|status]",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "voice",
-        description: "Toggle voice output",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[on|off|tts|status]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "personality",
-        description: "Set AI personality",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[name]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "codex-runtime",
-        description: "Toggle codex app-server runtime",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[auto|codex_app_server]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "verbose",
-        description: "Cycle tool progress display",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[off|new|all|verbose]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "config",
-        description: "View or change configuration",
-        aliases: &["settings"],
-        category: "Config",
-        args_hint: "[key] [value]",
-        admin_only: true,
-    },
+    CommandDef::new("model", "Switch AI model")
+        .with_aliases(&["provider"])
+        .with_category("Config")
+        .with_args("[model] [--provider name]"),
+    CommandDef::new("reasoning", "Toggle reasoning display")
+        .with_category("Config")
+        .with_args("[level|show|hide]"),
+    CommandDef::new(
+        "effort",
+        "Set reasoning effort (the TUI /effort picker, over this channel)",
+    )
+    .with_category("Config")
+    .with_args("[off|minimal|low|medium|high|xhigh|status]"),
+    CommandDef::new(
+        "plan",
+        "Toggle plan mode (read-only: gated tools are denied, not prompted)",
+    )
+    .with_category("Config")
+    .with_args("[on|off|status]"),
+    CommandDef::new(
+        "context",
+        "Show this session's context occupancy (messages, tokens, window)",
+    )
+    .with_category("Session")
+    .with_args("[status]"),
+    CommandDef::new(
+        "export",
+        "Export this session's transcript to a markdown file",
+    )
+    .with_aliases(&["transcript"])
+    .with_category("Session")
+    .with_args("[path]"),
+    CommandDef::new(
+        "memory",
+        "Show the live memory engine, or recall entries for a query",
+    )
+    .with_category("Config")
+    .with_args("[query]"),
+    CommandDef::new("footer", "Toggle message footer")
+        .with_category("Config")
+        .with_args("[on|off|status]"),
+    CommandDef::new(
+        "yolo",
+        "Toggle YOLO mode (auto-approves destructive tool prompts for this channel)",
+    )
+    .with_category("Config")
+    .with_args("[on|off|status]")
+    .admin_only(),
+    CommandDef::new("voice", "Toggle voice output")
+        .with_category("Config")
+        .with_args("[on|off|tts|status]"),
+    CommandDef::new("personality", "Set AI personality")
+        .with_category("Config")
+        .with_args("[name]"),
+    CommandDef::new("codex-runtime", "Toggle codex app-server runtime")
+        .with_category("Config")
+        .with_args("[auto|codex_app_server]"),
+    CommandDef::new("verbose", "Cycle tool progress display")
+        .with_category("Config")
+        .with_args("[off|new|all|verbose]"),
+    CommandDef::new("config", "View or change configuration")
+        .with_aliases(&["settings"])
+        .with_category("Config")
+        .with_args("[key] [value]")
+        .admin_only(),
     // ── Tools ────────────────────────────────────────────────
-    CommandDef {
-        name: "reload-mcp",
-        description: "Reload MCP servers",
-        aliases: &["reload_mcp", "reloadmcp"],
-        category: "Tools",
-        args_hint: "",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "reload-skills",
-        description: "Reload skill registry",
-        aliases: &["reload_skills", "reloadskills"],
-        category: "Tools",
-        args_hint: "",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "kanban",
-        description: "Manage kanban boards",
-        aliases: &[],
-        category: "Tools",
-        args_hint: "[subcommand]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "curator",
-        description: "Background skill maintenance",
-        aliases: &[],
-        category: "Tools",
-        args_hint: "[status|run|pin|archive|list-archived]",
-        admin_only: false,
-    },
-    CommandDef {
-        // (iter-2211) The posture, per chat. Upstream's `/ponytail` is the
-        // level switch; here it is scoped to the chat that typed it, so one
-        // chat's level cannot become the daemon's level.
-        name: "ponytail",
-        description: "Set the ponytail posture for this chat (lite|full|ultra|off)",
-        aliases: &[],
-        category: "Tools",
-        args_hint: "[lite|full|ultra|off]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "skills",
-        description: "List installed skills, or expand one for this chat",
-        aliases: &["skill"],
-        category: "Tools",
-        args_hint: "[name [instruction]]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "search",
-        description: "Search past sessions (or browse recent ones with no query)",
-        aliases: &["find"],
-        category: "Session",
-        args_hint: "<query>",
-        admin_only: false,
-    },
+    CommandDef::new("reload-mcp", "Reload MCP servers")
+        .with_aliases(&["reload_mcp", "reloadmcp"])
+        .with_category("Tools")
+        .admin_only(),
+    CommandDef::new("reload-skills", "Reload skill registry")
+        .with_aliases(&["reload_skills", "reloadskills"])
+        .with_category("Tools")
+        .admin_only(),
+    CommandDef::new("kanban", "Manage kanban boards")
+        .with_category("Tools")
+        .with_args("[subcommand]"),
+    CommandDef::new("curator", "Background skill maintenance")
+        .with_category("Tools")
+        .with_args("[status|run|pin|archive|list-archived]"),
+    // (iter-2211) The posture, per chat. Upstream's `/ponytail` is the
+    // level switch; here it is scoped to the chat that typed it, so one
+    // chat's level cannot become the daemon's level.
+    CommandDef::new(
+        "ponytail",
+        "Set the ponytail posture for this chat (lite|full|ultra|off)",
+    )
+    .with_category("Tools")
+    .with_args("[lite|full|ultra|off]"),
+    CommandDef::new(
+        "skills",
+        "List installed skills, or expand one for this chat",
+    )
+    .with_aliases(&["skill"])
+    .with_category("Tools")
+    .with_args("[name [instruction]]"),
+    CommandDef::new(
+        "search",
+        "Search past sessions (or browse recent ones with no query)",
+    )
+    .with_aliases(&["find"])
+    .with_category("Session")
+    .with_args("<query>"),
     // ── Info ─────────────────────────────────────────────────
-    CommandDef {
-        name: "start",
-        description: "Start the bot",
-        aliases: &[],
-        category: "Info",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "help",
-        description: "Show available commands",
-        aliases: &[],
-        category: "Info",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "commands",
-        description: "List all commands",
-        aliases: &[],
-        category: "Info",
-        args_hint: "[page]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "usage",
-        description: "Show usage statistics",
-        aliases: &[],
-        category: "Info",
-        args_hint: "[days]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "insights",
-        description: "Show session insights",
-        aliases: &[],
-        category: "Info",
-        args_hint: "[days]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "debug",
-        description: "Show debug info",
-        aliases: &[],
-        category: "Info",
-        args_hint: "",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "update",
-        description: "Check for updates",
-        aliases: &[],
-        category: "Info",
-        args_hint: "",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "platform",
-        description: "Manage gateway platforms",
-        aliases: &[],
-        category: "Info",
-        args_hint: "<pause|resume|list> [name]",
-        admin_only: true,
-    },
+    CommandDef::new("start", "Start the bot").with_category("Info"),
+    CommandDef::new("help", "Show available commands").with_category("Info"),
+    CommandDef::new("commands", "List all commands")
+        .with_category("Info")
+        .with_args("[page]"),
+    CommandDef::new("usage", "Show usage statistics")
+        .with_category("Info")
+        .with_args("[days]"),
+    CommandDef::new("insights", "Show session insights")
+        .with_category("Info")
+        .with_args("[days]"),
+    CommandDef::new("debug", "Show debug info").with_category("Info"),
+    CommandDef::new("update", "Check for updates")
+        .with_category("Info")
+        .admin_only(),
+    CommandDef::new("platform", "Manage gateway platforms")
+        .with_category("Info")
+        .with_args("<pause|resume|list> [name]")
+        .admin_only(),
     // ── Admin ─────────────────────────────────────────────────
-    CommandDef {
-        name: "approve",
-        description: "Approve pending action",
-        aliases: &["yes", "y"],
-        category: "Admin",
-        args_hint: "[session|always]",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "deny",
-        description: "Deny pending action",
-        aliases: &["no", "n"],
-        category: "Admin",
-        args_hint: "",
-        admin_only: true,
-    },
+    CommandDef::new("approve", "Approve pending action")
+        .with_aliases(&["yes", "y"])
+        .with_category("Admin")
+        .with_args("[session|always]")
+        .admin_only(),
+    CommandDef::new("deny", "Deny pending action")
+        .with_aliases(&["no", "n"])
+        .with_category("Admin")
+        .admin_only(),
     // ── Org bylaws (P3) ─────────────────────────────────────────────────
-    CommandDef {
-        name: "permissions",
-        description: "Show a seat's policy, standing grants and pending escalations",
-        aliases: &[],
-        category: "Admin",
-        args_hint: "[seat]",
-        admin_only: false,
-    },
-    CommandDef {
-        name: "grant",
-        description: "Grant a seat a capability (mints a TTL'd grant; seats an ungoverned seat)",
-        aliases: &[],
-        category: "Admin",
-        args_hint: "<seat> <tool> [--days N]",
-        admin_only: true,
-    },
-    CommandDef {
-        name: "revoke",
-        description: "Revoke a grant by id — the next run escalates again",
-        aliases: &[],
-        category: "Admin",
-        args_hint: "<grant_id>",
-        admin_only: true,
-    },
+    CommandDef::new(
+        "permissions",
+        "Show a seat's policy, standing grants and pending escalations",
+    )
+    .with_category("Admin")
+    .with_args("[seat]"),
+    CommandDef::new(
+        "grant",
+        "Grant a seat a capability (mints a TTL'd grant; seats an ungoverned seat)",
+    )
+    .with_category("Admin")
+    .with_args("<seat> <tool> [--days N]")
+    .admin_only(),
+    CommandDef::new(
+        "revoke",
+        "Revoke a grant by id — the next run escalates again",
+    )
+    .with_category("Admin")
+    .with_args("<grant_id>")
+    .admin_only(),
 ];
-
-/// The outcome of classifying inbound text as a command.
-///
-/// This is deliberately a three-state answer. `resolve_command` used to return a
-/// bare `Option`, which collapsed "this is not a command" and "this is a command
-/// whose name I do not recognise" into the same `None`. The live gateway treated
-/// `None` as "not a command, therefore a prompt for the agent", so a mistyped
-/// `/arop` was forwarded to the model and answered as if the user had asked it
-/// something. The model then improvised a help reply, which read like a working
-/// command handler that happened not to know the word — the opposite of the truth.
-#[derive(Debug, Clone, Copy)]
-pub enum CommandMatch<'a> {
-    /// Ordinary prose, not a command.
-    NotACommand,
-    /// A well-formed command whose name is not in the registry.
-    Unknown { token: &'a str },
-    /// A registry entry matched, with the remainder of the text as its arguments.
-    Found(&'static CommandDef, &'a str),
-}
-
-/// Hand-written because [`CommandDef`] is not `PartialEq`; two `Found` values
-/// match when they name the same command and carry the same arguments.
-impl PartialEq for CommandMatch<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (CommandMatch::NotACommand, CommandMatch::NotACommand) => true,
-            (CommandMatch::Unknown { token: a }, CommandMatch::Unknown { token: b }) => a == b,
-            (CommandMatch::Found(a, x), CommandMatch::Found(b, y)) => a.name == b.name && x == y,
-            _ => false,
-        }
-    }
-}
-
-/// Classify a raw message text as a command, its arguments, or prose.
-///
-/// Extracts the first space-delimited token as the command name (stripping the
-/// leading `/`) and matches it case-insensitively against the registry including
-/// aliases. Unlike the previous `Option`-returning form this distinguishes an
-/// unknown command from ordinary text, so the caller can reject the former
-/// instead of leaking it to the agent.
-///
-/// Also accepts the group-chat mention form (`/stop@my_bot`) that Telegram
-/// clients append when a command is sent by tapping the bot's name. The previous
-/// form left the suffix attached, so the registry lookup missed and even
-/// correctly-spelled commands silently failed when invoked that way.
-pub fn resolve_command(text: &str) -> CommandMatch<'_> {
-    let trimmed = text.trim();
-
-    let Some(after_slash) = trimmed.strip_prefix('/') else {
-        return CommandMatch::NotACommand;
-    };
-    let after_slash = after_slash.trim_start();
-
-    let (cmd_token, args) = match after_slash.split_once(|c: char| c.is_ascii_whitespace()) {
-        Some((cmd, rest)) => (cmd, rest.trim_start()),
-        None => (after_slash, ""),
-    };
-
-    let cmd_token = cmd_token
-        .split_once('@')
-        .map_or(cmd_token, |(name, _)| name);
-
-    if cmd_token.is_empty() {
-        return CommandMatch::NotACommand;
-    }
-
-    match COMMAND_REGISTRY.iter().find(|def| {
-        def.name.eq_ignore_ascii_case(cmd_token)
-            || def
-                .aliases
-                .iter()
-                .any(|a| a.eq_ignore_ascii_case(cmd_token))
-    }) {
-        Some(def) => CommandMatch::Found(def, args),
-        None => CommandMatch::Unknown { token: cmd_token },
-    }
-}
 
 /// The candidate skill names a command token names, in order: the token
 /// itself, then its HYPHENATED spelling. Telegram's `setMyCommands` writes
@@ -3463,7 +3123,7 @@ mod tests {
 
     /// The canonical name and arguments of a command that must resolve.
     fn found(text: &str) -> (&'static str, &str) {
-        match resolve_command(text) {
+        match resolve_command(text, COMMAND_REGISTRY) {
             CommandMatch::Found(def, args) => (def.name, args),
             other => panic!("expected {text:?} to resolve, got {other:?}"),
         }
@@ -3488,7 +3148,10 @@ mod tests {
 
     #[test]
     fn test_resolve_no_slash() {
-        assert_eq!(resolve_command("hello"), CommandMatch::NotACommand);
+        assert_eq!(
+            resolve_command("hello", COMMAND_REGISTRY),
+            CommandMatch::NotACommand
+        );
     }
 
     /// An unknown command must be distinguishable from prose. It used to return
@@ -3497,14 +3160,14 @@ mod tests {
     #[test]
     fn test_resolve_unknown_is_not_prose() {
         assert_eq!(
-            resolve_command("/nonexistent"),
+            resolve_command("/nonexistent", COMMAND_REGISTRY),
             CommandMatch::Unknown {
                 token: "nonexistent"
             }
         );
         assert_ne!(
-            resolve_command("/nonexistent"),
-            resolve_command("nonexistent"),
+            resolve_command("/nonexistent", COMMAND_REGISTRY),
+            resolve_command("nonexistent", COMMAND_REGISTRY),
             "an unknown command must not classify the same as prose"
         );
     }
@@ -3513,7 +3176,7 @@ mod tests {
     #[test]
     fn test_resolve_mistyped_command_is_unknown() {
         assert_eq!(
-            resolve_command("/arop"),
+            resolve_command("/arop", COMMAND_REGISTRY),
             CommandMatch::Unknown { token: "arop" }
         );
     }
@@ -3529,8 +3192,14 @@ mod tests {
 
     #[test]
     fn test_resolve_bare_slash_is_prose() {
-        assert_eq!(resolve_command("/"), CommandMatch::NotACommand);
-        assert_eq!(resolve_command("/ "), CommandMatch::NotACommand);
+        assert_eq!(
+            resolve_command("/", COMMAND_REGISTRY),
+            CommandMatch::NotACommand
+        );
+        assert_eq!(
+            resolve_command("/ ", COMMAND_REGISTRY),
+            CommandMatch::NotACommand
+        );
     }
 
     #[test]
@@ -4561,8 +4230,8 @@ mod subagents_command_tests {
         // The registry's uniqueness guard is the one that would catch a name
         // clash, but assert the resolution directly so the intent is legible
         // at the call site: each text must land on its OWN command.
-        let agents = resolve_command("/agents");
-        let subagents = resolve_command("/subagents");
+        let agents = resolve_command("/agents", COMMAND_REGISTRY);
+        let subagents = resolve_command("/subagents", COMMAND_REGISTRY);
         assert!(
             matches!(agents, CommandMatch::Found(d, _) if d.name == "agents"),
             "/agents must resolve to the agents command"
@@ -4573,7 +4242,7 @@ mod subagents_command_tests {
         );
         assert_ne!(agents, subagents, "the two lists must not collapse");
         // The alias must land on the same definition as the long form.
-        let via_alias = resolve_command("/subagent");
+        let via_alias = resolve_command("/subagent", COMMAND_REGISTRY);
         assert_eq!(
             subagents, via_alias,
             "/subagent is an alias for /subagents, not a separate command"
@@ -4880,7 +4549,7 @@ mod rt179_functional_core_tests {
     #[test]
     fn plan_and_effort_resolve_as_commands_not_prose() {
         for (text, name) in [("/plan on", "plan"), ("/effort high", "effort")] {
-            match resolve_command(text) {
+            match resolve_command(text, COMMAND_REGISTRY) {
                 CommandMatch::Found(def, _) => {
                     assert_eq!(def.name, name, "{text} must resolve to {name}")
                 }
@@ -4997,7 +4666,7 @@ mod rt179_functional_core_tests {
     /// to the model, which improvises a help-shaped answer.
     #[test]
     fn context_resolves_as_a_command_not_prose() {
-        match resolve_command("/context") {
+        match resolve_command("/context", COMMAND_REGISTRY) {
             CommandMatch::Found(def, _) => {
                 assert_eq!(def.name, "context", "/context must resolve to context")
             }
@@ -5005,7 +4674,7 @@ mod rt179_functional_core_tests {
         }
         // `status` is the explicit form of the same read; it must not be a
         // separate name that can drift.
-        match resolve_command("/context status") {
+        match resolve_command("/context status", COMMAND_REGISTRY) {
             CommandMatch::Found(def, args) => {
                 assert_eq!(def.name, "context");
                 assert_eq!(args, "status");
@@ -5159,7 +4828,7 @@ mod rt179_export_tests {
             ("/transcript", "export"),
             ("/export /tmp/x.md", "export"),
         ] {
-            match resolve_command(text) {
+            match resolve_command(text, COMMAND_REGISTRY) {
                 CommandMatch::Found(def, _) => {
                     assert_eq!(def.name, name, "{text} must resolve to {name}")
                 }
@@ -5207,7 +4876,7 @@ mod rt179_memory_tests {
     #[test]
     fn memory_resolves_as_a_command_and_reaches_the_command_list() {
         for (text, name) in [("/memory", "memory"), ("/memory deploy notes", "memory")] {
-            match resolve_command(text) {
+            match resolve_command(text, COMMAND_REGISTRY) {
                 CommandMatch::Found(def, _) => {
                     assert_eq!(def.name, name, "{text} must resolve to {name}")
                 }
@@ -5273,7 +4942,7 @@ mod rt179_skill_tests {
         // The token no built-in claims reaches the unknown-token arm.
         assert!(
             matches!(
-                resolve_command("/ponytail-review"),
+                resolve_command("/ponytail-review", COMMAND_REGISTRY),
                 CommandMatch::Unknown { .. }
             ),
             "/ponytail-review must not be a built-in — it is a skill command"
@@ -5346,7 +5015,7 @@ mod rt179_skill_tests {
             ("/skill fizzbuzz count", "skills"),
         ] {
             assert!(
-                matches!(resolve_command(text), CommandMatch::Found(d, _) if d.name == expected),
+                matches!(resolve_command(text, COMMAND_REGISTRY), CommandMatch::Found(d, _) if d.name == expected),
                 "{text} must resolve to the `{expected}` command (its alias), not prose"
             );
         }
@@ -5374,7 +5043,7 @@ mod rt179_search_tests {
             ("/find", "search"),
         ] {
             assert!(
-                matches!(resolve_command(text), CommandMatch::Found(d, _) if d.name == expected),
+                matches!(resolve_command(text, COMMAND_REGISTRY), CommandMatch::Found(d, _) if d.name == expected),
                 "{text} must resolve to `{expected}`, not prose"
             );
         }

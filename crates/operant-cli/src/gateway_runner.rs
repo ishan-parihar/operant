@@ -19,7 +19,8 @@ use operant_core::interrupt::InterruptFlag;
 use operant_core::redaction::redact_sensitive_text_if_enabled;
 
 use crate::gateway_commands::{
-    CommandContext, CommandMatch, handle_command, resolve_command, telegram_bot_commands,
+    COMMAND_REGISTRY as GATEWAY_COMMAND_REGISTRY, CommandContext, CommandMatch, handle_command,
+    resolve_command, telegram_bot_commands,
 };
 use operant_core::mcp::McpManager;
 use operant_core::observer::ObserverEvent;
@@ -8197,7 +8198,7 @@ pub async fn start_gateway(
                                         let approval_was_pending = approval_tap.is_some()
                                             && pending_permission_exists(&msg.channel_id);
                                         let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
-                                        match resolve_command(&msg.content) {
+                                        match resolve_command(&msg.content, GATEWAY_COMMAND_REGISTRY) {
                                         CommandMatch::Found(cmd_def, cmd_args) => {
                                             // `has_args` is a boolean on purpose: the args
                                             // string carries whatever the user typed after the
