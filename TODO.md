@@ -95,3 +95,40 @@ Decided on 2026-10-19; each choice and its reason are in the record named. The o
 - Context management: AD-029. The synchronous summarize rung stays; agent-driven reduction and a background historian are not built.
 - BUGS.md R42-8 (Telegram tokens in gateway.log): AD-030. The filter is covered by a test; the historic log is not rewritten; rotation is the owner's call.
 - TUI-11, git-diff half: AD-026 (closed). KB-6 retention: closed by iter-971 (AD-019).
+
+### Residual-gaps survey, 2026-11-21 — the owner-gated rows
+
+Plan: `docs/plans/2026-11-21-close-the-residual-implementation-gaps-the-pub-fn-queue-the-.md`
+(T1..T5, executable, peer-published iter-2778). The claimable tranches live on the board
+`docs/kb/workflows/residual-gaps-2026-11-21.md` (T4, T1a-T1e, T2, T3, T5 — claim with
+`./scripts/genome claim <id>`).
+
+**The rows below are owner-gated, so they sit here and never in `## Pending`.** Each is
+also a `blocked` row on that board (R1/R2/R3/T3a/T3b), with its evidence.
+
+- [ ] **R1 — RT-543 `operant acp` disposition.** Reviewer (context-pack round 4, iter-2772)
+      recommends (a) deprecate `--socket`, keep stdio. Campaign prior: (a). Not docs-only
+      (edits `cmd_acp.rs`): needs crate-scoped tests plus a release deploy.
+- [ ] **R2 — RT-280 resume/stop flags.** Reviewer recommends **(c) delete both flags and
+      their 3 writers**. This **REVERSES the campaign prior (a)** — the reviewer's ground is
+      that (a) needs a `max_age_seconds` the repository cannot supply. Read it as a
+      disagreement, not a confirmation. Needs a schema-compatibility decision so existing
+      SQLite rows still deserialize.
+- [ ] **R3 — RT-190 cross-surface memory.** Reviewer recommends (c) accept two families and
+      close the row; campaign prior (c). Docs/ledger-only when ruled.
+- [ ] **T3a — `plugins-wasm`: is the surface worth its advisories?** The 15 wasmtime
+      advisories are triaged+allowlisted (iter-2763, reason per entry); what is unruled is the
+      feature. extism 1.41.0 pins wasmtime 49.0.3 and is its own latest release, so they are
+      permanently unbumpable while it is on. Keep on (allowlist keeps this reason) or default off.
+- [ ] **T3b — `/reset` durability (ASKS Q6a).** `reset_slot_for_session` clears
+      seat/model/effort/posture/charter and never touches the store, so a "wiped" history
+      returns on restart. Not a false claim (RT-389 corrected the doc) — a missing capability.
+
+Evidence, per-ruling confidence, and the one measurement that would change each answer:
+`research/audits/context-pack-2026-11-20-blocker-rulings/VERIFICATION.md` Part 1.
+
+**Checked and NOT gaps — do not re-open:** `config_registry.rs` is generated+gated (409
+keys); `operant-api` and `operant-harness` are live dependencies, not parallel surfaces;
+there are no `TODO:`/`FIXME:` markers in `crates/` (the 2 matches are test fixtures); 72 TUI
+modules / 349 files and 7 crates are accurate; the 15 wasmtime advisories are allowlisted;
+the `libsqlite3-sys` bump is triaged (RT-616).
