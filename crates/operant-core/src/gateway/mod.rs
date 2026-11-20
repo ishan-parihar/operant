@@ -2548,21 +2548,49 @@ mod tests {
         let addr = addr.unwrap_or_else(|| panic!("the webhook adapter starts: {last_error:?}"));
 
         let url = format!("http://{}/webhook/r14", addr);
-        let client = reqwest::Client::new();
+        // (iter-2738: no proxy, same reason as `shared_http_client`. The test's
+        // own client is built here rather than shared, and `reqwest` reads the
+        // proxy env at construction -- a `no_proxy` that names no loopback host
+        // sends this to a proxy that is not listening.)
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("a test client");
         let body = r#"{"text":"hmac live test"}"#;
 
         // The server binds inside a spawned task — wait until it accepts.
-        for _ in 0..50 {
-            if client
+        //
+        // (iter-2737: the loop used to `break` on success and otherwise fall
+        // through SILENTLY after 50 tries, so the first POST reported a bare
+        // `ConnectionRefused` with no indication that the server never came up.
+        // MEASURED at full-suite parallelism: the probe exhausts its budget and
+        // the hard `unwrap()` below is the only thing that fails -- which reads
+        // as a mystery network error rather than "the server never accepted".
+        // The retry is on CONNECT, not only on bind: the adapter's own retry
+        // covers `AddrInUse` at bind, but a port that binds and then goes away
+        // (or a task that dies before the client is ready) surfaces as
+        // `ConnectionRefused` at connect, which no retry covered.)
+        let mut ready = false;
+        let mut last_probe: Option<reqwest::Error> = None;
+        for _ in 0..100 {
+            match client
                 .get(url.replace("/webhook/r14", "/health"))
                 .send()
                 .await
-                .is_ok()
             {
-                break;
+                Ok(_) => {
+                    ready = true;
+                    break;
+                }
+                Err(e) => last_probe = Some(e),
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+        assert!(
+            ready,
+            "the webhook adapter never accepted a connection on {url}: {:?}",
+            last_probe
+        );
 
         // 1) No signature -> 401
         let resp = client

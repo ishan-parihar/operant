@@ -746,12 +746,25 @@ pub struct GatewayStats {
 /// allocated a fresh connection pool per request — a connection-pool leak
 /// in the hot path. (iter-125 — closes the ponytail-audit security/perform-
 /// ance bug "4 adapters call reqwest::Client::new() per send_message".)
+///
+/// (iter-2738: LOOPBACK BYPASSES THE PROXY. `reqwest` reads the proxy
+/// environment once, at client construction, and the whole lib suite is ONE
+/// process -- so whichever test builds a reqwest client FIRST freezes the
+/// proxy decision for every later client. On a host whose `no_proxy` names
+/// only specific domains (MEASURED here: `no_proxy=aroute.ishanparihar.com`)
+/// every loopback request is sent to a proxy that is not listening, and the
+/// gateway tests fail with `ConnectionRefused` at connect. That is why they
+/// failed only under full-suite parallelism and passed alone: the pollution
+/// is order-dependent, not load-dependent. `.no_proxy()` on the builder is
+/// the documented per-client override and it is correct for a client whose
+/// only loopback callers are tests and same-host adapters.)
 pub(crate) fn shared_http_client() -> &'static reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
+            .no_proxy()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     })
