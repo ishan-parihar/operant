@@ -229,16 +229,24 @@ impl CommandExecutor for RealCommandExecutor {
 struct RealAutonomousAgentExecutor {
     config: AppConfig,
     system_prompt: Option<String>,
+    /// (iter-2725, Hydrogen round-2 F6) The MCP manager is built ONCE per
+    /// runner, not once per tick. `McpManager` is `Clone` and every field is
+    /// an `Arc`, so the clone shares the connected servers, the registered
+    /// tool names and the stdio watchdog — a tick's agent and the next
+    /// tick's agent talk to the SAME MCP children. Before this, each tick
+    /// built a fresh manager inside `run()`, so every autonomous iteration
+    /// respawned every stdio MCP server (the reviewer: "the only finding
+    /// that costs something on every tick forever").
+    mcp_manager: McpManager,
 }
 
 #[async_trait(?Send)]
 impl AutonomousAgentExecutor for RealAutonomousAgentExecutor {
     async fn run(&self, _snapshot: &WorkspaceSnapshot, query: String) -> Result<()> {
-        let mcp_manager = McpManager::new();
         let agent = create_agent_without_events(
             &self.config,
             self.system_prompt.as_deref(),
-            &mcp_manager,
+            &self.mcp_manager,
             &self.config.skills.root_dir,
         )
         .await?;
@@ -258,6 +266,8 @@ pub async fn run_autonomous(config: AppConfig, system_prompt: Option<String>) ->
     let agent_executor = RealAutonomousAgentExecutor {
         config: config.clone(),
         system_prompt,
+        // (iter-2725) One manager for the whole run: see the field doc.
+        mcp_manager: McpManager::new(),
     };
     let mut runner = AutonomousRunner::new(config, repo_root, RealCommandExecutor, agent_executor);
     runner.run_loop().await
