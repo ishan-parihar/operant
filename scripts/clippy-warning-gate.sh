@@ -172,11 +172,28 @@ jq -r '
   # failing no-header targets existed. Exempt the denied lints on that surface
   # ONLY: a test target still fails the gate on a compile error, an unwrap in a
   # non-test helper, or a lint of any other class.
-  | select(
-      ($file | startswith("crates/") and ($file | contains("/tests/")))
-      and ($lint == "clippy::unwrap_used" or $lint == "clippy::expect_used")
-      | not
-    )
+  #
+  # (iter-2742) The exemption PATH test only matched `crates/*/tests/*.rs`, i.e.
+  # an integration target. It did not match an IN-CRATE test module that happens to
+  # live in a file NAMED `tests.rs` under `src/` (`crates/operant-cli/src/tui/app/tests.rs`),
+  # which is the most obviously-a-test-file by name and fell through on
+  # `unused_mut`. Widen the path test to that case. This is deliberately narrow:
+  # it is still the TEST surface, not all files.
+  | (($file | startswith("crates/")) and
+     (($file | contains("/tests/")) or ($file | endswith("/tests.rs")))) as $in_test_surface
+  # iter-2742: also exempt rustc own dead-code-family lints on that surface.
+  # The exemption above named only `clippy::unwrap_used` / `clippy::expect_used`,
+  # so a test module that stops using an import (very common: a helper removed
+  # from the test body, an unused `use super::*` after a refactor) reddened the
+  # gate on `unused_imports` / `unused_mut` / `dead_code`. Those are hygiene, not
+  # correctness: they cannot hide a logic bug in production, and the test target
+  # still fails the gate on a compile error or a non-test helper unwrap.
+  # Named explicitly rather than by prefix so a future `clippy::correctness`
+  # lint on a test target still fails.
+  | (($in_test_surface) and
+     ($lint | IN("unused_imports", "unused_variables", "unused_mut", "dead_code",
+                 "unused_assignments", "clippy::unwrap_used", "clippy::expect_used"))) as $exempt
+  | select($exempt | not)
   | "\($target)|\($lint)|\($file)"
 ' "${tmp_json}" | LC_ALL=C sort -u > "${tmp_seen}"
 

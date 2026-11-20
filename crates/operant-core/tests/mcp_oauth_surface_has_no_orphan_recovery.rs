@@ -54,8 +54,10 @@ fn the_live_manager_surface_behaves_as_documented() {
     // operator's tokens.
     let url = "https://mcp-oauth-surface-test.invalid/live";
 
-    let mut cfg = McpOAuthConfig::default();
-    cfg.redirect_port = Some(0);
+    let cfg = McpOAuthConfig {
+        redirect_port: Some(0),
+        ..McpOAuthConfig::default()
+    };
 
     // get_provider must succeed and be repeatable (the second call takes the
     // cached path, which is the behaviour ProviderEntry exists for).
