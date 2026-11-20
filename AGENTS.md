@@ -1440,15 +1440,18 @@ real commands with handlers. See RG-010 for the check.
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
 - 7 dead dialogs deleted (iter-58); every remaining overlay has a PRODUCTION
-  opener. `App::overlay_flags()` names **29** of them (the array's own type
-  length is `[(&'static str, bool); 29]`, which the compiler enforces — so a
+  opener. `App::overlay_flags()` names **32** of them (the array's own type
+  length is `[(&'static str, bool); 32]`, which the compiler enforces — so a
   doc number here is only true while it equals that length, and
   `scripts/check-doc-claims.sh` derives it), and a full audit (iter-1002)
   traced every one to a non-test call site in `commands.rs`, `key_handling.rs`,
   `channel_drains.rs`, `import_config.rs`, `turn_state.rs`, `agents_view.rs`
   or `adapter_types/tui_app.rs`. None is test-only and none lacks an opener.
-  (This said **30** until 2026-11-17: the count drifted when an overlay was
-  added without updating the prose, and nothing checked it. Note the
+  (This said **29** until 2026-11-20, and **30** until 2026-11-17: the count
+  drifted each time an overlay was added without updating the prose, and for
+  that whole window nothing checked it — the gate that derives it now does.
+  The three added since 29 are `agent_picker`, `context_menu` and
+  `subagent_navigator`, iter-2714's TUI audit round. Note the
   "every overlay has a production opener" half is NOT grep-checkable —
   openers arrive as `.open()`, `.open_detail()`, `.toggle()` and
   `visible = true` — so per-command dispatch tests are the evidence for it.)
