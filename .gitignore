@@ -133,8 +133,18 @@ skills/.curator/
 local/libclang.deb
 local/onnxruntime*.tgz
 
-# kb flock artifacts
+# kb flock artifacts.
+#
+# `*.lock` was added in iter-900 for the kb's flock artifacts, and it silently
+# swallowed Cargo.lock from then until iter-2762. That mattered: the
+# supply-chain gate's own header says it audits "the committed lockfile" and
+# the ledger's RT-10 rows repeat the claim, but no lockfile was committed, so
+# the gate audited whatever `cargo audit` happened to resolve on the BUILDING
+# machine -- a verdict no fresh clone or peer machine reproduces. The `!Cargo.lock`
+# negation below is the narrow fix: the broad rule keeps its original purpose,
+# and the one file it must not catch is explicitly re-included.
 *.lock
+!Cargo.lock
 
 # genome runtime state (locks, temp files, recon tokens, read marks)
 *.genome-lock
