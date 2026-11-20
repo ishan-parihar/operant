@@ -17,9 +17,37 @@ pub enum SignatureMode {
     /// Reject plugins that are unsigned or fail verification.
     Strict,
     /// Warn but allow plugins that are unsigned or fail verification.
+    ///
+    /// (iter-2767: THIS IS THE DEFAULT, and the reasoning matters because the
+    /// alternative is not obviously wrong.)
+    ///
+    /// The other two modes are both defensible and both are worse here:
+    ///
+    /// - `Disabled` (the previous default) loads an unsigned plugin and says
+    ///   NOTHING. The operator who installed it gets no signal that operant did
+    ///   not verify who wrote it. That is not a check that was skipped; it is a
+    ///   check the operator cannot tell was skipped.
+    /// - `Strict` would refuse every existing unsigned install, i.e. it would
+    ///   break working configurations as a side effect of a security
+    ///   improvement. That is a migration, not a default.
+    ///
+    /// `Permissive` is the only mode that changes what the operator KNOWS
+    /// without changing what RUNS: an unsigned plugin or an untrusted publisher
+    /// key still loads, and `enforce_signature_policy` emits a `tracing::warn!`
+    /// naming the plugin (the "unsigned" arm and the "publisher key not
+    /// trusted" arm). Plugins are installed
+    /// deliberately by the operator, so refusing them outright would be
+    /// paternalistic; loading them silently would be negligent.
+    ///
+    /// A NOTE ON REACH, so this is not mistaken for a guarantee: the wasmtime
+    /// advisories triaged in iter-2763 reach the workspace through
+    /// `extism` -> `operant-plugins` and a host-side wasmtime bug is reachable
+    /// whenever a plugin RUNS. Signature mode does not gate that -- it answers
+    /// "who wrote this", not "is this runtime patched". The default here makes
+    /// provenance visible; it does not make the sandbox stronger.
+    #[default]
     Permissive,
     /// Do not check signatures at all.
-    #[default]
     Disabled,
 }
 
@@ -471,8 +499,57 @@ capabilities = ["tool"]
     }
 
     #[test]
-    fn test_signature_mode_default_is_disabled() {
-        assert_eq!(SignatureMode::default(), SignatureMode::Disabled);
+    fn test_signature_mode_default_is_permissive() {
+        // (iter-2767) WAS `..._default_is_disabled` asserting `Disabled`. The
+        // default moved because `Disabled` loads an unsigned plugin silently:
+        // `enforce_signature_policy` returns `Ok(Unsigned)` at :225 BEFORE any
+        // `tracing::warn!`, so the operator gets no signal that provenance was
+        // never checked. `Permissive` still loads it, but names the plugin in a
+        // warning. See the `Permissive` variant's doc for why not `Strict`.
+        //
+        // This is the regression pin: if the default is ever moved BACK to
+        // `Disabled`, this test fails BY NAME, so the change has to be argued
+        // rather than absorbed.
+        assert_eq!(SignatureMode::default(), SignatureMode::Permissive);
+    }
+
+    #[test]
+    fn test_permissive_warns_and_still_loads_an_unsigned_plugin() {
+        // The behaviour that justifies the default (iter-2767): an unsigned
+        // plugin is LOADED -- not refused, not skipped -- and the caller can
+        // see that it was unsigned. Asserting only the load would pass for
+        // `Disabled` too, which is the whole difference being tested here.
+        let result = enforce_signature_policy(
+            "anon-plugin",
+            "name = \"anon-plugin\"\n",
+            None,
+            None,
+            &[],
+            SignatureMode::Permissive,
+        );
+        assert_eq!(
+            result.expect("permissive loads an unsigned plugin"),
+            VerificationResult::Unsigned
+        );
+    }
+
+    #[test]
+    fn test_strict_refuses_an_unsigned_plugin() {
+        // The counterpart that keeps `Permissive` honest: `Strict` must REFUSE
+        // the same unsigned manifest `Permissive` loads. Without this pair, a
+        // `Permissive` default could silently become a `Strict` one.
+        let err = enforce_signature_policy(
+            "anon-plugin",
+            "name = \"anon-plugin\"\n",
+            None,
+            None,
+            &[],
+            SignatureMode::Strict,
+        );
+        assert!(
+            matches!(err, Err(PluginError::UnsignedPlugin(_))),
+            "Strict must refuse an unsigned plugin: {err:?}"
+        );
     }
 
     #[test]

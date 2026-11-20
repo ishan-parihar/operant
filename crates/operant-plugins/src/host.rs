@@ -36,8 +36,13 @@ struct LoadedPlugin {
 
 impl PluginHost {
     /// Create a new plugin host with the given plugins directory.
+    ///
+    /// (iter-2767: `SignatureMode::default()` rather than `Disabled` spelled out.
+    /// This line USED to pass `Disabled` explicitly, which would have pinned the
+    /// old behaviour no matter what `Default` said -- the exact trap this plan
+    /// named before touching the enum.)
     pub fn new(workspace_dir: &Path) -> Result<Self, PluginError> {
-        Self::with_security(workspace_dir, SignatureMode::Disabled, Vec::new())
+        Self::with_security(workspace_dir, SignatureMode::default(), Vec::new())
     }
 
     /// Create a host that scans EXACTLY `plugins_dir`.

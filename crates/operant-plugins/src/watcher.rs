@@ -68,7 +68,12 @@ impl Watcher {
             host,
             config,
             trusted_keys: Vec::new(),
-            signature_mode: SignatureMode::Disabled,
+            // (iter-2767) Was `SignatureMode::Disabled` spelled out here, which
+            // is the SAME trap as `PluginHost::new`: the hot-swap re-verification
+            // at :149 would keep passing `Disabled` no matter what the crate
+            // default said, and this is the path where a signature check matters
+            // most -- a manifest that changed on disk since the first load.
+            signature_mode: SignatureMode::default(),
             last_seen: HashMap::new(),
         }
     }
