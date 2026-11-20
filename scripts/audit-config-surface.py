@@ -109,12 +109,38 @@ def main() -> int:
         structs[m.group(1)] = re.findall(r"^\s*pub (\w+)\s*:", m.group(2), re.M)
 
     uses = collections.Counter()
+    # A field name shorter than the general identifier pattern's minimum is
+    # INVISIBLE to it: the scan below matches `\b[a-z_][a-z0-9_]{2,}\b`, which
+    # requires three characters, so `AppConfig.ui` and `AppConfig.pk` were never
+    # counted at all. That made the ratchet report `ui` as dead while it is read
+    # at five sites (ui/gate.rs:72,118 and tools/ui_tool.rs:697,699,708) -- a
+    # false positive, and a gate that cries wolf on a live setting is the exact
+    # failure mode this script's docstring warns about. So the field names that
+    # are too short are matched on their own, with a word boundary that makes
+    # `ui` not match inside `build`/`guide`, while the general scan still finds
+    # the long ones.
+    short_fields = set()
+    for fields in structs.values():
+        for field in fields:
+            if len(field) < 3:
+                short_fields.add(field)
+    # The match is QUALIFIED (`.field`), not a bare word: a bare word-boundary
+    # scan counts the field's own doc comment in config.rs (`/// crafted.ui.
+    # generative_enabled = false;`) as a use, which would make the ratchet blind
+    # to the very field it is meant to catch. A qualified match needs a real
+    # access, and `.ui` still does not match inside `build` or `guide`.
+    short_patterns = {
+        field: re.compile(r"\." + re.escape(field) + r"\b") for field in short_fields
+    }
     for path in ROOT.rglob("*.rs"):
         if path == CONFIG or "/tests/" in str(path):
             continue
         text = strip_test_items(path.read_text(encoding="utf-8", errors="replace"))
         for ident in set(re.findall(r"\b[a-z_][a-z0-9_]{2,}\b", text)):
             uses[ident] += 1
+        for field, pattern in short_patterns.items():
+            if pattern.search(text):
+                uses[field] += 1
 
     total = 0
     new = []
